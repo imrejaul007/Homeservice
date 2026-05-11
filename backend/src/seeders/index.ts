@@ -24,6 +24,9 @@ export const runAllSeeders = async (): Promise<void> => {
   }
 };
 
+// Alias for server startup
+export const seedDatabase = runAllSeeders;
+
 // Run all seeders if called directly
 if (require.main === module) {
   (async () => {

@@ -9,8 +9,10 @@ interface EmailTemplate {
   text?: string;
 }
 
-// Initialize Resend client
-const resend = new Resend(process.env.RESEND_API_KEY);
+// Initialize Resend client only if API key exists
+const resend = process.env.RESEND_API_KEY
+  ? new Resend(process.env.RESEND_API_KEY)
+  : null;
 
 const FROM_EMAIL = process.env.EMAIL_FROM || 'noreply@nilin.com';
 const APP_NAME = process.env.APP_NAME || 'NILIN';
@@ -26,6 +28,12 @@ const sendEmail = async (
   html: string,
   text?: string
 ): Promise<void> => {
+  // Skip if Resend is not configured
+  if (!resend) {
+    logger.warn('Email service not configured - skipping email', { to, subject });
+    return;
+  }
+
   let lastError: Error | null = null;
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
