@@ -1,0 +1,678 @@
+import { Request, Response } from 'express';
+import mongoose from 'mongoose';
+import Availability from '../models/availability.model';
+import Booking from '../models/booking.model';
+import { asyncHandler } from '../utils/asyncHandler';
+
+// ===================================
+// PROVIDER AVAILABILITY MANAGEMENT
+// ===================================
+
+// @desc    Get provider's availability settings
+// @route   GET /api/availability
+// @access  Private (Provider)
+export const getProviderAvailability = asyncHandler(async (req: Request, res: Response) => {
+  if (req.user?.role !== 'provider') {
+    return res.status(403).json({
+      success: false,
+      message: 'Only providers can access availability settings'
+    });
+  }
+
+  let availability = await Availability.findOne({ providerId: req.user?._id });
+
+  // Create default availability if none exists with proper time slots
+  if (!availability) {
+    console.log('🔧 Creating default availability for provider:', req.user?._id);
+    availability = new Availability({
+      providerId: req.user?._id,
+      weeklySchedule: {
+        monday: { isAvailable: true, timeSlots: [{ start: '09:00', end: '17:00', isActive: true }] },
+        tuesday: { isAvailable: true, timeSlots: [{ start: '09:00', end: '17:00', isActive: true }] },
+        wednesday: { isAvailable: true, timeSlots: [{ start: '09:00', end: '17:00', isActive: true }] },
+        thursday: { isAvailable: true, timeSlots: [{ start: '09:00', end: '17:00', isActive: true }] },
+        friday: { isAvailable: true, timeSlots: [{ start: '09:00', end: '17:00', isActive: true }] },
+        saturday: { isAvailable: false, timeSlots: [] },
+        sunday: { isAvailable: false, timeSlots: [] }
+      },
+      timezone: 'Asia/Kolkata'
+    });
+    await availability.save();
+    console.log('✅ Default availability created with time slots:', availability.weeklySchedule.monday.timeSlots);
+  }
+
+  return res.json({
+    success: true,
+    data: { availability }
+  });
+});
+
+// @desc    Update provider's weekly schedule
+// @route   PUT /api/availability/schedule
+// @access  Private (Provider)
+export const updateWeeklySchedule = asyncHandler(async (req: Request, res: Response) => {
+  const { weeklySchedule, bufferTime, advanceBooking, preferences } = req.body;
+
+  if (req.user?.role !== 'provider') {
+    return res.status(403).json({
+      success: false,
+      message: 'Only providers can update availability'
+    });
+  }
+
+  // Validate schedule format
+  if (weeklySchedule) {
+    const validDays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+
+    for (const day of validDays) {
+      if (weeklySchedule[day] && weeklySchedule[day].timeSlots) {
+        for (const slot of weeklySchedule[day].timeSlots) {
+          if (!slot.start || !slot.end) {
+            return res.status(400).json({
+              success: false,
+              message: `Invalid time slot for ${day}: start and end times are required`
+            });
+          }
+
+          // Validate time format (HH:MM)
+          const timeFormat = /^([01]?[0-9]|2[0-3]):[0-5][0-9]$/;
+          if (!timeFormat.test(slot.start) || !timeFormat.test(slot.end)) {
+            return res.status(400).json({
+              success: false,
+              message: `Invalid time format for ${day}. Use HH:MM format`
+            });
+          }
+
+          // Validate start time is before end time
+          const startMinutes = timeToMinutes(slot.start);
+          const endMinutes = timeToMinutes(slot.end);
+          if (startMinutes >= endMinutes) {
+            return res.status(400).json({
+              success: false,
+              message: `Invalid time slot for ${day}: start time must be before end time`
+            });
+          }
+        }
+      }
+    }
+  }
+
+  const availability = await Availability.findOneAndUpdate(
+    { providerId: req.user?._id },
+    {
+      $set: {
+        ...(weeklySchedule && { weeklySchedule }),
+        ...(bufferTime && { bufferTime }),
+        ...(advanceBooking && { advanceBooking }),
+        ...(preferences && { preferences })
+      }
+    },
+    { new: true, upsert: true }
+  );
+
+  return res.json({
+    success: true,
+    message: 'Weekly schedule updated successfully',
+    data: { availability }
+  });
+});
+
+// @desc    Add date-specific override
+// @route   POST /api/availability/override
+// @access  Private (Provider)
+export const addDateOverride = asyncHandler(async (req: Request, res: Response) => {
+  const { date, isAvailable, timeSlots, reason, notes } = req.body;
+
+  if (req.user?.role !== 'provider') {
+    return res.status(403).json({
+      success: false,
+      message: 'Only providers can add date overrides'
+    });
+  }
+
+  if (!date) {
+    return res.status(400).json({
+      success: false,
+      message: 'Date is required'
+    });
+  }
+
+  const overrideDate = new Date(date);
+  if (isNaN(overrideDate.getTime())) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid date format'
+    });
+  }
+
+  // Check if date is in the past
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  if (overrideDate < today) {
+    return res.status(400).json({
+      success: false,
+      message: 'Cannot set availability for past dates'
+    });
+  }
+
+  const availability = await Availability.findOne({ providerId: req.user?._id });
+  if (!availability) {
+    return res.status(404).json({
+      success: false,
+      message: 'Provider availability not found'
+    });
+  }
+
+  await availability.addDateOverride(overrideDate, isAvailable, reason);
+
+  // If custom time slots are provided for available days
+  if (isAvailable && timeSlots && timeSlots.length > 0) {
+    const existingOverride = availability.dateOverrides.find(
+      override => override.date.toDateString() === overrideDate.toDateString()
+    );
+
+    if (existingOverride) {
+      existingOverride.timeSlots = timeSlots;
+      existingOverride.notes = notes;
+      await availability.save();
+    }
+  }
+
+  return res.json({
+    success: true,
+    message: 'Date override added successfully',
+    data: { availability }
+  });
+});
+
+// @desc    Remove date override
+// @route   DELETE /api/availability/override/:date
+// @access  Private (Provider)
+export const removeDateOverride = asyncHandler(async (req: Request, res: Response) => {
+  const { date } = req.params;
+
+  if (req.user?.role !== 'provider') {
+    return res.status(403).json({
+      success: false,
+      message: 'Only providers can remove date overrides'
+    });
+  }
+
+  const overrideDate = new Date(date);
+  if (isNaN(overrideDate.getTime())) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid date format'
+    });
+  }
+
+  const availability = await Availability.findOne({ providerId: req.user?._id });
+  if (!availability) {
+    return res.status(404).json({
+      success: false,
+      message: 'Provider availability not found'
+    });
+  }
+
+  // Remove the override
+  availability.dateOverrides = availability.dateOverrides.filter(
+    override => override.date.toDateString() !== overrideDate.toDateString()
+  );
+
+  await availability.save();
+
+  return res.json({
+    success: true,
+    message: 'Date override removed successfully',
+    data: { availability }
+  });
+});
+
+// @desc    Block a period of time
+// @route   POST /api/availability/block
+// @access  Private (Provider)
+export const blockTimePeriod = asyncHandler(async (req: Request, res: Response) => {
+  const { startDate, endDate, reason, title, notes } = req.body;
+
+  if (req.user?.role !== 'provider') {
+    return res.status(403).json({
+      success: false,
+      message: 'Only providers can block time periods'
+    });
+  }
+
+  if (!startDate || !endDate || !reason || !title) {
+    return res.status(400).json({
+      success: false,
+      message: 'Start date, end date, reason, and title are required'
+    });
+  }
+
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+
+  if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid date format'
+    });
+  }
+
+  if (start >= end) {
+    return res.status(400).json({
+      success: false,
+      message: 'Start date must be before end date'
+    });
+  }
+
+  const availability = await Availability.findOne({ providerId: req.user?._id });
+  if (!availability) {
+    return res.status(404).json({
+      success: false,
+      message: 'Provider availability not found'
+    });
+  }
+
+  await availability.blockPeriod(start, end, reason);
+
+  if (notes || title) {
+    const newBlock = availability.blockedPeriods[availability.blockedPeriods.length - 1];
+    if (notes) newBlock.notes = notes;
+    if (title) newBlock.title = title;
+    await availability.save();
+  }
+
+  return res.json({
+    success: true,
+    message: 'Time period blocked successfully',
+    data: { availability }
+  });
+});
+
+// @desc    Remove blocked period
+// @route   DELETE /api/availability/block/:blockId
+// @access  Private (Provider)
+export const removeBlockedPeriod = asyncHandler(async (req: Request, res: Response) => {
+  const { blockId } = req.params;
+
+  if (req.user?.role !== 'provider') {
+    return res.status(403).json({
+      success: false,
+      message: 'Only providers can remove blocked periods'
+    });
+  }
+
+  if (!mongoose.Types.ObjectId.isValid(blockId)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid block ID'
+    });
+  }
+
+  const availability = await Availability.findOne({ providerId: req.user?._id });
+  if (!availability) {
+    return res.status(404).json({
+      success: false,
+      message: 'Provider availability not found'
+    });
+  }
+
+  // Remove the blocked period
+  availability.blockedPeriods = availability.blockedPeriods.filter(
+    (block: any) => (block as any)._id?.toString() !== blockId
+  );
+
+  await availability.save();
+
+  return res.json({
+    success: true,
+    message: 'Blocked period removed successfully',
+    data: { availability }
+  });
+});
+
+// ===================================
+// AVAILABILITY QUERIES FOR CUSTOMERS
+// ===================================
+
+// @desc    Get available slots for a provider
+// @route   GET /api/availability/provider/:providerId/slots
+// @access  Public
+export const getProviderAvailableSlots = asyncHandler(async (req: Request, res: Response) => {
+  const { providerId } = req.params;
+  const { date, duration = 60, days = 7 } = req.query;
+
+  if (!mongoose.Types.ObjectId.isValid(providerId)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid provider ID'
+    });
+  }
+
+  const availability = await Availability.findOne({ providerId });
+  if (!availability) {
+    return res.status(404).json({
+      success: false,
+      message: 'Provider availability not found'
+    });
+  }
+
+  const startDate = date ? new Date(date as string) : new Date();
+  const serviceDuration = Number(duration);
+  const daysToCheck = Number(days);
+
+  // Get available slots for the specified date range
+  const availableSlots: { [key: string]: string[] } = {};
+
+  for (let i = 0; i < daysToCheck; i++) {
+    const checkDate = new Date(startDate);
+    checkDate.setDate(startDate.getDate() + i);
+
+    // Skip past dates
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (checkDate < today) continue;
+
+    const dateString = checkDate.toISOString().split('T')[0];
+    const slots = availability.getAvailableSlots(checkDate, serviceDuration);
+
+    // Filter out slots that conflict with existing bookings
+    const availableSlotsTimes = await filterBookedSlots(
+      providerId,
+      checkDate,
+      slots,
+      serviceDuration
+    );
+
+    if (availableSlotsTimes.length > 0) {
+      availableSlots[dateString] = availableSlotsTimes;
+    }
+  }
+
+  return res.json({
+    success: true,
+    data: {
+      providerId,
+      availableSlots,
+      duration: serviceDuration,
+      dateRange: {
+        start: startDate.toISOString().split('T')[0],
+        days: daysToCheck
+      }
+    }
+  });
+});
+
+// @desc    Check if specific time slot is available
+// @route   GET /api/availability/provider/:providerId/check
+// @access  Public
+export const checkTimeSlotAvailability = asyncHandler(async (req: Request, res: Response) => {
+  const { providerId } = req.params;
+  const { date, time, duration = 60 } = req.query;
+
+  if (!mongoose.Types.ObjectId.isValid(providerId)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid provider ID'
+    });
+  }
+
+  if (!date || !time) {
+    return res.status(400).json({
+      success: false,
+      message: 'Date and time are required'
+    });
+  }
+
+  const availability = await Availability.findOne({ providerId });
+  if (!availability) {
+    return res.status(404).json({
+      success: false,
+      message: 'Provider availability not found'
+    });
+  }
+
+  const checkDate = new Date(date as string);
+  const serviceDuration = Number(duration);
+
+  if (isNaN(checkDate.getTime())) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid date format'
+    });
+  }
+
+  // Check basic availability
+  const isAvailable = availability.isAvailableAt(checkDate, time as string, serviceDuration);
+
+  if (!isAvailable) {
+    return res.json({
+      success: true,
+      data: {
+        available: false,
+        reason: 'Provider not available at this time'
+      }
+    });
+  }
+
+  // Check for existing bookings
+  const hasConflict = await checkBookingConflict(
+    providerId,
+    checkDate,
+    time as string,
+    serviceDuration
+  );
+
+  return res.json({
+    success: true,
+    data: {
+      available: !hasConflict,
+      reason: hasConflict ? 'Time slot already booked' : null
+    }
+  });
+});
+
+// ===================================
+// ANALYTICS AND REPORTING
+// ===================================
+
+// @desc    Get provider availability analytics
+// @route   GET /api/availability/analytics
+// @access  Private (Provider)
+export const getAvailabilityAnalytics = asyncHandler(async (req: Request, res: Response) => {
+  const { startDate, endDate } = req.query;
+
+  if (req.user?.role !== 'provider') {
+    return res.status(403).json({
+      success: false,
+      message: 'Only providers can access analytics'
+    });
+  }
+
+  const availability = await Availability.findOne({ providerId: req.user?._id });
+  if (!availability) {
+    return res.status(404).json({
+      success: false,
+      message: 'Provider availability not found'
+    });
+  }
+
+  // Date range for analytics
+  const start = startDate ? new Date(startDate as string) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const end = endDate ? new Date(endDate as string) : new Date();
+
+  // Get bookings in the date range
+  const bookings = await Booking.find({
+    providerId: req.user?._id,
+    scheduledDate: { $gte: start, $lte: end },
+    status: { $in: ['confirmed', 'completed'] }
+  });
+
+  // Calculate metrics
+  const totalHoursAvailable = calculateAvailableHours(availability, start, end);
+  const totalBookedHours = bookings.reduce((total, booking) => total + (booking.duration / 60), 0);
+  const utilizationRate = totalHoursAvailable > 0 ? (totalBookedHours / totalHoursAvailable) * 100 : 0;
+
+  // Peak analysis
+  const peakDays = calculatePeakDays(bookings);
+  const peakHours = calculatePeakHours(bookings);
+
+  // Update analytics in the model
+  availability.analytics = {
+    totalHoursAvailable,
+    totalBookedHours,
+    utilizationRate: Math.round(utilizationRate * 100) / 100,
+    peakDays,
+    peakHours,
+    lastUpdated: new Date()
+  };
+
+  await availability.save();
+
+  return res.json({
+    success: true,
+    data: {
+      analytics: availability.analytics,
+      dateRange: { start, end },
+      bookingCount: bookings.length,
+      revenue: bookings.reduce((total, booking) => total + booking.pricing.totalAmount, 0)
+    }
+  });
+});
+
+// ===================================
+// UTILITY FUNCTIONS
+// ===================================
+
+// Helper function to convert time string to minutes
+function timeToMinutes(timeString: string): number {
+  const [hours, minutes] = timeString.split(':').map(Number);
+  return hours * 60 + minutes;
+}
+
+// Helper function to filter out booked time slots
+async function filterBookedSlots(
+  providerId: string,
+  date: Date,
+  slots: string[],
+  duration: number
+): Promise<string[]> {
+  const bookedSlots = await Booking.find({
+    providerId,
+    scheduledDate: date,
+    status: { $in: ['pending', 'confirmed', 'in_progress'] }
+  }).select('scheduledTime duration');
+
+  return slots.filter(slot => {
+    const slotStart = timeToMinutes(slot);
+    const slotEnd = slotStart + duration;
+
+    // Check if this slot conflicts with any booking
+    return !bookedSlots.some(booking => {
+      const bookingStart = timeToMinutes(booking.scheduledTime);
+      const bookingEnd = bookingStart + booking.duration;
+
+      // Check for overlap
+      return slotStart < bookingEnd && slotEnd > bookingStart;
+    });
+  });
+}
+
+// Helper function to check for booking conflicts
+async function checkBookingConflict(
+  providerId: string,
+  date: Date,
+  time: string,
+  duration: number
+): Promise<boolean> {
+  const slotStart = timeToMinutes(time);
+  const slotEnd = slotStart + duration;
+
+  const conflictingBooking = await Booking.findOne({
+    providerId,
+    scheduledDate: date,
+    status: { $in: ['pending', 'confirmed', 'in_progress'] },
+    $expr: {
+      $and: [
+        {
+          $lt: [
+            { $add: [{ $multiply: [{ $toInt: { $substr: ['$scheduledTime', 0, 2] } }, 60] }, { $toInt: { $substr: ['$scheduledTime', 3, 2] } }] },
+            slotEnd
+          ]
+        },
+        {
+          $gt: [
+            { $add: [
+              { $add: [{ $multiply: [{ $toInt: { $substr: ['$scheduledTime', 0, 2] } }, 60] }, { $toInt: { $substr: ['$scheduledTime', 3, 2] } }] },
+              '$duration'
+            ]},
+            slotStart
+          ]
+        }
+      ]
+    }
+  });
+
+  return !!conflictingBooking;
+}
+
+// Calculate available hours in a date range
+function calculateAvailableHours(availability: any, startDate: Date, endDate: Date): number {
+  let totalHours = 0;
+  const currentDate = new Date(startDate);
+
+  while (currentDate <= endDate) {
+    const dayName = currentDate.toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase();
+    const daySchedule = availability.weeklySchedule[dayName];
+
+    if (daySchedule?.isAvailable) {
+      const dayHours = daySchedule.timeSlots.reduce((hours: number, slot: any) => {
+        if (slot.isActive) {
+          const start = timeToMinutes(slot.start);
+          const end = timeToMinutes(slot.end);
+          return hours + ((end - start) / 60);
+        }
+        return hours;
+      }, 0);
+
+      totalHours += dayHours;
+    }
+
+    currentDate.setDate(currentDate.getDate() + 1);
+  }
+
+  return totalHours;
+}
+
+// Calculate peak booking days
+function calculatePeakDays(bookings: any[]): string[] {
+  const dayCounts: { [key: string]: number } = {};
+
+  bookings.forEach(booking => {
+    const dayName = booking.scheduledDate.toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase();
+    dayCounts[dayName] = (dayCounts[dayName] || 0) + 1;
+  });
+
+  // Return top 3 days
+  return Object.entries(dayCounts)
+    .sort(([, a], [, b]) => b - a)
+    .slice(0, 3)
+    .map(([day]) => day);
+}
+
+// Calculate peak booking hours
+function calculatePeakHours(bookings: any[]): string[] {
+  const hourCounts: { [key: string]: number } = {};
+
+  bookings.forEach(booking => {
+    const hour = booking.scheduledTime.split(':')[0] + ':00';
+    hourCounts[hour] = (hourCounts[hour] || 0) + 1;
+  });
+
+  // Return top 3 hours
+  return Object.entries(hourCounts)
+    .sort(([, a], [, b]) => b - a)
+    .slice(0, 3)
+    .map(([hour]) => hour);
+}
+

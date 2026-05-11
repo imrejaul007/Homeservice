@@ -1,0 +1,49 @@
+/* NILIN Gradient Utilities */
+
+.gradient-nilin-primary {
+  background: linear-gradient(135deg, #FFE5F0, #E8E5FF);
+}
+
+.gradient-nilin-secondary {
+  background: linear-gradient(135deg, #E8E5FF, #E5F3FF);
+}
+
+.gradient-nilin-tertiary {
+  background: linear-gradient(135deg, #F5F3E8, #E5F3FF);
+}
+
+.gradient-nilin-pink-lavender {
+  background: linear-gradient(135deg, #FFE5F0, #E8E5FF);
+}
+
+.gradient-nilin-lavender-blue {
+  background: linear-gradient(135deg, #E8E5FF, #E5F3FF);
+}
+
+/* Text Gradient Utilities */
+.text-gradient-nilin-primary {
+  background: linear-gradient(135deg, #FFE5F0, #E8E5FF);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.text-gradient-nilin-secondary {
+  background: linear-gradient(135deg, #E8E5FF, #E5F3FF);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Hover Gradient Utilities */
+.hover-gradient-nilin-primary {
+  transition: background 0.3s ease;
+}
+
+.hover-gradient-nilin-primary:hover {
+  background: linear-gradient(135deg, #FFE5F0, #E8E5FF);
+}
+
+.hover-gradient-nilin-secondary:hover {
+  background: linear-gradient(135deg, #E8E5FF, #E5F3FF);
+}

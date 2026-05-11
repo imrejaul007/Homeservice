@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">NILIN</string>
+    <string name="title_activity_main">NILIN</string>
+    <string name="package_name">com.nilin.app</string>
+    <string name="custom_url_scheme">com.nilin.app</string>
+</resources>

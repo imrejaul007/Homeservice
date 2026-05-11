@@ -1,0 +1,9 @@
+{
+  "firstName": "Test",
+  "lastName": "Customer",
+  "email": "test-customer@example.com",
+  "password": "TestPass123!",
+  "role": "customer",
+  "agreeToTerms": true,
+  "agreeToPrivacy": true
+}

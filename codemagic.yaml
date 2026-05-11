@@ -1,0 +1,66 @@
+workflows:
+  ios-build:
+    name: NILIN iOS Build
+    max_build_duration: 30
+    instance_type: mac_mini_m2
+    environment:
+      node: 22
+      xcode: latest
+      vars:
+        XCODE_PROJECT: "frontend/ios/App/App.xcodeproj"
+        XCODE_SCHEME: "App"
+    scripts:
+      - name: Install dependencies
+        script: |
+          cd frontend
+          npm install
+      - name: Build web assets
+        script: |
+          cd frontend
+          npm run build
+      - name: Sync Capacitor
+        script: |
+          cd frontend
+          npx cap sync ios
+      - name: Resolve Swift packages
+        script: |
+          xcodebuild -resolvePackageDependencies \
+            -project "$XCODE_PROJECT" \
+            -scheme "$XCODE_SCHEME"
+      - name: Build unsigned
+        script: |
+          xcodebuild build \
+            -project "$XCODE_PROJECT" \
+            -scheme "$XCODE_SCHEME" \
+            -destination "generic/platform=iOS" \
+            CODE_SIGNING_ALLOWED=NO
+    artifacts:
+      - frontend/ios/App/build/**/*.app
+      - /tmp/xcodebuild_logs/*.log
+
+  android-build:
+    name: NILIN Android Build
+    max_build_duration: 30
+    instance_type: mac_mini_m2
+    environment:
+      node: 22
+      java: 21
+    scripts:
+      - name: Install dependencies
+        script: |
+          cd frontend
+          npm install
+      - name: Build web assets
+        script: |
+          cd frontend
+          npm run build
+      - name: Sync Capacitor
+        script: |
+          cd frontend
+          npx cap sync android
+      - name: Build APK
+        script: |
+          cd frontend/android
+          ./gradlew assembleDebug
+    artifacts:
+      - frontend/android/app/build/outputs/**/*.apk
