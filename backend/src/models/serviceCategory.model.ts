@@ -165,8 +165,7 @@ const serviceCategorySchema = new Schema<IServiceCategory>(
   }
 );
 
-// Indexes
-serviceCategorySchema.index({ slug: 1 }, { unique: true });
+// Indexes (slug already has unique: true from field definition)
 serviceCategorySchema.index({ isActive: 1, sortOrder: 1 });
 serviceCategorySchema.index({ isFeatured: 1, isActive: 1 });
 serviceCategorySchema.index({ 'metadata.popularityScore': -1 });

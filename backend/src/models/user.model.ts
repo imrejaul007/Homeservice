@@ -542,7 +542,7 @@ userSchema.index({ accountStatus: 1, role: 1 });
 userSchema.index({ createdAt: -1 });
 userSchema.index({ lastLogin: -1 });
 userSchema.index({ 'address.coordinates': '2dsphere' }); // For geospatial queries
-userSchema.index({ 'loyaltySystem.referralCode': 1 });
+// Note: loyaltySystem.referralCode index created automatically by unique: true
 userSchema.index({ 'loyaltySystem.tier': 1 });
 userSchema.index({ 'socialProfiles.followers': 1 });
 userSchema.index({ 'socialProfiles.following': 1 });

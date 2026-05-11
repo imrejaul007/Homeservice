@@ -354,9 +354,8 @@ const notificationSchema = new Schema<IBookingNotification>(
 // INDEXES FOR PERFORMANCE
 // ===================================
 
-// Core notification queries
+// Core notification queries (bookingId already has index from field-level index: true)
 notificationSchema.index({ recipientId: 1, status: 1 });
-notificationSchema.index({ bookingId: 1 });
 notificationSchema.index({ type: 1, status: 1 });
 notificationSchema.index({ priority: 1, status: 1 });
 

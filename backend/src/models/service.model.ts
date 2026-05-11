@@ -452,11 +452,9 @@ serviceSchema.index({ 'price.amount': 1, 'rating.average': -1 });
 serviceSchema.index({ providerId: 1, isActive: 1 });
 serviceSchema.index({ 'location.address.city': 1, category: 1 });
 serviceSchema.index({ createdAt: -1 }); // For newest first
-serviceSchema.index({ 'searchMetadata.popularityScore': -1 }); // For popularity sorting
+// Note: searchMetadata.popularityScore already has index from field-level index: -1
 
-// Sparse indexes for optional fields
-serviceSchema.index({ subcategory: 1 }, { sparse: true });
-serviceSchema.index({ isFeatured: 1 }, { sparse: true, partialFilterExpression: { isFeatured: true } });
+// Sparse indexes for optional fields (subcategory and isFeatured already have index: true)
 
 // ===================================
 // VIRTUAL PROPERTIES

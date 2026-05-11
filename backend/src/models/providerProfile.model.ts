@@ -1051,8 +1051,7 @@ const providerProfileSchema = new Schema<IProviderProfile>(
   }
 );
 
-// Comprehensive Indexes for Performance
-providerProfileSchema.index({ userId: 1 });
+// Comprehensive Indexes for Performance (userId already has index from unique: true)
 providerProfileSchema.index({ 'locationInfo.primaryAddress.coordinates': '2dsphere' });
 providerProfileSchema.index({ 'services.category': 1 });
 providerProfileSchema.index({ 'services.isActive': 1 });

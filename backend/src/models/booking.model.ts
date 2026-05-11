@@ -546,11 +546,10 @@ const bookingSchema = new Schema<IBooking>(
 // INDEXES FOR PERFORMANCE OPTIMIZATION
 // ===================================
 
-// Core booking queries
+// Core booking queries (simple indexes already created by field-level index: true)
+// Compound indexes for common query patterns
 bookingSchema.index({ customerId: 1, status: 1 });
 bookingSchema.index({ providerId: 1, scheduledDate: 1 });
-bookingSchema.index({ serviceId: 1 });
-bookingSchema.index({ bookingNumber: 1 }, { unique: true });
 bookingSchema.index({ status: 1, scheduledDate: 1 });
 
 // Location-based queries

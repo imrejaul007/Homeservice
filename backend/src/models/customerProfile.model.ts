@@ -409,8 +409,7 @@ const customerProfileSchema = new Schema<ICustomerProfile>(
   }
 );
 
-// Indexes for performance
-customerProfileSchema.index({ userId: 1 });
+// Indexes for performance (userId already has index from unique: true)
 customerProfileSchema.index({ 'addresses.coordinates': '2dsphere' });
 customerProfileSchema.index({ 'favoriteProviders.providerId': 1 });
 customerProfileSchema.index({ 'loyaltyData.tier': 1 });
