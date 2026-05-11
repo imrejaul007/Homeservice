@@ -1,8 +1,6 @@
 import express, { Application, Request, Response } from 'express';
 import cors from 'cors';
-import helmet from 'helmet';
 import compression from 'compression';
-import mongoSanitize from 'express-mongo-sanitize';
 import rateLimit from 'express-rate-limit';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
@@ -12,9 +10,30 @@ import { stream } from './utils/logger';
 import { APP_CONSTANTS } from './config/constants';
 import routes from './routes';
 import { errorHandler } from './middleware/error.middleware';
+import { correlationIdMiddleware } from './middleware/correlationId.middleware';
+import {
+  helmetConfig,
+  mongoSanitizeConfig,
+  perUserRateLimiter,
+  strictRateLimiter,
+  securityHeaders,
+  uploadSizeLimit,
+} from './middleware/security.middleware';
+import {
+  sanitizeInput,
+  blockAttackPatterns,
+} from './middleware/security-validation.middleware';
+import {
+  initializeSentry,
+  sentryRequestHandler,
+  sentryErrorHandler,
+} from './config/sentry';
 
 // Load environment variables
 dotenv.config({ path: path.join(__dirname, '../.env') });
+
+// Initialize Sentry first
+initializeSentry();
 
 // Perform security audit on startup
 import securityValidator from './utils/securityValidator';
@@ -26,35 +45,62 @@ const app: Application = express();
 // Trust proxy
 app.set('trust proxy', 1);
 
-// Security middleware
-app.use(helmet({
-  contentSecurityPolicy: {
-    directives: {
-      defaultSrc: ["'self'"],
-      styleSrc: ["'self'", "'unsafe-inline'"],
-      scriptSrc: ["'self'"],
-      imgSrc: ["'self'", "data:", "https:"],
-    },
-  },
-  crossOriginEmbedderPolicy: false,
-}));
+// Sentry request handler (must be early)
+app.use(sentryRequestHandler);
 
-// CORS configuration - Allow all origins in development
+// Add correlation ID to all requests
+app.use(correlationIdMiddleware);
+
+// Security middleware - Helmet with strict CSP
+app.use(helmetConfig);
+
+// Additional security headers
+app.use(securityHeaders);
+
+// CORS configuration
+const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || [
+  'http://localhost:3000',
+  'http://localhost:5173',
+];
+
 const corsOptions = {
-  origin: true, // Allow all origins in development
+  origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+    // Allow requests with no origin (mobile apps, curl, etc.)
+    if (!origin) {
+      return callback(null, true);
+    }
+
+    // In development, allow all origins
+    if (process.env.NODE_ENV === 'development') {
+      return callback(null, true);
+    }
+
+    // Check if origin is allowed
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    callback(new Error('Not allowed by CORS'));
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: [
     'Content-Type',
     'Authorization',
     'X-Requested-With',
-    'skipAuth', // Allow skipAuth header for AuthService
-    'skipauth', // Allow lowercase variant
-    'x-csrf-token', // Allow CSRF token header
-    'x-2fa-token' // Allow 2FA token header
+    'X-Correlation-ID',
+    'skipAuth',
+    'skipauth',
+    'x-csrf-token',
+    'x-2fa-token',
   ],
-  exposedHeaders: ['X-Total-Count', 'X-Page', 'X-Page-Size'],
-  maxAge: 86400 // 24 hours
+  exposedHeaders: [
+    'X-Total-Count',
+    'X-Page',
+    'X-Page-Size',
+    'X-Correlation-ID',
+  ],
+  maxAge: 86400,
 };
 
 app.use(cors(corsOptions));
@@ -62,12 +108,21 @@ app.use(cors(corsOptions));
 // Compression middleware
 app.use(compression());
 
-// Body parsing middleware
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+// Body parsing middleware with size limits
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
-// MongoDB sanitization
-app.use(mongoSanitize());
+// Request size validation middleware
+app.use(uploadSizeLimit(5));
+
+// MongoDB sanitization (enhanced)
+app.use(mongoSanitizeConfig);
+
+// Sanitize user input
+app.use(sanitizeInput);
+
+// Block common attack patterns
+app.use(blockAttackPatterns);
 
 // HTTP request logging
 if (process.env.NODE_ENV === 'development') {
@@ -76,28 +131,81 @@ if (process.env.NODE_ENV === 'development') {
   app.use(morgan('combined', { stream }));
 }
 
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000'), // 15 minutes
-  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100'),
-  message: 'Too many requests from this IP, please try again later.',
+// Global rate limiting for all API routes
+const globalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '500'),
   standardHeaders: true,
   legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many requests, please try again later.',
+  },
 });
 
-app.use('/api', limiter);
+app.use('/api', globalLimiter);
 
-// Health check endpoint
-app.get('/health', (_req: Request, res: Response) => {
+// Per-user rate limiting (stricter for authenticated users)
+app.use('/api', perUserRateLimiter);
+
+// Health check endpoint (with strict rate limiting)
+app.get('/health', strictRateLimiter, (_req: Request, res: Response) => {
   res.status(APP_CONSTANTS.HTTP_STATUS.OK).json({
     status: 'healthy',
     service: APP_CONSTANTS.APP_NAME,
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
     environment: process.env.NODE_ENV,
-    version: APP_CONSTANTS.API_VERSION
+    version: APP_CONSTANTS.API_VERSION,
   });
 });
+
+// Readiness check (for Kubernetes/Load Balancers)
+app.get('/health/ready', async (_req: Request, res: Response) => {
+  try {
+    const mongoose = (await import('mongoose')).default;
+    const dbState = mongoose.connection.readyState;
+    const isConnected = dbState === 1;
+
+    if (!isConnected) {
+      res.status(503).json({
+        status: 'unhealthy',
+        ready: false,
+        checks: {
+          database: 'disconnected',
+        },
+      });
+      return;
+    }
+
+    res.json({
+      status: 'healthy',
+      ready: true,
+      checks: {
+        database: 'connected',
+      },
+    });
+  } catch {
+    res.status(503).json({
+      status: 'unhealthy',
+      ready: false,
+      error: 'Health check failed',
+    });
+  }
+});
+
+// Liveness check
+app.get('/health/live', (_req: Request, res: Response) => {
+  res.json({
+    status: 'alive',
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// Metrics endpoints
+import { getMetrics, getPrometheusMetrics } from './utils/metrics';
+app.get('/metrics', getMetrics);
+app.get('/metrics/prometheus', getPrometheusMetrics);
 
 // API test endpoint
 app.get('/api/test', (_req: Request, res: Response) => {
@@ -105,7 +213,7 @@ app.get('/api/test', (_req: Request, res: Response) => {
     success: true,
     message: 'Backend API is connected and working!',
     timestamp: new Date().toISOString(),
-    api_version: APP_CONSTANTS.API_VERSION
+    api_version: APP_CONSTANTS.API_VERSION,
   });
 });
 
@@ -122,9 +230,12 @@ app.use((req: Request, res: Response) => {
   res.status(APP_CONSTANTS.HTTP_STATUS.NOT_FOUND).json({
     success: false,
     message: `Route ${req.originalUrl} not found`,
-    error: APP_CONSTANTS.ERROR_MESSAGES.NOT_FOUND
+    error: APP_CONSTANTS.ERROR_MESSAGES.NOT_FOUND,
   });
 });
+
+// Sentry error handler (must be before other error handlers)
+app.use(sentryErrorHandler);
 
 // Global error handler
 app.use(errorHandler);

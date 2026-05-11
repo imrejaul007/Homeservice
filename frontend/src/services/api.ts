@@ -1,70 +1,65 @@
-import axios from 'axios';
-import type { AxiosInstance, AxiosError, AxiosResponse } from 'axios';
+import axios, { type AxiosInstance, type AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
+import { sanitizeHtml, secureStorage, isSecureContext } from '@/lib/security';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5001/api';
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
-// Get auth tokens from Zustand store
+// Retry configuration
+const MAX_RETRIES = 3;
+const RETRY_DELAY = 1000;
+
+// Error types
+export interface ApiError {
+  success: false;
+  message: string;
+  error?: string;
+  statusCode?: number;
+}
+
+export interface ApiResponse<T = unknown> {
+  success: boolean;
+  data?: T;
+  message?: string;
+}
+
+// Get auth tokens from secure storage
 const getAuthTokens = () => {
   try {
-    const stored = localStorage.getItem('auth-storage');
-    if (stored) {
-      const parsed = JSON.parse(stored);
-      return parsed.state?.tokens || null;
-    }
-  } catch (error) {
-    console.error('Failed to get stored tokens:', error);
-  }
-  return null;
-};
-
-// Update auth tokens in Zustand store
-const updateAuthTokens = (tokens: any) => {
-  try {
-    const stored = localStorage.getItem('auth-storage');
-    if (stored) {
-      const parsed = JSON.parse(stored);
-      parsed.state.tokens = tokens;
-      localStorage.setItem('auth-storage', JSON.stringify(parsed));
-
-      // Dispatch custom event to notify store of token update
-      window.dispatchEvent(new CustomEvent('auth-tokens-updated', { detail: tokens }));
-    }
-  } catch (error) {
-    console.error('Failed to update stored tokens:', error);
+    const accessToken = secureStorage.getItem('accessToken');
+    const refreshToken = secureStorage.getItem('refreshToken');
+    return accessToken && refreshToken ? { accessToken, refreshToken } : null;
+  } catch {
+    return null;
   }
 };
 
-// Clear auth from Zustand store
+// Update auth tokens
+const updateAuthTokens = (tokens: { accessToken: string; refreshToken: string }) => {
+  secureStorage.setItem('accessToken', tokens.accessToken);
+  secureStorage.setItem('refreshToken', tokens.refreshToken);
+};
+
+// Clear auth
 const clearAuth = () => {
-  try {
-    const stored = localStorage.getItem('auth-storage');
-    if (stored) {
-      const parsed = JSON.parse(stored);
-      parsed.state = {
-        ...parsed.state,
-        user: null,
-        customerProfile: null,
-        providerProfile: null,
-        tokens: null,
-        isAuthenticated: false,
-      };
-      localStorage.setItem('auth-storage', JSON.stringify(parsed));
-    }
-  } catch (error) {
-    console.error('Failed to clear auth:', error);
-  }
+  secureStorage.removeItem('accessToken');
+  secureStorage.removeItem('refreshToken');
 };
 
-// Create axios instance
+// Generate correlation ID for request tracing
+const generateCorrelationId = () => {
+  return `req-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+};
+
+// Create axios instance with security configurations
 const api: AxiosInstance = axios.create({
   baseURL: API_URL,
-  timeout: 10000,
+  timeout: 30000, // 30 seconds
   headers: {
     'Content-Type': 'application/json',
   },
   withCredentials: true,
 });
 
+// Token refresh management
 let isRefreshing = false;
 let refreshSubscribers: Array<(token: string) => void> = [];
 
@@ -77,34 +72,95 @@ const onRefreshed = (token: string) => {
   refreshSubscribers = [];
 };
 
-// Request interceptor - Add JWT token to requests
+// Retry logic for failed requests
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const shouldRetry = (error: AxiosError): boolean => {
+  if (!error.config) return false;
+
+  // Don't retry on 4xx errors (except 429 - Too Many Requests)
+  if (error.response?.status && error.response.status >= 400 && error.response.status < 500 && error.response.status !== 429) {
+    return false;
+  }
+
+  // Retry on network errors or 5xx errors
+  return !error.response || error.response.status >= 500 || error.response.status === 429;
+};
+
+const retryRequest = async (config: InternalAxiosRequestConfig, retryCount: number = 0): Promise<Response> => {
+  if (retryCount >= MAX_RETRIES) {
+    throw new Error('Max retries exceeded');
+  }
+
+  await sleep(RETRY_DELAY * Math.pow(2, retryCount)); // Exponential backoff
+
+  return axios(config).then((response) => response.data);
+};
+
+// Request interceptor - Add auth token and correlation ID
 api.interceptors.request.use(
   (config) => {
+    // Add correlation ID for request tracing
+    const correlationId = generateCorrelationId();
+    config.headers['X-Correlation-ID'] = correlationId;
+
+    // Add auth token if available
     const tokens = getAuthTokens();
     if (tokens?.accessToken) {
       config.headers.Authorization = `Bearer ${tokens.accessToken}`;
     }
+
+    // Sanitize URL params (basic XSS prevention)
+    if (config.url) {
+      config.url = sanitizeHtml(config.url);
+    }
+
     return config;
   },
   (error: AxiosError) => {
+    console.error('Request interceptor error:', error);
     return Promise.reject(error);
   }
 );
 
-// Response interceptor - Handle token refresh and errors
+// Response interceptor - Handle token refresh, errors, and retries
 api.interceptors.response.use(
   (response: AxiosResponse) => {
+    // Sanitize response data if it's HTML content
+    if (typeof response.data === 'string' && response.data.includes('<html')) {
+      console.warn('Unexpected HTML response received');
+    }
     return response;
   },
   async (error: AxiosError) => {
-    const originalRequest = error.config as any;
+    const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean; _retryCount?: number };
 
+    // Log the error for debugging (sanitized)
+    console.error('API Error:', {
+      url: originalRequest?.url,
+      status: error.response?.status,
+      message: error.message,
+      correlationId: originalRequest?.headers?.['X-Correlation-ID'],
+    });
+
+    // Handle network errors with retry
+    if (!error.response && shouldRetry(error)) {
+      const retryCount = (originalRequest._retryCount || 0) + 1;
+      originalRequest._retryCount = retryCount;
+
+      if (retryCount <= MAX_RETRIES) {
+        console.log(`Retrying request (${retryCount}/${MAX_RETRIES})...`);
+        return retryRequest(originalRequest, retryCount);
+      }
+    }
+
+    // Handle 401 Unauthorized - Token refresh
     if (error.response?.status === 401 && !originalRequest._retry) {
       if (isRefreshing) {
         return new Promise((resolve) => {
           addRefreshSubscriber((token: string) => {
             originalRequest.headers.Authorization = `Bearer ${token}`;
-            resolve(axios(originalRequest));
+            resolve(api(originalRequest));
           });
         });
       }
@@ -132,21 +188,28 @@ api.interceptors.response.use(
         console.error('Token refresh failed:', refreshError);
         clearAuth();
 
-        // Redirect to homepage
         if (typeof window !== 'undefined') {
-          window.location.href = '/';
+          window.location.href = '/login?reason=session_expired';
         }
       } finally {
         isRefreshing = false;
       }
     }
 
-    // Handle other error types
+    // Handle 403 Forbidden
     if (error.response?.status === 403) {
-      console.error('Access forbidden:', error.response?.data);
+      const message = (error.response.data as ApiError)?.message || 'Access denied';
+      console.error('Access forbidden:', message);
     }
 
-    if (error.response && error.response.status >= 500) {
+    // Handle 429 Too Many Requests
+    if (error.response?.status === 429) {
+      const retryAfter = error.response.headers['retry-after'];
+      console.warn(`Rate limited. Retry after ${retryAfter || 'unknown'} seconds`);
+    }
+
+    // Handle 500 Internal Server Error
+    if (error.response?.status && error.response.status >= 500) {
       console.error('Server error:', error.response.data);
     }
 
@@ -154,80 +217,93 @@ api.interceptors.response.use(
   }
 );
 
-// API service methods
+// API service with typed methods
 export const apiService = {
   // Health check
-  checkHealth: async () => {
-    const response = await axios.get(`${API_URL.replace('/api', '')}/health`);
+  checkHealth: async (): Promise<{ status: string; service: string }> => {
+    const baseUrl = API_URL.replace('/api', '');
+    const response = await axios.get(`${baseUrl}/health`);
+    return response.data;
+  },
+
+  // Readiness check
+  checkReadiness: async (): Promise<{ status: string; ready: boolean }> => {
+    const baseUrl = API_URL.replace('/api', '');
+    const response = await axios.get(`${baseUrl}/health/ready`);
     return response.data;
   },
 
   // Test API connection
-  testConnection: async () => {
+  testConnection: async (): Promise<ApiResponse> => {
     const response = await api.get('/test');
     return response.data;
   },
 
-  // Verify all services
-  verifyServices: async () => {
+  // Verify services
+  verifyServices: async (): Promise<{
+    success: boolean;
+    services?: {
+      database?: { status: string; details?: string };
+      external?: {
+        cloudinary?: { status: string; message?: string };
+        stripe?: { status: string; message?: string; details?: string };
+        email?: { status: string; message?: string; details?: string };
+      };
+    };
+  }> => {
     const response = await api.get('/verify');
-    return response.data;
-  },
-
-  // Verify database
-  verifyDatabase: async () => {
-    const response = await api.get('/verify/database');
-    return response.data;
-  },
-
-  // Verify external services
-  verifyCloudinary: async () => {
-    const response = await api.get('/verify/cloudinary');
-    return response.data;
-  },
-
-  verifyStripe: async () => {
-    const response = await api.get('/verify/stripe');
-    return response.data;
-  },
-
-  verifyEmail: async () => {
-    const response = await api.get('/verify/email');
     return response.data;
   },
 
   // Admin services
   admin: {
-    // Get pending providers for verification
     getPendingProviders: async (params?: { page?: number; limit?: number; search?: string }) => {
       const response = await api.get('/admin/providers/pending', { params });
       return response.data;
     },
 
-    // Get provider details for verification
     getProviderDetails: async (id: string) => {
       const response = await api.get(`/admin/providers/${id}`);
       return response.data;
     },
 
-    // Approve provider
     approveProvider: async (id: string, notes?: string) => {
       const response = await api.post(`/admin/providers/${id}/approve`, { notes });
       return response.data;
     },
 
-    // Reject provider
     rejectProvider: async (id: string, reason: string, notes?: string) => {
       const response = await api.post(`/admin/providers/${id}/reject`, { reason, notes });
       return response.data;
     },
 
-    // Get verification statistics
     getVerificationStats: async () => {
       const response = await api.get('/admin/providers/stats');
       return response.data;
     },
   },
+
+  // Payment services
+  payment: {
+    createPaymentIntent: async (bookingId: string) => {
+      const response = await api.post('/payments/create-intent', { bookingId });
+      return response.data;
+    },
+
+    getPaymentStatus: async (bookingId: string) => {
+      const response = await api.get(`/payments/status/${bookingId}`);
+      return response.data;
+    },
+
+    createRefund: async (bookingId: string, amount?: number) => {
+      const response = await api.post(`/payments/refund/${bookingId}`, { amount });
+      return response.data;
+    },
+  },
 };
 
-export default api;
+// Export typed API instance
+export { api };
+
+// Default export
+export default apiService;

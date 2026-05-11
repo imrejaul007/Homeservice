@@ -1,5 +1,5 @@
 import express from 'express';
-import authController from '../controllers/auth.controller.refactored';
+import authController from '../controllers/auth.controller';
 import authMiddleware from '../middleware/auth.middleware';
 import {
   validateCustomerRegistration,

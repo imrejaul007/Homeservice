@@ -12,7 +12,7 @@ import {
   addBookingMessage,
   createGuestBooking,
   trackBooking
-} from '../controllers/booking.controller.refactored';
+} from '../controllers/booking.controller';
 
 import {
   getProviderAvailability,

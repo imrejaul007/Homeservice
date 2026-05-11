@@ -1,0 +1,16 @@
+# https://www.robotstxt.org/robotstxt.html
+User-agent: *
+Allow: /
+
+# Disallow admin and API routes
+Disallow: /api/
+Disallow: /admin/
+Disallow: /provider/
+Disallow: /customer/
+Disallow: /api-docs/
+
+# Sitemap
+Sitemap: https://nilin.com/sitemap.xml
+
+# Crawl-delay for polite crawling
+Crawl-delay: 1

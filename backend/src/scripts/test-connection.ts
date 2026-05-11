@@ -1,3 +1,6 @@
+import dotenv from 'dotenv';
+dotenv.config();
+
 import database from '../config/database';
 
 async function testConnection() {

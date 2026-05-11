@@ -18,7 +18,7 @@ import NavigationHeader from '../../components/layout/NavigationHeader';
 import Footer from '../../components/layout/Footer';
 import Breadcrumb from '../../components/common/Breadcrumb';
 import { useAuthStore } from '../../stores/authStore';
-import api from '../../services/api';
+import { api } from '../../services/api';
 
 const ProfilePage: React.FC = () => {
   const navigate = useNavigate();

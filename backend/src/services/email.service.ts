@@ -1,5 +1,6 @@
-import nodemailer from 'nodemailer';
+import { Resend } from 'resend';
 import { ApiError } from '../utils/ApiError';
+import logger from '../utils/logger';
 
 // Email templates
 interface EmailTemplate {
@@ -8,61 +9,73 @@ interface EmailTemplate {
   text?: string;
 }
 
-// Create transporter based on environment
-const createTransporter = () => {
-  if (process.env.NODE_ENV === 'production') {
-    // Production: Use real SMTP (e.g., SendGrid, AWS SES, etc.)
-    return nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
-      port: parseInt(process.env.SMTP_PORT || '587'),
-      secure: process.env.SMTP_SECURE === 'true',
-      auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASS
-      }
-    });
-  } else {
-    // Development: Use Ethereal (fake SMTP)
-    return nodemailer.createTransport({
-      host: 'smtp.ethereal.email',
-      port: 587,
-      secure: false,
-      auth: {
-        user: process.env.ETHEREAL_USER || 'ethereal.user@ethereal.email',
-        pass: process.env.ETHEREAL_PASS || 'ethereal.pass'
-      }
-    });
-  }
-};
+// Initialize Resend client
+const resend = new Resend(process.env.RESEND_API_KEY);
 
-const transporter = createTransporter();
+const FROM_EMAIL = process.env.EMAIL_FROM || 'noreply@nilin.com';
+const APP_NAME = process.env.APP_NAME || 'NILIN';
 
-// Base email function
+// Retry configuration
+const MAX_RETRIES = 3;
+const RETRY_DELAY = 1000;
+
+// Base email function with retry support
 const sendEmail = async (
   to: string,
   subject: string,
   html: string,
   text?: string
 ): Promise<void> => {
-  try {
-    const mailOptions = {
-      from: `"${process.env.APP_NAME || 'Home Service Platform'}" <${process.env.FROM_EMAIL || 'noreply@homeservice.com'}>`,
-      to,
-      subject,
-      html,
-      text: text || html.replace(/<[^>]*>/g, '') // Strip HTML for text version
-    };
+  let lastError: Error | null = null;
 
-    const info = await transporter.sendMail(mailOptions);
-    
-    if (process.env.NODE_ENV !== 'production') {
-      console.log('📧 Email sent:', info.messageId);
-      console.log('📧 Preview URL:', nodemailer.getTestMessageUrl(info));
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const result = await resend.emails.send({
+        from: `${APP_NAME} <${FROM_EMAIL}>`,
+        to: [to],
+        subject,
+        html,
+        text: text || html.replace(/<[^>]*>/g, ''),
+      });
+
+      if (result.error) {
+        throw new Error(result.error.message);
+      }
+
+      logger.info('Email sent successfully', {
+        to,
+        subject,
+        messageId: result.data?.id,
+        attempt,
+        action: 'EMAIL_SENT',
+      });
+
+      return;
+    } catch (error: any) {
+      lastError = error;
+      logger.warn('Email send attempt failed', {
+        to,
+        subject,
+        attempt,
+        maxRetries: MAX_RETRIES,
+        error: error.message,
+        action: 'EMAIL_RETRY',
+      });
+
+      if (attempt < MAX_RETRIES) {
+        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY * attempt));
+      }
     }
-  } catch (error) {
-    console.error('📧 Email sending failed:', error);
-    throw new ApiError(500, 'Failed to send email');
   }
+
+  logger.error('Failed to send email after all retries', {
+    to,
+    subject,
+    error: lastError?.message,
+    action: 'EMAIL_FAILED',
+  });
+
+  throw new ApiError(500, 'Failed to send email after multiple attempts');
 };
 
 // Email verification template

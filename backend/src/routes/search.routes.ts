@@ -9,13 +9,18 @@ import {
   getPopularServices,
   getServicesByCategory
 } from '../controllers/search.controller';
-import { 
+import {
+  reindexAllServices,
+  getSearchStats,
+} from '../services/search.service';
+import {
   validateSearchQuery,
   validateSuggestionQuery,
   validateCategoryParam,
   validateServiceId
 } from '../middleware/validation/search.validation';
 import rateLimit from 'express-rate-limit';
+import { asyncHandler } from '../utils/asyncHandler';
 
 const router = express.Router();
 
@@ -52,5 +57,16 @@ router.get('/category/:category', validateCategoryParam, validateSearchQuery, ge
 router.get('/service/:id', validateServiceId, getServiceById);
 
 router.post('/service/:id/click', validateServiceId, trackServiceClick);
+
+// MeiliSearch stats and admin endpoints
+router.get('/stats', asyncHandler(async (_req, res) => {
+  const stats = await getSearchStats();
+  res.json({ success: true, data: stats });
+}));
+
+router.post('/reindex', asyncHandler(async (_req, res) => {
+  await reindexAllServices();
+  res.json({ success: true, message: 'Reindexing started' });
+}));
 
 export default router;

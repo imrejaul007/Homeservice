@@ -7,6 +7,8 @@ import providerRoutes from './provider.routes';
 import providerPublicRoutes from './provider.public.routes';
 import bookingRoutes from './booking.routes';
 import categoryRoutes from './category.routes';
+import paymentRoutes from './payment.routes';
+import analyticsRoutes from './analytics.routes';
 
 const router = Router();
 
@@ -29,6 +31,7 @@ router.get('/', (_req, res) => {
       provider: '/api/provider',
       bookings: '/api/bookings',
       availability: '/api/availability',
+      payments: '/api/payments',
       documentation: '/api-docs'
     }
   });
@@ -58,8 +61,13 @@ router.use('/provider', providerRoutes);
 // Booking and Availability routes
 router.use('/', bookingRoutes);
 
+// Payment routes
+router.use('/payments', paymentRoutes);
+
+// Analytics routes
+router.use('/analytics', analyticsRoutes);
+
 // Future route imports will go here
 // router.use('/users', userRoutes);
-// router.use('/payments', paymentRoutes);
 
 export default router;
