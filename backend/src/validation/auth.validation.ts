@@ -121,7 +121,7 @@ export const providerRegistrationSchema = Joi.object({
   email: emailSchema,
   password: passwordSchema,
   confirmPassword: Joi.string().optional(), // Allow confirmPassword but ignore it
-  phone: phoneSchema.required(),
+  phone: Joi.string().allow('', null).optional(),
   dateOfBirth: Joi.alternatives().try(
     Joi.date().max('now').min('1900-01-01'),
     Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/)
