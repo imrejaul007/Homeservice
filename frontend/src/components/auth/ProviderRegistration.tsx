@@ -36,7 +36,7 @@ const ProviderRegistration: React.FC = () => {
 
   const { register, handleSubmit, formState: { errors: formErrors, isSubmitting }, setError, clearErrors, watch, setValue } = useForm<ProviderRegistrationForm>({
     resolver: zodResolver(providerRegistrationSchema),
-    defaultValues: { serviceCategories: [] },
+    defaultValues: { serviceCategories: [], agreeToTerms: false, agreeToPrivacy: false },
   });
 
   const watchedPassword = watch('password');
