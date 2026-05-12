@@ -27,7 +27,15 @@ const emailSchema = Joi.string()
 
 // Phone validation schema
 const phoneSchema = Joi.string()
-  .pattern(new RegExp('^[\\+]?[(]?[\\d\\s\\-\\(\\)]{10,}$'))
+  .allow('', null)
+  .optional()
+  .custom((value, helpers) => {
+    if (!value || value === '') return value; // Allow empty
+    if (!/^[\+]?[(]?[\d\s\-\(\)]{10,}$/.test(value)) {
+      return helpers.error('string.pattern.base');
+    }
+    return value;
+  })
   .messages({
     'string.pattern.base': 'Please provide a valid phone number'
   });
