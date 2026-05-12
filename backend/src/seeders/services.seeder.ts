@@ -13,7 +13,10 @@ const SAMPLE_SERVICES = [
     duration: 60,
     price: { amount: 150, currency: 'AED', type: 'fixed' },
     tags: ['haircut', 'styling', 'luxury'],
-    location: { address: { city: 'Dubai', state: 'Dubai' } },
+    location: {
+      address: { street: '123 Business Bay', city: 'Dubai', state: 'Dubai', zipCode: '12345', country: 'UAE' },
+      coordinates: { type: 'Point' as const, coordinates: [55.2708, 25.2048] as [number, number] }
+    },
     images: ['https://images.unsplash.com/photo-1560066984-138dadb4c035?w=600&q=80'],
   },
   {
@@ -24,7 +27,10 @@ const SAMPLE_SERVICES = [
     duration: 180,
     price: { amount: 550, currency: 'AED', type: 'fixed' },
     tags: ['balayage', 'color', 'highlights'],
-    location: { address: { city: 'Dubai', state: 'Dubai' } },
+    location: {
+      address: { street: '123 Business Bay', city: 'Dubai', state: 'Dubai', zipCode: '12345', country: 'UAE' },
+      coordinates: { type: 'Point' as const, coordinates: [55.2708, 25.2048] as [number, number] }
+    },
     images: ['https://images.unsplash.com/photo-1522337360788-8b13dee7a37e?w=600&q=80'],
   },
   {
@@ -35,7 +41,10 @@ const SAMPLE_SERVICES = [
     duration: 120,
     price: { amount: 400, currency: 'AED', type: 'fixed' },
     tags: ['keratin', 'treatment', 'smoothing'],
-    location: { address: { city: 'Dubai', state: 'Dubai' } },
+    location: {
+      address: { street: '123 Business Bay', city: 'Dubai', state: 'Dubai', zipCode: '12345', country: 'UAE' },
+      coordinates: { type: 'Point' as const, coordinates: [55.2708, 25.2048] as [number, number] }
+    },
     images: ['https://images.unsplash.com/photo-1521590832167-7bcbfaa6381f?w=600&q=80'],
   },
   // Makeup Services
@@ -47,7 +56,10 @@ const SAMPLE_SERVICES = [
     duration: 120,
     price: { amount: 800, currency: 'AED', type: 'fixed' },
     tags: ['bridal', 'makeup', 'wedding'],
-    location: { address: { city: 'Dubai', state: 'Dubai' } },
+    location: {
+      address: { street: '123 Business Bay', city: 'Dubai', state: 'Dubai', zipCode: '12345', country: 'UAE' },
+      coordinates: { type: 'Point' as const, coordinates: [55.2708, 25.2048] as [number, number] }
+    },
     images: ['https://images.unsplash.com/photo-1487412912498-0447578fcca8?w=600&q=80'],
   },
   {
@@ -58,7 +70,10 @@ const SAMPLE_SERVICES = [
     duration: 60,
     price: { amount: 300, currency: 'AED', type: 'fixed' },
     tags: ['glam', 'evening', 'party'],
-    location: { address: { city: 'Dubai', state: 'Dubai' } },
+    location: {
+      address: { street: '123 Business Bay', city: 'Dubai', state: 'Dubai', zipCode: '12345', country: 'UAE' },
+      coordinates: { type: 'Point' as const, coordinates: [55.2708, 25.2048] as [number, number] }
+    },
     images: ['https://images.unsplash.com/photo-1512496015851-a90fb38ba796?w=600&q=80'],
   },
   // Nail Services
@@ -70,7 +85,10 @@ const SAMPLE_SERVICES = [
     duration: 60,
     price: { amount: 120, currency: 'AED', type: 'fixed' },
     tags: ['gel', 'manicure', 'nails'],
-    location: { address: { city: 'Dubai', state: 'Dubai' } },
+    location: {
+      address: { street: '123 Business Bay', city: 'Dubai', state: 'Dubai', zipCode: '12345', country: 'UAE' },
+      coordinates: { type: 'Point' as const, coordinates: [55.2708, 25.2048] as [number, number] }
+    },
     images: ['https://images.unsplash.com/photo-1604654894610-df63bc536371?w=600&q=80'],
   },
   {
@@ -79,9 +97,12 @@ const SAMPLE_SERVICES = [
     subcategory: 'Nail Art',
     description: 'Custom nail art by our skilled artists. Choose from various designs and techniques.',
     duration: 45,
-    price: { amount: 80, currency: 'AED', type: 'per_design' },
+    price: { amount: 80, currency: 'AED', type: 'fixed' },
     tags: ['nail art', 'design', 'custom'],
-    location: { address: { city: 'Dubai', state: 'Dubai' } },
+    location: {
+      address: { street: '123 Business Bay', city: 'Dubai', state: 'Dubai', zipCode: '12345', country: 'UAE' },
+      coordinates: { type: 'Point' as const, coordinates: [55.2708, 25.2048] as [number, number] }
+    },
     images: ['https://images.unsplash.com/photo-1519014816548-bf5fe059798b?w=600&q=80'],
   },
   // Skin & Aesthetics
@@ -93,7 +114,10 @@ const SAMPLE_SERVICES = [
     duration: 75,
     price: { amount: 450, currency: 'AED', type: 'fixed' },
     tags: ['hydrafacial', 'facial', 'skincare'],
-    location: { address: { city: 'Dubai', state: 'Dubai' } },
+    location: {
+      address: { street: '123 Business Bay', city: 'Dubai', state: 'Dubai', zipCode: '12345', country: 'UAE' },
+      coordinates: { type: 'Point' as const, coordinates: [55.2708, 25.2048] as [number, number] }
+    },
     images: ['https://images.unsplash.com/photo-1570172619644-dfd03ed5b881?w=600&q=80'],
   },
   {
@@ -104,7 +128,10 @@ const SAMPLE_SERVICES = [
     duration: 30,
     price: { amount: 200, currency: 'AED', type: 'fixed' },
     tags: ['led', 'therapy', 'anti-aging'],
-    location: { address: { city: 'Dubai', state: 'Dubai' } },
+    location: {
+      address: { street: '123 Business Bay', city: 'Dubai', state: 'Dubai', zipCode: '12345', country: 'UAE' },
+      coordinates: { type: 'Point' as const, coordinates: [55.2708, 25.2048] as [number, number] }
+    },
     images: ['https://images.unsplash.com/photo-1616394584738-fc6e612e71b9?w=600&q=80'],
   },
   // Massage & Body
@@ -116,7 +143,10 @@ const SAMPLE_SERVICES = [
     duration: 60,
     price: { amount: 250, currency: 'AED', type: 'fixed' },
     tags: ['swedish', 'massage', 'relaxation'],
-    location: { address: { city: 'Dubai', state: 'Dubai' } },
+    location: {
+      address: { street: '123 Business Bay', city: 'Dubai', state: 'Dubai', zipCode: '12345', country: 'UAE' },
+      coordinates: { type: 'Point' as const, coordinates: [55.2708, 25.2048] as [number, number] }
+    },
     images: ['https://images.unsplash.com/photo-1544161515-4ab6ce6db874?w=600&q=80'],
   },
   {
@@ -127,7 +157,10 @@ const SAMPLE_SERVICES = [
     duration: 90,
     price: { amount: 350, currency: 'AED', type: 'fixed' },
     tags: ['deep tissue', 'therapeutic', 'pain relief'],
-    location: { address: { city: 'Dubai', state: 'Dubai' } },
+    location: {
+      address: { street: '123 Business Bay', city: 'Dubai', state: 'Dubai', zipCode: '12345', country: 'UAE' },
+      coordinates: { type: 'Point' as const, coordinates: [55.2708, 25.2048] as [number, number] }
+    },
     images: ['https://images.unsplash.com/photo-1519824145371-296894a0daa9?w=600&q=80'],
   },
   // Personal Care
@@ -139,7 +172,10 @@ const SAMPLE_SERVICES = [
     duration: 45,
     price: { amount: 100, currency: 'AED', type: 'fixed' },
     tags: ['brows', 'shaping', 'lamination'],
-    location: { address: { city: 'Dubai', state: 'Dubai' } },
+    location: {
+      address: { street: '123 Business Bay', city: 'Dubai', state: 'Dubai', zipCode: '12345', country: 'UAE' },
+      coordinates: { type: 'Point' as const, coordinates: [55.2708, 25.2048] as [number, number] }
+    },
     images: ['https://images.unsplash.com/photo-1522335789203-aabd1fc54bc9?w=600&q=80'],
   },
   {
@@ -150,7 +186,10 @@ const SAMPLE_SERVICES = [
     duration: 120,
     price: { amount: 350, currency: 'AED', type: 'fixed' },
     tags: ['lashes', 'extensions', 'volume'],
-    location: { address: { city: 'Dubai', state: 'Dubai' } },
+    location: {
+      address: { street: '123 Business Bay', city: 'Dubai', state: 'Dubai', zipCode: '12345', country: 'UAE' },
+      coordinates: { type: 'Point' as const, coordinates: [55.2708, 25.2048] as [number, number] }
+    },
     images: ['https://images.unsplash.com/photo-1583001931096-959e9a1a6223?w=600&q=80'],
   },
 ];
@@ -167,41 +206,86 @@ async function seedServices() {
     // Get a provider to assign services to
     let provider = await ProviderProfile.findOne();
 
-    // If no provider exists, create a test user and provider
+    // If no provider exists, create one
     if (!provider) {
       logger.info('Services seeder: No provider found, creating test provider...');
 
-      // Create test user
-      const testUser = await User.create({
-        email: 'provider@nilin.com',
-        firstName: 'Sarah',
-        lastName: 'Johnson',
-        phone: '+971501234567',
-        role: 'provider',
-        isEmailVerified: true,
-      });
+      // Find existing user or create one
+      let user = await User.findOne({ email: 'provider@nilin.com' });
+      if (!user) {
+        user = await User.create({
+          email: 'provider@nilin.com',
+          firstName: 'Sarah',
+          lastName: 'Johnson',
+          phone: '+971501234567',
+          password: 'Provider123!',
+          role: 'provider',
+          isEmailVerified: true,
+        });
+      }
 
       // Create provider profile
       provider = await ProviderProfile.create({
-        userId: testUser._id,
-        businessName: 'Sarah Beauty Studio',
-        bio: 'Professional beauty services with 10+ years experience',
-        city: 'Dubai',
-        state: 'Dubai',
-        isVerified: true,
-        rating: { average: 4.8, count: 45 },
+        userId: user._id,
+        tier: 'premium',
+        businessInfo: {
+          businessName: 'Sarah Beauty Studio',
+          businessType: 'individual',
+          description: 'Professional beauty services with 10+ years experience',
+          businessHours: {
+            monday: { isOpen: true, openTime: '09:00', closeTime: '18:00' },
+            tuesday: { isOpen: true, openTime: '09:00', closeTime: '18:00' },
+            wednesday: { isOpen: true, openTime: '09:00', closeTime: '18:00' },
+            thursday: { isOpen: true, openTime: '09:00', closeTime: '18:00' },
+            friday: { isOpen: true, openTime: '09:00', closeTime: '18:00' },
+            saturday: { isOpen: true, openTime: '10:00', closeTime: '16:00' },
+            sunday: { isOpen: false },
+          },
+          serviceRadius: 25,
+          instantBooking: true,
+          advanceBookingDays: 30,
+        },
+        locationInfo: {
+          primaryAddress: {
+            street: '123 Business Bay',
+            city: 'Dubai',
+            state: 'Dubai',
+            zipCode: '12345',
+            country: 'UAE',
+            coordinates: { lat: 25.2048, lng: 55.2708 },
+          },
+          serviceAreas: [],
+          travelFee: { baseFee: 0, perKmFee: 0, maxTravelDistance: 10 },
+          mobileService: false,
+          hasFixedLocation: true,
+        },
+        instagramStyleProfile: {
+          profilePhoto: 'https://images.unsplash.com/photo-1560066984-138dadb4c035?w=400&q=80',
+          bio: 'Professional beauty services with 10+ years experience',
+          isVerified: true,
+          verificationBadges: [],
+          highlights: [],
+          posts: [],
+          followersCount: 0,
+          followingCount: 0,
+          totalLikes: 0,
+          engagementRate: 0,
+        },
         isActive: true,
       });
     }
 
     // Create services
     const createdServices = [];
+    const providerName = provider.businessInfo?.businessName || 'NILIN Provider';
+    const providerTrustScore = (provider.reviewsData as any)?.averageRating || 4.5;
+
     for (const serviceData of SAMPLE_SERVICES) {
       const service = await Service.create({
         ...serviceData,
         providerId: provider._id,
-        providerName: provider.businessName || `${provider.userId}'s Services`,
-        providerTrustScore: provider.rating?.average || 4.5,
+        providerName: providerName,
+        providerTrustScore: providerTrustScore,
         rating: { average: 4.0 + Math.random() * 1, count: Math.floor(Math.random() * 50) + 5 },
         searchMetadata: {
           searchCount: Math.floor(Math.random() * 100),
