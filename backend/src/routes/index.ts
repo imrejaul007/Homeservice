@@ -9,6 +9,7 @@ import bookingRoutes from './booking.routes';
 import categoryRoutes from './category.routes';
 import paymentRoutes from './payment.routes';
 import analyticsRoutes from './analytics.routes';
+import offerRoutes from './offer.routes';
 
 const router = Router();
 
@@ -63,6 +64,9 @@ router.use('/', bookingRoutes);
 
 // Payment routes
 router.use('/payments', paymentRoutes);
+
+// Offer routes
+router.use('/offers', offerRoutes);
 
 // Analytics routes
 router.use('/analytics', analyticsRoutes);

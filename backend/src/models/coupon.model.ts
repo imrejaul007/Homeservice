@@ -28,6 +28,15 @@ export interface ICoupon extends Document {
   title: string;
   description?: string;
 
+  // Homepage Display
+  displayTitle?: string;
+  displaySubtitle?: string;
+  displayGradient?: string;
+  displayBadge?: 'Limited Time' | 'New' | 'Popular' | 'Hot';
+  imageUrl?: string;
+  featured?: boolean;
+  claimExpiresInDays?: number;
+
   // Tracking
   usedBy: Array<{
     userId: mongoose.Types.ObjectId;
@@ -129,6 +138,35 @@ const couponSchema = new Schema<ICoupon>(
     description: {
       type: String,
       trim: true,
+    },
+    // Homepage Display (for Special Offers section)
+    displayTitle: {
+      type: String,
+      trim: true,
+    },
+    displaySubtitle: {
+      type: String,
+      trim: true,
+    },
+    displayGradient: {
+      type: String,
+      default: 'from-nilin-rose to-nilin-coral',
+    },
+    displayBadge: {
+      type: String,
+      enum: ['Limited Time', 'New', 'Popular', 'Hot'],
+    },
+    imageUrl: {
+      type: String,
+    },
+    featured: {
+      type: Boolean,
+      default: false,
+    },
+    claimExpiresInDays: {
+      type: Number,
+      default: 30,
+      min: 1,
     },
     usedBy: [{
       userId: { type: Schema.Types.ObjectId, ref: 'User' },
