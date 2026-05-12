@@ -38,7 +38,7 @@ const CategoryTabs: React.FC = () => {
   const displayCategories = categories.slice(0, 6);
 
   return (
-    <div className="bg-white border-b border-gray-100">
+    <div className="bg-nilin-surface border-b border-nilin-border">
       <div className="max-w-7xl mx-auto">
         <div
           ref={scrollRef}
@@ -58,8 +58,8 @@ const CategoryTabs: React.FC = () => {
                   flex-shrink-0 px-4 md:px-6 py-3 text-sm font-medium whitespace-nowrap
                   transition-all duration-200 border-b-2 relative
                   ${isActive
-                    ? 'text-nilin-accent border-nilin-accent font-semibold'
-                    : 'text-gray-600 border-transparent hover:text-gray-900 hover:border-gray-300'
+                    ? 'text-nilin-coral border-nilin-coral font-semibold'
+                    : 'text-nilin-warmGray border-transparent hover:text-nilin-charcoal hover:border-nilin-border'
                   }
                 `}
               >

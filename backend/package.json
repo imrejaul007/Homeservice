@@ -52,8 +52,10 @@
     "morgan": "^1.10.0",
     "multer": "^1.4.5-lts.1",
     "nodemailer": "^7.0.6",
+    "qrcode": "^1.5.4",
     "resend": "^2.0.0",
     "socket.io": "^4.8.3",
+    "speakeasy": "^2.0.0",
     "stripe": "^14.25.0",
     "winston": "^3.11.0"
   },
@@ -68,6 +70,8 @@
     "@types/morgan": "^1.9.9",
     "@types/multer": "^1.4.11",
     "@types/node": "^20.10.5",
+    "@types/qrcode": "^1.5.5",
+    "@types/speakeasy": "^2.0.10",
     "@types/supertest": "^2.0.16",
     "@types/uuid": "^10.0.0",
     "@typescript-eslint/eslint-plugin": "^6.17.0",
@@ -80,6 +84,7 @@
     "supertest": "^6.3.3",
     "ts-jest": "^29.1.1",
     "ts-node": "^10.9.2",
+    "tsx": "^4.21.0",
     "typescript": "^5.3.3"
   }
 }

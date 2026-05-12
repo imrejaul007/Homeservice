@@ -45,16 +45,16 @@ const CustomerDashboard: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
+    <div className="min-h-screen bg-gradient-to-br from-nilin-blush via-nilin-peach to-nilin-cream flex flex-col">
       <NavigationHeader />
 
       <main className="flex-1 max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-6 md:py-10 w-full">
         {/* Welcome */}
         <div className="mb-8">
-          <h1 className="text-2xl md:text-3xl font-bold text-gray-900 mb-1">
+          <h1 className="text-2xl md:text-3xl font-serif font-light text-nilin-charcoal mb-1">
             Hi, {user?.name?.split(' ')[0] || 'there'}
           </h1>
-          <p className="text-gray-500 text-sm">Welcome back to NILIN</p>
+          <p className="text-nilin-warmGray text-sm font-sans">Welcome back to NILIN</p>
         </div>
 
         {/* Quick Actions */}
@@ -63,16 +63,16 @@ const CustomerDashboard: React.FC = () => {
             <button
               key={action.label}
               onClick={() => navigate(action.href)}
-              className="flex items-center gap-4 p-4 bg-white rounded-2xl border border-gray-100 hover:shadow-md hover:-translate-y-0.5 transition-all text-left group"
+              className="flex items-center gap-4 p-5 glass glass-blur rounded-2xl border border-nilin-border/50 hover:shadow-nilin-lg hover:-translate-y-0.5 transition-all duration-300 text-left group neu-light"
             >
-              <div className="w-12 h-12 rounded-xl bg-nilin-primary/10 flex items-center justify-center flex-shrink-0">
-                <action.icon className="w-6 h-6 text-nilin-primary" />
+              <div className="w-12 h-12 rounded-xl bg-nilin-blush/70 flex items-center justify-center flex-shrink-0">
+                <action.icon className="w-5 h-5 text-nilin-rose" />
               </div>
               <div className="flex-1 min-w-0">
-                <h3 className="font-semibold text-gray-900 text-sm">{action.label}</h3>
-                <p className="text-xs text-gray-500">{action.description}</p>
+                <h3 className="font-sans font-medium text-nilin-charcoal text-sm">{action.label}</h3>
+                <p className="text-xs text-nilin-warmGray">{action.description}</p>
               </div>
-              <ArrowRight className="w-4 h-4 text-gray-400 group-hover:text-nilin-primary group-hover:translate-x-0.5 transition-all flex-shrink-0" />
+              <ArrowRight className="w-4 h-4 text-nilin-coral group-hover:text-nilin-rose group-hover:translate-x-0.5 transition-all flex-shrink-0" />
             </button>
           ))}
         </div>
@@ -80,10 +80,10 @@ const CustomerDashboard: React.FC = () => {
         {/* Recent / Recommended Services */}
         <div>
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-bold text-gray-900">Recommended for you</h2>
+            <h2 className="text-lg font-serif font-light text-nilin-charcoal">Recommended for you</h2>
             <button
               onClick={() => navigate('/search')}
-              className="text-sm font-medium text-nilin-primary hover:text-nilin-primary-dark flex items-center gap-1"
+              className="text-sm font-sans font-medium text-nilin-coral hover:text-nilin-rose flex items-center gap-1 transition-colors"
             >
               View all <ArrowRight className="w-3.5 h-3.5" />
             </button>
@@ -92,7 +92,7 @@ const CustomerDashboard: React.FC = () => {
           {loading ? (
             <div className="space-y-3">
               {[1, 2, 3].map((i) => (
-                <div key={i} className="bg-white rounded-2xl h-24 animate-pulse" />
+                <div key={i} className="glass glass-blur rounded-2xl h-24 animate-pulse gradient-3d" />
               ))}
             </div>
           ) : recentServices.length > 0 ? (
@@ -101,20 +101,20 @@ const CustomerDashboard: React.FC = () => {
                 <button
                   key={service._id}
                   onClick={() => navigate(`/services/${service._id}`)}
-                  className="flex items-center gap-4 w-full p-3 bg-white rounded-2xl border border-gray-100 hover:shadow-md transition-all text-left group"
+                  className="flex items-center gap-4 w-full p-3 glass glass-blur rounded-2xl border border-nilin-border/50 hover:shadow-nilin-lg transition-all duration-300 text-left group card-3d"
                 >
                   <div className="w-16 h-16 rounded-xl overflow-hidden flex-shrink-0">
                     <img
                       src={getServiceImage(service)}
                       alt={service.name}
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                     />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <h3 className="font-semibold text-gray-900 text-sm line-clamp-1 group-hover:text-nilin-primary transition-colors">
+                    <h3 className="font-sans font-medium text-nilin-charcoal text-sm line-clamp-1 group-hover:text-nilin-rose transition-colors">
                       {service.name}
                     </h3>
-                    <div className="flex items-center gap-3 text-xs text-gray-500 mt-1">
+                    <div className="flex items-center gap-3 text-xs text-nilin-warmGray mt-1">
                       <span className="flex items-center gap-0.5">
                         <Star className="w-3 h-3 text-amber-400 fill-amber-400" />
                         {service.rating?.average?.toFixed(1) || '4.8'}
@@ -126,7 +126,7 @@ const CustomerDashboard: React.FC = () => {
                     </div>
                   </div>
                   <div className="text-right flex-shrink-0">
-                    <span className="font-bold text-gray-900 text-sm">
+                    <span className="font-sans font-medium text-nilin-charcoal text-sm">
                       AED {service.price?.amount || 199}
                     </span>
                   </div>
@@ -134,11 +134,11 @@ const CustomerDashboard: React.FC = () => {
               ))}
             </div>
           ) : (
-            <div className="bg-white rounded-2xl p-8 text-center border border-gray-100">
-              <p className="text-gray-500 text-sm mb-4">No services to show yet</p>
+            <div className="glass glass-blur rounded-2xl p-8 text-center border border-nilin-border/50 inner-glow">
+              <p className="text-nilin-warmGray text-sm mb-4 font-sans">No services to show yet</p>
               <button
                 onClick={() => navigate('/search')}
-                className="px-5 py-2 bg-nilin-primary text-white rounded-full text-sm font-semibold"
+                className="px-5 py-2.5 bg-gradient-to-r from-nilin-rose to-nilin-coral text-white rounded-xl text-sm font-sans font-medium shadow-nilin-warm hover:shadow-nilin-lg transition-all btn-3d"
               >
                 Browse Services
               </button>

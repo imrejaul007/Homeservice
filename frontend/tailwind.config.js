@@ -48,35 +48,59 @@ export default {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
         },
-        // NILIN Brand Colors
+        // NILIN Brand Colors - Luxury Minimal Aesthetic
         nilin: {
-          // Soft pastels (backgrounds)
-          pink: '#FFE5F0',
-          lavender: '#E8E5FF',
-          cream: '#F5F3E8',
-          blue: '#E5F3FF',
-          // Bold accents (CTAs, highlights)
-          primary: '#6366F1',
-          'primary-dark': '#4F46E5',
-          secondary: '#8B5CF6',
-          accent: '#EC4899',
-          success: '#10B981',
-          dark: '#1E1B4B',
+          // Primary palette (from reference images)
+          blush: '#F5E6E0',
+          peach: '#FAE5E0',
+          cream: '#FDFBF9',
+          rose: '#D4A89A',
+          coral: '#E8B4A8',
+          // Text colors
+          charcoal: '#2D2D2D',
+          warmGray: '#6B6B6B',
+          lightGray: '#9B9B9B',
+          // Semantic colors
+          primary: '#E8B4A8',
+          'primary-dark': '#D4A89A',
+          secondary: '#D4A89A',
+          accent: '#2D2D2D',
+          success: '#7BA889',
+          warning: '#E8C4A8',
+          error: '#C88B8B',
+          // Backgrounds
+          surface: '#FFFFFF',
+          muted: '#F8F6F4',
+          overlay: 'rgba(45, 45, 45, 0.05)',
         },
       },
+      fontFamily: {
+        serif: ['Cormorant Garamond', 'Georgia', 'serif'],
+        sans: ['Inter', 'system-ui', 'sans-serif'],
+      },
       backgroundImage: {
-        'gradient-nilin-primary': 'linear-gradient(135deg, #FFE5F0, #E8E5FF)',
-        'gradient-nilin-secondary': 'linear-gradient(135deg, #E8E5FF, #E5F3FF)',
-        'gradient-nilin-tertiary': 'linear-gradient(135deg, #F5F3E8, #E5F3FF)',
-        'gradient-nilin-pink-lavender': 'linear-gradient(135deg, #FFE5F0, #E8E5FF)',
-        'gradient-nilin-lavender-blue': 'linear-gradient(135deg, #E8E5FF, #E5F3FF)',
-        'gradient-nilin-hero': 'linear-gradient(135deg, #FFE5F0 0%, #E8E5FF 50%, #E5F3FF 100%)',
-        'gradient-nilin-cta': 'linear-gradient(135deg, #1E1B4B 0%, #4F46E5 100%)',
+        'gradient-nilin-primary': 'linear-gradient(135deg, #F5E6E0, #FAE5E0)',
+        'gradient-nilin-hero': 'linear-gradient(135deg, #F5E6E0 0%, #FAE5E0 50%, #FDFBF9 100%)',
+        'gradient-nilin-warm': 'linear-gradient(135deg, #F5E6E0 0%, #E8B4A8 100%)',
+        'gradient-nilin-cta': 'linear-gradient(135deg, #D4A89A 0%, #E8B4A8 100%)',
+        'gradient-nilin-surface': 'linear-gradient(180deg, #FFFFFF 0%, #FDFBF9 100%)',
       },
       borderRadius: {
         lg: "var(--radius)",
         md: "calc(var(--radius) - 2px)",
         sm: "calc(var(--radius) - 4px)",
+        xl: "16px",
+        '2xl': "20px",
+      },
+      boxShadow: {
+        'nilin': '0 4px 20px rgba(45, 45, 45, 0.08)',
+        'nilin-lg': '0 8px 30px rgba(45, 45, 45, 0.12)',
+        'nilin-sm': '0 2px 10px rgba(45, 45, 45, 0.06)',
+        'nilin-warm': '0 4px 20px rgba(212, 168, 154, 0.15)',
+      },
+      spacing: {
+        '18': '4.5rem',
+        '22': '5.5rem',
       },
       keyframes: {
         "accordion-down": {
@@ -87,10 +111,30 @@ export default {
           from: { height: "var(--radix-accordion-content-height)" },
           to: { height: 0 },
         },
+        "fade-in": {
+          from: { opacity: 0 },
+          to: { opacity: 1 },
+        },
+        "slide-up": {
+          from: { opacity: 0, transform: 'translateY(10px)' },
+          to: { opacity: 1, transform: 'translateY(0)' },
+        },
+        "toast-slide-in": {
+          from: { opacity: 0, transform: 'translateX(100%)' },
+          to: { opacity: 1, transform: 'translateX(0)' },
+        },
+        "toast-fade-out": {
+          from: { opacity: 1, transform: 'translateX(0)' },
+          to: { opacity: 0, transform: 'translateX(100%)' },
+        },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up": "accordion-up 0.2s ease-out",
+        "fade-in": "fade-in 0.4s ease-out",
+        "slide-up": "slide-up 0.4s ease-out",
+        "toast-slide-in": "toast-slide-in 0.3s ease-out",
+        "toast-fade-out": "toast-fade-out 0.2s ease-in forwards",
       },
     },
   },

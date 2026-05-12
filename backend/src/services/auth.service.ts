@@ -24,9 +24,9 @@ import {
 // Token Generation Helpers
 // ============================================
 
-const generateTokens = (user: any): TokenPair => {
+const generateTokens = (user: any, rememberMe: boolean = false): TokenPair => {
   const accessToken = user.generateAuthToken();
-  const refreshToken = user.generateRefreshToken();
+  const refreshToken = user.generateRefreshToken(rememberMe);
   return { accessToken, refreshToken };
 };
 
@@ -826,7 +826,7 @@ export class AuthService {
   // Login
   // ========================================
 
-  async login(email: string, password: string, ip?: string): Promise<LoginResult> {
+  async login(email: string, password: string, ip?: string, rememberMe: boolean = false): Promise<LoginResult> {
     // Find user and include password for comparison
     const user = await User.findOne({ email }).select('+password');
 
@@ -871,8 +871,8 @@ export class AuthService {
     // Update last login
     await user.updateLastLogin(ip);
 
-    // Generate tokens
-    const tokens = generateTokens(user);
+    // Generate tokens (pass rememberMe to control refresh token expiry)
+    const tokens = generateTokens(user, rememberMe);
 
     // Get role-specific data
     const roleSpecificData = await this.getRoleSpecificData(user);

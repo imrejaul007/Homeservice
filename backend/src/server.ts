@@ -6,6 +6,8 @@ import app from './app';
 import database from './config/database';
 import logger from './utils/logger';
 import { initializeSocketServer } from './socket';
+import { initializeEventSubscriptions } from './event-bus';
+import { initializeIndexes } from './services/search.service';
 
 // Create HTTP server
 const server = http.createServer(app);
@@ -84,6 +86,22 @@ const startServer = async () => {
       } catch (seedError) {
         logger.warn('Database seeding skipped or failed:', seedError);
       }
+    }
+
+    // Initialize event subscriptions
+    try {
+      await initializeEventSubscriptions();
+      logger.info('Event subscriptions initialized');
+    } catch (error) {
+      logger.warn('Event subscriptions initialization failed:', error);
+    }
+
+    // Initialize search indexes (Meilisearch)
+    try {
+      await initializeIndexes();
+      logger.info('Search indexes initialized');
+    } catch (error) {
+      logger.warn('Search indexes initialization failed:', error);
     }
 
     // Start listening

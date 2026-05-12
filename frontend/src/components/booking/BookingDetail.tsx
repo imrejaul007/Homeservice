@@ -185,17 +185,17 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
   if (isLoading) {
     return (
       <div className="flex justify-center items-center py-12">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-nilin-coral"></div>
       </div>
     );
   }
 
   if (!currentBooking) {
     return (
-      <div className="text-center py-12">
-        <AlertCircle className="h-16 w-16 text-gray-300 mx-auto mb-4" />
-        <h3 className="text-lg font-medium text-gray-900 mb-2">Booking not found</h3>
-        <p className="text-gray-500">The booking you're looking for doesn't exist or you don't have access to it.</p>
+      <div className="glass text-center py-12 rounded-xl gradient-3d">
+        <AlertCircle className="h-16 w-16 text-nilin-rose/50 mx-auto mb-4" />
+        <h3 className="text-lg font-medium text-nilin-charcoal mb-2">Booking not found</h3>
+        <p className="text-nilin-warmGray">The booking you're looking for doesn't exist or you don't have access to it.</p>
       </div>
     );
   }
@@ -210,23 +210,23 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
         <div className="flex items-center gap-4 mb-4">
           <Link
             to={`/${userType}/bookings`}
-            className="p-2 hover:bg-gray-100 rounded-full transition-colors"
+            className="glass-btn p-2 hover:bg-nilin-blush/30 rounded-full transition-colors"
           >
-            <ArrowLeft className="h-5 w-5 text-gray-600" />
+            <ArrowLeft className="h-5 w-5 text-nilin-warmGray" />
           </Link>
           <div className="flex-1">
-            <h1 className="text-2xl font-bold text-gray-900">
+            <h1 className="text-2xl font-bold text-nilin-charcoal font-serif">
               Booking #{bookingService.formatBookingNumber(currentBooking.bookingNumber)}
             </h1>
             <div className="flex items-center gap-3 mt-2">
               <div className={cn(
-                "flex items-center gap-2 px-3 py-1 rounded-full text-sm font-medium",
+                "flex items-center gap-2 px-3 py-1 rounded-full text-sm font-medium glass",
                 bookingService.getStatusColor(currentBooking.status)
               )}>
                 {getStatusIcon(currentBooking.status)}
                 {bookingService.getStatusLabel(currentBooking.status)}
               </div>
-              <span className="text-sm text-gray-500">
+              <span className="text-sm text-nilin-warmGray">
                 Created {new Date(currentBooking.createdAt).toLocaleDateString()}
               </span>
             </div>
@@ -239,16 +239,16 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
                 const getActionColor = (actionType: string) => {
                   switch (actionType) {
                     case 'accept':
-                      return 'bg-green-500 hover:bg-green-600 text-white';
+                      return 'bg-nilin-success hover:bg-nilin-success/90 text-white';
                     case 'start':
-                      return 'bg-blue-500 hover:bg-blue-600 text-white';
+                      return 'bg-gradient-to-r from-nilin-rose to-nilin-coral hover:shadow-nilin-warm text-white';
                     case 'complete':
-                      return 'bg-purple-500 hover:bg-purple-600 text-white';
+                      return 'bg-nilin-success hover:bg-nilin-success/90 text-white';
                     case 'reject':
                     case 'cancel':
-                      return 'bg-red-500 hover:bg-red-600 text-white';
+                      return 'bg-nilin-error hover:bg-nilin-error/90 text-white';
                     default:
-                      return 'bg-gray-500 hover:bg-gray-600 text-white';
+                      return 'bg-nilin-warmGray hover:bg-nilin-charcoal text-white';
                   }
                 };
 
@@ -258,7 +258,7 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
                     onClick={() => handleBookingAction(action)}
                     disabled={actionLoading === action}
                     className={cn(
-                      "flex items-center gap-2 px-4 py-2 rounded-lg transition-colors text-sm font-medium",
+                      "btn-3d flex items-center gap-2 px-4 py-2 rounded-xl transition-all text-sm font-medium",
                       getActionColor(action),
                       actionLoading === action && "opacity-50 cursor-not-allowed"
                     )}
@@ -278,15 +278,15 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
         </div>
 
         {/* Tab Navigation */}
-        <div className="border-b border-gray-200">
-          <nav className="flex space-x-8">
+        <div className="glass border-b border-nilin-border/30 rounded-t-xl">
+          <nav className="flex space-x-8 px-4">
             <Link
               to={`/${userType}/bookings/${currentBooking._id}`}
               className={cn(
-                "py-2 px-1 border-b-2 font-medium text-sm",
+                "py-2 px-1 border-b-2 font-medium text-sm transition-all",
                 activeTab === 'details'
-                  ? "border-blue-500 text-blue-600"
-                  : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
+                  ? "border-nilin-coral text-nilin-coral"
+                  : "border-transparent text-nilin-warmGray hover:text-nilin-charcoal hover:border-nilin-border"
               )}
             >
               <FileText className="h-4 w-4 inline mr-2" />
@@ -295,16 +295,16 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
             <Link
               to={`/${userType}/bookings/${currentBooking._id}?tab=messages`}
               className={cn(
-                "py-2 px-1 border-b-2 font-medium text-sm flex items-center",
+                "py-2 px-1 border-b-2 font-medium text-sm flex items-center transition-all",
                 activeTab === 'messages'
-                  ? "border-blue-500 text-blue-600"
-                  : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
+                  ? "border-nilin-coral text-nilin-coral"
+                  : "border-transparent text-nilin-warmGray hover:text-nilin-charcoal hover:border-nilin-border"
               )}
             >
               <MessageCircle className="h-4 w-4 inline mr-2" />
               Messages
               {currentBooking.messages.length > 0 && (
-                <span className="ml-1 bg-gray-200 text-gray-700 text-xs rounded-full px-2 py-0.5">
+                <span className="ml-1 glass bg-nilin-blush text-nilin-charcoal text-xs rounded-full px-2 py-0.5">
                   {currentBooking.messages.length}
                 </span>
               )}
@@ -315,12 +315,12 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
 
       {/* Error Messages */}
       {errors.length > 0 && (
-        <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg">
+        <div className="glass mb-6 p-4 rounded-xl bg-nilin-error/10 border border-nilin-error/20">
           <div className="flex items-center">
-            <AlertCircle className="h-5 w-5 text-red-600 mr-2" />
+            <AlertCircle className="h-5 w-5 text-nilin-error mr-2" />
             <div>
-              <h3 className="text-sm font-medium text-red-800">Error</h3>
-              <div className="text-sm text-red-700 mt-1">
+              <h3 className="text-sm font-medium text-nilin-error">Error</h3>
+              <div className="text-sm text-nilin-error/80 mt-1">
                 {errors.map((error, index) => (
                   <p key={index}>{error.message}</p>
                 ))}
@@ -335,12 +335,12 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
         <div className="space-y-6">
           {/* Completed Booking Notice */}
           {currentBooking.status === 'completed' && (
-            <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+            <div className="glass p-4 rounded-xl bg-nilin-success/10 border border-nilin-success/20">
               <div className="flex items-center">
-                <CheckCircle className="h-5 w-5 text-green-600 mr-2" />
+                <CheckCircle className="h-5 w-5 text-nilin-success mr-2" />
                 <div>
-                  <h3 className="text-sm font-medium text-green-800">Service Completed</h3>
-                  <p className="text-sm text-green-700 mt-1">
+                  <h3 className="text-sm font-medium text-nilin-success">Service Completed</h3>
+                  <p className="text-sm text-nilin-success/80 mt-1">
                     This service has been successfully completed.
                     {currentBooking.providerResponse?.completedAt && (
                       <span className="ml-1">
@@ -355,12 +355,12 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
 
           {/* In Progress Notice */}
           {currentBooking.status === 'in_progress' && (
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+            <div className="glass p-4 rounded-xl gradient-3d">
               <div className="flex items-center">
-                <AlertCircle className="h-5 w-5 text-blue-600 mr-2" />
+                <AlertCircle className="h-5 w-5 text-nilin-rose mr-2" />
                 <div>
-                  <h3 className="text-sm font-medium text-blue-800">Service In Progress</h3>
-                  <p className="text-sm text-blue-700 mt-1">
+                  <h3 className="text-sm font-medium text-nilin-charcoal">Service In Progress</h3>
+                  <p className="text-sm text-nilin-warmGray mt-1">
                     This service is currently being performed.
                     {currentBooking.providerResponse?.arrivalTime && (
                       <span className="ml-1">
@@ -373,44 +373,44 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
             </div>
           )}
           {/* Service Information */}
-          <div className="bg-white border border-gray-200 rounded-lg p-6">
-            <h2 className="text-lg font-semibold text-gray-900 mb-4">Service Information</h2>
+          <div className="glass glass-blur rounded-xl p-6 gradient-3d card-3d">
+            <h2 className="text-lg font-semibold text-nilin-charcoal mb-4 font-serif">Service Information</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div>
-                <h3 className="font-medium text-gray-900 mb-2">
+                <h3 className="font-medium text-nilin-charcoal mb-2">
                   {currentBooking.service?.name || 'Service'}
                 </h3>
-                <p className="text-gray-600 mb-4">
+                <p className="text-nilin-warmGray mb-4">
                   {currentBooking.service?.description || 'No description available'}
                 </p>
 
                 <div className="space-y-3">
-                  <div className="flex items-center gap-3">
-                    <Calendar className="h-5 w-5 text-gray-400" />
+                  <div className="flex items-center gap-3 neu-light p-3 rounded-xl">
+                    <Calendar className="h-5 w-5 text-nilin-rose" />
                     <div>
-                      <p className="font-medium text-gray-900">{date}</p>
-                      <p className="text-sm text-gray-600">{time}</p>
+                      <p className="font-medium text-nilin-charcoal">{date}</p>
+                      <p className="text-sm text-nilin-warmGray">{time}</p>
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-3">
-                    <Clock className="h-5 w-5 text-gray-400" />
+                  <div className="flex items-center gap-3 neu-light p-3 rounded-xl">
+                    <Clock className="h-5 w-5 text-nilin-rose" />
                     <div>
-                      <p className="font-medium text-gray-900">{(currentBooking as any).duration || currentBooking.estimatedDuration || (currentBooking as any).selectedDuration || currentBooking.service?.duration || '—'} minutes</p>
-                      <p className="text-sm text-gray-600">Estimated duration</p>
+                      <p className="font-medium text-nilin-charcoal">{(currentBooking as any).duration || currentBooking.estimatedDuration || (currentBooking as any).selectedDuration || currentBooking.service?.duration || '—'} minutes</p>
+                      <p className="text-sm text-nilin-warmGray">Estimated duration</p>
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-3">
-                    <MapPin className="h-5 w-5 text-gray-400" />
+                  <div className="flex items-center gap-3 neu-light p-3 rounded-xl">
+                    <MapPin className="h-5 w-5 text-nilin-rose" />
                     <div>
-                      <p className="font-medium text-gray-900">
+                      <p className="font-medium text-nilin-charcoal">
                         {currentBooking.location.type === 'customer_address' && 'Customer Address'}
                         {currentBooking.location.type === 'provider_location' && 'Provider Location'}
                         {currentBooking.location.type === 'online' && 'Online/Virtual'}
                       </p>
                       {currentBooking.location.address && (
-                        <div className="text-sm text-gray-600">
+                        <div className="text-sm text-nilin-warmGray">
                           <p>{currentBooking.location.address.street}</p>
                           <p>
                             {currentBooking.location.address.city}, {currentBooking.location.address.state} {currentBooking.location.address.zipCode}
@@ -421,11 +421,11 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
                   </div>
 
                   {currentBooking.customerInfo.phone && (
-                    <div className="flex items-center gap-3">
-                      <Phone className="h-5 w-5 text-gray-400" />
+                    <div className="flex items-center gap-3 neu-light p-3 rounded-xl">
+                      <Phone className="h-5 w-5 text-nilin-rose" />
                       <div>
-                        <p className="font-medium text-gray-900">{currentBooking.customerInfo.phone}</p>
-                        <p className="text-sm text-gray-600">Contact number</p>
+                        <p className="font-medium text-nilin-charcoal">{currentBooking.customerInfo.phone}</p>
+                        <p className="text-sm text-nilin-warmGray">Contact number</p>
                       </div>
                     </div>
                   )}
@@ -436,9 +436,9 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
                 {/* Provider/Customer Info */}
                 {userType === 'customer' && currentBooking.provider && (
                   <div className="mb-6">
-                    <h4 className="font-medium text-gray-900 mb-3">Service Provider</h4>
-                    <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
-                      <div className="w-12 h-12 bg-blue-500 rounded-full flex items-center justify-center">
+                    <h4 className="font-medium text-nilin-charcoal mb-3">Service Provider</h4>
+                    <div className="flex items-center gap-3 p-3 neu-light rounded-xl">
+                      <div className="w-12 h-12 bg-gradient-to-br from-nilin-rose to-nilin-coral rounded-full flex items-center justify-center shadow-nilin-warm">
                         {currentBooking.provider.avatar ? (
                           <img
                             src={currentBooking.provider.avatar}
@@ -450,16 +450,16 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
                         )}
                       </div>
                       <div>
-                        <p className="font-medium text-gray-900">
+                        <p className="font-medium text-nilin-charcoal">
                           {currentBooking.provider.firstName} {currentBooking.provider.lastName}
                         </p>
                         {currentBooking.provider.businessInfo?.businessName && (
-                          <p className="text-sm text-gray-600">
+                          <p className="text-sm text-nilin-warmGray">
                             {currentBooking.provider.businessInfo.businessName}
                           </p>
                         )}
                         {currentBooking.provider.phone && (
-                          <p className="text-sm text-gray-600">{currentBooking.provider.phone}</p>
+                          <p className="text-sm text-nilin-warmGray">{currentBooking.provider.phone}</p>
                         )}
                       </div>
                     </div>
@@ -468,9 +468,9 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
 
                 {userType === 'provider' && currentBooking.customer && (
                   <div className="mb-6">
-                    <h4 className="font-medium text-gray-900 mb-3">Customer</h4>
-                    <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
-                      <div className="w-12 h-12 bg-green-500 rounded-full flex items-center justify-center">
+                    <h4 className="font-medium text-nilin-charcoal mb-3">Customer</h4>
+                    <div className="flex items-center gap-3 p-3 neu-light rounded-xl">
+                      <div className="w-12 h-12 bg-gradient-to-br from-nilin-success to-nilin-success/70 rounded-full flex items-center justify-center shadow-nilin-warm">
                         {currentBooking.customer.avatar ? (
                           <img
                             src={currentBooking.customer.avatar}
@@ -482,12 +482,12 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
                         )}
                       </div>
                       <div>
-                        <p className="font-medium text-gray-900">
+                        <p className="font-medium text-nilin-charcoal">
                           {currentBooking.customer.firstName} {currentBooking.customer.lastName}
                         </p>
-                        <p className="text-sm text-gray-600">{currentBooking.customer.email}</p>
+                        <p className="text-sm text-nilin-warmGray">{currentBooking.customer.email}</p>
                         {currentBooking.customer.phone && (
-                          <p className="text-sm text-gray-600">{currentBooking.customer.phone}</p>
+                          <p className="text-sm text-nilin-warmGray">{currentBooking.customer.phone}</p>
                         )}
                       </div>
                     </div>
@@ -495,38 +495,38 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
                 )}
 
                 {/* Pricing Breakdown */}
-                <div className="bg-gray-50 p-4 rounded-lg">
-                  <h4 className="font-medium text-gray-900 mb-3">Pricing Details</h4>
+                <div className="glass p-4 rounded-xl gradient-3d">
+                  <h4 className="font-medium text-nilin-charcoal mb-3">Pricing Details</h4>
                   <div className="space-y-2 text-sm">
                     <div className="flex justify-between">
-                      <span className="text-gray-600">Base Service:</span>
-                      <span>{formatPrice(currentBooking.pricing.basePrice || currentBooking.service?.price.amount || 0, currentBooking.pricing.currency)}</span>
+                      <span className="text-nilin-warmGray">Base Service:</span>
+                      <span className="text-nilin-charcoal">{formatPrice(currentBooking.pricing.basePrice || currentBooking.service?.price.amount || 0, currentBooking.pricing.currency)}</span>
                     </div>
 
                     {currentBooking.pricing.addOns.length > 0 && (
                       <>
                         {currentBooking.pricing.addOns.map((addon, index) => (
-                          <div key={index} className="flex justify-between text-gray-600">
+                          <div key={index} className="flex justify-between text-nilin-warmGray">
                             <span>{addon.name}:</span>
-                            <span>{formatPrice(addon.price, currentBooking.pricing.currency)}</span>
+                            <span className="text-nilin-charcoal">{formatPrice(addon.price, currentBooking.pricing.currency)}</span>
                           </div>
                         ))}
                       </>
                     )}
 
-                    <div className="flex justify-between border-t pt-2">
-                      <span className="text-gray-600">Subtotal:</span>
-                      <span>{formatPrice(currentBooking.pricing.subtotal, currentBooking.pricing.currency)}</span>
+                    <div className="flex justify-between border-t border-nilin-border/30 pt-2">
+                      <span className="text-nilin-warmGray">Subtotal:</span>
+                      <span className="text-nilin-charcoal">{formatPrice(currentBooking.pricing.subtotal, currentBooking.pricing.currency)}</span>
                     </div>
 
                     <div className="flex justify-between">
-                      <span className="text-gray-600">Taxes:</span>
-                      <span>{formatPrice(currentBooking.pricing.taxes, currentBooking.pricing.currency)}</span>
+                      <span className="text-nilin-warmGray">Taxes:</span>
+                      <span className="text-nilin-charcoal">{formatPrice(currentBooking.pricing.taxes, currentBooking.pricing.currency)}</span>
                     </div>
 
-                    <div className="flex justify-between border-t pt-2 font-semibold text-lg">
-                      <span>Total:</span>
-                      <span>{formatPrice(currentBooking.pricing.totalAmount || currentBooking.pricing.total || 0, currentBooking.pricing.currency)}</span>
+                    <div className="flex justify-between border-t border-nilin-border/30 pt-2 font-semibold text-lg">
+                      <span className="text-nilin-charcoal">Total:</span>
+                      <span className="text-nilin-coral">{formatPrice(currentBooking.pricing.totalAmount || currentBooking.pricing.total || 0, currentBooking.pricing.currency)}</span>
                     </div>
                   </div>
                 </div>
@@ -535,13 +535,13 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
 
             {/* Special Requests & Instructions */}
             {(currentBooking.customerInfo.specialRequests || currentBooking.customerInfo.accessInstructions || currentBooking.location.notes) && (
-              <div className="mt-6 pt-6 border-t border-gray-200">
-                <h4 className="font-medium text-gray-900 mb-3">Additional Information</h4>
+              <div className="mt-6 pt-6 border-t border-nilin-border/30">
+                <h4 className="font-medium text-nilin-charcoal mb-3">Additional Information</h4>
                 <div className="space-y-4">
                   {currentBooking.customerInfo.specialRequests && (
                     <div>
-                      <h5 className="text-sm font-medium text-gray-700 mb-1">Special Requests:</h5>
-                      <p className="text-sm text-gray-600 p-3 bg-blue-50 rounded-lg">
+                      <h5 className="text-sm font-medium text-nilin-warmGray mb-1">Special Requests:</h5>
+                      <p className="text-sm text-nilin-charcoal p-3 neu-light rounded-xl">
                         {currentBooking.customerInfo.specialRequests}
                       </p>
                     </div>
@@ -549,8 +549,8 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
 
                   {currentBooking.customerInfo.accessInstructions && (
                     <div>
-                      <h5 className="text-sm font-medium text-gray-700 mb-1">Access Instructions:</h5>
-                      <p className="text-sm text-gray-600 p-3 bg-yellow-50 rounded-lg">
+                      <h5 className="text-sm font-medium text-nilin-warmGray mb-1">Access Instructions:</h5>
+                      <p className="text-sm text-nilin-charcoal p-3 neu-light rounded-xl">
                         {currentBooking.customerInfo.accessInstructions}
                       </p>
                     </div>
@@ -558,8 +558,8 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
 
                   {currentBooking.location.notes && (
                     <div>
-                      <h5 className="text-sm font-medium text-gray-700 mb-1">Location Notes:</h5>
-                      <p className="text-sm text-gray-600 p-3 bg-gray-50 rounded-lg">
+                      <h5 className="text-sm font-medium text-nilin-warmGray mb-1">Location Notes:</h5>
+                      <p className="text-sm text-nilin-charcoal p-3 neu-light rounded-xl">
                         {currentBooking.location.notes}
                       </p>
                     </div>
@@ -571,26 +571,26 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
 
           {/* Status History */}
           {currentBooking.statusHistory.length > 0 && (
-            <div className="bg-white border border-gray-200 rounded-lg p-6">
-              <h2 className="text-lg font-semibold text-gray-900 mb-4">Status History</h2>
+            <div className="glass glass-blur rounded-xl p-6 gradient-3d card-3d">
+              <h2 className="text-lg font-semibold text-nilin-charcoal mb-4 font-serif">Status History</h2>
               <div className="space-y-3">
                 {currentBooking.statusHistory.map((status, index) => (
-                  <div key={index} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
+                  <div key={index} className="flex items-center gap-3 p-3 neu-light rounded-xl">
                     <div className={cn(
                       "w-3 h-3 rounded-full",
-                      status.status === 'completed' ? "bg-green-500" :
-                      status.status === 'cancelled' ? "bg-red-500" :
-                      "bg-blue-500"
+                      status.status === 'completed' ? "bg-nilin-success" :
+                      status.status === 'cancelled' ? "bg-nilin-error" :
+                      "bg-nilin-coral"
                     )} />
                     <div className="flex-1">
-                      <p className="font-medium text-gray-900 capitalize">
+                      <p className="font-medium text-nilin-charcoal capitalize">
                         {status.status.replace('_', ' ')}
                       </p>
-                      <p className="text-sm text-gray-600">
+                      <p className="text-sm text-nilin-warmGray">
                         {new Date(status.timestamp).toLocaleString()}
                       </p>
                       {status.notes && (
-                        <p className="text-sm text-gray-600 mt-1">{status.notes}</p>
+                        <p className="text-sm text-nilin-warmGray mt-1">{status.notes}</p>
                       )}
                     </div>
                   </div>
@@ -602,9 +602,9 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
       )}
 
       {activeTab === 'messages' && (
-        <div className="bg-white border border-gray-200 rounded-lg">
+        <div className="glass glass-blur rounded-xl gradient-3d">
           {/* Messages List */}
-          <div className="p-6 max-h-96 overflow-y-auto border-b border-gray-200">
+          <div className="p-6 max-h-96 overflow-y-auto border-b border-nilin-border/30">
             {currentBooking.messages.length > 0 ? (
               <div className="space-y-4">
                 {currentBooking.messages.map((message) => {
@@ -619,15 +619,15 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
                       )}
                     >
                       <div className={cn(
-                        "max-w-xs lg:max-w-md px-4 py-2 rounded-lg",
+                        "max-w-xs lg:max-w-md px-4 py-2 rounded-xl",
                         isOwnMessage
-                          ? "bg-blue-500 text-white"
-                          : "bg-gray-100 text-gray-900"
+                          ? "bg-gradient-to-r from-nilin-rose to-nilin-coral text-white"
+                          : "glass text-nilin-charcoal"
                       )}>
                         <p className="text-sm">{message.message}</p>
                         <p className={cn(
                           "text-xs mt-1",
-                          isOwnMessage ? "text-blue-100" : "text-gray-500"
+                          isOwnMessage ? "text-white/80" : "text-nilin-warmGray"
                         )}>
                           {new Date(message.timestamp).toLocaleString()}
                         </p>
@@ -637,8 +637,8 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
                 })}
               </div>
             ) : (
-              <div className="text-center py-8 text-gray-500">
-                <MessageCircle className="h-12 w-12 mx-auto mb-2 text-gray-300" />
+              <div className="text-center py-8 text-nilin-warmGray">
+                <MessageCircle className="h-12 w-12 mx-auto mb-2 text-nilin-rose/50" />
                 <p>No messages yet</p>
                 <p className="text-sm">Start a conversation about this booking</p>
               </div>
@@ -653,16 +653,16 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
                 value={newMessage}
                 onChange={(e) => setNewMessage(e.target.value)}
                 placeholder="Type your message..."
-                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="glass-input flex-1 px-3 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-rose/30 font-sans border-glow"
               />
               <button
                 type="submit"
                 disabled={!newMessage.trim() || isSubmitting}
                 className={cn(
-                  "px-4 py-2 bg-blue-500 text-white rounded-lg transition-colors flex items-center gap-2",
+                  "btn-3d px-4 py-3 bg-gradient-to-r from-nilin-rose to-nilin-coral text-white rounded-xl transition-all flex items-center gap-2",
                   (!newMessage.trim() || isSubmitting)
                     ? "opacity-50 cursor-not-allowed"
-                    : "hover:bg-blue-600"
+                    : "hover:shadow-nilin-warm"
                 )}
               >
                 {isSubmitting ? (

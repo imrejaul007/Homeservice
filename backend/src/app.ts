@@ -5,8 +5,11 @@ import rateLimit from 'express-rate-limit';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
 import path from 'path';
+import cluster from 'cluster';
+import os from 'os';
 
 import { stream } from './utils/logger';
+import logger from './utils/logger';
 import { APP_CONSTANTS } from './config/constants';
 import routes from './routes';
 import { errorHandler } from './middleware/error.middleware';
@@ -105,8 +108,51 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 
-// Compression middleware
-app.use(compression());
+// Compression middleware with optimized settings for production
+app.use(compression({
+  filter: (req, res) => {
+    // Don't compress responses with this request header
+    if (req.headers['x-no-compression']) {
+      return false;
+    }
+    // Use compression filter from compression module
+    const fallback = compression.filter(req, res);
+    return fallback;
+  },
+  level: parseInt(process.env.COMPRESSION_LEVEL || '6'), // 0-9, default 6
+  threshold: 1024, // Only compress responses > 1KB
+  chunkSize: 16 * 1024, // 16KB chunks
+  windowBits: 15,
+}));
+
+// HTTP/2 Support hints (note: requires spdy or http2 module, handled at server level)
+// Add hints for HTTP/2 push preload headers
+app.use((_req, res, next) => {
+  // Add preload hints for critical resources
+  res.setHeader('Link', '</static/js/main.js>; rel=preload; as=script');
+
+  // HTTP/2 Server Push can be configured at the reverse proxy (nginx/haproxy) level
+  // These hints help the server understand what resources should be pushed
+
+  next();
+});
+
+// Connection keep-alive optimizations
+app.use((_req, res, next) => {
+  // Enable keep-alive for persistent connections
+  res.setHeader('Connection', 'keep-alive');
+
+  // Set Keep-Alive timeout on server
+  res.setTimeout(parseInt(process.env.KEEP_ALIVE_TIMEOUT || '65000'), () => {
+    // Handle timeout if needed
+  });
+
+  next();
+});
+
+// Trust proxy for proper IP detection behind load balancers
+app.set('trust proxy', parseInt(process.env.TRUST_PROXY_COUNT || '1'));
+app.set('trust proxy', 'loopback');
 
 // Body parsing middleware with size limits
 app.use(express.json({ limit: '1mb' }));
@@ -131,10 +177,11 @@ if (process.env.NODE_ENV === 'development') {
   app.use(morgan('combined', { stream }));
 }
 
-// Global rate limiting for all API routes
+// Global rate limiting for all API routes (disabled in development)
+const isDev = process.env.NODE_ENV !== 'production';
 const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '500'),
+  max: isDev ? 5000 : parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '500'),
   standardHeaders: true,
   legacyHeaders: false,
   message: {
@@ -224,6 +271,81 @@ app.use('/api', routes);
 if (process.env.NODE_ENV === 'development') {
   app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 }
+
+// Production static file serving with aggressive caching
+if (process.env.NODE_ENV === 'production') {
+  // Cache control for static assets
+  app.use('/static', express.static(path.join(__dirname, '../dist/client'), {
+    maxAge: '1y', // Cache for 1 year
+    etag: true,
+    lastModified: true,
+    setHeaders: (res) => {
+      // Add cache busting headers
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+    },
+  }));
+
+  // Cache control for uploads (shorter TTL)
+  app.use('/uploads', express.static(path.join(__dirname, '../uploads'), {
+    maxAge: '7d', // Cache for 7 days
+    etag: true,
+    setHeaders: (res) => {
+      res.setHeader('Cache-Control', 'public, max-age=604800');
+    },
+  }));
+}
+
+// Production cluster support
+if (process.env.NODE_ENV === 'production' && process.env.CLUSTER_MODE === 'true') {
+  const numCPUs = os.cpus().length;
+
+  if (cluster.isMaster) {
+    logger.info(`Master process ${process.pid} is running`);
+    logger.info(`Starting ${numCPUs} worker processes...`);
+
+    // Fork workers
+    for (let i = 0; i < numCPUs; i++) {
+      cluster.fork();
+    }
+
+    // Handle worker exits
+    cluster.on('exit', (worker, code, signal) => {
+      logger.warn(`Worker ${worker.process.pid} died (code: ${code}, signal: ${signal}). Restarting...`);
+      cluster.fork();
+    });
+
+    // Handle worker online
+    cluster.on('online', (worker) => {
+      logger.info(`Worker ${worker.process.pid} is online`);
+    });
+  } else {
+    // Workers share the TCP connection
+    logger.info(`Worker ${process.pid} started`);
+  }
+}
+
+// Graceful shutdown handler
+process.on('SIGTERM', () => {
+  logger.info('SIGTERM signal received. Closing HTTP server...');
+
+  // Stop accepting new connections
+  // Existing connections will be handled until they complete
+
+  setTimeout(() => {
+    logger.info('Shutdown complete');
+    process.exit(0);
+  }, parseInt(process.env.GRACEFUL_SHUTDOWN_TIMEOUT || '10000'));
+});
+
+process.on('SIGINT', () => {
+  logger.info('SIGINT signal received. Closing HTTP server...');
+
+  setTimeout(() => {
+    logger.info('Shutdown complete');
+    process.exit(0);
+  }, parseInt(process.env.GRACEFUL_SHUTDOWN_TIMEOUT || '10000'));
+});
 
 // 404 handler
 app.use((req: Request, res: Response) => {

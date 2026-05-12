@@ -16,7 +16,8 @@ import {
   TrendingUp,
   Users,
   AlertCircle,
-  CheckCircle
+  CheckCircle,
+  XCircle
 } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
 import authService from '../../services/AuthService';
@@ -75,6 +76,13 @@ interface PerformanceStats {
   conversionRate: number;
 }
 
+interface BookingStats {
+  newBookings: number;
+  pendingRequests: number;
+  todaySchedule: number;
+  completedThisMonth: number;
+}
+
 const ServiceManagement: React.FC = () => {
   const { user, tokens, isAuthenticated } = useAuthStore();
   const [services, setServices] = useState<Service[]>([]);
@@ -84,7 +92,15 @@ const ServiceManagement: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [sortBy, setSortBy] = useState('createdAt');
   const [sortOrder, setSortOrder] = useState('desc');
-  
+
+  // Date Range Filter
+  const [startDate, setStartDate] = useState<string>('');
+  const [endDate, setEndDate] = useState<string>('');
+
+  // Category Filter
+  const [categoryFilter, setCategoryFilter] = useState<string>('all');
+  const [availableCategories, setAvailableCategories] = useState<string[]>([]);
+
   // Stats
   const [serviceStats, setServiceStats] = useState<ServiceStats>({
     total: 0,
@@ -92,12 +108,20 @@ const ServiceManagement: React.FC = () => {
     draft: 0,
     inactive: 0
   });
-  
+
   const [performanceStats, setPerformanceStats] = useState<PerformanceStats>({
     totalViews: 0,
     totalClicks: 0,
     totalBookings: 0,
     conversionRate: 0
+  });
+
+  // Booking Stats
+  const [bookingStats, setBookingStats] = useState<BookingStats>({
+    newBookings: 0,
+    pendingRequests: 0,
+    todaySchedule: 0,
+    completedThisMonth: 0
   });
 
   // Add Service Modal State
@@ -123,6 +147,10 @@ const ServiceManagement: React.FC = () => {
     status: 'active'
   });
 
+  // Analytics Modal State
+  const [showAnalyticsModal, setShowAnalyticsModal] = useState(false);
+  const [analyticsService, setAnalyticsService] = useState<Service | null>(null);
+
   useEffect(() => {
     // Don't make API calls if user is not authenticated as provider
     if (!isAuthenticated || !user || user.role !== 'provider' || !tokens?.accessToken) {
@@ -138,7 +166,7 @@ const ServiceManagement: React.FC = () => {
 
     fetchServices();
     fetchOverviewStats();
-  }, [statusFilter, sortBy, sortOrder, isAuthenticated, user, tokens]);
+  }, [statusFilter, sortBy, sortOrder, startDate, endDate, categoryFilter, isAuthenticated, user, tokens]);
 
   const fetchServices = async () => {
     try {
@@ -152,6 +180,16 @@ const ServiceManagement: React.FC = () => {
         limit: '20'
       });
 
+      // Add date range filters
+      if (startDate) queryParams.append('startDate', startDate);
+      if (endDate) queryParams.append('endDate', endDate);
+
+      // Add category filter
+      if (categoryFilter !== 'all') queryParams.append('category', categoryFilter);
+
+      // Add search filter
+      if (searchTerm) queryParams.append('search', searchTerm);
+
       const data = await authService.get<{success: boolean, data: {services: Service[]}}>(`/provider/services?${queryParams}`);
 
       if (!data.success) {
@@ -159,7 +197,7 @@ const ServiceManagement: React.FC = () => {
       }
 
       setServices(data.data.services);
-      
+
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch services');
       console.error('Error fetching services:', err);
@@ -170,15 +208,32 @@ const ServiceManagement: React.FC = () => {
 
   const fetchOverviewStats = async () => {
     try {
-      const data = await authService.get<{success: boolean, data: {overview: {serviceStats: ServiceStats, performanceStats: PerformanceStats}}}>('/provider/analytics');
+      const data = await authService.get<{
+        success: boolean,
+        data: {
+          overview: {
+            serviceStats: ServiceStats,
+            performanceStats: PerformanceStats,
+            bookingStats: BookingStats,
+            categories: string[]
+          }
+        }
+      }>('/provider/analytics');
 
       if (data.success) {
         setServiceStats(data.data.overview.serviceStats);
         setPerformanceStats(data.data.overview.performanceStats);
+        setBookingStats(data.data.overview.bookingStats);
+        setAvailableCategories(data.data.overview.categories || []);
       }
     } catch (err) {
       console.error('Error fetching stats:', err);
     }
+  };
+
+  const openAnalyticsModal = (service: Service) => {
+    setAnalyticsService(service);
+    setShowAnalyticsModal(true);
   };
 
   const toggleServiceStatus = async (serviceId: string, currentStatus: string) => {
@@ -310,7 +365,62 @@ const ServiceManagement: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      {/* Stats Cards */}
+      {/* Booking Overview Stats */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-lg shadow-sm border p-5 text-white">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-blue-100">New Bookings</p>
+              <p className="text-2xl font-bold">{bookingStats.newBookings}</p>
+              <p className="text-xs text-blue-200 mt-1">Last 7 days</p>
+            </div>
+            <div className="w-10 h-10 bg-white/20 rounded-lg flex items-center justify-center">
+              <Calendar className="w-5 h-5" />
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-gradient-to-br from-yellow-500 to-yellow-600 rounded-lg shadow-sm border p-5 text-white">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-yellow-100">Pending Requests</p>
+              <p className="text-2xl font-bold">{bookingStats.pendingRequests}</p>
+              <p className="text-xs text-yellow-200 mt-1">Awaiting response</p>
+            </div>
+            <div className="w-10 h-10 bg-white/20 rounded-lg flex items-center justify-center">
+              <Clock className="w-5 h-5" />
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-gradient-to-br from-purple-500 to-purple-600 rounded-lg shadow-sm border p-5 text-white">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-purple-100">Today's Schedule</p>
+              <p className="text-2xl font-bold">{bookingStats.todaySchedule}</p>
+              <p className="text-xs text-purple-200 mt-1">Appointments</p>
+            </div>
+            <div className="w-10 h-10 bg-white/20 rounded-lg flex items-center justify-center">
+              <Users className="w-5 h-5" />
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-gradient-to-br from-green-500 to-green-600 rounded-lg shadow-sm border p-5 text-white">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-green-100">Completed</p>
+              <p className="text-2xl font-bold">{bookingStats.completedThisMonth}</p>
+              <p className="text-xs text-green-200 mt-1">This month</p>
+            </div>
+            <div className="w-10 h-10 bg-white/20 rounded-lg flex items-center justify-center">
+              <CheckCircle className="w-5 h-5" />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Service Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         <div className="bg-white rounded-lg shadow-sm border p-6">
           <div className="flex items-center">
@@ -389,9 +499,9 @@ const ServiceManagement: React.FC = () => {
 
         {/* Filters */}
         <div className="px-6 py-4 border-b border-gray-200 bg-gray-50">
-          <div className="flex flex-col sm:flex-row space-y-4 sm:space-y-0 sm:space-x-4">
+          <div className="flex flex-col lg:flex-row gap-4 flex-wrap">
             {/* Search */}
-            <div className="relative flex-1">
+            <div className="relative flex-1 min-w-[200px]">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
               <input
                 type="text"
@@ -402,11 +512,42 @@ const ServiceManagement: React.FC = () => {
               />
             </div>
 
+            {/* Category Filter */}
+            <select
+              value={categoryFilter}
+              onChange={(e) => setCategoryFilter(e.target.value)}
+              className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 min-w-[150px]"
+            >
+              <option value="all">All Categories</option>
+              {availableCategories.map(cat => (
+                <option key={cat} value={cat}>{cat}</option>
+              ))}
+            </select>
+
+            {/* Date Range */}
+            <div className="flex items-center gap-2">
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                placeholder="Start date"
+              />
+              <span className="text-gray-400">-</span>
+              <input
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                placeholder="End date"
+              />
+            </div>
+
             {/* Status Filter */}
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
-              className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 min-w-[120px]"
             >
               <option value="all">All Status</option>
               <option value="active">Active</option>
@@ -423,7 +564,7 @@ const ServiceManagement: React.FC = () => {
                 setSortBy(field);
                 setSortOrder(order);
               }}
-              className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 min-w-[150px]"
             >
               <option value="createdAt-desc">Newest First</option>
               <option value="createdAt-asc">Oldest First</option>
@@ -432,6 +573,22 @@ const ServiceManagement: React.FC = () => {
               <option value="views-desc">Most Views</option>
               <option value="popularity-desc">Most Popular</option>
             </select>
+
+            {/* Clear Filters */}
+            {(searchTerm || startDate || endDate || categoryFilter !== 'all' || statusFilter !== 'all') && (
+              <button
+                onClick={() => {
+                  setSearchTerm('');
+                  setStartDate('');
+                  setEndDate('');
+                  setCategoryFilter('all');
+                  setStatusFilter('all');
+                }}
+                className="px-3 py-2 text-sm text-red-600 hover:text-red-700 hover:bg-red-50 rounded-md transition-colors"
+              >
+                Clear Filters
+              </button>
+            )}
           </div>
         </div>
 
@@ -512,12 +669,21 @@ const ServiceManagement: React.FC = () => {
                   </div>
                   
                   <div className="flex items-center space-x-2 ml-4">
+                    {/* Analytics */}
+                    <button
+                      onClick={() => openAnalyticsModal(service)}
+                      className="p-2 text-purple-600 hover:bg-purple-50 rounded-md transition-colors"
+                      title="View Analytics"
+                    >
+                      <TrendingUp className="w-5 h-5" />
+                    </button>
+
                     {/* Toggle Status */}
                     <button
                       onClick={() => toggleServiceStatus(service._id, service.status)}
                       className={`p-2 rounded-md transition-colors ${
-                        service.isActive 
-                          ? 'text-green-600 hover:bg-green-50' 
+                        service.isActive
+                          ? 'text-green-600 hover:bg-green-50'
                           : 'text-gray-400 hover:bg-gray-50'
                       }`}
                       title={service.isActive ? 'Deactivate service' : 'Activate service'}
@@ -528,7 +694,7 @@ const ServiceManagement: React.FC = () => {
                         <ToggleLeft className="w-5 h-5" />
                       )}
                     </button>
-                    
+
                     {/* Edit */}
                     <button
                       onClick={() => {
@@ -579,6 +745,137 @@ const ServiceManagement: React.FC = () => {
         }}
         serviceId={editingServiceId}
       />
+
+      {/* Service Analytics Modal */}
+      {showAnalyticsModal && analyticsService && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+          <div className="bg-white rounded-xl shadow-xl max-w-lg w-full max-h-[90vh] overflow-auto">
+            {/* Header */}
+            <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">Service Analytics</h2>
+                <p className="text-sm text-gray-600">{analyticsService.name}</p>
+              </div>
+              <button
+                onClick={() => setShowAnalyticsModal(false)}
+                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                <XCircle className="w-5 h-5 text-gray-500" />
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="p-6 space-y-6">
+              {/* Key Metrics */}
+              <div className="grid grid-cols-2 gap-4">
+                <div className="bg-blue-50 rounded-lg p-4 text-center">
+                  <div className="text-3xl font-bold text-blue-600">
+                    {analyticsService.searchMetadata.searchCount.toLocaleString()}
+                  </div>
+                  <div className="text-sm text-blue-600">Total Views</div>
+                </div>
+                <div className="bg-green-50 rounded-lg p-4 text-center">
+                  <div className="text-3xl font-bold text-green-600">
+                    {analyticsService.searchMetadata.bookingCount}
+                  </div>
+                  <div className="text-sm text-green-600">Total Bookings</div>
+                </div>
+              </div>
+
+              {/* Book Rate */}
+              <div className="bg-purple-50 rounded-lg p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-medium text-purple-700">Book Rate</span>
+                  <span className="text-lg font-bold text-purple-600">
+                    {analyticsService.searchMetadata.clickCount > 0
+                      ? ((analyticsService.searchMetadata.bookingCount / analyticsService.searchMetadata.clickCount) * 100).toFixed(1)
+                      : 0}%
+                  </span>
+                </div>
+                <div className="w-full bg-purple-200 rounded-full h-2">
+                  <div
+                    className="bg-purple-600 h-2 rounded-full"
+                    style={{
+                      width: `${Math.min(100, analyticsService.searchMetadata.clickCount > 0
+                        ? (analyticsService.searchMetadata.bookingCount / analyticsService.searchMetadata.clickCount) * 100
+                        : 0)}%`
+                    }}
+                  />
+                </div>
+                <p className="text-xs text-purple-600 mt-1">
+                  {analyticsService.searchMetadata.clickCount} clicks
+                </p>
+              </div>
+
+              {/* Rating */}
+              <div className="bg-yellow-50 rounded-lg p-4">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-yellow-700">Average Rating</span>
+                  <div className="flex items-center gap-2">
+                    <div className="flex">
+                      {[1, 2, 3, 4, 5].map((star) => (
+                        <Star
+                          key={star}
+                          className={`w-5 h-5 ${
+                            star <= Math.round(analyticsService.rating.average)
+                              ? 'text-yellow-400 fill-yellow-400'
+                              : 'text-gray-300'
+                          }`}
+                        />
+                      ))}
+                    </div>
+                    <span className="text-lg font-bold text-yellow-600">
+                      {analyticsService.rating.average.toFixed(1)}
+                    </span>
+                  </div>
+                </div>
+                <p className="text-xs text-yellow-600 mt-1">
+                  Based on {analyticsService.rating.count} reviews
+                </p>
+              </div>
+
+              {/* Additional Stats */}
+              <div className="border-t border-gray-200 pt-4">
+                <h4 className="text-sm font-medium text-gray-700 mb-3">Performance Details</h4>
+                <div className="space-y-2">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-600">Popularity Score</span>
+                    <span className="font-medium">{analyticsService.searchMetadata.popularityScore}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-600">Status</span>
+                    <span className="font-medium capitalize">{analyticsService.status}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-600">Category</span>
+                    <span className="font-medium">{analyticsService.category}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-600">Price</span>
+                    <span className="font-medium">
+                      {analyticsService.price.currency} {analyticsService.price.amount}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-600">Duration</span>
+                    <span className="font-medium">{analyticsService.duration} min</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 rounded-b-xl">
+              <button
+                onClick={() => setShowAnalyticsModal(false)}
+                className="w-full px-4 py-2 bg-gray-900 text-white rounded-lg hover:bg-gray-800 transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

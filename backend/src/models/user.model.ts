@@ -184,6 +184,21 @@ export interface IUser extends Document {
   verificationExpire?: Date;
   refreshTokens: string[];
   tokenVersion?: number;
+
+  // Two-Factor Authentication
+  twoFactor: {
+    enabled: boolean;
+    secret?: string; // Encrypted TOTP secret
+    recoveryCodes?: string[]; // Bcrypt hashed recovery codes
+    backupEnabled: boolean;
+    lastVerified?: Date;
+    trustedDevices?: Array<{
+      deviceId: string;
+      deviceName: string;
+      addedAt: Date;
+      lastUsed?: Date;
+    }>;
+  };
   
   // Audit
   createdAt: Date;
@@ -509,14 +524,29 @@ const userSchema = new Schema<IUser>(
     verificationExpire: Date,
     refreshTokens: [String],
     tokenVersion: { type: Number, default: 1 },
-    
+
+    // Two-Factor Authentication
+    twoFactor: {
+      enabled: { type: Boolean, default: false },
+      secret: { type: String, select: false }, // Encrypted TOTP secret
+      recoveryCodes: { type: [String], select: false }, // Bcrypt hashed recovery codes
+      backupEnabled: { type: Boolean, default: true },
+      lastVerified: Date,
+      trustedDevices: [{
+        deviceId: { type: String, required: true },
+        deviceName: { type: String },
+        addedAt: { type: Date, default: Date.now },
+        lastUsed: Date
+      }]
+    },
+
     // Audit
     createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
     updatedBy: { type: Schema.Types.ObjectId, ref: 'User' }
   },
   {
     timestamps: true,
-    toJSON: { 
+    toJSON: {
       virtuals: true,
       transform: function(_doc, ret) {
         delete (ret as any).password;
@@ -528,6 +558,8 @@ const userSchema = new Schema<IUser>(
         delete (ret as any).refreshTokens;
         delete (ret as any).loginAttempts;
         delete (ret as any).lockUntil;
+        delete (ret as any)['twoFactor.secret'];
+        delete (ret as any)['twoFactor.recoveryCodes'];
         return ret;
       }
     },
@@ -624,16 +656,26 @@ userSchema.methods.generateAuthToken = function(): string {
   );
 };
 
-userSchema.methods.generateRefreshToken = function(): string {
+userSchema.methods.generateRefreshToken = function(rememberMe: boolean = false): string {
   const payload = {
     id: this._id.toString(),
     tokenVersion: this.tokenVersion || 1,
-    deviceFingerprint: this.currentSession?.deviceFingerprint || 'unknown'
+    deviceFingerprint: this.currentSession?.deviceFingerprint || 'unknown',
+    rememberMe
   };
 
   const secret = process.env.JWT_REFRESH_SECRET as string;
+
+  // If rememberMe is true, issue a longer-lived token (30 days vs 7 days)
+  let expiresIn = '7d';
+  if (rememberMe) {
+    expiresIn = process.env.JWT_REMEMBER_EXPIRE || '30d';
+  } else {
+    expiresIn = process.env.JWT_REFRESH_EXPIRE || '7d';
+  }
+
   const options = {
-    expiresIn: process.env.JWT_REFRESH_EXPIRE || '30d',  // Long-lived refresh tokens
+    expiresIn,
     issuer: 'home-service-platform'
   } as jwt.SignOptions;
 

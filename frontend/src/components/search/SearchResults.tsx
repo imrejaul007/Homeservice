@@ -91,26 +91,30 @@ const SearchResults: React.FC<SearchResultsProps> = ({
     };
 
     return (
-      <div className="flex items-center justify-between border-t border-gray-200 bg-white px-4 py-3 sm:px-6">
+      // NILIN: glass-nilin background and border-nilin separator
+      <div className="flex items-center justify-between border-t border-nilin glass-nilin px-4 py-3 sm:px-6">
         <div className="flex flex-1 justify-between sm:hidden">
           <button
             onClick={() => handlePageChange(currentPage - 1)}
             disabled={currentPage === 1}
-            className="relative inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+            // NILIN: rounded-nilin styling
+            className="relative inline-flex items-center rounded-nilin border border-nilin/30 bg-white px-4 py-2 text-sm font-medium text-nilin-charcoal hover:bg-nilin-blush/30 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Previous
           </button>
           <button
             onClick={() => handlePageChange(currentPage + 1)}
             disabled={currentPage === totalPages}
-            className="relative ml-3 inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+            // NILIN: rounded-nilin styling
+            className="relative ml-3 inline-flex items-center rounded-nilin border border-nilin/30 bg-white px-4 py-2 text-sm font-medium text-nilin-charcoal hover:bg-nilin-blush/30 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Next
           </button>
         </div>
         <div className="hidden sm:flex sm:flex-1 sm:items-center sm:justify-between">
           <div>
-            <p className="text-sm text-gray-700">
+            {/* NILIN: text-nilin-charcoal */}
+            <p className="text-sm text-nilin-charcoal">
               Showing{' '}
               <span className="font-medium">
                 {(currentPage - 1) * (filters.limit || 10) + 1}
@@ -124,11 +128,12 @@ const SearchResults: React.FC<SearchResultsProps> = ({
             </p>
           </div>
           <div>
-            <nav className="isolate inline-flex -space-x-px rounded-md shadow-sm" aria-label="Pagination">
+            {/* NILIN: rounded-nilin styling for pagination */}
+            <nav className="isolate inline-flex -space-x-px rounded-nilin shadow-nilin" aria-label="Pagination">
               <button
                 onClick={() => handlePageChange(currentPage - 1)}
                 disabled={currentPage === 1}
-                className="relative inline-flex items-center rounded-l-md px-2 py-2 text-gray-400 ring-1 ring-inset ring-gray-300 hover:bg-gray-50 focus:z-20 focus:outline-offset-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="relative inline-flex items-center rounded-l-nilin px-2 py-2 text-nilin-charcoal ring-1 ring-inset ring-nilin/30 hover:bg-nilin-blush/30 focus:z-20 focus:outline-offset-0 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <ChevronLeft className="h-5 w-5" />
               </button>
@@ -137,10 +142,10 @@ const SearchResults: React.FC<SearchResultsProps> = ({
                   key={page}
                   onClick={() => handlePageChange(page)}
                   className={cn(
-                    'relative inline-flex items-center px-4 py-2 text-sm font-semibold focus:z-20',
+                    'relative inline-flex items-center px-4 py-2 text-sm font-semibold focus:z-20 rounded-nilin',
                     page === currentPage
-                      ? 'z-10 bg-blue-600 text-white focus:bg-blue-500'
-                      : 'text-gray-900 ring-1 ring-inset ring-gray-300 hover:bg-gray-50'
+                      ? 'z-10 bg-nilin text-white focus:bg-nilin/90'
+                      : 'text-nilin-charcoal ring-1 ring-inset ring-nilin/30 hover:bg-nilin-blush/30'
                   )}
                 >
                   {page}
@@ -149,7 +154,7 @@ const SearchResults: React.FC<SearchResultsProps> = ({
               <button
                 onClick={() => handlePageChange(currentPage + 1)}
                 disabled={currentPage === totalPages}
-                className="relative inline-flex items-center rounded-r-md px-2 py-2 text-gray-400 ring-1 ring-inset ring-gray-300 hover:bg-gray-50 focus:z-20 focus:outline-offset-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="relative inline-flex items-center rounded-r-nilin px-2 py-2 text-nilin-charcoal ring-1 ring-inset ring-nilin/30 hover:bg-nilin-blush/30 focus:z-20 focus:outline-offset-0 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <ChevronRight className="h-5 w-5" />
               </button>
@@ -165,32 +170,33 @@ const SearchResults: React.FC<SearchResultsProps> = ({
       {/* Results Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h2 className="text-xl font-semibold text-gray-900">
+          {/* NILIN: text-nilin-charcoal */}
+          <h2 className="text-xl font-semibold text-nilin-charcoal">
             {currentQuery ? (
               <>
-                Results for "<span className="text-blue-600">{currentQuery}</span>"
+                Results for "<span className="text-nilin">{currentQuery}</span>"
               </>
             ) : (
               'All Services'
             )}
           </h2>
           {!isLoading && (
-            <p className="text-sm text-gray-600 mt-1">
+            <p className="text-sm text-nilin-charcoal/70 mt-1">
               {totalCount === 0 ? 'No services found' : `${totalCount} services found`}
             </p>
           )}
         </div>
 
-        {/* Layout Toggle */}
+        {/* Layout Toggle - NILIN: rounded-nilin styling */}
         {showLayoutToggle && hasResults && (
-          <div className="flex items-center border border-gray-300 rounded-lg">
+          <div className="flex items-center border border-nilin/30 rounded-nilin overflow-hidden">
             <button
               onClick={() => onLayoutChange?.('grid')}
               className={cn(
-                'p-2 rounded-l-lg transition-colors',
+                'p-2 transition-colors',
                 layout === 'grid'
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-white text-gray-600 hover:bg-gray-50'
+                  ? 'bg-nilin text-white'
+                  : 'bg-white text-nilin-charcoal hover:bg-nilin-blush/30'
               )}
             >
               <Grid3X3 className="h-4 w-4" />
@@ -198,10 +204,10 @@ const SearchResults: React.FC<SearchResultsProps> = ({
             <button
               onClick={() => onLayoutChange?.('list')}
               className={cn(
-                'p-2 rounded-r-lg transition-colors',
+                'p-2 transition-colors',
                 layout === 'list'
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-white text-gray-600 hover:bg-gray-50'
+                  ? 'bg-nilin text-white'
+                  : 'bg-white text-nilin-charcoal hover:bg-nilin-blush/30'
               )}
             >
               <List className="h-4 w-4" />
@@ -214,8 +220,8 @@ const SearchResults: React.FC<SearchResultsProps> = ({
       {isLoading && (
         <div className="flex items-center justify-center py-12">
           <div className="text-center">
-            <Loader2 className="h-8 w-8 animate-spin text-blue-600 mx-auto mb-4" />
-            <p className="text-gray-600">Searching for services...</p>
+            <Loader2 className="h-8 w-8 animate-spin text-nilin mx-auto mb-4" />
+            <p className="text-nilin-charcoal">Searching for services...</p>
           </div>
         </div>
       )}
@@ -225,11 +231,12 @@ const SearchResults: React.FC<SearchResultsProps> = ({
         <div className="flex items-center justify-center py-12">
           <div className="text-center">
             <AlertCircle className="h-8 w-8 text-red-500 mx-auto mb-4" />
-            <p className="text-gray-900 font-medium mb-2">Search Error</p>
-            <p className="text-gray-600 mb-4">{error}</p>
+            <p className="text-nilin-charcoal font-medium mb-2">Search Error</p>
+            <p className="text-nilin-charcoal/70 mb-4">{error}</p>
             <button
               onClick={() => performSearch()}
-              className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md transition-colors"
+              // NILIN: rounded-nilin and shadow-nilin
+              className="bg-nilin hover:bg-nilin/90 text-white px-4 py-2 rounded-nilin transition-colors shadow-nilin"
             >
               Try Again
             </button>
@@ -241,16 +248,16 @@ const SearchResults: React.FC<SearchResultsProps> = ({
       {isEmpty && !isLoading && !error && (
         <div className="flex items-center justify-center py-12">
           <div className="text-center">
-            <div className="text-6xl mb-4">🔍</div>
-            <p className="text-gray-900 font-medium mb-2">No services found</p>
-            <p className="text-gray-600 mb-4">
+            <div className="text-6xl mb-4">&#128269;</div>
+            <p className="text-nilin-charcoal font-medium mb-2">No services found</p>
+            <p className="text-nilin-charcoal/70 mb-4">
               Try adjusting your search terms or filters
             </p>
           </div>
         </div>
       )}
 
-      {/* Results Grid/List */}
+      {/* Results Grid/List - NILIN: animate-nilin-in for results appearing */}
       {hasResults && !isLoading && !error && (
         <>
           <div
@@ -261,18 +268,31 @@ const SearchResults: React.FC<SearchResultsProps> = ({
                 : 'space-y-6'
             )}
           >
-            {services.map((service) => (
-              <ServiceCard
+            {services.map((service, index) => (
+              <div
                 key={service._id}
-                service={service}
-                variant={layout === 'list' ? 'compact' : 'default'}
-                showDistance={true}
-                onServiceClick={handleServiceClick}
-                onProviderClick={handleProviderClick}
-                onFavorite={handleFavorite}
-                onShare={handleShare}
-                className={layout === 'list' ? 'flex-row' : ''}
-              />
+                // NILIN: animate-nilin-in with staggered delay based on index
+                className={cn(
+                  'animate-nilin-in',
+                  // Dynamic animation delay for staggered effect
+                  `[animation-delay:${Math.min(index * 50, 500)}ms]`
+                )}
+              >
+                <ServiceCard
+                  service={service}
+                  variant={layout === 'list' ? 'compact' : 'default'}
+                  showDistance={true}
+                  onServiceClick={handleServiceClick}
+                  onProviderClick={handleProviderClick}
+                  onFavorite={handleFavorite}
+                  onShare={handleShare}
+                  className={cn(
+                    layout === 'list' ? 'flex-row' : '',
+                    // NILIN: shadow-nilin for result cards
+                    'shadow-nilin'
+                  )}
+                />
+              </div>
             ))}
           </div>
 

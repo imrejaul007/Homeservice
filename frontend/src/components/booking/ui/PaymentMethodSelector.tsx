@@ -1,5 +1,6 @@
 import React from 'react';
 import { CreditCard, Smartphone, Check, Banknote } from 'lucide-react';
+import { cn } from '../../../lib/utils';
 
 type PaymentMethod = 'apple_pay' | 'credit_card' | 'cash';
 
@@ -17,7 +18,7 @@ const PaymentMethodSelector: React.FC<PaymentMethodSelectorProps> = ({
       value: 'apple_pay',
       label: 'Apple Pay',
       icon: (
-        <div className="flex items-center justify-center w-12 h-8 bg-black rounded text-white text-xs font-bold">
+        <div className="flex items-center justify-center w-12 h-8 bg-black rounded text-white text-xs font-bold shadow-nilin">
           Pay
         </div>
       ),
@@ -46,27 +47,30 @@ const PaymentMethodSelector: React.FC<PaymentMethodSelectorProps> = ({
           <button
             key={option.value}
             onClick={() => onChange(option.value)}
-            className={`
-              w-full flex items-center justify-between p-4 rounded-xl transition-all
-              ${isSelected
-                ? 'bg-nilin-primary/10 border-2 border-nilin-primary'
-                : 'bg-white border-2 border-gray-200 hover:border-gray-300'
-              }
-            `}
+            className={cn(
+              "w-full flex items-center justify-between p-4 rounded-xl transition-all card-3d",
+              isSelected
+                ? 'bg-gradient-to-br from-nilin-rose/10 to-nilin-coral/10 border-2 border-nilin-rose shadow-nilin-warm'
+                : 'glass border-2 border-nilin-border/30 hover:border-nilin-rose/50 hover:bg-nilin-blush/30'
+            )
+            }
           >
             <div className="flex items-center gap-4">
               {option.icon}
               <div className="text-left">
-                <span className={`font-medium ${isSelected ? 'text-nilin-primary' : 'text-gray-800'}`}>
+                <span className={cn(
+                  "font-medium",
+                  isSelected ? 'text-nilin-rose' : 'text-nilin-charcoal'
+                )}>
                   {option.label}
                 </span>
                 {option.description && (
-                  <p className="text-xs text-gray-500 mt-0.5">{option.description}</p>
+                  <p className="text-xs text-nilin-warmGray mt-0.5">{option.description}</p>
                 )}
               </div>
             </div>
             {isSelected && (
-              <div className="w-6 h-6 bg-nilin-primary rounded-full flex items-center justify-center">
+              <div className="w-7 h-7 bg-gradient-to-br from-nilin-rose to-nilin-coral rounded-full flex items-center justify-center shadow-sm float-3d shimmer">
                 <Check className="w-4 h-4 text-white" />
               </div>
             )}

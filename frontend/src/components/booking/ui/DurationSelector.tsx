@@ -1,4 +1,5 @@
 import React from 'react';
+import { cn } from '../../../lib/utils';
 
 interface DurationOption {
   duration: number;
@@ -26,7 +27,7 @@ const DurationSelector: React.FC<DurationSelectorProps> = ({
     return `${currency} ${price.toLocaleString('en-US')}`;
   };
 
-  // If no options provided, don't render
+  // If no options provided, don't Render
   if (!options || options.length === 0) {
     return null;
   }
@@ -40,18 +41,24 @@ const DurationSelector: React.FC<DurationSelectorProps> = ({
           <button
             key={option.duration}
             onClick={() => onSelect(option.duration)}
-            className={`
-              flex-shrink-0 flex flex-col items-center py-3 px-5 rounded-xl transition-all
-              ${isSelected
-                ? 'bg-nilin-primary text-white shadow-md'
-                : 'bg-white text-gray-700 border border-gray-200 hover:border-nilin-primary'
-              }
-            `}
+            className={cn(
+              "flex-shrink-0 flex flex-col items-center py-3 px-5 rounded-xl transition-all card-3d",
+              isSelected
+                ? 'bg-gradient-to-br from-nilin-rose to-nilin-coral text-white shadow-nilin-warm shimmer'
+                : 'glass text-nilin-charcoal border border-nilin-border/30 hover:border-nilin-rose hover:bg-nilin-blush/30'
+            )
+            }
           >
-            <span className={`text-lg font-semibold ${isSelected ? 'text-white' : 'text-gray-800'}`}>
+            <span className={cn(
+              "text-lg font-semibold",
+              isSelected ? 'text-white' : 'text-nilin-charcoal'
+            )}>
               {option.label || `${option.duration} min`}
             </span>
-            <span className={`text-sm mt-1 ${isSelected ? 'text-white/80' : 'text-gray-500'}`}>
+            <span className={cn(
+              "text-sm mt-1",
+              isSelected ? 'text-white/90' : 'text-nilin-warmGray'
+            )}>
               {formatPrice(option.price)}
             </span>
           </button>

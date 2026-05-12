@@ -222,7 +222,7 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
   if (isLoading) {
     return (
       <div className="flex justify-center items-center py-12">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-nilin-coral"></div>
       </div>
     );
   }
@@ -232,8 +232,8 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
       {/* Header */}
       <div className="flex justify-between items-start">
         <div>
-          <h2 className="text-2xl font-bold text-gray-900">Availability Management</h2>
-          <p className="text-gray-600">Set your weekly schedule and manage special dates</p>
+          <h2 className="text-2xl font-bold text-nilin-charcoal font-serif">Availability Management</h2>
+          <p className="text-nilin-warmGray">Set your weekly schedule and manage special dates</p>
         </div>
 
         {hasChanges && (
@@ -241,10 +241,10 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
             onClick={handleSaveSchedule}
             disabled={isSubmitting}
             className={cn(
-              "flex items-center gap-2 px-4 py-2 bg-blue-500 text-white rounded-lg font-medium transition-colors",
+              "btn-3d flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-nilin-rose to-nilin-coral text-white rounded-xl font-medium transition-all shadow-nilin-warm",
               isSubmitting
                 ? "opacity-50 cursor-not-allowed"
-                : "hover:bg-blue-600"
+                : "hover:shadow-lg"
             )}
           >
             {isSubmitting ? (
@@ -259,12 +259,12 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
 
       {/* Error Messages */}
       {errors.length > 0 && (
-        <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
+        <div className="glass p-4 rounded-xl bg-nilin-error/10 border border-nilin-error/20">
           <div className="flex items-center">
-            <AlertCircle className="h-5 w-5 text-red-600 mr-2" />
+            <AlertCircle className="h-5 w-5 text-nilin-error mr-2" />
             <div>
-              <h3 className="text-sm font-medium text-red-800">Error</h3>
-              <div className="text-sm text-red-700 mt-1">
+              <h3 className="text-sm font-medium text-nilin-error">Error</h3>
+              <div className="text-sm text-nilin-error/80 mt-1">
                 {errors.map((error, index) => (
                   <p key={index}>{error.message}</p>
                 ))}
@@ -275,25 +275,25 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
       )}
 
       {/* Weekly Schedule */}
-      <div className="bg-white border border-gray-200 rounded-lg p-6">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Weekly Schedule</h3>
+      <div className="glass glass-blur rounded-xl p-6 gradient-3d card-3d">
+        <h3 className="text-lg font-semibold text-nilin-charcoal mb-4 font-serif">Weekly Schedule</h3>
 
         <div className="space-y-4">
           {DAYS_OF_WEEK.map(day => {
             const daySchedule = schedule[day] || { isAvailable: false, timeSlots: [] };
 
             return (
-              <div key={day} className="border border-gray-200 rounded-lg p-4">
+              <div key={day} className="glass p-4 rounded-xl border border-nilin-border/30 card-3d transition-all hover:border-glow">
                 <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-3">
-                    <label className="flex items-center">
+                    <label className="flex items-center cursor-pointer">
                       <input
                         type="checkbox"
                         checked={daySchedule.isAvailable}
                         onChange={(e) => updateDayAvailability(day, e.target.checked)}
-                        className="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                        className="h-4 w-4 text-nilin-coral border-nilin-border rounded focus:ring-nilin-rose/50"
                       />
-                      <span className="ml-2 font-medium text-gray-900">
+                      <span className="ml-2 font-medium text-nilin-charcoal">
                         {DAY_LABELS[day as keyof typeof DAY_LABELS]}
                       </span>
                     </label>
@@ -302,7 +302,7 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
                   {daySchedule.isAvailable && (
                     <button
                       onClick={() => addTimeSlot(day)}
-                      className="flex items-center gap-1 px-3 py-1 text-sm text-blue-600 hover:bg-blue-50 rounded transition-colors"
+                      className="glass-btn flex items-center gap-1 px-3 py-1 text-sm text-nilin-coral hover:bg-nilin-blush/30 rounded-lg transition-colors"
                     >
                       <Plus className="h-4 w-4" />
                       Add Time Slot
@@ -313,29 +313,29 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
                 {daySchedule.isAvailable && (
                   <div className="space-y-2">
                     {daySchedule.timeSlots.map((slot, index) => (
-                      <div key={index} className="flex items-center gap-3 bg-gray-50 p-3 rounded">
-                        <Clock className="h-4 w-4 text-gray-400" />
+                      <div key={index} className="flex items-center gap-3 neu-light p-3 rounded-xl">
+                        <Clock className="h-4 w-4 text-nilin-rose" />
 
                         <input
                           type="time"
                           value={typeof slot.start === 'string' ? slot.start : ''}
                           onChange={(e) => updateTimeSlot(day, index, 'start', e.target.value)}
-                          className="px-2 py-1 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          className="glass-input px-3 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-nilin-rose/30 font-sans"
                         />
 
-                        <span className="text-gray-500">to</span>
+                        <span className="text-nilin-warmGray">to</span>
 
                         <input
                           type="time"
                           value={typeof slot.end === 'string' ? slot.end : ''}
                           onChange={(e) => updateTimeSlot(day, index, 'end', e.target.value)}
-                          className="px-2 py-1 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          className="glass-input px-3 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-nilin-rose/30 font-sans"
                         />
 
                         {daySchedule.timeSlots.length > 1 && (
                           <button
                             onClick={() => removeTimeSlot(day, index)}
-                            className="p-1 text-red-600 hover:bg-red-50 rounded transition-colors"
+                            className="glass-btn p-1 text-nilin-error hover:bg-nilin-error/10 rounded-lg transition-colors"
                           >
                             <Minus className="h-4 w-4" />
                           </button>
@@ -344,7 +344,7 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
                     ))}
 
                     {daySchedule.timeSlots.length === 0 && (
-                      <p className="text-sm text-gray-500 italic">
+                      <p className="text-sm text-nilin-warmGray italic">
                         No time slots set. Click "Add Time Slot" to add availability.
                       </p>
                     )}
@@ -352,7 +352,7 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
                 )}
 
                 {!daySchedule.isAvailable && (
-                  <p className="text-sm text-gray-500 italic">Not available on this day</p>
+                  <p className="text-sm text-nilin-warmGray italic">Not available on this day</p>
                 )}
               </div>
             );
@@ -361,40 +361,40 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
       </div>
 
       {/* Date Overrides */}
-      <div className="bg-white border border-gray-200 rounded-lg p-6">
+      <div className="glass glass-blur rounded-xl p-6 gradient-3d card-3d">
         <div className="flex justify-between items-center mb-4">
-          <h3 className="text-lg font-semibold text-gray-900">Special Dates</h3>
+          <h3 className="text-lg font-semibold text-nilin-charcoal font-serif">Special Dates</h3>
           <button
             onClick={() => setShowOverrideForm(!showOverrideForm)}
-            className="flex items-center gap-2 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+            className="glass-btn flex items-center gap-2 px-4 py-2 rounded-xl transition-all"
           >
-            <Plus className="h-4 w-4" />
-            Add Special Date
+            <Plus className="h-4 w-4 text-nilin-coral" />
+            <span className="text-nilin-charcoal">Add Special Date</span>
           </button>
         </div>
 
         {/* Add Override Form */}
         {showOverrideForm && (
-          <div className="mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
-            <h4 className="font-medium text-gray-900 mb-3">Add Special Date Override</h4>
+          <div className="mb-6 neu-light p-6 rounded-xl">
+            <h4 className="font-medium text-nilin-charcoal mb-3">Add Special Date Override</h4>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Date</label>
+                <label className="block text-sm font-medium text-nilin-warmGray mb-1">Date</label>
                 <input
                   type="date"
                   value={newOverride.date}
                   onChange={(e) => setNewOverride(prev => ({ ...prev, date: e.target.value }))}
                   min={new Date().toISOString().split('T')[0]}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="glass-input w-full px-3 py-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-rose/30 font-sans"
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
+                <label className="block text-sm font-medium text-nilin-warmGray mb-1">Status</label>
                 <select
                   value={newOverride.isAvailable ? 'available' : 'unavailable'}
                   onChange={(e) => setNewOverride(prev => ({ ...prev, isAvailable: e.target.value === 'available' }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="glass-input w-full px-3 py-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-rose/30 font-sans"
                 >
                   <option value="available">Available</option>
                   <option value="unavailable">Unavailable</option>
@@ -402,11 +402,11 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Reason (Optional)</label>
+                <label className="block text-sm font-medium text-nilin-warmGray mb-1">Reason (Optional)</label>
                 <select
                   value={newOverride.reason}
                   onChange={(e) => setNewOverride(prev => ({ ...prev, reason: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="glass-input w-full px-3 py-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-rose/30 font-sans"
                 >
                   <option value="">Select reason...</option>
                   <option value="vacation">Vacation</option>
@@ -419,13 +419,13 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Notes (Optional)</label>
+                <label className="block text-sm font-medium text-nilin-warmGray mb-1">Notes (Optional)</label>
                 <input
                   type="text"
                   value={newOverride.notes}
                   onChange={(e) => setNewOverride(prev => ({ ...prev, notes: e.target.value }))}
                   placeholder="Additional notes..."
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="glass-input w-full px-3 py-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-rose/30 font-sans"
                 />
               </div>
             </div>
@@ -433,7 +433,7 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
             <div className="flex justify-end gap-3 mt-4">
               <button
                 onClick={() => setShowOverrideForm(false)}
-                className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                className="glass-btn px-4 py-2 rounded-xl transition-all"
               >
                 Cancel
               </button>
@@ -441,10 +441,10 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
                 onClick={handleAddOverride}
                 disabled={!newOverride.date || isSubmitting}
                 className={cn(
-                  "flex items-center gap-2 px-4 py-2 bg-blue-500 text-white rounded-lg font-medium transition-colors",
+                  "btn-3d flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-nilin-rose to-nilin-coral text-white rounded-xl font-medium transition-all",
                   (!newOverride.date || isSubmitting)
                     ? "opacity-50 cursor-not-allowed"
-                    : "hover:bg-blue-600"
+                    : "hover:shadow-nilin-warm"
                 )}
               >
                 {isSubmitting ? (
@@ -464,11 +464,11 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
             {providerAvailability.dateOverrides
               .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
               .map((override, index) => (
-                <div key={index} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                <div key={index} className="flex items-center justify-between p-3 neu-light rounded-xl">
                   <div className="flex items-center gap-3">
-                    <Calendar className="h-5 w-5 text-gray-400" />
+                    <Calendar className="h-5 w-5 text-nilin-rose" />
                     <div>
-                      <p className="font-medium text-gray-900">
+                      <p className="font-medium text-nilin-charcoal">
                         {new Date(override.date).toLocaleDateString('en-US', {
                           weekday: 'long',
                           year: 'numeric',
@@ -478,21 +478,21 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
                       </p>
                       <div className="flex items-center gap-2">
                         <span className={cn(
-                          "px-2 py-1 rounded-full text-xs font-medium",
+                          "px-2 py-1 rounded-full text-xs font-medium glass",
                           override.isAvailable
-                            ? "bg-green-100 text-green-700"
-                            : "bg-red-100 text-red-700"
+                            ? "bg-nilin-success/10 text-nilin-success"
+                            : "bg-nilin-error/10 text-nilin-error"
                         )}>
                           {override.isAvailable ? 'Available' : 'Unavailable'}
                         </span>
                         {override.reason && (
-                          <span className="text-sm text-gray-600 capitalize">
+                          <span className="text-sm text-nilin-warmGray capitalize">
                             {override.reason.replace('_', ' ')}
                           </span>
                         )}
                       </div>
                       {override.notes && (
-                        <p className="text-sm text-gray-600 mt-1">{override.notes}</p>
+                        <p className="text-sm text-nilin-warmGray mt-1">{override.notes}</p>
                       )}
                     </div>
                   </div>
@@ -500,7 +500,7 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
                   <button
                     onClick={() => handleRemoveOverride(override.date)}
                     disabled={isSubmitting}
-                    className="p-2 text-red-600 hover:bg-red-50 rounded transition-colors"
+                    className="glass-btn p-2 text-nilin-error hover:bg-nilin-error/10 rounded-lg transition-colors"
                   >
                     <Trash2 className="h-4 w-4" />
                   </button>
@@ -508,25 +508,25 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
               ))}
           </div>
         ) : (
-          <div className="text-center py-8 text-gray-500">
-            <Calendar className="h-12 w-12 mx-auto mb-2 text-gray-300" />
+          <div className="glass text-center py-8 rounded-xl">
+            <Calendar className="h-12 w-12 mx-auto mb-2 text-nilin-rose/50" />
             <p>No special dates set</p>
-            <p className="text-sm">Add vacation days, holidays, or special availability</p>
+            <p className="text-sm text-nilin-warmGray">Add vacation days, holidays, or special availability</p>
           </div>
         )}
       </div>
 
       {/* Settings */}
-      <div className="bg-white border border-gray-200 rounded-lg p-6">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Availability Settings</h3>
+      <div className="glass glass-blur rounded-xl p-6 gradient-3d card-3d">
+        <h3 className="text-lg font-semibold text-nilin-charcoal mb-4 font-serif">Availability Settings</h3>
 
         <div className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-nilin-warmGray mb-1">
                 Buffer Time (minutes)
               </label>
-              <p className="text-sm text-gray-500 mb-2">
+              <p className="text-sm text-nilin-lightGray mb-2">
                 Time between bookings for preparation
               </p>
               <input
@@ -534,16 +534,16 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
                 value={providerAvailability?.bufferTime || 15}
                 min="0"
                 max="120"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="glass-input w-full px-3 py-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-rose/30 font-sans bg-nilin-muted/50"
                 readOnly
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-nilin-warmGray mb-1">
                 Max Advance Booking (days)
               </label>
-              <p className="text-sm text-gray-500 mb-2">
+              <p className="text-sm text-nilin-lightGray mb-2">
                 How far in advance customers can book
               </p>
               <input
@@ -551,7 +551,7 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
                 value={providerAvailability?.maxAdvanceBookingDays || 30}
                 min="1"
                 max="365"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="glass-input w-full px-3 py-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-rose/30 font-sans bg-nilin-muted/50"
                 readOnly
               />
             </div>
@@ -562,20 +562,20 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
               <input
                 type="checkbox"
                 checked={providerAvailability?.autoAcceptBookings || false}
-                className="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                className="h-4 w-4 text-nilin-coral border-nilin-border rounded focus:ring-nilin-rose/50"
                 readOnly
               />
-              <span className="ml-2 text-sm text-gray-700">
+              <span className="ml-2 text-sm text-nilin-charcoal">
                 Auto-accept bookings (no manual approval required)
               </span>
             </label>
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-medium text-nilin-warmGray mb-1">
               Timezone
             </label>
-            <p className="text-sm text-gray-500">
+            <p className="text-sm text-nilin-charcoal neu-light p-2 rounded-lg inline-block">
               {providerAvailability?.timezone || 'Asia/Kolkata'}
             </p>
           </div>

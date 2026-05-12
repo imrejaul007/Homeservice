@@ -1,5 +1,6 @@
 import React from 'react';
 import { Calendar, Clock, MapPin, Briefcase } from 'lucide-react';
+import { cn } from '../../../lib/utils';
 
 interface BookingSummaryCardProps {
   serviceName: string;
@@ -62,26 +63,26 @@ const BookingSummaryCard: React.FC<BookingSummaryCardProps> = ({
   const locationLabel = locationType === 'at_home' ? 'Home' : 'Hotel';
 
   return (
-    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+    <div className="card-nilin rounded-2xl p-4 transition-all duration-300 hover:shadow-nilin-warm">
       {/* Service Info */}
-      <div className="flex items-start gap-3 pb-4 border-b border-gray-100">
-        <div className="w-10 h-10 bg-nilin-primary/10 rounded-lg flex items-center justify-center">
-          <Briefcase className="w-5 h-5 text-nilin-primary" />
+      <div className="flex items-start gap-3 pb-4 border-b border-nilin-border/30">
+        <div className="w-12 h-12 bg-gradient-to-br from-nilin-blush/40 to-nilin-peach/30 rounded-xl flex items-center justify-center shadow-nilin-warm transition-all duration-300">
+          <Briefcase className="w-5 h-5 text-nilin-rose" />
         </div>
         <div>
-          <h3 className="font-semibold text-gray-800">{serviceName}</h3>
-          <div className="flex items-center gap-1 mt-1 text-sm text-gray-500">
-            <Calendar className="w-3.5 h-3.5" />
+          <h3 className="font-semibold text-nilin-charcoal">{serviceName}</h3>
+          <div className="flex items-center gap-1 mt-1 text-sm text-nilin-warmGray">
+            <Calendar className="w-3.5 h-3.5 text-nilin-rose" />
             <span>{formatDate(date)}, {formatTime(time)} - {getEndTime(time, duration)}</span>
           </div>
         </div>
       </div>
 
       {/* Location */}
-      <div className="flex items-center gap-2 py-3 border-b border-gray-100">
-        <MapPin className="w-4 h-4 text-gray-400" />
-        <span className="text-gray-700">{locationLabel}</span>
-        <span className="ml-auto px-2 py-0.5 bg-nilin-primary/10 text-nilin-primary text-xs rounded-full">
+      <div className="flex items-center gap-2 py-3 border-b border-nilin-border/30">
+        <MapPin className="w-4 h-4 text-nilin-rose" />
+        <span className="text-nilin-charcoal">{locationLabel}</span>
+        <span className="ml-auto px-2 py-0.5 bg-gradient-to-r from-nilin-blush/40 to-nilin-peach/30 text-nilin-coral text-xs rounded-full card-nilin transition-all duration-300">
           Scheduled
         </span>
       </div>
@@ -89,10 +90,10 @@ const BookingSummaryCard: React.FC<BookingSummaryCardProps> = ({
       {/* Price */}
       <div className="pt-3">
         <div className="flex justify-between items-center">
-          <span className="text-gray-600">Total service price:</span>
-          <span className="text-lg font-bold text-gray-800">{formatPrice(price)}</span>
+          <span className="text-nilin-warmGray">Total service price:</span>
+          <span className="text-lg font-bold text-nilin-coral">{formatPrice(price)}</span>
         </div>
-        <p className="text-xs text-gray-500 mt-2">
+        <p className="text-xs text-nilin-lightGray mt-2 card-nilin p-2 rounded-lg transition-all duration-300">
           No charges will be made now. Payment is processed only after the service is completed.
         </p>
       </div>

@@ -1,5 +1,4 @@
 import { Queue, Job } from 'bullmq';
-import { queueRedis } from '../config/redis';
 import logger from '../utils/logger';
 
 // Queue names
@@ -12,6 +11,14 @@ export const QUEUE_NAMES = {
   CLEANUP: 'cleanup-queue',
 } as const;
 
+// Queue connection config - use URL for BullMQ v5
+const queueConnection = {
+  host: process.env.REDIS_HOST || 'redis-12442.c274.us-east-1-3.ec2.cloud.redislabs.com',
+  port: parseInt(process.env.REDIS_PORT || '12442'),
+  password: process.env.REDIS_PASSWORD || 'jwTUlq5fg7BD4D8KQcpUfmSoMh0Z6s5w',
+  maxRetriesPerRequest: null,
+};
+
 // Queue instances
 const queues: Record<string, Queue> = {};
 
@@ -22,7 +29,7 @@ export const createQueue = (name: string): Queue => {
   }
 
   const queue = new Queue(name, {
-    connection: queueRedis,
+    connection: queueConnection,
     defaultJobOptions: {
       attempts: 3,
       backoff: {

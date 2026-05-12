@@ -143,7 +143,7 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className }) => {
 
   const handleBookingAction = async (bookingId: string, action: string) => {
     setActionLoading(prev => ({ ...prev, [bookingId]: action }));
-    
+
     try {
       switch (action) {
         case 'accept':
@@ -181,7 +181,7 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className }) => {
 
   const getProviderActions = (booking: Booking): string[] => {
     const actions: string[] = [];
-    
+
     switch (booking.status) {
       case 'pending':
         actions.push('accept', 'reject');
@@ -193,23 +193,23 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className }) => {
         actions.push('complete');
         break;
     }
-    
+
     return actions;
   };
 
   const getActionButtonStyle = (action: string): string => {
     switch (action) {
       case 'accept':
-        return 'bg-green-500 hover:bg-green-600 text-white';
+        return 'bg-nilin-success hover:bg-nilin-success/90 text-white';
       case 'start':
-        return 'bg-blue-500 hover:bg-blue-600 text-white';
+        return 'bg-gradient-to-r from-nilin-rose to-nilin-coral hover:shadow-nilin-warm text-white';
       case 'complete':
-        return 'bg-purple-500 hover:bg-purple-600 text-white';
+        return 'bg-nilin-success hover:bg-nilin-success/90 text-white';
       case 'reject':
       case 'cancel':
-        return 'bg-red-500 hover:bg-red-600 text-white';
+        return 'bg-nilin-error hover:bg-nilin-error/90 text-white';
       default:
-        return 'bg-gray-500 hover:bg-gray-600 text-white';
+        return 'bg-nilin-warmGray hover:bg-nilin-charcoal text-white';
     }
   };
 
@@ -234,10 +234,10 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className }) => {
       {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h2 className="text-2xl font-bold text-gray-900">
+          <h2 className="text-2xl font-bold text-nilin-charcoal font-serif">
             {userType === 'customer' ? 'My Bookings' : 'Service Requests'}
           </h2>
-          <p className="text-gray-600">
+          <p className="text-nilin-warmGray">
             {userType === 'customer'
               ? 'Track and manage your service bookings'
               : 'Manage your incoming service requests'
@@ -248,37 +248,37 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className }) => {
         {/* Search and Filter */}
         <div className="flex items-center gap-3">
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-nilin-warmGray" />
             <input
               type="text"
               placeholder={`Search ${userType === 'customer' ? 'bookings' : 'requests'}...`}
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="glass-input pl-10 pr-4 py-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-rose/30 font-sans border-glow"
             />
           </div>
 
           <button
             onClick={() => setShowFilters(!showFilters)}
-            className="flex items-center gap-2 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+            className="glass-btn flex items-center gap-2 px-4 py-2 rounded-xl transition-all"
           >
-            <Filter className="h-4 w-4" />
-            Filters
-            <ChevronDown className={cn("h-4 w-4 transition-transform", showFilters && "rotate-180")} />
+            <Filter className="h-4 w-4 text-nilin-warmGray" />
+            <span className="text-nilin-charcoal">Filters</span>
+            <ChevronDown className={cn("h-4 w-4 text-nilin-warmGray transition-transform", showFilters && "rotate-180")} />
           </button>
         </div>
       </div>
 
       {/* Filters Panel */}
       {showFilters && (
-        <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
+        <div className="glass glass-blur p-4 rounded-xl gradient-3d">
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
+              <label className="block text-sm font-medium text-nilin-warmGray mb-1">Status</label>
               <select
                 value={filters.status || ''}
                 onChange={(e) => handleFilterChange('status', e.target.value || undefined)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="glass-input w-full px-3 py-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-rose/30 font-sans"
               >
                 <option value="">All Status</option>
                 <option value="pending">Pending</option>
@@ -290,27 +290,27 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className }) => {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Date From</label>
+              <label className="block text-sm font-medium text-nilin-warmGray mb-1">Date From</label>
               <input
                 type="date"
                 value={filters.dateFrom || ''}
                 onChange={(e) => handleFilterChange('dateFrom', e.target.value || undefined)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="glass-input w-full px-3 py-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-rose/30 font-sans"
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Date To</label>
+              <label className="block text-sm font-medium text-nilin-warmGray mb-1">Date To</label>
               <input
                 type="date"
                 value={filters.dateTo || ''}
                 onChange={(e) => handleFilterChange('dateTo', e.target.value || undefined)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="glass-input w-full px-3 py-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-rose/30 font-sans"
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Sort By</label>
+              <label className="block text-sm font-medium text-nilin-warmGray mb-1">Sort By</label>
               <select
                 value={`${filters.sortBy}-${filters.sortOrder}`}
                 onChange={(e) => {
@@ -318,7 +318,7 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className }) => {
                   handleFilterChange('sortBy', sortBy);
                   handleFilterChange('sortOrder', sortOrder as 'asc' | 'desc');
                 }}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="glass-input w-full px-3 py-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-rose/30 font-sans"
               >
                 <option value="createdAt-desc">Newest First</option>
                 <option value="createdAt-asc">Oldest First</option>
@@ -333,12 +333,12 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className }) => {
 
       {/* Error Message */}
       {errors.length > 0 && (
-        <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
+        <div className="glass p-4 rounded-xl bg-nilin-error/10 border border-nilin-error/20">
           <div className="flex items-center">
-            <AlertCircle className="h-5 w-5 text-red-600 mr-2" />
+            <AlertCircle className="h-5 w-5 text-nilin-error mr-2" />
             <div>
-              <h3 className="text-sm font-medium text-red-800">Error loading bookings</h3>
-              <div className="text-sm text-red-700 mt-1">
+              <h3 className="text-sm font-medium text-nilin-error">Error loading bookings</h3>
+              <div className="text-sm text-nilin-error/80 mt-1">
                 {errors.map((error, index) => (
                   <p key={index}>{error.message}</p>
                 ))}
@@ -351,7 +351,7 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className }) => {
       {/* Loading State */}
       {isLoading && (
         <div className="flex justify-center py-12">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-nilin-coral"></div>
         </div>
       )}
 
@@ -369,7 +369,7 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className }) => {
                 return (
                   <div
                     key={booking._id}
-                    className="bg-white border border-gray-200 rounded-lg p-6 hover:shadow-md transition-shadow"
+                    className="glass rounded-xl p-6 hover:shadow-nilin-warm transition-all card-3d gradient-3d"
                   >
                     <div className="flex items-start justify-between">
                       <div className="flex-1">
@@ -383,12 +383,12 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className }) => {
                             {bookingService.getStatusLabel(booking.status)}
                           </div>
 
-                          <span className="text-sm text-gray-500">
+                          <span className="text-sm text-nilin-warmGray glass px-2 py-1 rounded-full">
                             #{bookingService.formatBookingNumber(booking.bookingNumber)}
                           </span>
 
                           {unreadCount > 0 && (
-                            <div className="flex items-center gap-1 bg-red-100 text-red-700 px-2 py-1 rounded-full text-xs">
+                            <div className="flex items-center gap-1 bg-nilin-error/10 text-nilin-error px-2 py-1 rounded-full text-xs glass">
                               <MessageCircle className="h-3 w-3" />
                               {unreadCount} new
                             </div>
@@ -398,12 +398,12 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className }) => {
                         {/* Service Info */}
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                           <div>
-                            <h3 className="font-semibold text-gray-900 mb-1">
+                            <h3 className="font-semibold text-nilin-charcoal mb-1">
                               {booking.service?.name || 'Service'}
                             </h3>
 
                             {userType === 'customer' && booking.provider && (
-                              <p className="text-sm text-gray-600 mb-2">
+                              <p className="text-sm text-nilin-warmGray mb-2">
                                 by {booking.provider.firstName} {booking.provider.lastName}
                                 {booking.provider.businessInfo?.businessName &&
                                   ` (${booking.provider.businessInfo.businessName})`
@@ -416,25 +416,25 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className }) => {
                               const last = booking.customer?.lastName || booking.customerInfo?.lastName || (booking as any).guestInfo?.name?.split(' ').slice(1).join(' ');
                               const name = (first || last) ? `${first || ''} ${last || ''}`.trim() : ((booking as any).isGuestBooking ? 'Guest' : 'Customer');
                               return (
-                                <p className="text-sm text-gray-600 mb-2">
+                                <p className="text-sm text-nilin-warmGray mb-2">
                                   for {name}
                                 </p>
                               );
                             })()}
 
                             <div className="space-y-1">
-                              <div className="flex items-center gap-2 text-sm text-gray-600">
-                                <Calendar className="h-4 w-4" />
+                              <div className="flex items-center gap-2 text-sm text-nilin-warmGray">
+                                <Calendar className="h-4 w-4 text-nilin-rose" />
                                 {formatDate(booking.scheduledDate, booking.scheduledTime)}
                               </div>
 
-                              <div className="flex items-center gap-2 text-sm text-gray-600">
-                                <Clock className="h-4 w-4" />
+                              <div className="flex items-center gap-2 text-sm text-nilin-warmGray">
+                                <Clock className="h-4 w-4 text-nilin-rose" />
                                 {(booking as any).duration || booking.estimatedDuration || (booking as any).selectedDuration || booking.service?.duration || '—'} minutes
                               </div>
 
-                              <div className="flex items-center gap-2 text-sm text-gray-600">
-                                <MapPin className="h-4 w-4" />
+                              <div className="flex items-center gap-2 text-sm text-nilin-warmGray">
+                                <MapPin className="h-4 w-4 text-nilin-rose" />
                                 {booking.location.type === 'online' ? 'Online/Virtual' : (
                                   booking.location.address?.street || booking.location.address?.city
                                     ? [booking.location.address.street, booking.location.address.city].filter(Boolean).join(', ')
@@ -443,8 +443,8 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className }) => {
                               </div>
 
                               {booking.customerInfo.phone && (
-                                <div className="flex items-center gap-2 text-sm text-gray-600">
-                                  <Phone className="h-4 w-4" />
+                                <div className="flex items-center gap-2 text-sm text-nilin-warmGray">
+                                  <Phone className="h-4 w-4 text-nilin-rose" />
                                   {booking.customerInfo.phone}
                                 </div>
                               )}
@@ -452,12 +452,12 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className }) => {
                           </div>
 
                           <div className="text-right">
-                            <div className="text-2xl font-bold text-gray-900 mb-1">
+                            <div className="text-2xl font-bold text-nilin-charcoal mb-1">
                               {formatPrice(booking.pricing.totalAmount || booking.pricing.total || 0, booking.pricing.currency)}
                             </div>
 
                             {booking.pricing.addOns.length > 0 && (
-                              <p className="text-sm text-gray-500 mb-2">
+                              <p className="text-sm text-nilin-warmGray mb-2">
                                 Includes {booking.pricing.addOns.length} add-on(s)
                               </p>
                             )}
@@ -468,19 +468,19 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className }) => {
                                 {userType === 'customer' && booking.customerRating ? (
                                   <div className="flex items-center gap-1 justify-end">
                                     <Star className="h-4 w-4 text-yellow-400 fill-yellow-400" />
-                                    <span className="text-sm text-gray-600">
+                                    <span className="text-sm text-nilin-warmGray">
                                       You rated: {booking.customerRating.rating}/5
                                     </span>
                                   </div>
                                 ) : userType === 'provider' && booking.providerRating ? (
                                   <div className="flex items-center gap-1 justify-end">
                                     <Star className="h-4 w-4 text-yellow-400 fill-yellow-400" />
-                                    <span className="text-sm text-gray-600">
+                                    <span className="text-sm text-nilin-warmGray">
                                       Customer rated: {booking.providerRating.rating}/5
                                     </span>
                                   </div>
                                 ) : (
-                                  <p className="text-sm text-gray-500">No rating yet</p>
+                                  <p className="text-sm text-nilin-warmGray">No rating yet</p>
                                 )}
                               </div>
                             )}
@@ -489,29 +489,29 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className }) => {
 
                         {/* Special Requests */}
                         {booking.customerInfo.specialRequests && (
-                          <div className="mb-4 p-3 bg-blue-50 rounded-lg">
-                            <h4 className="text-sm font-medium text-blue-900 mb-1">Special Requests:</h4>
-                            <p className="text-sm text-blue-800">{booking.customerInfo.specialRequests}</p>
+                          <div className="mb-4 p-3 neu-light rounded-xl">
+                            <h4 className="text-sm font-medium text-nilin-charcoal mb-1">Special Requests:</h4>
+                            <p className="text-sm text-nilin-warmGray">{booking.customerInfo.specialRequests}</p>
                           </div>
                         )}
 
                         {/* Recent Messages */}
                         {booking.messages.length > 0 && (
                           <div className="mb-4">
-                            <h4 className="text-sm font-medium text-gray-700 mb-2">
+                            <h4 className="text-sm font-medium text-nilin-charcoal mb-2">
                               Recent Messages ({booking.messages.length})
                             </h4>
-                            <div className="bg-gray-50 p-3 rounded-lg">
+                            <div className="glass p-3 rounded-xl">
                               {booking.messages.slice(-2).map((message) => (
                                 <div key={message._id} className="text-sm">
-                                  <span className="font-medium">
+                                  <span className="font-medium text-nilin-charcoal">
                                     {message.senderType === 'customer' ? 'Customer' : 'Provider'}:
                                   </span>
-                                  <span className="ml-2 text-gray-700">{message.message}</span>
+                                  <span className="ml-2 text-nilin-warmGray">{message.message}</span>
                                 </div>
                               ))}
                               {booking.messages.length > 2 && (
-                                <p className="text-xs text-gray-500 mt-1">
+                                <p className="text-xs text-nilin-warmGray mt-1">
                                   +{booking.messages.length - 2} more messages
                                 </p>
                               )}
@@ -524,7 +524,7 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className }) => {
                       <div className="ml-6 flex flex-col gap-2">
                         <Link
                           to={`/${userType}/bookings/${booking._id}`}
-                          className="flex items-center gap-2 px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors text-sm"
+                          className="btn-3d flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-nilin-rose to-nilin-coral text-white rounded-xl hover:shadow-nilin-warm transition-all text-sm font-medium"
                         >
                           <Eye className="h-4 w-4" />
                           View Details
@@ -539,7 +539,7 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className }) => {
                                 onClick={() => handleBookingAction(booking._id, action)}
                                 disabled={currentActionLoading === action}
                                 className={cn(
-                                  "flex items-center gap-2 px-4 py-2 rounded-lg transition-colors text-sm font-medium",
+                                  "flex items-center gap-2 px-4 py-2 rounded-xl transition-all text-sm font-medium card-3d",
                                   getActionButtonStyle(action),
                                   currentActionLoading === action && "opacity-50 cursor-not-allowed"
                                 )}
@@ -559,12 +559,12 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className }) => {
                         {booking.messages.length > 0 && (
                           <Link
                             to={`/${userType}/bookings/${booking._id}?tab=messages`}
-                            className="flex items-center gap-2 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors text-sm relative"
+                            className="glass-btn flex items-center gap-2 px-4 py-2 rounded-xl transition-all text-sm relative"
                           >
-                            <MessageCircle className="h-4 w-4" />
-                            Messages
+                            <MessageCircle className="h-4 w-4 text-nilin-warmGray" />
+                            <span className="text-nilin-charcoal">Messages</span>
                             {unreadCount > 0 && (
-                              <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center">
+                              <span className="absolute -top-1 -right-1 bg-nilin-error text-white text-xs rounded-full h-5 w-5 flex items-center justify-center">
                                 {unreadCount}
                               </span>
                             )}
@@ -575,10 +575,10 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className }) => {
                           <button
                             onClick={() => handleBookingAction(booking._id, 'cancel')}
                             disabled={currentActionLoading === 'cancel'}
-                            className="flex items-center gap-2 px-4 py-2 border border-red-300 text-red-600 rounded-lg hover:bg-red-50 transition-colors text-sm"
+                            className="glass-btn flex items-center gap-2 px-4 py-2 border border-nilin-error/30 text-nilin-error rounded-xl transition-all text-sm"
                           >
                             {currentActionLoading === 'cancel' ? (
-                              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-red-600"></div>
+                              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-nilin-error"></div>
                             ) : (
                               <XCircle className="h-4 w-4" />
                             )}
@@ -592,12 +592,12 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className }) => {
               })}
             </div>
           ) : (
-            <div className="text-center py-12">
-              <Calendar className="h-16 w-16 text-gray-300 mx-auto mb-4" />
-              <h3 className="text-lg font-medium text-gray-900 mb-2">
+            <div className="glass text-center py-12 rounded-xl gradient-3d">
+              <Calendar className="h-16 w-16 text-nilin-rose/50 mx-auto mb-4" />
+              <h3 className="text-lg font-medium text-nilin-charcoal mb-2">
                 No {userType === 'customer' ? 'bookings' : 'requests'} found
               </h3>
-              <p className="text-gray-500 mb-6">
+              <p className="text-nilin-warmGray mb-6">
                 {userType === 'customer'
                   ? "You haven't made any bookings yet."
                   : "You don't have any service requests yet."
@@ -606,7 +606,7 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className }) => {
               {userType === 'customer' && (
                 <Link
                   to="/services"
-                  className="inline-flex items-center px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors"
+                  className="btn-3d inline-flex items-center px-4 py-2 bg-gradient-to-r from-nilin-rose to-nilin-coral text-white rounded-xl hover:shadow-nilin-warm transition-all"
                 >
                   Browse Services
                 </Link>
@@ -617,15 +617,15 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className }) => {
           {/* Pagination */}
           {pagination && pagination.pages > 1 && (
             <div className="flex justify-center mt-8">
-              <div className="flex items-center gap-2">
+              <div className="glass flex items-center gap-2 p-2 rounded-xl">
                 <button
                   onClick={() => handlePageChange(pagination.page - 1)}
                   disabled={pagination.page === 1}
                   className={cn(
-                    "px-3 py-2 rounded-lg text-sm",
+                    "px-3 py-2 rounded-xl text-sm",
                     pagination.page === 1
-                      ? "text-gray-400 cursor-not-allowed"
-                      : "text-gray-700 hover:bg-gray-100"
+                      ? "text-nilin-lightGray cursor-not-allowed"
+                      : "text-nilin-charcoal hover:bg-nilin-blush/30"
                   )}
                 >
                   Previous
@@ -643,10 +643,10 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className }) => {
                       key={pageNum}
                       onClick={() => handlePageChange(pageNum)}
                       className={cn(
-                        "px-3 py-2 rounded-lg text-sm",
+                        "px-3 py-2 rounded-xl text-sm card-3d transition-all",
                         pageNum === pagination.page
-                          ? "bg-blue-500 text-white"
-                          : "text-gray-700 hover:bg-gray-100"
+                          ? "bg-gradient-to-r from-nilin-rose to-nilin-coral text-white"
+                          : "text-nilin-charcoal hover:bg-nilin-blush/30"
                       )}
                     >
                       {pageNum}
@@ -658,10 +658,10 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className }) => {
                   onClick={() => handlePageChange(pagination.page + 1)}
                   disabled={pagination.page === pagination.pages}
                   className={cn(
-                    "px-3 py-2 rounded-lg text-sm",
+                    "px-3 py-2 rounded-xl text-sm",
                     pagination.page === pagination.pages
-                      ? "text-gray-400 cursor-not-allowed"
-                      : "text-gray-700 hover:bg-gray-100"
+                      ? "text-nilin-lightGray cursor-not-allowed"
+                      : "text-nilin-charcoal hover:bg-nilin-blush/30"
                   )}
                 >
                   Next

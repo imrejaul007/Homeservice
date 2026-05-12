@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { authService } from '../services/auth.service';
 import { asyncHandler } from '../utils/asyncHandler';
 import { ApiError } from '../utils/ApiError';
+import { eventBus, EVENT_TYPES } from '../event-bus';
 import Joi from 'joi';
 import { CustomerRegistrationDTO, ProviderRegistrationDTO, AdminRegistrationDTO, ProfileUpdatesDTO } from '../dto/auth.dto';
 
@@ -105,6 +106,7 @@ const providerRegistrationSchema = Joi.object({
 const loginSchema = Joi.object({
   email: Joi.string().email().required(),
   password: Joi.string().required(),
+  rememberMe: Joi.boolean().default(false),
 });
 
 const changePasswordSchema = Joi.object({
@@ -154,6 +156,19 @@ export const registerCustomer = asyncHandler(async (req: Request, res: Response)
     res.cookie('refreshToken', result.tokens.refreshToken, getCookieOptions(30 * 24 * 60 * 60 * 1000));
   }
 
+  // Publish user.registered event
+  await eventBus.publish(EVENT_TYPES.USER_REGISTERED, {
+    userId: result.user.id,
+    email: value.email,
+    role: 'customer',
+    firstName: value.firstName,
+    lastName: value.lastName,
+    referralCode: value.referralCode,
+  }, {
+    ipAddress: req.ip,
+    userAgent: req.get('user-agent'),
+  });
+
   res.status(201).json({
     success: true,
     message: 'Customer registration successful! Welcome to the platform!',
@@ -182,6 +197,20 @@ export const registerProvider = asyncHandler(async (req: Request, res: Response)
   if (result.tokens.refreshToken) {
     res.cookie('refreshToken', result.tokens.refreshToken, getCookieOptions(30 * 24 * 60 * 60 * 1000));
   }
+
+  // Publish user.registered event
+  await eventBus.publish(EVENT_TYPES.USER_REGISTERED, {
+    userId: result.user.id,
+    email: value.email,
+    role: 'provider',
+    firstName: value.firstName,
+    lastName: value.lastName,
+    businessName: value.businessInfo?.businessName,
+    services: value.services?.map((s: any) => s.name) || [],
+  }, {
+    ipAddress: req.ip,
+    userAgent: req.get('user-agent'),
+  });
 
   res.status(201).json({
     success: true,
@@ -238,11 +267,14 @@ export const login = asyncHandler(async (req: Request, res: Response) => {
   }
 
   const clientIP = req.ip || req.connection.remoteAddress || 'unknown';
-  const result = await authService.login(value.email, value.password, clientIP);
+  const rememberMe = value.rememberMe || false;
+  const result = await authService.login(value.email, value.password, clientIP, rememberMe);
 
   // Set refresh token as HTTP-only cookie
+  // Cookie expiry: 30 days if rememberMe, 7 days otherwise
+  const cookieMaxAge = rememberMe ? 30 * 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000;
   if (result.tokens.refreshToken) {
-    res.cookie('refreshToken', result.tokens.refreshToken, getCookieOptions(30 * 24 * 60 * 60 * 1000));
+    res.cookie('refreshToken', result.tokens.refreshToken, getCookieOptions(cookieMaxAge));
   }
 
   res.json({

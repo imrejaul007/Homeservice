@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { bookingService } from '../services/booking.service';
 import { asyncHandler } from '../utils/asyncHandler';
 import { ApiError } from '../utils/ApiError';
+import { eventBus, EVENT_TYPES } from '../event-bus';
 import Joi from 'joi';
 
 // ============================================
@@ -126,6 +127,23 @@ export const createBooking = asyncHandler(async (req: Request, res: Response) =>
   const customerId = (req.user as any)._id.toString();
   const result = await bookingService.createCustomerBooking(customerId, value);
 
+  // Publish booking.created event
+  await eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
+    bookingId: result.booking._id.toString(),
+    customerId,
+    providerId: value.providerId,
+    amount: result.booking.pricing?.totalAmount,
+    bookingNumber: result.booking.bookingNumber,
+    serviceId: value.serviceId,
+    scheduledDate: value.scheduledDate,
+    scheduledTime: value.scheduledTime,
+  }, {
+    userId: customerId,
+    sessionId: req.body.metadata?.sessionId,
+    ipAddress: req.ip,
+    userAgent: req.get('user-agent'),
+  });
+
   res.status(201).json({
     success: true,
     message: 'Booking request submitted, awaiting provider confirmation',
@@ -177,6 +195,21 @@ export const cancelBooking = asyncHandler(async (req: Request, res: Response) =>
 
   const customerId = (req.user as any)._id.toString();
   const result = await bookingService.cancelBooking(id, customerId, value);
+
+  // Publish booking.cancelled event
+  await eventBus.publish(EVENT_TYPES.BOOKING_CANCELLED, {
+    bookingId: id,
+    cancelledBy: customerId,
+    reason: value.reason || null,
+    bookingNumber: result.booking?.bookingNumber,
+    customerId,
+    providerId: result.booking?.providerId?.toString(),
+    refundAmount: result.refundAmount,
+  }, {
+    userId: customerId,
+    ipAddress: req.ip,
+    userAgent: req.get('user-agent'),
+  });
 
   res.json({
     success: true,
@@ -230,6 +263,19 @@ export const acceptBooking = asyncHandler(async (req: Request, res: Response) =>
   const providerId = (req.user as any)._id.toString();
   const booking = await bookingService.acceptBooking(id, providerId, value);
 
+  // Publish booking.confirmed event
+  await eventBus.publish(EVENT_TYPES.BOOKING_CONFIRMED, {
+    bookingId: id,
+    providerId,
+    bookingNumber: booking.bookingNumber,
+    customerId: booking.customerId?.toString(),
+    estimatedArrival: value.estimatedArrival,
+  }, {
+    userId: providerId,
+    ipAddress: req.ip,
+    userAgent: req.get('user-agent'),
+  });
+
   res.json({
     success: true,
     message: 'Booking accepted successfully',
@@ -250,6 +296,19 @@ export const rejectBooking = asyncHandler(async (req: Request, res: Response) =>
 
   const providerId = (req.user as any)._id.toString();
   const booking = await bookingService.rejectBooking(id, providerId, value);
+
+  // Publish booking.rejected event
+  await eventBus.publish(EVENT_TYPES.BOOKING_REJECTED, {
+    bookingId: id,
+    providerId,
+    reason: value.reason || null,
+    bookingNumber: booking.bookingNumber,
+    customerId: booking.customerId?.toString(),
+  }, {
+    userId: providerId,
+    ipAddress: req.ip,
+    userAgent: req.get('user-agent'),
+  });
 
   res.json({
     success: true,
@@ -292,6 +351,22 @@ export const completeBooking = asyncHandler(async (req: Request, res: Response) 
 
   const providerId = (req.user as any)._id.toString();
   const booking = await bookingService.completeBooking(id, providerId, value);
+
+  // Publish booking.completed event
+  await eventBus.publish(EVENT_TYPES.BOOKING_COMPLETED, {
+    bookingId: id,
+    customerId: booking.customerId?.toString(),
+    providerId,
+    amount: booking.pricing?.totalAmount,
+    bookingNumber: booking.bookingNumber,
+    notes: value.notes,
+    actualDuration: value.actualDuration,
+    serviceId: booking.serviceId?.toString(),
+  }, {
+    userId: providerId,
+    ipAddress: req.ip,
+    userAgent: req.get('user-agent'),
+  });
 
   res.json({
     success: true,

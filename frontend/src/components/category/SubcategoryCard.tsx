@@ -40,31 +40,31 @@ const SubcategoryCard: React.FC<SubcategoryCardProps> = ({ subcategory, category
   return (
     <button
       onClick={onClick}
-      className="bg-white rounded-2xl overflow-hidden text-left w-full border border-gray-100 shadow-sm hover:shadow-lg hover:-translate-y-0.5 transition-all duration-300 group"
+      className="bg-white rounded-nilin-lg overflow-hidden text-left w-full border-nilin shadow-nilin hover-lift transition-all duration-300 group"
     >
-      {/* Image */}
+      {/* Image with glass overlay */}
       <div className="relative h-[140px] md:h-[160px] overflow-hidden">
         <img
           src={image}
           alt={displayName}
           className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
         />
-        <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent" />
+        <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent glass-nilin" />
       </div>
 
       {/* Content */}
       <div className="p-4">
-        <h3 className="font-semibold text-gray-900 text-base mb-1 group-hover:text-nilin-primary transition-colors">
+        <h3 className="font-semibold text-nilin-charcoal text-base mb-1 group-hover:text-nilin-primary transition-colors">
           {displayName}
         </h3>
 
-        <div className="flex items-center gap-3 text-sm text-gray-500 mb-2">
+        <div className="flex items-center gap-3 text-sm text-nilin-warm-gray mb-2">
           {price && <span>From AED {price}</span>}
-          {price && duration && <span className="text-gray-300">|</span>}
+          {price && duration && <span className="text-nilin-blush">|</span>}
           {duration && <span>{duration} min</span>}
         </div>
 
-        <div className="flex items-center gap-1 text-nilin-primary">
+        <div className="flex items-center gap-1 text-nilin-coral">
           <span className="text-xs font-medium">View details</span>
           <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
         </div>

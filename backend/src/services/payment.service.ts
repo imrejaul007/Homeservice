@@ -1,6 +1,7 @@
 import Stripe from 'stripe';
 import Booking from '../models/booking.model';
 import { ApiError } from '../utils/ApiError';
+import { eventBus, EVENT_TYPES } from '../event-bus';
 import logger from '../utils/logger';
 
 // Use the Stripe API version from the package
@@ -100,6 +101,17 @@ export const confirmPayment = async (paymentIntentId: string): Promise<{ success
     booking.payment.paidAt = new Date();
     await booking.save();
 
+    // Publish payment.completed event
+    await eventBus.publish(EVENT_TYPES.PAYMENT_COMPLETED, {
+      bookingId: booking._id.toString(),
+      transactionId: paymentIntentId,
+      amount: paymentIntent.amount / 100, // Convert from cents
+      currency: paymentIntent.currency.toUpperCase(),
+      customerId: booking.customerId?.toString(),
+      providerId: booking.providerId?.toString(),
+      bookingNumber: booking.bookingNumber,
+    });
+
     logger.info('Payment confirmed', {
       bookingId: booking._id,
       paymentIntentId,
@@ -146,6 +158,18 @@ export const handleWebhookEvent = async (event: Stripe.Event): Promise<{ handled
           booking.payment.status = 'failed';
           booking.payment.transactionId = `failed_${paymentIntent.last_payment_error?.message || 'unknown'}`;
           await booking.save();
+
+          // Publish payment.failed event
+          await eventBus.publish(EVENT_TYPES.PAYMENT_FAILED, {
+            bookingId: booking._id.toString(),
+            transactionId: paymentIntent.id,
+            error: paymentIntent.last_payment_error?.message || 'Unknown payment error',
+            errorCode: paymentIntent.last_payment_error?.code,
+            declineCode: paymentIntent.last_payment_error?.decline_code,
+            customerId: booking.customerId?.toString(),
+            providerId: booking.providerId?.toString(),
+            bookingNumber: booking.bookingNumber,
+          });
 
           logger.warn('Webhook: Payment failed', {
             bookingId: booking._id,

@@ -33,8 +33,23 @@ const sensitiveFields = [
 ];
 
 // Redact sensitive data from objects
-const redactSensitiveData = (obj: unknown): Record<string, unknown> => {
+const redactSensitiveData = (obj: unknown, seen = new WeakSet()): Record<string, unknown> => {
   if (!obj || typeof obj !== 'object') return {};
+
+  // Handle Error objects
+  if (obj instanceof Error) {
+    return {
+      message: obj.message,
+      name: obj.name,
+      stack: obj.stack,
+    };
+  }
+
+  // Prevent circular references
+  if (seen.has(obj as object)) {
+    return { _circular: true };
+  }
+  seen.add(obj as object);
 
   const result: Record<string, unknown> = {};
   const entries = Object.entries(obj as Record<string, unknown>);
@@ -44,7 +59,7 @@ const redactSensitiveData = (obj: unknown): Record<string, unknown> => {
     if (sensitiveFields.some(field => lowerKey.includes(field))) {
       result[key] = '[REDACTED]';
     } else if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
-      result[key] = redactSensitiveData(value);
+      result[key] = redactSensitiveData(value, seen);
     } else {
       result[key] = value;
     }

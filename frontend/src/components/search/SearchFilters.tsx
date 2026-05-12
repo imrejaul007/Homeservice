@@ -62,22 +62,24 @@ const SearchFilters: React.FC<SearchFiltersProps> = ({
 
   if (isCollapsed) {
     return (
-      <div className={cn('bg-white border border-gray-200 rounded-lg p-4', className)}>
+      // NILIN: glass-nilin background and border-nilin
+      <div className={cn('glass-nilin border border-nilin/20 rounded-nilin p-4', className)}>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <Filter className="h-5 w-5 text-gray-500" />
-            <span className="font-medium">Filters</span>
+            <Filter className="h-5 w-5 text-nilin-charcoal" />
+            <span className="font-medium text-nilin-charcoal">Filters</span>
             {hasActiveFilters && (
-              <span className="bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full">
+              // NILIN: bg-nilin-blush for filter chips
+              <span className="bg-nilin-blush text-nilin-charcoal text-xs px-2 py-1 rounded-full">
                 Active
               </span>
             )}
           </div>
           <button
             onClick={onToggle}
-            className="p-1 hover:bg-gray-100 rounded transition-colors"
+            className="p-1 hover:bg-nilin-blush/30 rounded-nilin transition-colors"
           >
-            <ChevronDown className="h-4 w-4" />
+            <ChevronDown className="h-4 w-4 text-nilin-charcoal" />
           </button>
         </div>
       </div>
@@ -85,14 +87,16 @@ const SearchFilters: React.FC<SearchFiltersProps> = ({
   }
 
   return (
-    <div className={cn('bg-white border border-gray-200 rounded-lg', className)}>
-      {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b border-gray-200">
+    // NILIN: glass-nilin background
+    <div className={cn('glass-nilin border border-nilin/20 rounded-nilin', className)}>
+      {/* Header - NILIN: border-nilin separator */}
+      <div className="flex items-center justify-between p-4 border-b border-nilin">
         <div className="flex items-center gap-2">
-          <Filter className="h-5 w-5 text-gray-500" />
-          <h3 className="font-medium">Filters</h3>
+          <Filter className="h-5 w-5 text-nilin-charcoal" />
+          <h3 className="font-medium text-nilin-charcoal">Filters</h3>
           {hasActiveFilters && (
-            <span className="bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full">
+            // NILIN: bg-nilin-blush for filter chips
+            <span className="bg-nilin-blush text-nilin-charcoal text-xs px-2 py-1 rounded-full">
               {Object.values(filters).filter(v => v !== undefined && v !== '').length} Active
             </span>
           )}
@@ -101,7 +105,7 @@ const SearchFilters: React.FC<SearchFiltersProps> = ({
           {hasActiveFilters && (
             <button
               onClick={handleClearFilters}
-              className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+              className="text-sm text-nilin hover:text-nilin/80 font-medium"
             >
               Clear All
             </button>
@@ -109,9 +113,9 @@ const SearchFilters: React.FC<SearchFiltersProps> = ({
           {onToggle && (
             <button
               onClick={onToggle}
-              className="p-1 hover:bg-gray-100 rounded transition-colors"
+              className="p-1 hover:bg-nilin-blush/30 rounded-nilin transition-colors"
             >
-              <X className="h-4 w-4" />
+              <X className="h-4 w-4 text-nilin-charcoal" />
             </button>
           )}
         </div>
@@ -120,13 +124,14 @@ const SearchFilters: React.FC<SearchFiltersProps> = ({
       <div className="p-4 space-y-6">
         {/* Category Filter */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
+          <label className="block text-sm font-medium text-nilin-charcoal mb-2">
             Category
           </label>
           <select
             value={localFilters.category || ''}
             onChange={(e) => handleFilterChange('category', e.target.value || undefined)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            // NILIN: rounded-nilin and input-nilin styling
+            className="w-full px-3 py-2 border border-nilin/30 rounded-nilin input-nilin focus:outline-none focus:ring-2 focus:ring-nilin/50"
           >
             <option value="">All Categories</option>
             {categories.map((cat) => (
@@ -139,13 +144,14 @@ const SearchFilters: React.FC<SearchFiltersProps> = ({
 
         {/* Sort Options */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
+          <label className="block text-sm font-medium text-nilin-charcoal mb-2">
             Sort By
           </label>
           <select
             value={localFilters.sortBy}
             onChange={(e) => handleFilterChange('sortBy', e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            // NILIN: rounded-nilin and input-nilin styling
+            className="w-full px-3 py-2 border border-nilin/30 rounded-nilin input-nilin focus:outline-none focus:ring-2 focus:ring-nilin/50"
           >
             {SORT_OPTIONS.map((option) => (
               <option key={option.value} value={option.value}>
@@ -158,12 +164,12 @@ const SearchFilters: React.FC<SearchFiltersProps> = ({
         {/* Price Range */}
         <div>
           <div className="flex items-center justify-between mb-2">
-            <label className="text-sm font-medium text-gray-700">
+            <label className="text-sm font-medium text-nilin-charcoal">
               Price Range
             </label>
             <button
               onClick={() => setShowPriceRange(!showPriceRange)}
-              className="text-sm text-blue-600 hover:text-blue-700"
+              className="text-sm text-nilin hover:text-nilin/80"
             >
               {showPriceRange ? 'Hide' : 'Show'}
             </button>
@@ -177,7 +183,8 @@ const SearchFilters: React.FC<SearchFiltersProps> = ({
                   placeholder="Min price"
                   value={localFilters.minPrice || ''}
                   onChange={(e) => handleFilterChange('minPrice', e.target.value ? Number(e.target.value) : undefined)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  // NILIN: rounded-nilin and input-nilin styling
+                  className="w-full px-3 py-2 border border-nilin/30 rounded-nilin input-nilin text-sm focus:outline-none focus:ring-2 focus:ring-nilin/50"
                 />
               </div>
               <div>
@@ -186,16 +193,17 @@ const SearchFilters: React.FC<SearchFiltersProps> = ({
                   placeholder="Max price"
                   value={localFilters.maxPrice || ''}
                   onChange={(e) => handleFilterChange('maxPrice', e.target.value ? Number(e.target.value) : undefined)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  // NILIN: rounded-nilin and input-nilin styling
+                  className="w-full px-3 py-2 border border-nilin/30 rounded-nilin input-nilin text-sm focus:outline-none focus:ring-2 focus:ring-nilin/50"
                 />
               </div>
             </div>
           )}
         </div>
 
-        {/* Rating Filter */}
+        {/* Rating Filter - NILIN: bg-nilin-blush for filter chips */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
+          <label className="block text-sm font-medium text-nilin-charcoal mb-2">
             Minimum Rating
           </label>
           <div className="flex items-center gap-2">
@@ -204,10 +212,10 @@ const SearchFilters: React.FC<SearchFiltersProps> = ({
                 key={rating}
                 onClick={() => handleFilterChange('minRating', rating === localFilters.minRating ? undefined : rating)}
                 className={cn(
-                  'flex items-center gap-1 px-2 py-1 rounded-md border transition-colors',
+                  'flex items-center gap-1 px-2 py-1 rounded-nilin border transition-colors',
                   localFilters.minRating === rating
-                    ? 'bg-yellow-100 border-yellow-300 text-yellow-800'
-                    : 'border-gray-300 text-gray-600 hover:bg-gray-50'
+                    ? 'bg-nilin-blush border-nilin/50 text-nilin-charcoal'
+                    : 'border-nilin/30 text-nilin-charcoal hover:bg-nilin-blush/30'
                 )}
               >
                 <Star className="h-4 w-4" fill={localFilters.minRating === rating ? 'currentColor' : 'none'} />
@@ -219,7 +227,7 @@ const SearchFilters: React.FC<SearchFiltersProps> = ({
 
         {/* Location Filter */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
+          <label className="block text-sm font-medium text-nilin-charcoal mb-2">
             Location
           </label>
           <div className="space-y-2">
@@ -228,16 +236,17 @@ const SearchFilters: React.FC<SearchFiltersProps> = ({
               placeholder="City"
               value={localFilters.city || ''}
               onChange={(e) => handleFilterChange('city', e.target.value || undefined)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              // NILIN: rounded-nilin and input-nilin styling
+              className="w-full px-3 py-2 border border-nilin/30 rounded-nilin input-nilin focus:outline-none focus:ring-2 focus:ring-nilin/50"
             />
 
             <div className="flex items-center justify-between">
-              <label className="text-sm text-gray-600">
+              <label className="text-sm text-nilin-charcoal/80">
                 Search Radius
               </label>
               <button
                 onClick={() => setShowRadius(!showRadius)}
-                className="text-sm text-blue-600 hover:text-blue-700"
+                className="text-sm text-nilin hover:text-nilin/80"
               >
                 {showRadius ? 'Hide' : 'Show'}
               </button>
@@ -251,9 +260,9 @@ const SearchFilters: React.FC<SearchFiltersProps> = ({
                   max="100"
                   value={localFilters.radius || 25}
                   onChange={(e) => handleFilterChange('radius', Number(e.target.value))}
-                  className="flex-1"
+                  className="flex-1 accent-nilin"
                 />
-                <span className="text-sm text-gray-600 min-w-0">
+                <span className="text-sm text-nilin-charcoal min-w-0">
                   {localFilters.radius || 25}km
                 </span>
               </div>
@@ -263,13 +272,14 @@ const SearchFilters: React.FC<SearchFiltersProps> = ({
 
         {/* Results per page */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
+          <label className="block text-sm font-medium text-nilin-charcoal mb-2">
             Results per page
           </label>
           <select
             value={localFilters.limit}
             onChange={(e) => handleFilterChange('limit', Number(e.target.value))}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            // NILIN: rounded-nilin and input-nilin styling
+            className="w-full px-3 py-2 border border-nilin/30 rounded-nilin input-nilin focus:outline-none focus:ring-2 focus:ring-nilin/50"
           >
             <option value={10}>10 results</option>
             <option value={20}>20 results</option>
@@ -277,10 +287,10 @@ const SearchFilters: React.FC<SearchFiltersProps> = ({
           </select>
         </div>
 
-        {/* Apply Button */}
+        {/* Apply Button - NILIN: rounded-nilin styling */}
         <button
           onClick={handleApplyFilters}
-          className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 px-4 rounded-md transition-colors font-medium"
+          className="w-full bg-nilin hover:bg-nilin/90 text-white py-2 px-4 rounded-nilin transition-colors font-medium shadow-nilin"
         >
           Apply Filters
         </button>

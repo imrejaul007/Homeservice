@@ -148,11 +148,11 @@ const STEPS = [
   { id: 6, name: 'Review', fullName: 'Review & Submit', icon: FileText, description: 'Confirm everything' },
 ];
 
-// Shared input class
-const inputClass = "w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-nilin-primary/30 focus:border-nilin-primary focus:bg-white transition-all";
-const selectClass = "w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-nilin-primary/30 focus:border-nilin-primary focus:bg-white transition-all appearance-none";
-const labelClass = "block text-sm font-semibold text-gray-700 mb-1.5";
-const errorClass = "mt-1.5 text-xs font-medium text-red-500";
+// NILIN styled input classes
+const inputClass = "input-nilin w-full px-4 py-3.5 border border-[#E8E4E0] rounded-nilin text-sm text-nilin-charcoal placeholder-nilin-warmGray";
+const selectClass = "input-nilin w-full px-4 py-3.5 border border-[#E8E4E0] rounded-nilin text-sm text-nilin-charcoal appearance-none";
+const labelClass = "block text-sm font-semibold text-nilin-charcoal mb-2";
+const errorClass = "mt-2 text-xs font-medium text-red-500";
 
 const ProviderRegistration: React.FC = () => {
   const { categories, isLoading: categoriesLoading } = useCategories();
@@ -381,36 +381,46 @@ const ProviderRegistration: React.FC = () => {
   const currentStepData = STEPS[currentStep - 1];
 
   return (
-    <div className="min-h-screen flex flex-col bg-gray-50">
+    <div className="min-h-screen flex flex-col bg-gradient-to-br from-nilin-blush via-nilin-peach to-nilin-cream relative overflow-hidden">
+      {/* Decorative Image - low opacity */}
+      <div className="absolute inset-0 opacity-10">
+        <img src="/images/references/BLONDIES 💈for @oligopro Photographer @jofortin Creative direction @hoxtiff Hair artist @paco_pu (5).jpg" className="w-full h-full object-cover" />
+      </div>
+
+      {/* Floating decorative shapes */}
+      <div className="absolute top-24 right-20 w-40 h-40 rounded-full bg-nilin-rose/20 blur-3xl float-shape" />
+      <div className="absolute bottom-32 left-16 w-48 h-48 rounded-full bg-nilin-coral/20 blur-3xl float-shape" style={{animationDelay: '1s'}} />
+      <div className="absolute top-1/2 right-1/3 w-32 h-32 rounded-full bg-nilin-peach/25 blur-2xl float-shape" style={{animationDelay: '2s'}} />
+
       <NavigationHeader />
-      <div className="flex-1 py-8 md:py-12">
+      <div className="relative z-10 flex-1 py-8 md:py-12">
         <div className="max-w-3xl mx-auto px-4 sm:px-6">
 
           {/* Hero Header */}
-          <div className="text-center mb-8">
-            <div className="inline-flex items-center gap-2 px-4 py-1.5 bg-nilin-primary/10 rounded-full mb-4">
-              <Sparkles className="w-4 h-4 text-nilin-primary" />
-              <span className="text-sm font-semibold text-nilin-primary">Join NILIN</span>
+          <div className="text-center mb-8 animate-fade-in-up">
+            <div className="inline-flex items-center gap-2 px-4 py-1.5 bg-nilin-rose/10 rounded-full mb-4">
+              <Sparkles className="w-4 h-4 text-nilin-rose" />
+              <span className="text-sm font-semibold text-nilin-rose">Join NILIN</span>
             </div>
-            <h1 className="text-2xl md:text-3xl font-bold text-gray-900 mb-2">
+            <h1 className="text-2xl md:text-3xl font-serif font-light text-nilin-charcoal mb-2">
               Become a Service Provider
             </h1>
-            <p className="text-gray-500 text-sm md:text-base max-w-md mx-auto">
+            <p className="text-nilin-warmGray text-sm md:text-base max-w-md mx-auto">
               Join Dubai's fastest-growing beauty platform and start earning on your own terms
             </p>
 
             {/* Value props */}
             <div className="flex flex-wrap justify-center gap-3 mt-5">
-              <div className="flex items-center gap-1.5 text-xs text-gray-500">
-                <Clock className="w-3.5 h-3.5 text-emerald-500" />
+              <div className="flex items-center gap-1.5 text-xs text-nilin-warmGray">
+                <Clock className="w-3.5 h-3.5 text-nilin-rose" />
                 <span>Flexible hours</span>
               </div>
-              <div className="flex items-center gap-1.5 text-xs text-gray-500">
-                <TrendingUp className="w-3.5 h-3.5 text-amber-500" />
+              <div className="flex items-center gap-1.5 text-xs text-nilin-warmGray">
+                <TrendingUp className="w-3.5 h-3.5 text-nilin-rose" />
                 <span>Higher earnings</span>
               </div>
-              <div className="flex items-center gap-1.5 text-xs text-gray-500">
-                <Shield className="w-3.5 h-3.5 text-nilin-primary" />
+              <div className="flex items-center gap-1.5 text-xs text-nilin-warmGray">
+                <Shield className="w-3.5 h-3.5 text-nilin-rose" />
                 <span>Trusted platform</span>
               </div>
             </div>
@@ -421,10 +431,10 @@ const ProviderRegistration: React.FC = () => {
             {/* Desktop progress */}
             <div className="hidden sm:flex items-center justify-between relative">
               {/* Background line */}
-              <div className="absolute top-5 left-[40px] right-[40px] h-0.5 bg-gray-200" />
+              <div className="absolute top-5 left-[40px] right-[40px] h-0.5 bg-[#E8E4E0]/60" />
               {/* Active line */}
               <div
-                className="absolute top-5 left-[40px] h-0.5 bg-nilin-primary transition-all duration-500"
+                className="absolute top-5 left-[40px] h-0.5 bg-nilin-rose transition-all duration-500"
                 style={{ width: `${((currentStep - 1) / (STEPS.length - 1)) * (100 - (80 / (STEPS.length * 2 + 6)) * 100)}%` }}
               />
 
@@ -437,10 +447,10 @@ const ProviderRegistration: React.FC = () => {
                     <div
                       className={`w-10 h-10 rounded-full flex items-center justify-center transition-all duration-300 ${
                         isCompleted
-                          ? 'bg-nilin-primary text-white shadow-md shadow-nilin-primary/30'
+                          ? 'bg-nilin-rose text-white shadow-md shadow-nilin-rose/30'
                           : isActive
-                          ? 'bg-nilin-primary text-white shadow-lg shadow-nilin-primary/30 scale-110'
-                          : 'bg-white border-2 border-gray-200 text-gray-400'
+                          ? 'bg-nilin-rose text-white shadow-lg shadow-nilin-rose/30 scale-110'
+                          : 'bg-white border-2 border-[#E8E4E0] text-nilin-warmGray'
                       }`}
                     >
                       {isCompleted ? (
@@ -450,7 +460,7 @@ const ProviderRegistration: React.FC = () => {
                       )}
                     </div>
                     <span className={`mt-2 text-xs font-medium transition-colors ${
-                      isActive ? 'text-nilin-primary' : isCompleted ? 'text-nilin-primary' : 'text-gray-400'
+                      isActive ? 'text-nilin-rose' : isCompleted ? 'text-nilin-rose' : 'text-nilin-warmGray'
                     }`}>
                       {step.name}
                     </span>
@@ -462,41 +472,41 @@ const ProviderRegistration: React.FC = () => {
             {/* Mobile progress */}
             <div className="sm:hidden">
               <div className="flex items-center justify-between mb-3">
-                <span className="text-sm font-semibold text-gray-900">
+                <span className="text-sm font-semibold text-nilin-charcoal">
                   Step {currentStep} of {STEPS.length}
                 </span>
-                <span className="text-sm font-medium text-nilin-primary">
+                <span className="text-sm font-medium text-nilin-rose">
                   {currentStepData.fullName}
                 </span>
               </div>
-              <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+              <div className="h-2 bg-[#E8E4E0]/40 rounded-full overflow-hidden">
                 <div
-                  className="h-full bg-gradient-to-r from-nilin-primary to-nilin-accent rounded-full transition-all duration-500"
+                  className="h-full bg-gradient-to-r from-nilin-rose to-nilin-coral rounded-full transition-all duration-500"
                   style={{ width: `${(currentStep / STEPS.length) * 100}%` }}
                 />
               </div>
             </div>
           </div>
 
-          {/* Form Card */}
-          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+          {/* NILIN Glass Card */}
+          <div className="glass-nilin-strong rounded-nilin border border-[#E8E4E0]/60 overflow-hidden shadow-nilin-warm">
             <form onSubmit={handleSubmit(onSubmit)}>
               {/* Step Header */}
               <div className="px-6 sm:px-8 pt-7 pb-1">
                 <div className="flex items-center gap-3 mb-1">
-                  <div className="w-10 h-10 rounded-xl bg-nilin-primary/10 flex items-center justify-center">
-                    <currentStepData.icon className="w-5 h-5 text-nilin-primary" />
+                  <div className="w-10 h-10 rounded-nilin bg-nilin-rose/10 flex items-center justify-center">
+                    <currentStepData.icon className="w-5 h-5 text-nilin-rose" />
                   </div>
                   <div>
-                    <h2 className="text-lg font-bold text-gray-900">{currentStepData.fullName}</h2>
-                    <p className="text-sm text-gray-400">{currentStepData.description}</p>
+                    <h2 className="text-lg font-bold text-nilin-charcoal">{currentStepData.fullName}</h2>
+                    <p className="text-sm text-nilin-warmGray">{currentStepData.description}</p>
                   </div>
                 </div>
               </div>
 
               <div className="px-6 sm:px-8 py-6">
                 {(formErrors as any).root && (
-                  <div className="mb-6 p-4 bg-red-50 border border-red-100 rounded-xl flex items-start gap-3">
+                  <div className="mb-6 p-4 bg-red-50/80 border border-red-100 rounded-nilin flex items-start gap-3">
                     <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
                     <p className="text-sm font-medium text-red-700">{(formErrors as any).root.message}</p>
                   </div>
@@ -505,12 +515,12 @@ const ProviderRegistration: React.FC = () => {
               </div>
 
               {/* Navigation Footer */}
-              <div className="px-6 sm:px-8 py-5 bg-gray-50/80 border-t border-gray-100 flex items-center justify-between">
+              <div className="px-6 sm:px-8 py-5 bg-nilin-cream/50 border-t border-[#E8E4E0]/60 flex items-center justify-between">
                 <button
                   type="button"
                   onClick={prevStep}
                   disabled={currentStep === 1}
-                  className="flex items-center gap-2 px-5 py-2.5 text-sm font-semibold text-gray-600 bg-white border border-gray-200 rounded-full hover:bg-gray-50 hover:border-gray-300 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                  className="flex items-center gap-2 px-5 py-2.5 text-sm font-semibold text-nilin-charcoal bg-white border border-[#E8E4E0] rounded-nilin hover:bg-nilin-blush/50 hover:border-nilin-coral/40 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   <ChevronLeft className="w-4 h-4" />
                   Back
@@ -520,7 +530,7 @@ const ProviderRegistration: React.FC = () => {
                   <button
                     type="button"
                     onClick={nextStep}
-                    className="flex items-center gap-2 px-7 py-2.5 text-sm font-semibold text-white bg-nilin-primary rounded-full hover:bg-nilin-primary/90 hover:shadow-lg hover:shadow-nilin-primary/25 transition-all"
+                    className="btn-nilin flex items-center gap-2 px-7 py-2.5 text-sm font-semibold text-white rounded-nilin transition-all"
                   >
                     Continue
                     <ChevronRight className="w-4 h-4" />
@@ -533,7 +543,7 @@ const ProviderRegistration: React.FC = () => {
                       e.preventDefault();
                       handleSubmit(onSubmit)(e);
                     }}
-                    className="flex items-center gap-2 px-7 py-2.5 text-sm font-semibold text-white bg-nilin-accent rounded-full hover:bg-nilin-accent/90 hover:shadow-lg hover:shadow-nilin-accent/25 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="btn-nilin flex items-center gap-2 px-7 py-2.5 text-sm font-semibold text-white rounded-nilin transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {isSubmitting || isLoading ? (
                       <>
@@ -554,7 +564,7 @@ const ProviderRegistration: React.FC = () => {
 
           {/* Error Display */}
           {errors && errors.length > 0 && (
-            <div className="mt-6 rounded-2xl bg-red-50 border border-red-100 p-5">
+            <div className="mt-6 rounded-nilin bg-red-50 border border-red-100 p-5">
               <div className="flex gap-3">
                 <AlertCircle className="h-5 w-5 text-red-500 flex-shrink-0 mt-0.5" />
                 <div>
@@ -576,8 +586,8 @@ const ProviderRegistration: React.FC = () => {
 
           {/* Sign In Link */}
           <div className="mt-6 text-center pb-4">
-            <span className="text-sm text-gray-400">Already have an account? </span>
-            <Link to="/login" className="text-sm text-nilin-primary hover:text-nilin-primary/80 font-semibold transition-colors">
+            <span className="text-sm text-nilin-warmGray">Already have an account? </span>
+            <Link to="/login" className="text-sm text-nilin-rose hover:text-nilin-coral font-semibold transition-colors">
               Sign in
             </Link>
           </div>
@@ -593,38 +603,39 @@ const ProviderRegistration: React.FC = () => {
 const PersonalInfoStep = ({ register, formErrors, showPassword, setShowPassword, showConfirmPassword, setShowConfirmPassword }: any) => (
   <div className="space-y-5">
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-      <div>
+      <div className="animate-fade-in-up" style={{ animationDelay: '0ms' }}>
         <label className={labelClass}>First Name *</label>
         <div className="relative">
           <input
             {...register('firstName')}
             type="text"
-            className={inputClass}
+            className={`${inputClass} pl-12`}
             placeholder="e.g. Sarah"
           />
+          <User className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-nilin-warmGray transition-colors" />
         </div>
         {formErrors.firstName && <p className={errorClass}>{formErrors.firstName.message}</p>}
       </div>
-      <div>
+      <div className="animate-fade-in-up" style={{ animationDelay: '50ms' }}>
         <label className={labelClass}>Last Name *</label>
         <input
           {...register('lastName')}
           type="text"
-          className={inputClass}
+          className={`${inputClass} pl-12`}
           placeholder="e.g. Ahmed"
         />
         {formErrors.lastName && <p className={errorClass}>{formErrors.lastName.message}</p>}
       </div>
     </div>
 
-    <div>
+    <div className="animate-fade-in-up" style={{ animationDelay: '100ms' }}>
       <label className={labelClass}>Email Address *</label>
       <div className="relative">
-        <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+        <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-nilin-warmGray transition-colors" />
         <input
           {...register('email')}
           type="email"
-          className={`${inputClass} pl-11`}
+          className={`${inputClass} pl-12`}
           placeholder="sarah@example.com"
         />
       </div>
@@ -632,18 +643,18 @@ const PersonalInfoStep = ({ register, formErrors, showPassword, setShowPassword,
     </div>
 
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-      <div>
+      <div className="animate-fade-in-up" style={{ animationDelay: '150ms' }}>
         <label className={labelClass}>Password *</label>
         <div className="relative">
           <input
             {...register('password')}
             type={showPassword ? 'text' : 'password'}
-            className={`${inputClass} pr-11`}
+            className={`${inputClass} pr-12`}
             placeholder="Min. 8 characters"
           />
           <button
             type="button"
-            className="absolute inset-y-0 right-0 pr-4 flex items-center text-gray-400 hover:text-gray-600"
+            className="absolute inset-y-0 right-0 pr-4 flex items-center text-nilin-warmGray hover:text-nilin-coral transition-colors"
             onClick={() => setShowPassword(!showPassword)}
           >
             {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -651,18 +662,18 @@ const PersonalInfoStep = ({ register, formErrors, showPassword, setShowPassword,
         </div>
         {formErrors.password && <p className={errorClass}>{formErrors.password.message}</p>}
       </div>
-      <div>
+      <div className="animate-fade-in-up" style={{ animationDelay: '200ms' }}>
         <label className={labelClass}>Confirm Password *</label>
         <div className="relative">
           <input
             {...register('confirmPassword')}
             type={showConfirmPassword ? 'text' : 'password'}
-            className={`${inputClass} pr-11`}
+            className={`${inputClass} pr-12`}
             placeholder="Re-enter password"
           />
           <button
             type="button"
-            className="absolute inset-y-0 right-0 pr-4 flex items-center text-gray-400 hover:text-gray-600"
+            className="absolute inset-y-0 right-0 pr-4 flex items-center text-nilin-warmGray hover:text-nilin-coral transition-colors"
             onClick={() => setShowConfirmPassword(!showConfirmPassword)}
           >
             {showConfirmPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -673,27 +684,27 @@ const PersonalInfoStep = ({ register, formErrors, showPassword, setShowPassword,
     </div>
 
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-      <div>
+      <div className="animate-fade-in-up" style={{ animationDelay: '250ms' }}>
         <label className={labelClass}>Phone Number *</label>
         <div className="relative">
-          <Phone className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+          <Phone className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-nilin-warmGray transition-colors" />
           <input
             {...register('phone')}
             type="tel"
-            className={`${inputClass} pl-11`}
+            className={`${inputClass} pl-12`}
             placeholder="+971 50 123 4567"
           />
         </div>
         {formErrors.phone && <p className={errorClass}>{formErrors.phone.message}</p>}
       </div>
-      <div>
+      <div className="animate-fade-in-up" style={{ animationDelay: '300ms' }}>
         <label className={labelClass}>Date of Birth *</label>
         <div className="relative">
-          <Calendar className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+          <Calendar className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-nilin-warmGray transition-colors" />
           <input
             {...register('dateOfBirth')}
             type="date"
-            className={`${inputClass} pl-11`}
+            className={`${inputClass} pl-12`}
           />
         </div>
         {formErrors.dateOfBirth && <p className={errorClass}>{formErrors.dateOfBirth.message}</p>}
@@ -704,21 +715,21 @@ const PersonalInfoStep = ({ register, formErrors, showPassword, setShowPassword,
 
 const BusinessInfoStep = ({ register, formErrors }: any) => (
   <div className="space-y-5">
-    <div>
+    <div className="animate-fade-in-up" style={{ animationDelay: '0ms' }}>
       <label className={labelClass}>Business Name *</label>
       <div className="relative">
-        <Building className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+        <Building className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-nilin-warmGray transition-colors" />
         <input
           {...register('businessInfo.businessName')}
           type="text"
-          className={`${inputClass} pl-11`}
+          className={`${inputClass} pl-12`}
           placeholder="e.g. Glow Beauty Studio"
         />
       </div>
       {formErrors.businessInfo?.businessName && <p className={errorClass}>{formErrors.businessInfo.businessName.message}</p>}
     </div>
 
-    <div>
+    <div className="animate-fade-in-up" style={{ animationDelay: '50ms' }}>
       <label className={labelClass}>Business Type *</label>
       <select {...register('businessInfo.businessType')} className={selectClass}>
         <option value="individual">Individual Freelancer</option>
@@ -728,7 +739,7 @@ const BusinessInfoStep = ({ register, formErrors }: any) => (
       </select>
     </div>
 
-    <div>
+    <div className="animate-fade-in-up" style={{ animationDelay: '100ms' }}>
       <label className={labelClass}>Business Description *</label>
       <textarea
         {...register('businessInfo.description')}
@@ -739,8 +750,8 @@ const BusinessInfoStep = ({ register, formErrors }: any) => (
       {formErrors.businessInfo?.description && <p className={errorClass}>{formErrors.businessInfo.description.message}</p>}
     </div>
 
-    <div>
-      <label className={labelClass}>Tagline <span className="text-gray-400 font-normal">(Optional)</span></label>
+    <div className="animate-fade-in-up" style={{ animationDelay: '150ms' }}>
+      <label className={labelClass}>Tagline <span className="text-nilin-warmGray font-normal">(Optional)</span></label>
       <input
         {...register('businessInfo.tagline')}
         type="text"
@@ -750,28 +761,28 @@ const BusinessInfoStep = ({ register, formErrors }: any) => (
     </div>
 
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-      <div>
-        <label className={labelClass}>Website <span className="text-gray-400 font-normal">(Optional)</span></label>
+      <div className="animate-fade-in-up" style={{ animationDelay: '200ms' }}>
+        <label className={labelClass}>Website <span className="text-nilin-warmGray font-normal">(Optional)</span></label>
         <div className="relative">
-          <Globe className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+          <Globe className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-nilin-warmGray transition-colors" />
           <input
             {...register('businessInfo.website')}
             type="url"
-            className={`${inputClass} pl-11`}
+            className={`${inputClass} pl-12`}
             placeholder="https://yourwebsite.com"
           />
         </div>
       </div>
-      <div>
+      <div className="animate-fade-in-up" style={{ animationDelay: '250ms' }}>
         <label className={labelClass}>Service Radius (km) *</label>
         <div className="relative">
-          <Navigation className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+          <Navigation className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-nilin-warmGray transition-colors" />
           <input
             {...register('businessInfo.serviceRadius', { valueAsNumber: true })}
             type="number"
             min="1"
             max="100"
-            className={`${inputClass} pl-11`}
+            className={`${inputClass} pl-12`}
             placeholder="25"
           />
         </div>
@@ -783,9 +794,9 @@ const BusinessInfoStep = ({ register, formErrors }: any) => (
 const LocationInfoStep = ({ register, formErrors, watch }: any) => (
   <div className="space-y-6">
     {/* Address Section */}
-    <div>
-      <h3 className="text-sm font-semibold text-gray-900 mb-4 flex items-center gap-2">
-        <MapPin className="w-4 h-4 text-nilin-primary" />
+    <div className="animate-fade-in-up" style={{ animationDelay: '0ms' }}>
+      <h3 className="text-sm font-semibold text-nilin-charcoal mb-4 flex items-center gap-2">
+        <MapPin className="w-4 h-4 text-nilin-rose" />
         Primary Business Address
       </h3>
 
@@ -857,45 +868,45 @@ const LocationInfoStep = ({ register, formErrors, watch }: any) => (
     </div>
 
     {/* Service Options */}
-    <div>
-      <h3 className="text-sm font-semibold text-gray-900 mb-4 flex items-center gap-2">
-        <Briefcase className="w-4 h-4 text-nilin-primary" />
+    <div className="animate-fade-in-up" style={{ animationDelay: '50ms' }}>
+      <h3 className="text-sm font-semibold text-nilin-charcoal mb-4 flex items-center gap-2">
+        <Briefcase className="w-4 h-4 text-nilin-rose" />
         Service Type
       </h3>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <label className="relative flex items-start gap-3 p-4 bg-gray-50 border-2 border-gray-200 rounded-xl cursor-pointer hover:border-nilin-primary/40 has-[:checked]:border-nilin-primary has-[:checked]:bg-nilin-primary/5 transition-all">
+        <label className="relative flex items-start gap-3 p-4 bg-nilin-blush/30 border-2 border-[#E8E4E0] rounded-nilin cursor-pointer hover:border-nilin-coral/40 has-[:checked]:border-nilin-rose has-[:checked]:bg-nilin-rose/5 transition-all">
           <input
             {...register('locationInfo.mobileService')}
             type="checkbox"
             className="sr-only peer"
           />
-          <div className="w-10 h-10 rounded-xl bg-emerald-100 flex items-center justify-center flex-shrink-0">
-            <Navigation className="w-5 h-5 text-emerald-600" />
+          <div className="w-10 h-10 rounded-nilin bg-nilin-peach/50 flex items-center justify-center flex-shrink-0">
+            <Navigation className="w-5 h-5 text-nilin-rose" />
           </div>
           <div>
-            <span className="text-sm font-semibold text-gray-900 block">Mobile Service</span>
-            <span className="text-xs text-gray-500">I travel to clients</span>
+            <span className="text-sm font-semibold text-nilin-charcoal block">Mobile Service</span>
+            <span className="text-xs text-nilin-warmGray">I travel to clients</span>
           </div>
-          <div className="absolute top-3 right-3 w-5 h-5 rounded-full border-2 border-gray-300 peer-checked:border-nilin-primary peer-checked:bg-nilin-primary flex items-center justify-center transition-all">
+          <div className="absolute top-3 right-3 w-5 h-5 rounded-full border-2 border-[#E8E4E0] peer-checked:border-nilin-rose peer-checked:bg-nilin-rose flex items-center justify-center transition-all">
             <Check className="w-3 h-3 text-white" />
           </div>
         </label>
 
-        <label className="relative flex items-start gap-3 p-4 bg-gray-50 border-2 border-gray-200 rounded-xl cursor-pointer hover:border-nilin-primary/40 has-[:checked]:border-nilin-primary has-[:checked]:bg-nilin-primary/5 transition-all">
+        <label className="relative flex items-start gap-3 p-4 bg-nilin-blush/30 border-2 border-[#E8E4E0] rounded-nilin cursor-pointer hover:border-nilin-coral/40 has-[:checked]:border-nilin-rose has-[:checked]:bg-nilin-rose/5 transition-all">
           <input
             {...register('locationInfo.hasFixedLocation')}
             type="checkbox"
             className="sr-only peer"
           />
-          <div className="w-10 h-10 rounded-xl bg-blue-100 flex items-center justify-center flex-shrink-0">
-            <MapPin className="w-5 h-5 text-blue-600" />
+          <div className="w-10 h-10 rounded-nilin bg-nilin-peach/50 flex items-center justify-center flex-shrink-0">
+            <MapPin className="w-5 h-5 text-nilin-rose" />
           </div>
           <div>
-            <span className="text-sm font-semibold text-gray-900 block">Fixed Location</span>
-            <span className="text-xs text-gray-500">Clients visit me</span>
+            <span className="text-sm font-semibold text-nilin-charcoal block">Fixed Location</span>
+            <span className="text-xs text-nilin-warmGray">Clients visit me</span>
           </div>
-          <div className="absolute top-3 right-3 w-5 h-5 rounded-full border-2 border-gray-300 peer-checked:border-nilin-primary peer-checked:bg-nilin-primary flex items-center justify-center transition-all">
+          <div className="absolute top-3 right-3 w-5 h-5 rounded-full border-2 border-[#E8E4E0] peer-checked:border-nilin-rose peer-checked:bg-nilin-rose flex items-center justify-center transition-all">
             <Check className="w-3 h-3 text-white" />
           </div>
         </label>
@@ -909,14 +920,14 @@ const ServicesStep = ({ register, formErrors, services, addService, removeServic
     {/* Service Cards */}
     <div className="space-y-4">
       {services.map((_: any, index: number) => (
-        <div key={index} className="relative p-5 bg-gray-50 border border-gray-200 rounded-2xl">
+        <div key={index} className="relative p-5 bg-nilin-blush/30 border border-[#E8E4E0] rounded-nilin">
           {/* Service number & remove */}
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-lg bg-nilin-primary/10 flex items-center justify-center">
-                <span className="text-xs font-bold text-nilin-primary">{index + 1}</span>
+              <div className="w-7 h-7 rounded-lg bg-nilin-rose/10 flex items-center justify-center">
+                <span className="text-xs font-bold text-nilin-rose">{index + 1}</span>
               </div>
-              <h3 className="text-sm font-semibold text-gray-900">Service {index + 1}</h3>
+              <h3 className="text-sm font-semibold text-nilin-charcoal">Service {index + 1}</h3>
             </div>
             {services.length > 1 && (
               <button
@@ -963,7 +974,7 @@ const ServicesStep = ({ register, formErrors, services, addService, removeServic
             </div>
 
             <div>
-              <label className={labelClass}>Subcategory <span className="text-gray-400 font-normal">(Optional)</span></label>
+              <label className={labelClass}>Subcategory <span className="text-nilin-warmGray font-normal">(Optional)</span></label>
               <select
                 {...register(`services.${index}.subcategory`)}
                 className={selectClass}
@@ -1043,7 +1054,7 @@ const ServicesStep = ({ register, formErrors, services, addService, removeServic
     <button
       type="button"
       onClick={addService}
-      className="w-full flex items-center justify-center gap-2 py-3.5 border-2 border-dashed border-gray-300 rounded-2xl text-sm font-semibold text-gray-500 hover:border-nilin-primary hover:text-nilin-primary hover:bg-nilin-primary/5 transition-all"
+      className="w-full flex items-center justify-center gap-2 py-3.5 border-2 border-dashed border-[#E8E4E0] rounded-nilin text-sm font-semibold text-nilin-warmGray hover:border-nilin-rose hover:text-nilin-rose hover:bg-nilin-rose/5 transition-all"
     >
       <Plus className="w-4 h-4" />
       Add Another Service
@@ -1090,25 +1101,26 @@ const DocumentsStep = ({ files, handleFileChange, removeFile, fileInputRefs }: a
 
   return (
     <div className="space-y-4">
-      {uploadSections.map((section) => (
+      {uploadSections.map((section, sectionIndex) => (
         <div
           key={section.key}
-          className="group p-5 border-2 border-dashed border-gray-200 rounded-2xl hover:border-nilin-primary/40 transition-colors"
+          className="group p-5 border-2 border-dashed border-[#E8E4E0] rounded-nilin hover:border-nilin-rose/40 transition-colors animate-fade-in-up"
+          style={{ animationDelay: `${sectionIndex * 50}ms` }}
         >
           <div className="flex items-start gap-4">
-            <div className={`w-12 h-12 rounded-xl ${section.iconBg} flex items-center justify-center flex-shrink-0`}>
+            <div className={`w-12 h-12 rounded-nilin ${section.iconBg} flex items-center justify-center flex-shrink-0`}>
               <section.icon className={`w-6 h-6 ${section.iconColor}`} />
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-1">
-                <h3 className="text-sm font-semibold text-gray-900">{section.title}</h3>
+                <h3 className="text-sm font-semibold text-nilin-charcoal">{section.title}</h3>
                 {section.required ? (
                   <span className="px-2 py-0.5 text-[10px] font-semibold bg-red-50 text-red-500 rounded-full">Required</span>
                 ) : (
-                  <span className="px-2 py-0.5 text-[10px] font-semibold bg-gray-100 text-gray-500 rounded-full">Optional</span>
+                  <span className="px-2 py-0.5 text-[10px] font-semibold bg-nilin-blush/50 text-nilin-warmGray rounded-full">Optional</span>
                 )}
               </div>
-              <p className="text-xs text-gray-400 mb-3">{section.description}</p>
+              <p className="text-xs text-nilin-warmGray mb-3">{section.description}</p>
 
               <input
                 ref={el => fileInputRefs.current[section.key] = el}
@@ -1123,7 +1135,7 @@ const DocumentsStep = ({ files, handleFileChange, removeFile, fileInputRefs }: a
                 <button
                   type="button"
                   onClick={() => fileInputRefs.current[section.key]?.click()}
-                  className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-nilin-primary bg-nilin-primary/10 rounded-xl hover:bg-nilin-primary/20 transition-colors"
+                  className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-nilin-rose bg-nilin-rose/10 rounded-nilin hover:bg-nilin-rose/20 transition-colors"
                 >
                   <Upload className="w-4 h-4" />
                   {section.multiple ? 'Choose Images' : 'Choose File'}
@@ -1131,15 +1143,15 @@ const DocumentsStep = ({ files, handleFileChange, removeFile, fileInputRefs }: a
               ) : (
                 <div className="space-y-2">
                   {files[section.key].map((file: File, index: number) => (
-                    <div key={index} className="flex items-center justify-between bg-white border border-gray-100 px-3 py-2 rounded-xl">
+                    <div key={index} className="flex items-center justify-between bg-white border border-[#E8E4E0] px-3 py-2 rounded-nilin">
                       <div className="flex items-center gap-2 min-w-0">
                         <CheckCircle className="w-4 h-4 text-green-500 flex-shrink-0" />
-                        <span className="text-sm text-gray-700 truncate">{file.name}</span>
+                        <span className="text-sm text-nilin-charcoal truncate">{file.name}</span>
                       </div>
                       <button
                         type="button"
                         onClick={() => removeFile(section.key, index)}
-                        className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors flex-shrink-0"
+                        className="p-1 text-nilin-warmGray hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors flex-shrink-0"
                       >
                         <X className="w-3.5 h-3.5" />
                       </button>
@@ -1148,7 +1160,7 @@ const DocumentsStep = ({ files, handleFileChange, removeFile, fileInputRefs }: a
                   <button
                     type="button"
                     onClick={() => fileInputRefs.current[section.key]?.click()}
-                    className="text-xs font-medium text-nilin-primary hover:underline"
+                    className="text-xs font-medium text-nilin-rose hover:underline"
                   >
                     + {section.multiple ? 'Add more' : 'Replace file'}
                   </button>
@@ -1165,10 +1177,10 @@ const DocumentsStep = ({ files, handleFileChange, removeFile, fileInputRefs }: a
 const ReviewStep = ({ data, files, register, formErrors }: any) => (
   <div className="space-y-5">
     {/* Personal Info Review */}
-    <div className="p-5 bg-gray-50 rounded-2xl">
+    <div className="p-5 bg-nilin-blush/30 rounded-nilin border border-[#E8E4E0]/40 animate-fade-in-up" style={{ animationDelay: '0ms' }}>
       <div className="flex items-center gap-2 mb-4">
-        <User className="w-4 h-4 text-nilin-primary" />
-        <h3 className="text-sm font-bold text-gray-900">Personal Information</h3>
+        <User className="w-4 h-4 text-nilin-rose" />
+        <h3 className="text-sm font-bold text-nilin-charcoal">Personal Information</h3>
       </div>
       <div className="grid grid-cols-2 gap-x-6 gap-y-3">
         <ReviewField label="Name" value={`${data.firstName} ${data.lastName}`} />
@@ -1179,10 +1191,10 @@ const ReviewStep = ({ data, files, register, formErrors }: any) => (
     </div>
 
     {/* Business Info Review */}
-    <div className="p-5 bg-gray-50 rounded-2xl">
+    <div className="p-5 bg-nilin-blush/30 rounded-nilin border border-[#E8E4E0]/40 animate-fade-in-up" style={{ animationDelay: '50ms' }}>
       <div className="flex items-center gap-2 mb-4">
-        <Building className="w-4 h-4 text-nilin-primary" />
-        <h3 className="text-sm font-bold text-gray-900">Business Information</h3>
+        <Building className="w-4 h-4 text-nilin-rose" />
+        <h3 className="text-sm font-bold text-nilin-charcoal">Business Information</h3>
       </div>
       <div className="space-y-3">
         <ReviewField label="Business Name" value={data.businessInfo?.businessName} />
@@ -1192,25 +1204,25 @@ const ReviewStep = ({ data, files, register, formErrors }: any) => (
     </div>
 
     {/* Services Review */}
-    <div className="p-5 bg-gray-50 rounded-2xl">
+    <div className="p-5 bg-nilin-blush/30 rounded-nilin border border-[#E8E4E0]/40 animate-fade-in-up" style={{ animationDelay: '100ms' }}>
       <div className="flex items-center gap-2 mb-4">
-        <Briefcase className="w-4 h-4 text-nilin-primary" />
-        <h3 className="text-sm font-bold text-gray-900">Services ({data.services?.length || 0})</h3>
+        <Briefcase className="w-4 h-4 text-nilin-rose" />
+        <h3 className="text-sm font-bold text-nilin-charcoal">Services ({data.services?.length || 0})</h3>
       </div>
       <div className="space-y-3">
         {data.services?.map((service: any, index: number) => (
-          <div key={index} className="bg-white p-4 rounded-xl border border-gray-100">
+          <div key={index} className="bg-white p-4 rounded-nilin border border-[#E8E4E0]">
             <div className="flex items-start justify-between">
               <div>
-                <h4 className="text-sm font-semibold text-gray-900">{service.name || 'Untitled'}</h4>
-                <p className="text-xs text-gray-400 mt-0.5">{service.category}{service.subcategory ? ` / ${service.subcategory}` : ''}</p>
+                <h4 className="text-sm font-semibold text-nilin-charcoal">{service.name || 'Untitled'}</h4>
+                <p className="text-xs text-nilin-warmGray mt-0.5">{service.category}{service.subcategory ? ` / ${service.subcategory}` : ''}</p>
               </div>
-              <span className="text-sm font-bold text-nilin-primary">AED {service.price?.amount || 0}</span>
+              <span className="text-sm font-bold text-nilin-rose">AED {service.price?.amount || 0}</span>
             </div>
             {service.description && (
-              <p className="text-xs text-gray-500 mt-2 line-clamp-2">{service.description}</p>
+              <p className="text-xs text-nilin-warmGray mt-2 line-clamp-2">{service.description}</p>
             )}
-            <div className="flex items-center gap-3 mt-2 text-xs text-gray-400">
+            <div className="flex items-center gap-3 mt-2 text-xs text-nilin-warmGray">
               <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> {service.duration} min</span>
               <span className="capitalize">{service.price?.type || 'fixed'} price</span>
             </div>
@@ -1220,20 +1232,20 @@ const ReviewStep = ({ data, files, register, formErrors }: any) => (
     </div>
 
     {/* Documents Review */}
-    <div className="p-5 bg-gray-50 rounded-2xl">
+    <div className="p-5 bg-nilin-blush/30 rounded-nilin border border-[#E8E4E0]/40 animate-fade-in-up" style={{ animationDelay: '150ms' }}>
       <div className="flex items-center gap-2 mb-4">
-        <Upload className="w-4 h-4 text-nilin-primary" />
-        <h3 className="text-sm font-bold text-gray-900">Uploaded Documents</h3>
+        <Upload className="w-4 h-4 text-nilin-rose" />
+        <h3 className="text-sm font-bold text-nilin-charcoal">Uploaded Documents</h3>
       </div>
       <div className="space-y-2">
         {Object.entries(files).map(([fieldName, fileList]) => {
           const count = Array.isArray(fileList) ? fileList.length : 0;
           return (
             <div key={fieldName} className="flex items-center justify-between py-2">
-              <span className="text-sm text-gray-600 capitalize">
+              <span className="text-sm text-nilin-charcoal capitalize">
                 {fieldName.replace(/([A-Z])/g, ' $1').trim()}
               </span>
-              <span className={`text-sm font-medium ${count > 0 ? 'text-green-600' : 'text-gray-400'}`}>
+              <span className={`text-sm font-medium ${count > 0 ? 'text-green-600' : 'text-nilin-warmGray'}`}>
                 {count > 0 ? (
                   <span className="flex items-center gap-1"><CheckCircle className="w-3.5 h-3.5" /> {count} file(s)</span>
                 ) : 'Not uploaded'}
@@ -1245,10 +1257,10 @@ const ReviewStep = ({ data, files, register, formErrors }: any) => (
     </div>
 
     {/* Agreements */}
-    <div className="p-5 bg-gray-50 rounded-2xl">
+    <div className="p-5 bg-nilin-blush/30 rounded-nilin border border-[#E8E4E0]/40 animate-fade-in-up" style={{ animationDelay: '200ms' }}>
       <div className="flex items-center gap-2 mb-4">
-        <Shield className="w-4 h-4 text-nilin-primary" />
-        <h3 className="text-sm font-bold text-gray-900">Required Agreements</h3>
+        <Shield className="w-4 h-4 text-nilin-rose" />
+        <h3 className="text-sm font-bold text-nilin-charcoal">Required Agreements</h3>
       </div>
 
       <div className="space-y-4">
@@ -1282,9 +1294,9 @@ const ReviewStep = ({ data, files, register, formErrors }: any) => (
 
 const ReviewField = ({ label, value, capitalize: cap }: { label: string; value?: string; capitalize?: boolean }) => (
   <div>
-    <dt className="text-xs text-gray-400 font-medium">{label}</dt>
-    <dd className={`text-sm font-medium text-gray-900 mt-0.5 ${cap ? 'capitalize' : ''}`}>
-      {value || <span className="text-gray-300">Not provided</span>}
+    <dt className="text-xs text-nilin-warmGray font-medium">{label}</dt>
+    <dd className={`text-sm font-medium text-nilin-charcoal mt-0.5 ${cap ? 'capitalize' : ''}`}>
+      {value || <span className="text-nilin-warmGray/50">Not provided</span>}
     </dd>
   </div>
 );
@@ -1298,13 +1310,13 @@ const AgreementCheckbox = ({ register, name, title, description, error }: any) =
           type="checkbox"
           className="sr-only peer"
         />
-        <div className="w-5 h-5 rounded-md border-2 border-gray-300 peer-checked:border-nilin-primary peer-checked:bg-nilin-primary flex items-center justify-center transition-all group-hover:border-gray-400">
+        <div className="w-5 h-5 rounded-md border-2 border-[#E8E4E0] peer-checked:border-nilin-rose peer-checked:bg-nilin-rose flex items-center justify-center transition-all group-hover:border-nilin-coral">
           <Check className="w-3 h-3 text-white opacity-0 peer-checked:opacity-100" />
         </div>
       </div>
       <div>
-        <span className="text-sm font-semibold text-gray-800 block">{title} *</span>
-        <span className="text-xs text-gray-400">{description}</span>
+        <span className="text-sm font-semibold text-nilin-charcoal block">{title} *</span>
+        <span className="text-xs text-nilin-warmGray">{description}</span>
       </div>
     </label>
     {error && <p className="ml-8 mt-1 text-xs font-medium text-red-500">{error.message}</p>}

@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import Service from '../models/service.model';
 import ServiceCategory from '../models/serviceCategory.model';
+import Booking from '../models/booking.model';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
 
@@ -56,12 +57,6 @@ const validateAndNormalizeCategorySubcategory = async (category: string, subcate
 // INTERFACES & TYPES
 // ===================================
 
-interface ServiceQuery {
-  providerId: string;
-  status?: string;
-  isActive?: boolean;
-}
-
 interface ServiceAnalytics {
   totalViews: number;
   totalClicks: number;
@@ -85,12 +80,51 @@ interface ServiceAnalytics {
  * GET /api/provider/services
  */
 export const getMyServices = asyncHandler(async (req: Request, res: Response) => {
-  const { status, sortBy = 'createdAt', order = 'desc', page = 1, limit = 20 } = req.query;
-  
+  const {
+    status,
+    sortBy = 'createdAt',
+    order = 'desc',
+    page = 1,
+    limit = 20,
+    startDate,
+    endDate,
+    category,
+    search
+  } = req.query;
+
   // Build query
-  const query: ServiceQuery = { providerId: (req.user as any)._id.toString() };
+  const query: any = { providerId: (req.user as any)._id.toString() };
+
   if (status && status !== 'all') {
     query.status = status as string;
+  }
+
+  // Date range filter
+  if (startDate || endDate) {
+    query.createdAt = {};
+    if (startDate) {
+      query.createdAt.$gte = new Date(startDate as string);
+    }
+    if (endDate) {
+      // Set to end of day
+      const endDateObj = new Date(endDate as string);
+      endDateObj.setHours(23, 59, 59, 999);
+      query.createdAt.$lte = endDateObj;
+    }
+  }
+
+  // Category filter
+  if (category && category !== 'all') {
+    query.category = { $regex: new RegExp(category as string, 'i') };
+  }
+
+  // Search filter
+  if (search) {
+    query.$or = [
+      { name: { $regex: new RegExp(search as string, 'i') } },
+      { description: { $regex: new RegExp(search as string, 'i') } },
+      { category: { $regex: new RegExp(search as string, 'i') } }
+    ];
   }
   
   // Calculate pagination
@@ -517,24 +551,56 @@ export const getServiceAnalytics = asyncHandler(async (req: Request, res: Respon
  */
 export const getOverviewAnalytics = asyncHandler(async (req: Request, res: Response) => {
   try {
+    const providerId = (req.user as any)._id.toString();
+
     // Get all provider services
     const services = await Service.find({
-      providerId: (req.user as any)._id.toString()
+      providerId
     }).lean();
-    
+
     // Calculate overview statistics
     const totalServices = services.length;
     const activeServices = services.filter(s => s.isActive && s.status === 'active').length;
     const draftServices = services.filter(s => s.status === 'draft').length;
     const inactiveServices = services.filter(s => s.status === 'inactive').length;
-    
+
     const totalViews = services.reduce((sum, service) => sum + service.searchMetadata.searchCount, 0);
     const totalClicks = services.reduce((sum, service) => sum + service.searchMetadata.clickCount, 0);
     const totalBookings = services.reduce((sum, service) => sum + service.searchMetadata.bookingCount, 0);
-    
+
     const averageRating = services.reduce((sum, service) => sum + service.rating.average, 0) / totalServices || 0;
     const totalReviews = services.reduce((sum, service) => sum + service.rating.count, 0);
-    
+
+    // Get booking stats from Booking model
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const startOfWeek = new Date(startOfToday.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    const [
+      allBookings,
+      pendingBookings,
+      todayBookings,
+      completedThisMonth
+    ] = await Promise.all([
+      Booking.find({ providerId }),
+      Booking.countDocuments({ providerId, status: 'pending' }),
+      Booking.countDocuments({
+        providerId,
+        scheduledDate: { $gte: startOfToday, $lt: new Date(startOfToday.getTime() + 24 * 60 * 60 * 1000) }
+      }),
+      Booking.countDocuments({
+        providerId,
+        status: 'completed',
+        completedAt: { $gte: startOfMonth }
+      })
+    ]);
+
+    // Calculate new bookings (last 7 days)
+    const newBookings = allBookings.filter(b =>
+      new Date(b.createdAt) >= startOfWeek && b.status !== 'cancelled'
+    ).length;
+
     // Top performing services
     const topServices = services
       .sort((a, b) => b.searchMetadata.popularityScore - a.searchMetadata.popularityScore)
@@ -549,7 +615,10 @@ export const getOverviewAnalytics = asyncHandler(async (req: Request, res: Respo
         rating: service.rating.average,
         popularityScore: service.searchMetadata.popularityScore
       }));
-    
+
+    // Get unique categories from services
+    const categories = [...new Set(services.map(s => s.category).filter(Boolean))];
+
     const overview = {
       serviceStats: {
         total: totalServices,
@@ -568,6 +637,13 @@ export const getOverviewAnalytics = asyncHandler(async (req: Request, res: Respo
         averageRating: Math.round(averageRating * 10) / 10,
         totalReviews
       },
+      bookingStats: {
+        newBookings,        // Last 7 days
+        pendingRequests: pendingBookings,
+        todaySchedule: todayBookings,
+        completedThisMonth
+      },
+      categories,
       topServices
     };
     

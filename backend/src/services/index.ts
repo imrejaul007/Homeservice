@@ -14,3 +14,40 @@ export {
   sendBookingRequestEmail,
   sendBookingConfirmationEmail,
 } from './email.service';
+
+// Finance service exports
+export {
+  financeService,
+  calculateProviderEarnings,
+  calculateProviderEarningsFromBooking,
+  calculatePayoutSchedule,
+  calculatePlatformFees,
+  getProviderPayoutSummary,
+  getCommissionConfig,
+  getCommissionTiers,
+} from './finance';
+
+// Trust & Safety service exports
+export {
+  trustSafetyService,
+  calculateTrustScore,
+  getTrustBreakdown,
+  updateTrustScore,
+  getTrustFactors,
+  compareProvidersTrustScores,
+  getTopTrustedProviders,
+  getTrustThresholds,
+} from './trust-safety';
+
+// Marketplace service exports
+export {
+  marketplaceService,
+  calculateSurgeMultiplier,
+  getDemandLevel,
+  getUpcomingSurges,
+  getHighDemandZones,
+  calculatePriceWithSurge,
+  getSurgeConfiguration,
+  clearSurgeCache,
+  experimentBucket,
+} from './marketplace';

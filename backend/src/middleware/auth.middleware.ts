@@ -4,6 +4,14 @@ import rateLimit from 'express-rate-limit';
 import User, { IUser, UserRole } from '../models/user.model';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
+import logger from '../utils/logger';
+import {
+  verifyToken,
+  verifyRecoveryCode,
+  decryptSecret,
+  isValidTokenFormat,
+  isValidRecoveryCodeFormat,
+} from '../services/auth/2fa.service';
 
 // Extend Express Request interface to include user
 declare global {
@@ -354,31 +362,257 @@ export const trackDevice = asyncHandler(async (req: Request, _res: Response, nex
   next();
 });
 
-// Two-factor authentication middleware (placeholder for future implementation)
+// Two-factor authentication middleware (complete implementation)
 export const require2FA = asyncHandler(async (req: Request, _res: Response, next: NextFunction) => {
   if (!req.user) {
     throw new ApiError(401, 'Authentication required');
   }
 
-  // Check if 2FA is enabled and required for this user/action
-  const requires2FA = req.user.role === 'admin' || req.user.corporateInfo;
-  
-  if (requires2FA) {
-    const twoFactorToken = req.headers['x-2fa-token'];
-    
-    if (!twoFactorToken) {
-      throw new ApiError(403, 'Two-factor authentication required');
-    }
+  // Check if 2FA is enabled for this user
+  const twoFactorEnabled = req.user.twoFactor?.enabled === true;
 
-    // Verify 2FA token (implement your 2FA logic)
-    // This would integrate with services like Google Authenticator, SMS, etc.
-    // const isValid2FA = await verify2FAToken(req.user._id, twoFactorToken);
-    // if (!isValid2FA) {
-    //   throw new ApiError(403, 'Invalid two-factor authentication token');
-    // }
+  if (!twoFactorEnabled) {
+    // 2FA not enabled, skip verification
+    return next();
   }
 
-  next();
+  // Check for trusted device
+  const deviceId = req.headers['x-device-id'] as string | undefined;
+  const skipTrustedCheck = req.headers['x-skip-2fa-trusted'] === 'true';
+
+  if (deviceId && !skipTrustedCheck) {
+    const trustedDevice = req.user.twoFactor?.trustedDevices?.find(
+      d => d.deviceId === deviceId
+    );
+
+    if (trustedDevice) {
+      // Update last used timestamp
+      trustedDevice.lastUsed = new Date();
+      await req.user.save({ validateBeforeSave: false });
+
+      logger.info('2FA bypass for trusted device', {
+        userId: req.user._id,
+        deviceId,
+      });
+
+      return next();
+    }
+  }
+
+  // Get 2FA token from header
+  const twoFactorToken = req.headers['x-2fa-token'] as string | undefined;
+
+  if (!twoFactorToken) {
+    throw new ApiError(403, 'Two-factor authentication required. Please provide your 2FA code.');
+  }
+
+  // Check if this is a recovery code
+  if (isValidRecoveryCodeFormat(twoFactorToken)) {
+    // Verify recovery code
+    const userWithCodes = await User.findById(req.user._id).select('+twoFactor.recoveryCodes');
+
+    if (!userWithCodes?.twoFactor?.recoveryCodes) {
+      throw new ApiError(403, '2FA recovery codes not configured');
+    }
+
+    const isValidRecovery = await verifyRecoveryCode(
+      userWithCodes.twoFactor.recoveryCodes,
+      twoFactorToken
+    );
+
+    if (!isValidRecovery) {
+      throw new ApiError(403, 'Invalid recovery code');
+    }
+
+    // Recovery code is valid, remove it from the list (one-time use)
+    const normalizedToken = twoFactorToken.toUpperCase().replace(/[\s-]/g, '');
+    const codeIndex = userWithCodes.twoFactor.recoveryCodes.findIndex(async (hashedCode) => {
+      const bcrypt = await import('bcryptjs');
+      return bcrypt.compare(normalizedToken, hashedCode);
+    });
+
+    if (codeIndex !== -1) {
+      userWithCodes.twoFactor.recoveryCodes.splice(codeIndex, 1);
+      await userWithCodes.save({ validateBeforeSave: false });
+    }
+
+    logger.info('2FA verified via recovery code', { userId: req.user._id });
+
+    return next();
+  }
+
+  // Validate token format
+  if (!isValidTokenFormat(twoFactorToken)) {
+    throw new ApiError(400, 'Invalid 2FA token format. Must be a 6 or 8 digit number.');
+  }
+
+  // Decrypt and verify the secret
+  const userWithSecret = await User.findById(req.user._id).select('+twoFactor.secret');
+
+  if (!userWithSecret?.twoFactor?.secret) {
+    throw new ApiError(403, '2FA secret not configured');
+  }
+
+  let decryptedSecret: string;
+  try {
+    decryptedSecret = decryptSecret(userWithSecret.twoFactor.secret);
+  } catch (error) {
+    logger.error('Failed to decrypt 2FA secret', { userId: req.user._id });
+    throw new ApiError(500, '2FA verification failed. Please contact support.');
+  }
+
+  // Verify the TOTP token
+  const isValidToken = verifyToken(decryptedSecret, twoFactorToken);
+
+  if (!isValidToken) {
+    throw new ApiError(403, 'Invalid 2FA code. Please try again or use a recovery code.');
+  }
+
+  // Update last verified timestamp
+  userWithSecret.twoFactor.lastVerified = new Date();
+  await userWithSecret.save({ validateBeforeSave: false });
+
+  logger.info('2FA verified successfully', { userId: req.user._id });
+
+  return next();
+});
+
+// Middleware to skip 2FA for specific routes or conditions
+export const skip2FAIfTrusted = asyncHandler(async (req: Request, _res: Response, next: NextFunction) => {
+  if (!req.user) {
+    return next();
+  }
+
+  // Check if this is a trusted device request
+  const deviceId = req.headers['x-device-id'] as string | undefined;
+
+  if (!deviceId) {
+    return next();
+  }
+
+  // Mark that we're skipping 2FA for this request
+  (req as any).skip2FAForTrustedDevice = true;
+
+  return next();
+});
+
+// Middleware to enable 2FA for a user (setup flow)
+export const setup2FA = asyncHandler(async (req: Request, _res: Response, next: NextFunction) => {
+  if (!req.user) {
+    throw new ApiError(401, 'Authentication required');
+  }
+
+  const { enable } = req.body;
+
+  if (enable === true && !req.user.twoFactor?.enabled) {
+    // Enable 2FA - user must provide valid token first
+    const twoFactorToken = req.headers['x-2fa-token'] as string;
+
+    if (!twoFactorToken) {
+      throw new ApiError(400, '2FA token required to enable 2FA');
+    }
+
+    // Verify the token before enabling
+    const userWithSecret = await User.findById(req.user._id).select('+twoFactor.secret');
+
+    if (userWithSecret?.twoFactor?.secret) {
+      let decryptedSecret: string;
+      try {
+        decryptedSecret = decryptSecret(userWithSecret.twoFactor.secret);
+      } catch {
+        throw new ApiError(500, '2FA setup failed');
+      }
+
+      if (!verifyToken(decryptedSecret, twoFactorToken)) {
+        throw new ApiError(400, 'Invalid 2FA code');
+      }
+    }
+  }
+
+  return next();
+});
+
+// Middleware to add trusted device after successful 2FA
+export const addTrustedDevice = asyncHandler(async (req: Request, _res: Response, next: NextFunction) => {
+  if (!req.user) {
+    return next();
+  }
+
+  const deviceId = req.headers['x-device-id'] as string | undefined;
+  const deviceName = req.headers['x-device-name'] as string | undefined;
+  const trustDevice = req.headers['x-trust-device'] === 'true';
+
+  if (!deviceId || !trustDevice) {
+    return next();
+  }
+
+  // Check if device already trusted
+  const existingDevice = req.user.twoFactor?.trustedDevices?.find(d => d.deviceId === deviceId);
+
+  if (!existingDevice) {
+    // Add new trusted device
+    if (!req.user.twoFactor) {
+      req.user.twoFactor = {
+        enabled: true,
+        backupEnabled: true,
+        trustedDevices: [],
+      };
+    }
+
+    if (!req.user.twoFactor.trustedDevices) {
+      req.user.twoFactor.trustedDevices = [];
+    }
+
+    req.user.twoFactor.trustedDevices.push({
+      deviceId,
+      deviceName: deviceName || 'Unknown Device',
+      addedAt: new Date(),
+      lastUsed: new Date(),
+    });
+
+    await req.user.save({ validateBeforeSave: false });
+
+    logger.info('New device added to trusted devices', {
+      userId: req.user._id,
+      deviceId,
+      deviceName,
+    });
+  } else {
+    // Update last used
+    existingDevice.lastUsed = new Date();
+    await req.user.save({ validateBeforeSave: false });
+  }
+
+  return next();
+});
+
+// Middleware to remove trusted device
+export const removeTrustedDevice = asyncHandler(async (req: Request, _res: Response, next: NextFunction) => {
+  if (!req.user) {
+    return next();
+  }
+
+  const deviceId = req.params.deviceId;
+
+  if (!deviceId) {
+    return next();
+  }
+
+  if (req.user.twoFactor?.trustedDevices) {
+    const deviceIndex = req.user.twoFactor.trustedDevices.findIndex(d => d.deviceId === deviceId);
+
+    if (deviceIndex !== -1) {
+      req.user.twoFactor.trustedDevices.splice(deviceIndex, 1);
+      await req.user.save({ validateBeforeSave: false });
+
+      logger.info('Device removed from trusted devices', {
+        userId: req.user._id,
+        deviceId,
+      });
+    }
+  }
+
+  return next();
 });
 
 export default {
@@ -396,5 +630,9 @@ export default {
   csrfProtection,
   auditLog,
   trackDevice,
-  require2FA
+  require2FA,
+  skip2FAIfTrusted,
+  setup2FA,
+  addTrustedDevice,
+  removeTrustedDevice,
 };

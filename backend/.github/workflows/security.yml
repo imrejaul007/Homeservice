@@ -1,0 +1,315 @@
+name: Security Scan
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  schedule:
+    - cron: '0 0 * * 0'  # Weekly on Sunday at midnight UTC
+  workflow_dispatch:
+    inputs:
+      scan_type:
+        description: 'Type of scan to run'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - codeql
+          - dependencies
+          - container
+
+env:
+  NODE_VERSION: '20'
+  DOCKER_REGISTRY: 'ghcr.io'
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # ============================================
+  # CodeQL Analysis
+  # ============================================
+  codeql:
+    name: CodeQL Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ['javascript', 'typescript']
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-extended
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+        with:
+          languages: ${{ matrix.language }}
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
+
+      - name: Upload CodeQL results to security tab
+        uses: github/codeql-action/upload-results@v3
+        if: always()
+        with:
+          category: "/language:${{ matrix.language }}"
+          upload_to_security: true
+
+  # ============================================
+  # Dependency Check
+  # ============================================
+  dependency-check:
+    name: Dependency Vulnerability Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run npm audit
+        id: audit
+        run: npm audit --audit-level=high
+        continue-on-error: true
+
+      - name: Check for outdated packages with known CVEs
+        run: |
+          npm install -g npm-check-updates
+          ncu --reject "mongoose,express,jsonwebtoken,bcryptjs,speakeasy,qrcode,axios,stripe" --漏洞
+
+      - name: Generate audit report
+        if: always()
+        run: |
+          npm audit --json > audit-report.json || true
+
+      - name: Upload audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-audit-report
+          path: audit-report.json
+          retention-days: 30
+
+      - name: Post summary comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '## Security Audit Results\n\n' +
+                '**npm audit** completed. Please review the detailed report.\n\n' +
+                'If vulnerabilities are found, please update the affected packages before merging.'
+            })
+
+      - name: Fail on critical vulnerabilities
+        if: steps.audit.outcome == 'failed'
+        run: |
+          echo "Critical or high severity vulnerabilities found in dependencies"
+          exit 1
+
+  # ============================================
+  # Container Scanning (Trivy)
+  # ============================================
+  container-scan:
+    name: Container Security Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.DOCKER_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for Docker Image
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'
+          timeout: '30m'
+
+      - name: Upload Trivy results to Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+          category: 'trivy-container-scan'
+
+      - name: Upload Trivy report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-report
+          path: trivy-results.sarif
+          retention-days: 30
+
+  # ============================================
+  # Secret Scanning
+  # ============================================
+  secret-scan:
+    name: Secret Scanning
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run GitLeaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+        continue-on-error: true
+
+      - name: Scan for committed secrets
+        run: |
+          pip install truffleHog
+          python -m truffleHog --regex --entropy=True --json > secrets-report.json || true
+
+      - name: Upload secrets report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: secrets-report
+          path: secrets-report.json
+          retention-days: 7
+
+  # ============================================
+  # Security Report Summary
+  # ============================================
+  security-report:
+    name: Security Report Summary
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [codeql, dependency-check, container-scan, secret-scan]
+    if: always()
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: reports
+
+      - name: Generate Security Report
+        run: |
+          echo "# Security Scan Report" > security-report.md
+          echo "Generated at: $(date)" >> security-report.md
+          echo "" >> security-report.md
+          echo "## Scan Results Summary" >> security-report.md
+          echo "" >> security-report.md
+          echo "| Scan Type | Status |" >> security-report.md
+          echo "|-----------|--------|" >> security-report.md
+          echo "| CodeQL | ${{ needs.codeql.result == 'success' && 'PASSED' || 'FAILED' }} |" >> security-report.md
+          echo "| Dependencies | ${{ needs.dependency-check.result == 'success' && 'PASSED' || 'FAILED' }} |" >> security-report.md
+          echo "| Container | ${{ needs.container-scan.result == 'success' && 'PASSED' || 'FAILED' }} |" >> security-report.md
+          echo "| Secrets | ${{ needs.secret-scan.result == 'success' && 'PASSED' || 'FAILED' }} |" >> security-report.md
+          echo "" >> security-report.md
+          echo "## Artifacts" >> security-report.md
+          echo "- npm audit report: reports/npm-audit-report" >> security-report.md
+          echo "- Trivy scan report: reports/trivy-report" >> security-report.md
+          echo "- Secrets report: reports/secrets-report" >> security-report.md
+
+      - name: Upload Security Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-report
+          path: security-report.md
+          retention-days: 30
+
+      - name: Post Security Report to PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const report = fs.readFileSync('security-report.md', 'utf8');
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '## Security Scan Report\n\n' + report + '\n\n' +
+                'Please review the scan results and address any vulnerabilities before merging.'
+            });
+
+      - name: Send failure notification
+        if: failure() && github.event_name != 'pull_request'
+        run: |
+          echo "Security scan failed. Please review the artifacts for details."
+
+      - name: Send failure notification to PR
+        if: failure() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '## :warning: Security Scan Failed\n\n' +
+                'One or more security scans have failed. Please review the artifacts and fix the issues before merging.\n\n' +
+                'To view the detailed reports, download the artifacts from the failed workflow run.'
+            });

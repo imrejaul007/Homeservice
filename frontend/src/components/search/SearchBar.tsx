@@ -133,16 +133,17 @@ const SearchBar: React.FC<SearchBarProps> = ({
 
   return (
     <div className={cn('relative w-full max-w-4xl mx-auto', className)}>
+      {/* NILIN: Glass effect background for search bar container */}
       <div
         className={cn(
-          'relative flex items-center bg-white border border-gray-300 rounded-lg shadow-sm transition-all duration-200',
-          isExpanded && 'ring-2 ring-blue-500 border-blue-500',
+          'relative flex items-center glass-nilin border border-nilin/20 rounded-nilin transition-all duration-200',
+          isExpanded && 'ring-2 ring-nilin border-nilin',
           currentSize.container
         )}
       >
-        {/* Search Input */}
+        {/* Search Input - NILIN: input-nilin styling */}
         <div className="flex-1 relative">
-          <Search className={cn('absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400', currentSize.icon)} />
+          <Search className={cn('absolute left-3 top-1/2 transform -translate-y-1/2 text-nilin-charcoal/50', currentSize.icon)} />
           <input
             ref={searchInputRef}
             type="text"
@@ -156,7 +157,7 @@ const SearchBar: React.FC<SearchBarProps> = ({
             onBlur={() => setIsExpanded(false)}
             placeholder={placeholder}
             className={cn(
-              'w-full border-none outline-none bg-transparent pl-10 pr-8',
+              'w-full border-none outline-none bg-transparent pl-10 pr-8 input-nilin',
               currentSize.input
             )}
           />
@@ -164,7 +165,7 @@ const SearchBar: React.FC<SearchBarProps> = ({
             <button
               onClick={clearQuery}
               className={cn(
-                'absolute right-2 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors',
+                'absolute right-2 top-1/2 transform -translate-y-1/2 text-nilin-charcoal/50 hover:text-nilin transition-colors',
                 currentSize.icon
               )}
             >
@@ -176,9 +177,10 @@ const SearchBar: React.FC<SearchBarProps> = ({
         {/* Location Input (Optional) */}
         {showLocationFilter && (
           <>
-            <div className="w-px h-6 bg-gray-300" />
+            {/* NILIN: border-nilin separator */}
+            <div className="w-px h-6 border-nilin" />
             <div className="flex-1 relative min-w-0">
-              <MapPin className={cn('absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400', currentSize.icon)} />
+              <MapPin className={cn('absolute left-3 top-1/2 transform -translate-y-1/2 text-nilin-charcoal/50', currentSize.icon)} />
               <input
                 ref={locationInputRef}
                 type="text"
@@ -187,7 +189,7 @@ const SearchBar: React.FC<SearchBarProps> = ({
                 onKeyDown={handleKeyDown}
                 placeholder="Location..."
                 className={cn(
-                  'w-full border-none outline-none bg-transparent pl-10 pr-3',
+                  'w-full border-none outline-none bg-transparent pl-10 pr-3 input-nilin',
                   currentSize.input
                 )}
               />
@@ -195,11 +197,11 @@ const SearchBar: React.FC<SearchBarProps> = ({
           </>
         )}
 
-        {/* Search Button */}
+        {/* Search Button - NILIN: rounded-nilin styling */}
         <button
           onClick={handleSearch}
           className={cn(
-            'bg-blue-600 hover:bg-blue-700 text-white rounded-r-lg transition-colors flex items-center justify-center',
+            'bg-nilin hover:bg-nilin/90 text-white rounded-nilin transition-colors flex items-center justify-center shadow-nilin',
             currentSize.button
           )}
         >
@@ -207,27 +209,27 @@ const SearchBar: React.FC<SearchBarProps> = ({
         </button>
       </div>
 
-      {/* Suggestions Dropdown */}
+      {/* Suggestions Dropdown - NILIN: glass effect */}
       {showSuggestions && (query.length >= 2 || recentSearches.length > 0) && (
         <div
           ref={suggestionsRef}
-          className="absolute top-full left-0 right-0 bg-white border border-gray-200 rounded-lg shadow-lg z-50 mt-1 max-h-80 overflow-y-auto"
+          className="absolute top-full left-0 right-0 glass-nilin border border-nilin/20 rounded-nilin shadow-nilin z-50 mt-1 max-h-80 overflow-y-auto"
         >
           {/* Suggestions from API */}
           {suggestions.length > 0 && (
             <div className="p-2">
-              <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide px-3 py-2">
+              <div className="text-xs font-semibold text-nilin-charcoal uppercase tracking-wide px-3 py-2">
                 Suggestions
               </div>
               {suggestions.map((suggestion, index) => (
                 <button
                   key={index}
                   onClick={() => handleSuggestionClick(suggestion.text)}
-                  className="w-full text-left px-3 py-2 hover:bg-gray-100 rounded flex items-center gap-2 transition-colors"
+                  className="w-full text-left px-3 py-2 hover:bg-nilin-blush/30 rounded-nilin flex items-center gap-2 transition-colors text-nilin-charcoal"
                 >
-                  <Search className="h-4 w-4 text-gray-400" />
+                  <Search className="h-4 w-4 text-nilin-charcoal/50" />
                   <span className="flex-1">{suggestion.text}</span>
-                  <span className="text-xs text-gray-500 capitalize">
+                  <span className="text-xs text-nilin-charcoal/60 capitalize">
                     {suggestion.type}
                   </span>
                 </button>
@@ -238,16 +240,16 @@ const SearchBar: React.FC<SearchBarProps> = ({
           {/* Recent Searches */}
           {recentSearches.length > 0 && suggestions.length === 0 && (
             <div className="p-2">
-              <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide px-3 py-2">
+              <div className="text-xs font-semibold text-nilin-charcoal uppercase tracking-wide px-3 py-2">
                 Recent Searches
               </div>
               {recentSearches.slice(0, 5).map((search, index) => (
                 <button
                   key={index}
                   onClick={() => handleSuggestionClick(search)}
-                  className="w-full text-left px-3 py-2 hover:bg-gray-100 rounded flex items-center gap-2 transition-colors"
+                  className="w-full text-left px-3 py-2 hover:bg-nilin-blush/30 rounded-nilin flex items-center gap-2 transition-colors text-nilin-charcoal"
                 >
-                  <Clock className="h-4 w-4 text-gray-400" />
+                  <Clock className="h-4 w-4 text-nilin-charcoal/50" />
                   <span className="flex-1">{search}</span>
                 </button>
               ))}
@@ -256,17 +258,17 @@ const SearchBar: React.FC<SearchBarProps> = ({
 
           {/* Loading State */}
           {isLoadingSuggestions && (
-            <div className="p-4 text-center text-gray-500">
-              <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600 mx-auto"></div>
-              <p className="text-sm mt-2">Loading suggestions...</p>
+            <div className="p-4 text-center text-nilin-charcoal/70">
+              <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-nilin mx-auto"></div>
+              <p className="text-sm mt-2 text-nilin-charcoal">Loading suggestions...</p>
             </div>
           )}
 
           {/* No Suggestions */}
           {!isLoadingSuggestions && suggestions.length === 0 && recentSearches.length === 0 && query.length >= 2 && (
-            <div className="p-4 text-center text-gray-500">
+            <div className="p-4 text-center text-nilin-charcoal/70">
               <Search className="h-6 w-6 mx-auto mb-2 opacity-50" />
-              <p className="text-sm">No suggestions found</p>
+              <p className="text-sm text-nilin-charcoal">No suggestions found</p>
             </div>
           )}
         </div>

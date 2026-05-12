@@ -1,189 +1,190 @@
-import React, { useRef } from 'react';
-import { Play, ChevronLeft, ChevronRight, Heart } from 'lucide-react';
+import React, { useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Heart, ArrowRight, Sparkles } from 'lucide-react';
 
-interface Reel {
-  id: string;
-  title: string;
-  subtitle: string;
-  image: string;
-  likes: string;
-  category: string;
-  link: string;
-}
-
-const REELS: Reel[] = [
+const TRENDING = [
   {
     id: '1',
-    title: 'Bridal Glow Up',
-    subtitle: 'Full bridal transformation',
-    image: 'https://images.unsplash.com/photo-1487412720507-e7ab37603c6f?w=400&h=600&q=80&fit=crop',
-    likes: '12.4K',
+    title: 'Bridal Glam',
+    subtitle: 'Flawless bridal look',
+    image: 'https://images.unsplash.com/photo-1487412720507-e7ab37603c6f?w=800&q=80',
+    likes: '12.8K',
     category: 'Makeup',
-    link: '/service/makeup/bridal-makeup',
+    link: '/category/makeup',
   },
   {
     id: '2',
-    title: 'Balayage Magic',
-    subtitle: 'Dark to honey blonde',
-    image: 'https://images.unsplash.com/photo-1522337360788-8b13dee7a37e?w=400&h=600&q=80&fit=crop',
+    title: 'Balayage',
+    subtitle: 'Sun-kissed highlights',
+    image: 'https://images.unsplash.com/photo-1522337360788-8b13dee7a37e?w=800&q=80',
     likes: '8.7K',
     category: 'Hair',
-    link: '/service/hair/hair-coloring',
+    link: '/category/hair',
   },
   {
     id: '3',
-    title: 'Nail Art Inspo',
-    subtitle: 'Chrome & marble designs',
-    image: 'https://images.unsplash.com/photo-1604654894610-df63bc536371?w=400&h=600&q=80&fit=crop',
+    title: 'Chrome Nails',
+    subtitle: 'Metallic perfection',
+    image: 'https://images.unsplash.com/photo-1604654894610-df63bc536371?w=800&q=80',
     likes: '15.2K',
     category: 'Nails',
-    link: '/service/nails/nail-art',
+    link: '/category/nails',
   },
   {
     id: '4',
-    title: 'Glass Skin Facial',
-    subtitle: 'Korean skincare routine',
-    image: 'https://images.unsplash.com/photo-1570172619644-dfd03ed5d881?w=400&h=600&q=80&fit=crop',
+    title: 'Glass Skin',
+    subtitle: 'Korean beauty glow',
+    image: 'https://images.unsplash.com/photo-1570172619644-dfd03ed5d881?w=800&q=80',
     likes: '9.1K',
-    category: 'Skin',
-    link: '/service/skin-aesthetics/facial-cleanup',
+    category: 'Skincare',
+    link: '/category/skincare',
   },
   {
     id: '5',
-    title: 'Deep Tissue Relief',
-    subtitle: 'Home spa experience',
-    image: 'https://images.unsplash.com/photo-1544161515-4ab6ce6db874?w=400&h=600&q=80&fit=crop',
+    title: 'Deep Tissue',
+    subtitle: 'Ultimate relaxation',
+    image: 'https://images.unsplash.com/photo-1544161515-4ab6ce6db874?w=800&q=80',
     likes: '6.3K',
     category: 'Massage',
-    link: '/service/massage-body/deep-tissue',
+    link: '/category/massage-body',
   },
   {
     id: '6',
-    title: 'Brow Lamination',
-    subtitle: 'Fluffy brows in 30 min',
-    image: 'https://images.unsplash.com/photo-1616394584738-fc6e612e71b9?w=400&h=600&q=80&fit=crop',
+    title: 'Brow Art',
+    subtitle: 'Fluffy perfect brows',
+    image: 'https://images.unsplash.com/photo-1522335789203-aabd1fc54bc9?w=800&q=80',
     likes: '11.8K',
-    category: 'Personal Care',
-    link: '/service/personal-care/eyebrow-shaping',
-  },
-  {
-    id: '7',
-    title: 'Gel Extensions',
-    subtitle: 'Natural & lasting length',
-    image: 'https://images.unsplash.com/photo-1632345031435-8727f6897d53?w=400&h=600&q=80&fit=crop',
-    likes: '7.5K',
-    category: 'Nails',
-    link: '/service/nails/nail-extensions',
-  },
-  {
-    id: '8',
-    title: 'Party Glam',
-    subtitle: 'Red carpet ready look',
-    image: 'https://images.unsplash.com/photo-1512496015851-a90fb38ba796?w=400&h=600&q=80&fit=crop',
-    likes: '13.6K',
-    category: 'Makeup',
-    link: '/service/makeup/party-makeup',
+    category: 'Brows',
+    link: '/category/beauty',
   },
 ];
 
 const CuratedReels: React.FC = () => {
-  const scrollRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
+  const scrollRef = useRef<HTMLDivElement>(null);
 
-  const scroll = (direction: 'left' | 'right') => {
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (scrollRef.current) {
+        const { scrollLeft, scrollWidth, clientWidth } = scrollRef.current;
+        if (scrollLeft >= scrollWidth - clientWidth - 10) {
+          scrollRef.current.scrollTo({ left: 0, behavior: 'smooth' });
+        } else {
+          scrollRef.current.scrollBy({ left: 320, behavior: 'smooth' });
+        }
+      }
+    }, 4000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const scroll = (dir: 'left' | 'right') => {
     if (scrollRef.current) {
-      scrollRef.current.scrollBy({
-        left: direction === 'left' ? -320 : 320,
-        behavior: 'smooth',
-      });
+      scrollRef.current.scrollBy({ left: dir === 'left' ? -320 : 320, behavior: 'smooth' });
     }
   };
 
   return (
-    <section className="py-8 md:py-12">
-      <div className="max-w-7xl mx-auto">
+    <section className="py-16 px-4 bg-gradient-to-br from-nilin-blush via-nilin-peach to-nilin-cream relative overflow-hidden">
+      {/* Decorative blur */}
+      <div className="absolute top-10 left-10 w-72 h-72 rounded-full bg-nilin-coral/20 blur-3xl" />
+      <div className="absolute bottom-10 right-10 w-56 h-56 rounded-full bg-nilin-rose/20 blur-3xl" />
+
+      <div className="max-w-7xl mx-auto relative">
         {/* Header */}
-        <div className="flex items-center justify-between px-4 sm:px-6 lg:px-8 mb-5 md:mb-6">
+        <div className="flex items-end justify-between mb-10">
           <div>
-            <h2 className="text-lg md:text-xl font-bold text-gray-900">Trending on NILIN</h2>
-            <p className="text-sm text-gray-500 mt-0.5 hidden md:block">
-              See what's popular — transformations, inspo, and real results
-            </p>
+            <div className="inline-flex items-center gap-2 px-4 py-2 glass rounded-full mb-4">
+              <Sparkles className="w-4 h-4 text-nilin-coral" />
+              <span className="text-sm text-nilin-charcoal">@NILIN.trending</span>
+            </div>
+            <h2 className="text-3xl md:text-4xl font-serif text-nilin-charcoal mb-2">
+              Trending Now
+            </h2>
+            <p className="text-nilin-warmGray">Real results, real transformations</p>
           </div>
-          <div className="hidden md:flex items-center gap-2">
+
+          <div className="hidden md:flex gap-3">
             <button
               onClick={() => scroll('left')}
-              className="p-2 rounded-full bg-white border border-gray-200 hover:border-gray-300 transition-colors"
+              className="glass w-12 h-12 rounded-full flex items-center justify-center hover:shadow-lg transition-all"
             >
-              <ChevronLeft className="w-4 h-4 text-gray-600" />
+              <svg className="w-5 h-5 text-nilin-charcoal" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+              </svg>
             </button>
             <button
               onClick={() => scroll('right')}
-              className="p-2 rounded-full bg-white border border-gray-200 hover:border-gray-300 transition-colors"
+              className="glass w-12 h-12 rounded-full flex items-center justify-center hover:shadow-lg transition-all"
             >
-              <ChevronRight className="w-4 h-4 text-gray-600" />
+              <svg className="w-5 h-5 text-nilin-charcoal" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
             </button>
           </div>
         </div>
 
-        {/* Reels scroll */}
+        {/* Auto-scrolling Cards */}
         <div
           ref={scrollRef}
-          className="flex gap-3 md:gap-4 overflow-x-auto scrollbar-hide px-4 sm:px-6 lg:px-8 pb-4"
-          style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+          className="flex gap-5 overflow-x-auto pb-4 scrollbar-hide"
+          style={{ scrollbarWidth: 'none' }}
         >
-          {REELS.map((reel) => (
-            <div
-              key={reel.id}
-              onClick={() => navigate(reel.link)}
-              className="flex-shrink-0 w-[150px] md:w-[180px] cursor-pointer group"
+          {TRENDING.map((item) => (
+            <button
+              key={item.id}
+              onClick={() => navigate(item.link)}
+              className="flex-shrink-0 group"
             >
-              {/* Reel card — portrait ratio */}
-              <div className="relative h-[220px] md:h-[270px] rounded-2xl overflow-hidden">
+              {/* Large Card */}
+              <div className="relative w-[280px] md:w-[320px] aspect-[4/5] rounded-3xl overflow-hidden shadow-xl card-3d">
                 <img
-                  src={reel.image}
-                  alt={reel.title}
-                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                  src={item.image}
+                  alt={item.title}
+                  className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
                 />
 
-                {/* Gradient overlay */}
-                <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent" />
+                {/* Gradient Overlay */}
+                <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
 
-                {/* Play button */}
-                <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                  <div className="w-12 h-12 rounded-full bg-white/25 backdrop-blur-sm flex items-center justify-center border border-white/40">
-                    <Play className="w-5 h-5 text-white fill-white ml-0.5" />
-                  </div>
-                </div>
-
-                {/* Category pill */}
-                <div className="absolute top-2.5 left-2.5">
-                  <span className="px-2 py-0.5 bg-white/20 backdrop-blur-sm text-white text-[10px] font-semibold rounded-full border border-white/20">
-                    {reel.category}
+                {/* Category Badge */}
+                <div className="absolute top-4 left-4">
+                  <span className="glass rounded-full px-4 py-2 text-sm font-medium text-nilin-charcoal backdrop-blur-md">
+                    {item.category}
                   </span>
                 </div>
 
                 {/* Likes */}
-                <div className="absolute top-2.5 right-2.5">
-                  <div className="flex items-center gap-1 text-white/90">
-                    <Heart className="w-3 h-3 fill-white" />
-                    <span className="text-[10px] font-semibold">{reel.likes}</span>
-                  </div>
+                <div className="absolute top-4 right-4">
+                  <span className="glass rounded-full px-3 py-2 flex items-center gap-1.5 backdrop-blur-md">
+                    <Heart className="w-4 h-4 text-nilin-coral fill-nilin-coral" />
+                    <span className="text-sm font-semibold text-nilin-charcoal">{item.likes}</span>
+                  </span>
                 </div>
 
-                {/* Bottom content */}
-                <div className="absolute bottom-0 left-0 right-0 p-3">
-                  <h3 className="text-white font-bold text-sm leading-tight mb-0.5">
-                    {reel.title}
-                  </h3>
-                  <p className="text-white/70 text-[11px]">
-                    {reel.subtitle}
-                  </p>
+                {/* Content */}
+                <div className="absolute bottom-0 left-0 right-0 p-6 text-left">
+                  <h3 className="text-xl font-medium text-white mb-1">{item.title}</h3>
+                  <p className="text-sm text-white/80 mb-4">{item.subtitle}</p>
+
+                  <div className="flex items-center gap-2 text-white/0 group-hover:text-white transition-all duration-300">
+                    <span className="text-sm font-medium">Explore</span>
+                    <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-2" />
+                  </div>
                 </div>
               </div>
-            </div>
+            </button>
           ))}
+        </div>
+
+        {/* Mobile View All */}
+        <div className="md:hidden text-center mt-8">
+          <button
+            onClick={() => navigate('/search')}
+            className="btn-3d inline-flex items-center gap-2 px-8 py-4 rounded-full bg-gradient-to-r from-nilin-rose to-nilin-coral text-white"
+          >
+            View All
+            <ArrowRight className="w-5 h-5" />
+          </button>
         </div>
       </div>
     </section>

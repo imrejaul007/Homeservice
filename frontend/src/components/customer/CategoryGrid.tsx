@@ -76,46 +76,50 @@ const CategoryGrid: React.FC<CategoryGridProps> = ({
     return (
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 lg:gap-6">
         {[...Array(6)].map((_, i) => (
-          <div key={i} className="rounded-2xl h-32 bg-gradient-to-br from-gray-100 to-gray-200 animate-pulse" />
+          <div key={i} className="rounded-nilin-lg h-32 bg-gradient-to-br from-nilin-cream to-nilin-blush animate-pulse shadow-nilin" />
         ))}
       </div>
     );
   }
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 lg:gap-6">
-      {resolvedCategories.map((category, index) => (
-        <button
-          key={category.id}
-          onClick={() => handleCategoryClick(category)}
-          className="group relative"
-        >
-          <div className={`
-            ${gradients[index % gradients.length]}
-            rounded-2xl p-6 h-32 flex flex-col items-center justify-center
-            transition-all duration-300 ease-in-out
-            hover:shadow-lg hover:scale-105
-            border border-gray-100
-          `}>
-            {/* Icon */}
-            <div className="text-gray-700 mb-2 group-hover:scale-110 transition-transform">
-              {iconMap[category.icon] || iconMap.home}
+    <div className="bg-nilin-cream rounded-nilin-lg p-4 lg:p-6 shadow-nilin">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 lg:gap-6">
+        {resolvedCategories.map((category, index) => (
+          <button
+            key={category.id}
+            onClick={() => handleCategoryClick(category)}
+            className="group relative"
+          >
+            <div className={`
+              ${gradients[index % gradients.length]}
+              rounded-nilin-lg p-6 h-32 flex flex-col items-center justify-center
+              transition-all duration-300 ease-in-out
+              hover-lift
+              border-nilin
+              shadow-nilin
+              hover:shadow-nilin
+            `}>
+              {/* Icon */}
+              <div className="text-nilin-charcoal mb-2 group-hover:scale-110 transition-transform">
+                {iconMap[category.icon] || iconMap.home}
+              </div>
+
+              {/* Category Name */}
+              <h3 className="text-sm font-semibold text-nilin-charcoal text-center">
+                {category.name}
+              </h3>
+
+              {/* Service count badge */}
+              {category.serviceCount ? (
+                <span className="absolute top-2 right-2 bg-nilin-blush text-nilin-charcoal text-xs font-medium px-2 py-1 rounded-full shadow-nilin">
+                  {category.serviceCount}+
+                </span>
+              ) : null}
             </div>
-
-            {/* Category Name */}
-            <h3 className="text-sm font-semibold text-gray-900 text-center">
-              {category.name}
-            </h3>
-
-            {/* Service count badge */}
-            {category.serviceCount ? (
-              <span className="absolute top-2 right-2 bg-white text-gray-700 text-xs font-medium px-2 py-1 rounded-full shadow-sm">
-                {category.serviceCount}+
-              </span>
-            ) : null}
-          </div>
-        </button>
-      ))}
+          </button>
+        ))}
+      </div>
     </div>
   );
 };

@@ -9,14 +9,14 @@ import { CATEGORY_IMAGES } from '../constants/images';
 
 // Loading skeleton
 const CategoryPageSkeleton: React.FC = () => (
-  <div className="min-h-screen bg-white">
+  <div className="min-h-screen bg-nilin-cream">
     <NavigationHeader />
     <div className="animate-pulse">
-      <div className="h-[200px] bg-gray-200" />
+      <div className="h-[200px] bg-gradient-to-r from-nilin-blush to-nilin-peach" />
       <div className="max-w-6xl mx-auto px-4 py-8">
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-4 md:gap-5">
           {[1, 2, 3, 4, 5, 6].map((i) => (
-            <div key={i} className="bg-gray-100 rounded-2xl h-[240px]" />
+            <div key={i} className="glass-nilin rounded-nilin h-[240px] shadow-nilin" />
           ))}
         </div>
       </div>
@@ -28,21 +28,21 @@ const CategoryPageSkeleton: React.FC = () => (
 const CategoryNotFound: React.FC = () => {
   const navigate = useNavigate();
   return (
-    <div className="min-h-screen bg-white">
+    <div className="min-h-screen bg-nilin-cream">
       <NavigationHeader />
-      <div className="max-w-4xl mx-auto px-4 py-20 text-center">
-        <div className="w-24 h-24 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-6">
-          <Folder className="w-12 h-12 text-gray-400" />
+      <div className="max-w-4xl mx-auto px-4 py-20 text-center animate-nilin-in">
+        <div className="w-24 h-24 rounded-nilin bg-gradient-to-br from-nilin-blush to-nilin-coral flex items-center justify-center mx-auto mb-6 shadow-nilin">
+          <Folder className="w-12 h-12 text-white" />
         </div>
-        <h1 className="text-2xl md:text-3xl font-bold text-gray-900 mb-4">
+        <h1 className="text-2xl md:text-3xl font-bold text-nilin-charcoal mb-4">
           Category not found
         </h1>
-        <p className="text-gray-500 mb-8 max-w-md mx-auto">
+        <p className="text-nilin-warmGray mb-8 max-w-md mx-auto">
           The category you're looking for doesn't exist or may have been moved.
         </p>
         <button
           onClick={() => navigate('/')}
-          className="px-6 py-3 bg-nilin-primary text-white rounded-full font-semibold hover:bg-nilin-primary-dark transition-colors"
+          className="btn-nilin px-6 py-3 rounded-nilin text-white font-semibold hover-lift"
         >
           Go Home
         </button>
@@ -58,13 +58,16 @@ const Breadcrumb: React.FC<{ items: { label: string; href?: string }[] }> = ({ i
     <nav className="flex items-center gap-2 text-sm">
       {items.map((item, index) => (
         <React.Fragment key={item.label}>
-          {index > 0 && <ChevronRight className="w-4 h-4 text-gray-400" />}
+          {index > 0 && <ChevronRight className="w-4 h-4 text-nilin-coral" />}
           {item.href ? (
-            <button onClick={() => navigate(item.href!)} className="text-gray-500 hover:text-gray-900 transition-colors">
+            <button
+              onClick={() => navigate(item.href!)}
+              className="text-nilin-warmGray hover:text-nilin-coral transition-colors hover-lift"
+            >
               {item.label}
             </button>
           ) : (
-            <span className="text-gray-900 font-medium">{item.label}</span>
+            <span className="text-nilin-charcoal font-medium">{item.label}</span>
           )}
         </React.Fragment>
       ))}
@@ -93,18 +96,18 @@ const CategoryPage: React.FC = () => {
     .sort((a: any, b: any) => (a.sortOrder || 0) - (b.sortOrder || 0)) || [];
 
   return (
-    <div className="min-h-screen bg-white flex flex-col">
+    <div className="min-h-screen bg-nilin-cream flex flex-col">
       <NavigationHeader />
 
       <main className="flex-1">
         {/* Category Hero Banner */}
-        <div className="relative h-[180px] md:h-[220px] overflow-hidden">
+        <div className="relative h-[180px] md:h-[220px] overflow-hidden animate-nilin-in">
           <img
             src={heroImage}
             alt={category.name}
             className="w-full h-full object-cover"
           />
-          <div className="absolute inset-0 bg-gradient-to-r from-black/60 via-black/40 to-transparent" />
+          <div className="absolute inset-0 bg-gradient-to-r from-nilin-charcoal/70 via-nilin-charcoal/40 to-transparent" />
           <div className="absolute inset-0 flex items-center">
             <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 w-full">
               <h1 className="text-3xl md:text-4xl font-bold text-white mb-2">
@@ -115,10 +118,12 @@ const CategoryPage: React.FC = () => {
               </p>
             </div>
           </div>
+          {/* Gradient overlay at bottom */}
+          <div className="absolute bottom-0 left-0 right-0 h-12 bg-gradient-to-t from-nilin-cream to-transparent" />
         </div>
 
         {/* Breadcrumb */}
-        <div className="bg-gray-50 border-b border-gray-100">
+        <div className="bg-white/80 glass-nilin border-b border-nilin-blush/30 animate-nilin-in" style={{animationDelay: '0.1s'}}>
           <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-3">
             <Breadcrumb
               items={[
@@ -131,27 +136,28 @@ const CategoryPage: React.FC = () => {
 
         {/* Subcategory Grid */}
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8 md:py-10">
-          <h2 className="text-lg md:text-xl font-bold text-gray-900 mb-6">
+          <h2 className="text-lg md:text-xl font-bold text-nilin-charcoal mb-6 animate-nilin-in" style={{animationDelay: '0.2s'}}>
             Choose a service
           </h2>
 
           {subcategories.length > 0 ? (
             <div className="grid grid-cols-2 md:grid-cols-3 gap-4 md:gap-5">
-              {subcategories.map((subcategory: any) => (
-                <SubcategoryCard
-                  key={subcategory.slug}
-                  subcategory={subcategory}
-                  categorySlug={slug}
-                  onClick={() => handleSubcategoryClick(subcategory.slug)}
-                />
+              {subcategories.map((subcategory: any, index: number) => (
+                <div key={subcategory.slug} className="animate-nilin-in hover-lift" style={{animationDelay: `${0.2 + index * 0.05}s`}}>
+                  <SubcategoryCard
+                    subcategory={subcategory}
+                    categorySlug={slug}
+                    onClick={() => handleSubcategoryClick(subcategory.slug)}
+                  />
+                </div>
               ))}
             </div>
           ) : (
-            <div className="bg-gray-50 rounded-2xl p-12 text-center">
-              <div className="w-16 h-16 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-4">
-                <Folder className="w-8 h-8 text-gray-400" />
+            <div className="glass-nilin rounded-nilin p-12 text-center shadow-nilin animate-nilin-in">
+              <div className="w-16 h-16 rounded-nilin bg-gradient-to-br from-nilin-blush to-nilin-coral flex items-center justify-center mx-auto mb-4">
+                <Folder className="w-8 h-8 text-white" />
               </div>
-              <p className="text-gray-500">No services available in this category yet.</p>
+              <p className="text-nilin-warmGray">No services available in this category yet.</p>
             </div>
           )}
         </div>

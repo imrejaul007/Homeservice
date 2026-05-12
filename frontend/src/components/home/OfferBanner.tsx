@@ -1,81 +1,92 @@
 import React, { useRef } from 'react';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { ArrowRight } from 'lucide-react';
 
 const OFFERS = [
   {
     title: 'First Booking 20% Off',
     subtitle: 'Use code NILIN20 on your first service',
-    gradient: 'from-nilin-pink via-pink-100 to-nilin-lavender',
-    cta: 'Book Now',
+    gradient: 'from-nilin-rose via-nilin-coral to-nilin-peach',
+    accent: '#E8B4A8',
   },
   {
-    title: 'Weekend Massage Special',
-    subtitle: 'Swedish & Deep Tissue from AED 199 this weekend',
-    gradient: 'from-nilin-blue via-blue-100 to-nilin-lavender',
-    cta: 'View Offer',
+    title: 'Weekend Spa Special',
+    subtitle: 'Swedish & Deep Tissue from AED 199',
+    gradient: 'from-nilin-charcoal via-gray-700 to-nilin-charcoal',
+    accent: '#2D2D2D',
   },
   {
     title: 'Bridal Glow Package',
-    subtitle: 'Complete bridal beauty starting at AED 1,499',
-    gradient: 'from-nilin-cream via-amber-50 to-nilin-pink',
-    cta: 'Explore',
+    subtitle: 'Complete bridal beauty from AED 1,499',
+    gradient: 'from-nilin-blush via-nilin-peach to-nilin-rose',
+    accent: '#D4A89A',
   },
 ];
 
 const OfferBanner: React.FC = () => {
+  const navigate = useNavigate();
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const scroll = (direction: 'left' | 'right') => {
     if (scrollRef.current) {
       scrollRef.current.scrollBy({
-        left: direction === 'left' ? -320 : 320,
+        left: direction === 'left' ? -350 : 350,
         behavior: 'smooth',
       });
     }
   };
 
   return (
-    <section className="py-6 md:py-8">
+    <section className="py-8 px-4">
       <div className="max-w-7xl mx-auto">
-        <div className="flex items-center justify-between px-4 sm:px-6 lg:px-8 mb-4">
-          <h2 className="text-lg md:text-xl font-bold text-gray-900">
-            Special offers
-          </h2>
-          <div className="hidden md:flex items-center gap-2">
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h2 className="text-xl md:text-2xl font-serif text-nilin-charcoal">Special Offers</h2>
+            <p className="text-sm text-nilin-warmGray">Limited time deals</p>
+          </div>
+          <div className="flex gap-2">
             <button
               onClick={() => scroll('left')}
-              className="p-2 rounded-full bg-white border border-gray-200 hover:border-gray-300 transition-colors"
+              className="glass-btn w-10 h-10 rounded-full flex items-center justify-center"
             >
-              <ChevronLeft className="w-4 h-4 text-gray-600" />
+              <svg className="w-5 h-5 text-nilin-charcoal" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+              </svg>
             </button>
             <button
               onClick={() => scroll('right')}
-              className="p-2 rounded-full bg-white border border-gray-200 hover:border-gray-300 transition-colors"
+              className="glass-btn w-10 h-10 rounded-full flex items-center justify-center"
             >
-              <ChevronRight className="w-4 h-4 text-gray-600" />
+              <svg className="w-5 h-5 text-nilin-charcoal" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
             </button>
           </div>
         </div>
 
         <div
           ref={scrollRef}
-          className="flex gap-4 overflow-x-auto scrollbar-hide px-4 sm:px-6 lg:px-8 pb-2"
-          style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+          className="flex gap-5 overflow-x-auto pb-4 scrollbar-hide"
+          style={{ scrollbarWidth: 'none' }}
         >
           {OFFERS.map((offer, index) => (
             <div
               key={index}
-              className={`flex-shrink-0 w-[300px] md:w-[400px] rounded-2xl bg-gradient-to-br ${offer.gradient} p-6 md:p-8 cursor-pointer hover:shadow-lg transition-shadow`}
+              className="flex-shrink-0 w-[320px] md:w-[380px] rounded-2xl overflow-hidden shadow-lg card-3d"
             >
-              <h3 className="text-lg md:text-xl font-bold text-gray-900 mb-2">
-                {offer.title}
-              </h3>
-              <p className="text-sm text-gray-600 mb-4">
-                {offer.subtitle}
-              </p>
-              <button className="px-5 py-2 bg-gray-900 text-white text-sm font-semibold rounded-full hover:bg-gray-800 transition-colors">
-                {offer.cta}
-              </button>
+              <div className={`h-40 bg-gradient-to-br ${offer.gradient} p-6 flex flex-col justify-between`}>
+                <div>
+                  <h3 className="text-xl font-serif text-white mb-1">{offer.title}</h3>
+                  <p className="text-sm text-white/80">{offer.subtitle}</p>
+                </div>
+                <button
+                  onClick={() => navigate('/search')}
+                  className="self-start inline-flex items-center gap-2 px-4 py-2 bg-white/20 backdrop-blur-sm rounded-full text-white text-sm font-medium hover:bg-white/30 transition-colors"
+                >
+                  Claim Offer
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              </div>
             </div>
           ))}
         </div>
