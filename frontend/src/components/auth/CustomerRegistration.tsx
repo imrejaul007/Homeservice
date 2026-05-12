@@ -15,7 +15,7 @@ const customerRegistrationSchema = z.object({
   email: z.string().email('Please enter a valid email').toLowerCase(),
   password: z.string().min(8, 'Password must be at least 8 characters').regex(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/, 'Must have uppercase, lowercase, number & special character'),
   confirmPassword: z.string(),
-  phone: z.string().optional().or(z.literal('')),
+  phone: z.string().min(10, 'Phone number must be at least 10 digits').regex(/^[\+]?[(]?[\d\s\-\(\)]{10,}$/, 'Please enter a valid phone number'),
   agreeToTerms: z.boolean().refine(v => v === true, 'You must agree to terms'),
   agreeToPrivacy: z.boolean().refine(v => v === true, 'You must agree to privacy'),
 }).refine(d => d.password === d.confirmPassword, { message: "Passwords don't match", path: ['confirmPassword'] });
@@ -122,11 +122,12 @@ const CustomerRegistration: React.FC = () => {
 
               {/* Phone */}
               <div>
-                <label className="block text-sm font-medium text-nilin-charcoal mb-1.5">Phone (Optional)</label>
+                <label className="block text-sm font-medium text-nilin-charcoal mb-1.5">Phone <span className="text-red-500">*</span></label>
                 <div className="relative">
                   <Phone className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-nilin-warmGray" />
                   <input {...register('phone')} placeholder="+971 50 123 4567" className="w-full pl-12 pr-4 py-3 rounded-xl bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all" />
                 </div>
+                {formErrors.phone && <p className="mt-1 text-xs text-red-500">{formErrors.phone.message}</p>}
               </div>
 
               {/* Password */}

@@ -20,6 +20,7 @@ const providerRegistrationSchema = z.object({
   businessName: z.string().min(2, 'Business name required'),
   serviceCategories: z.array(z.string()).min(1, 'Select at least one category'),
   agreeToTerms: z.boolean().refine(v => v === true, 'You must agree to terms'),
+  agreeToPrivacy: z.boolean().refine(v => v === true, 'You must agree to privacy policy'),
 }).refine(d => d.password === d.confirmPassword, { message: "Passwords don't match", path: ['confirmPassword'] });
 
 type ProviderRegistrationForm = z.infer<typeof providerRegistrationSchema>;
@@ -57,7 +58,7 @@ const ProviderRegistration: React.FC = () => {
         firstName: data.firstName, lastName: data.lastName, email: data.email,
         password: data.password, confirmPassword: data.confirmPassword, role: 'provider',
         phone: data.phone, businessName: data.businessName, serviceCategories: data.serviceCategories,
-        agreeToTerms: data.agreeToTerms,
+        agreeToTerms: data.agreeToTerms, agreeToPrivacy: data.agreeToPrivacy,
       });
       setIsSuccess(true);
     } catch {
@@ -210,12 +211,17 @@ const ProviderRegistration: React.FC = () => {
                   {formErrors.serviceCategories && <p className="mt-1 text-xs text-red-500">{formErrors.serviceCategories.message}</p>}
                 </div>
 
-                <div className="pt-2">
+                <div className="pt-2 space-y-2">
                   <label className="flex items-start gap-3 cursor-pointer">
                     <input {...register('agreeToTerms')} type="checkbox" className="mt-1 w-4 h-4 rounded border-nilin-border text-nilin-coral focus:ring-nilin-coral/30" />
-                    <span className="text-sm text-nilin-warmGray">I agree to the <Link to="/terms" className="text-nilin-coral hover:underline">Terms</Link> and <Link to="/privacy" className="text-nilin-coral hover:underline">Privacy Policy</Link></span>
+                    <span className="text-sm text-nilin-warmGray">I agree to the <Link to="/terms" className="text-nilin-coral hover:underline">Terms of Service</Link></span>
                   </label>
                   {formErrors.agreeToTerms && <p className="mt-1 text-xs text-red-500">{formErrors.agreeToTerms.message}</p>}
+                  <label className="flex items-start gap-3 cursor-pointer">
+                    <input {...register('agreeToPrivacy')} type="checkbox" className="mt-1 w-4 h-4 rounded border-nilin-border text-nilin-coral focus:ring-nilin-coral/30" />
+                    <span className="text-sm text-nilin-warmGray">I agree to the <Link to="/privacy" className="text-nilin-coral hover:underline">Privacy Policy</Link></span>
+                  </label>
+                  {formErrors.agreeToPrivacy && <p className="mt-1 text-xs text-red-500">{formErrors.agreeToPrivacy.message}</p>}
                 </div>
 
                 {errors?.length > 0 && (

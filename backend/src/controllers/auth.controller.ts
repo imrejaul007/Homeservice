@@ -15,7 +15,7 @@ const customerRegistrationSchema = Joi.object({
   lastName: Joi.string().required(),
   email: Joi.string().email().required(),
   password: Joi.string().min(8).required(),
-  phone: Joi.string(),
+  phone: Joi.string().pattern(/^[\+]?[(]?[\d\s\-\(\)]{10,}$/).required(),
   dateOfBirth: Joi.string(),
   gender: Joi.string(),
   address: Joi.object({
@@ -53,6 +53,14 @@ const customerRegistrationSchema = Joi.object({
     currency: Joi.string(),
   }),
   referralCode: Joi.string(),
+  agreeToTerms: Joi.alternatives().try(
+    Joi.boolean().valid(true),
+    Joi.string().valid('true')
+  ).required(),
+  agreeToPrivacy: Joi.alternatives().try(
+    Joi.boolean().valid(true),
+    Joi.string().valid('true')
+  ).required(),
 });
 
 const providerRegistrationSchema = Joi.object({

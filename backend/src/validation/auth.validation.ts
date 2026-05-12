@@ -60,7 +60,13 @@ export const customerRegistrationSchema = Joi.object({
   lastName: nameSchema,
   email: emailSchema,
   password: passwordSchema,
-  phone: phoneSchema.optional(),
+  phone: Joi.string()
+    .pattern(/^[\+]?[(]?[\d\s\-\(\)]{10,}$/)
+    .required()
+    .messages({
+      'string.pattern.base': 'Please provide a valid phone number',
+      'any.required': 'Phone number is required'
+    }),
   dateOfBirth: Joi.date()
     .max('now')
     .min('1900-01-01')
