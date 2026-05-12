@@ -79,7 +79,7 @@ const HomePage: React.FC = () => {
   const fetchServices = async () => {
     try {
       setIsLoading(true);
-      const popularRes = await searchApi.searchServices({ limit: 8, sortBy: 'popular' });
+      const popularRes = await searchApi.searchServices({ limit: 8, sortBy: 'popularity' });
       if (popularRes.success && popularRes.data.services) {
         setPopularServices(popularRes.data.services);
       }

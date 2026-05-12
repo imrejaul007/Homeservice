@@ -166,6 +166,10 @@ class MeiliSearchIndex {
 
   async addDocuments(documents: any[]): Promise<any> {
     const response = await this.client.post(`/indexes/${this.indexName}/documents`, documents);
+    const taskUid = response.data?.taskUid;
+    if (taskUid) {
+      await this.waitForTask(taskUid);
+    }
     return response.data;
   }
 
@@ -176,6 +180,10 @@ class MeiliSearchIndex {
 
   async deleteAllDocuments(): Promise<any> {
     const response = await this.client.delete(`/indexes/${this.indexName}/documents`);
+    const taskUid = response.data?.taskUid;
+    if (taskUid) {
+      await this.waitForTask(taskUid);
+    }
     return response.data;
   }
 

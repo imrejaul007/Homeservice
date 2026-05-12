@@ -14,13 +14,11 @@ interface FAQ {
 interface ServiceFAQProps {
   faqs: FAQ[];
   defaultOpen?: number;
-  allowMultipleOpen?: boolean;
 }
 
 const ServiceFAQ: React.FC<ServiceFAQProps> = ({
   faqs,
   defaultOpen = 0,
-  allowMultipleOpen = false,
 }) => {
   return (
     <section className="py-8 md:py-12">
@@ -30,8 +28,7 @@ const ServiceFAQ: React.FC<ServiceFAQProps> = ({
         </h2>
         <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden shadow-sm">
           <Accordion
-            type={allowMultipleOpen ? 'multiple' : 'single'}
-            defaultValue={allowMultipleOpen ? [] : [`faq-${defaultOpen}`]}
+            defaultValue={`faq-${defaultOpen}`}
             collapsible={true}
           >
             {faqs.map((faq, index) => (
@@ -43,7 +40,6 @@ const ServiceFAQ: React.FC<ServiceFAQProps> = ({
                 <AccordionTrigger
                   className="px-5 py-4 hover:bg-gray-50/80 text-left w-full"
                   showArrow={true}
-                  arrowPosition="right"
                 >
                   <span className="font-medium text-gray-900 text-sm md:text-base pr-4">
                     {faq.question}

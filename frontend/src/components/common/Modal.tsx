@@ -19,7 +19,7 @@ export interface ModalProps {
   /** Modal description text */
   description?: React.ReactNode;
   /** Modal content */
-  children: React.ReactNode;
+  children?: React.ReactNode;
   /** Footer content (actions) */
   footer?: React.ReactNode;
   /** Size preset variant */

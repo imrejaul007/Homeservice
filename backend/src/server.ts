@@ -77,15 +77,13 @@ const startServer = async () => {
     // Connect to database
     await database.connect();
 
-    // Seed database in production
-    if (process.env.NODE_ENV === 'production') {
-      try {
-        const { seedDatabase } = await import('./seeders/index');
-        await seedDatabase();
-        logger.info('Database seeded successfully');
-      } catch (seedError) {
-        logger.warn('Database seeding skipped or failed:', seedError);
-      }
+    // Seed database
+    try {
+      const { seedDatabase } = await import('./seeders/index');
+      await seedDatabase();
+      logger.info('Database seeded successfully');
+    } catch (seedError) {
+      logger.warn('Database seeding skipped or failed:', seedError);
     }
 
     // Initialize event subscriptions
@@ -100,6 +98,11 @@ const startServer = async () => {
     try {
       await initializeIndexes();
       logger.info('Search indexes initialized');
+
+      // Index all services in Meilisearch
+      const { reindexAllServices } = await import('./services/search.service');
+      await reindexAllServices();
+      logger.info('Services indexed in Meilisearch');
     } catch (error) {
       logger.warn('Search indexes initialization failed:', error);
     }

@@ -5,7 +5,7 @@ import { cn } from '../../lib/utils';
 // NILIN Design System - Input Component
 // =============================================================================
 
-export interface InputProps extends Omit<React.InputHTMLAttributes<HTMLInputElement>, 'size'> {
+export interface InputProps extends Omit<React.InputHTMLAttributes<HTMLInputElement>, 'size' | 'prefix'> {
   /** Label text displayed above the input */
   label?: React.ReactNode;
   /** Error message (enables error state) */

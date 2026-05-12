@@ -13,6 +13,7 @@
     "lint": "eslint src/**/*.ts",
     "format": "prettier --write src/**/*.ts",
     "db:seed": "ts-node src/seeders/index.ts",
+    "db:seed:services": "ts-node -e \"import './src/seeders/services.seeder'\".then(() => process.exit(0))",
     "db:seed:beauty": "ts-node src/scripts/seed-beauty.ts",
     "db:create-admin": "ts-node src/scripts/create-admin.ts",
     "db:create-production-admin": "ts-node src/scripts/create-production-admin.ts",

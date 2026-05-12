@@ -18,7 +18,7 @@ const ServiceProcedure: React.FC<ServiceProcedureProps> = ({ steps }) => {
         <h2 className="text-xl md:text-2xl font-bold text-gray-900 mb-8">
           How it works
         </h2>
-        <Accordion type="multiple" className="space-y-3">
+        <Accordion className="space-y-3">
           {steps.map((step, index) => (
             <AccordionItem
               key={step.step}
