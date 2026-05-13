@@ -10,6 +10,18 @@ import categoryRoutes from './category.routes';
 import paymentRoutes from './payment.routes';
 import analyticsRoutes from './analytics.routes';
 import offerRoutes from './offer.routes';
+import notificationRoutes from './notification.routes';
+import referralRoutes from './referral.routes';
+import favoritesRoutes from './favorites.routes';
+import loyaltyRoutes from './loyalty.routes';
+import customerRoutes from './customer.routes';
+import reviewRoutes from './review.routes';
+import experienceRoutes from './experience.routes';
+import experienceAdminRoutes from './experience.admin.routes';
+import walletRoutes from './wallet.routes';
+import aiRoutes from './ai.routes';
+import settingsRoutes from './settings.routes';
+import locationRoutes from './location.routes';
 
 const router = Router();
 
@@ -33,6 +45,7 @@ router.get('/', (_req, res) => {
       bookings: '/api/bookings',
       availability: '/api/availability',
       payments: '/api/payments',
+      ai: '/api/ai',
       documentation: '/api-docs'
     }
   });
@@ -71,7 +84,40 @@ router.use('/offers', offerRoutes);
 // Analytics routes
 router.use('/analytics', analyticsRoutes);
 
-// Future route imports will go here
-// router.use('/users', userRoutes);
+// Notification preferences routes
+router.use('/notifications', notificationRoutes);
+
+// Referral routes
+router.use('/referrals', referralRoutes);
+
+// Favorites routes
+router.use('/favorites', favoritesRoutes);
+
+// Loyalty routes
+router.use('/loyalty', loyaltyRoutes);
+
+// Customer routes (addresses, payment methods)
+router.use('/customers', customerRoutes);
+
+// Reviews routes
+router.use('/reviews', reviewRoutes);
+
+// Experience routes
+router.use('/experiences', experienceRoutes);
+
+// Admin Experience routes
+router.use('/admin/experiences', experienceAdminRoutes);
+
+// Wallet/Earnings routes (for providers)
+router.use('/provider', walletRoutes);
+
+// AI routes (insights, provider scoring, churn prediction)
+router.use('/ai', aiRoutes);
+
+// Settings routes
+router.use('/settings', settingsRoutes);
+
+// Location routes (geocoding)
+router.use('/location', locationRoutes);
 
 export default router;

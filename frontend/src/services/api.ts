@@ -21,27 +21,52 @@ export interface ApiResponse<T = unknown> {
   message?: string;
 }
 
-// Get auth tokens from secure storage
+// Get auth tokens from sessionStorage (same as authStore for consistency)
+// Using sessionStorage for improved security - tokens don't persist beyond current tab
 const getAuthTokens = () => {
   try {
-    const accessToken = secureStorage.getItem('accessToken');
-    const refreshToken = secureStorage.getItem('refreshToken');
-    return accessToken && refreshToken ? { accessToken, refreshToken } : null;
+    const stored = sessionStorage.getItem('auth-storage');
+    if (!stored) return null;
+
+    const parsed = JSON.parse(stored);
+    const tokens = parsed?.state?.tokens;
+
+    if (tokens?.accessToken && tokens?.refreshToken) {
+      return tokens;
+    }
+    return null;
   } catch {
     return null;
   }
 };
 
-// Update auth tokens
+// Update auth tokens - also save to sessionStorage
 const updateAuthTokens = (tokens: { accessToken: string; refreshToken: string }) => {
-  secureStorage.setItem('accessToken', tokens.accessToken);
-  secureStorage.setItem('refreshToken', tokens.refreshToken);
+  try {
+    const stored = sessionStorage.getItem('auth-storage');
+    const parsed = stored ? JSON.parse(stored) : { state: {} };
+    parsed.state.tokens = tokens;
+    sessionStorage.setItem('auth-storage', JSON.stringify(parsed));
+  } catch {
+    // Silent fail
+  }
 };
 
 // Clear auth
 const clearAuth = () => {
-  secureStorage.removeItem('accessToken');
-  secureStorage.removeItem('refreshToken');
+  try {
+    const stored = sessionStorage.getItem('auth-storage');
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (parsed.state) {
+        parsed.state.tokens = null;
+        parsed.state.isAuthenticated = false;
+        sessionStorage.setItem('auth-storage', JSON.stringify(parsed));
+      }
+    }
+  } catch {
+    // Silent fail
+  }
 };
 
 // Generate correlation ID for request tracing
@@ -58,6 +83,17 @@ const api: AxiosInstance = axios.create({
   },
   withCredentials: true,
 });
+
+// Initialize default auth header from stored tokens
+const initAuthHeader = () => {
+  const tokens = getAuthTokens();
+  if (tokens?.accessToken) {
+    api.defaults.headers.common.Authorization = `Bearer ${tokens.accessToken}`;
+  }
+};
+
+// Call initialization after api is created
+initAuthHeader();
 
 // Token refresh management
 let isRefreshing = false;

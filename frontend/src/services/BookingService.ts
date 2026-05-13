@@ -48,8 +48,12 @@ export interface CreateBookingData {
   // New booking flow fields
   locationType?: 'at_home' | 'hotel';
   selectedDuration?: number;
-  professionalPreference?: 'male' | 'female' | 'no_preference';
+  genderPreference?: 'male' | 'female' | 'no_preference';
+  experiencePreference?: 'no_preference' | 'specific' | 'any_experience';
   paymentMethod?: 'apple_pay' | 'credit_card' | 'cash';
+
+  // Coupon/Promo
+  couponCode?: string;
 }
 
 export interface Booking {

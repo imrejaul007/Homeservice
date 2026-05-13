@@ -4,12 +4,14 @@ import {
   getCustomerBookings,
   getBookingDetails,
   cancelBooking,
+  rescheduleBooking,
   getProviderBookings,
   acceptBooking,
   rejectBooking,
   startBooking,
   completeBooking,
   addBookingMessage,
+  markMessagesAsRead,
   createGuestBooking,
   trackBooking
 } from '../controllers/booking.controller';
@@ -55,6 +57,7 @@ router.get('/bookings/provider', authenticate, getProviderBookings);
 // Specific booking operations (MUST come after /customer and /provider routes)
 router.get('/bookings/:id', authenticate, getBookingDetails);
 router.patch('/bookings/:id/cancel', authenticate, cancelBooking);
+router.patch('/bookings/:id/reschedule', authenticate, rescheduleBooking);
 router.patch('/bookings/:id/accept', authenticate, acceptBooking);
 router.patch('/bookings/:id/reject', authenticate, rejectBooking);
 router.patch('/bookings/:id/start', authenticate, startBooking);
@@ -62,6 +65,7 @@ router.patch('/bookings/:id/complete', authenticate, completeBooking);
 
 // Booking Communication
 router.post('/bookings/:id/messages', authenticate, addBookingMessage);
+router.patch('/bookings/:id/messages/read', authenticate, markMessagesAsRead);
 
 // ===================================
 // AVAILABILITY ROUTES

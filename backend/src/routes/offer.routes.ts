@@ -13,9 +13,10 @@ const asyncHandler = (fn: Function) => (req: Request, res: Response, next: NextF
 // PUBLIC ROUTES
 // ============================================
 
-// GET /api/offers - List active offers for homepage
-router.get('/', asyncHandler(async (req: Request, res: Response) => {
-  const offers = await offerService.getActiveOffers();
+// GET /api/offers - List active offers for homepage (includes claimed status if authenticated)
+router.get('/', authenticate, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).user?.id;
+  const offers = await offerService.getActiveOffers(userId);
   res.json({ success: true, data: offers });
 }));
 

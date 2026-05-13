@@ -1,4 +1,5 @@
 import { Resend } from 'resend';
+import * as nodemailer from 'nodemailer';
 import { ApiError } from '../utils/ApiError';
 import logger from '../utils/logger';
 
@@ -9,69 +10,169 @@ interface EmailTemplate {
   text?: string;
 }
 
+// ============================================
+// SMTP Configuration (Nodemailer)
+// ============================================
+
+// Initialize SMTP transporter if SMTP credentials are provided
+const createSmtpTransporter = () => {
+  const smtpHost = process.env.SMTP_HOST;
+  const smtpPort = parseInt(process.env.SMTP_PORT || '587', 10);
+  const smtpUser = process.env.SMTP_USER;
+  const smtpPass = process.env.SMTP_PASS;
+
+  if (!smtpHost || !smtpUser || !smtpPass) {
+    return null;
+  }
+
+  return nodemailer.createTransport({
+    host: smtpHost,
+    port: smtpPort,
+    secure: smtpPort === 465, // true for 465, false for other ports
+    auth: {
+      user: smtpUser,
+      pass: smtpPass,
+    },
+    tls: {
+      rejectUnauthorized: process.env.NODE_ENV === 'production',
+    },
+  });
+};
+
+const smtpTransporter = createSmtpTransporter();
+
+// ============================================
+// Resend Configuration (Backup)
+// ============================================
+
 // Initialize Resend client only if API key exists
 const resend = process.env.RESEND_API_KEY
   ? new Resend(process.env.RESEND_API_KEY)
   : null;
 
-const FROM_EMAIL = process.env.EMAIL_FROM || 'noreply@nilin.com';
-const APP_NAME = process.env.APP_NAME || 'NILIN';
+// ============================================
+// Common Configuration
+// ============================================
+
+const FROM_EMAIL = process.env.FROM_EMAIL || process.env.EMAIL_FROM || 'noreply@nilin.com';
+const FROM_NAME = process.env.FROM_NAME || process.env.APP_NAME || 'NILIN';
+// Fail-fast: require FRONTEND_URL in production
+const FRONTEND_URL = process.env.FRONTEND_URL;
+if (!FRONTEND_URL && process.env.NODE_ENV === 'production') {
+  const error = new Error('FRONTEND_URL environment variable is required in production');
+  logger.error('Email service configuration error:', error.message);
+  throw error;
+}
+// Use empty string as fallback only in development (will log warning when used)
+const FRONTEND_URL_FALLBACK = FRONTEND_URL || '';
+
+// NILIN Brand Colors
+const BRAND_COLORS = {
+  primary: '#E11D48',      // Rose/Rose-600 (coral theme)
+  primaryDark: '#BE123C',  // Rose-700
+  primaryLight: '#FCE7F3', // Rose-100
+  secondary: '#F97316',    // Orange-500
+  text: '#1F2937',         // Gray-800
+  textLight: '#6B7280',    // Gray-500
+  background: '#FFF1F2',   // Rose-50
+  white: '#FFFFFF',
+  success: '#10B981',      // Emerald-500
+  warning: '#F59E0B',      // Amber-500
+  error: '#EF4444',        // Red-500
+};
 
 // Retry configuration
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000;
 
+// ============================================
 // Base email function with retry support
+// ============================================
 const sendEmail = async (
   to: string,
   subject: string,
   html: string,
   text?: string
 ): Promise<void> => {
-  // Skip if Resend is not configured
-  if (!resend) {
+  // Log email in development
+  if (process.env.NODE_ENV !== 'production') {
+    logger.info('Email would be sent', { to, subject, preview: html.substring(0, 200) });
+  }
+
+  // Check if either SMTP or Resend is configured
+  const hasSmtp = smtpTransporter !== null;
+  const hasResend = resend !== null;
+
+  if (!hasSmtp && !hasResend) {
     logger.warn('Email service not configured - skipping email', { to, subject });
+    logger.info('Configure SMTP_HOST, SMTP_USER, SMTP_PASS or RESEND_API_KEY to enable emails');
     return;
   }
 
   let lastError: Error | null = null;
 
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      const result = await resend.emails.send({
-        from: `${APP_NAME} <${FROM_EMAIL}>`,
+  // Try SMTP first if available, then fall back to Resend
+  const methods = hasSmtp
+    ? [
+        async () => {
+          const info = await smtpTransporter!.sendMail({
+            from: `"${FROM_NAME}" <${FROM_EMAIL}>`,
+            to,
+            subject,
+            html,
+            text: text || html.replace(/<[^>]*>/g, ''),
+          });
+          return { messageId: info.messageId || 'unknown' };
+        },
+      ]
+    : [];
+
+  // Add Resend as fallback if available
+  if (hasResend) {
+    methods.push(async () => {
+      const result = await resend!.emails.send({
+        from: `${FROM_NAME} <${FROM_EMAIL}>`,
         to: [to],
         subject,
         html,
         text: text || html.replace(/<[^>]*>/g, ''),
       });
-
       if (result.error) {
         throw new Error(result.error.message);
       }
+      return { messageId: result.data?.id || 'unknown' };
+    });
+  }
 
-      logger.info('Email sent successfully', {
-        to,
-        subject,
-        messageId: result.data?.id,
-        attempt,
-        action: 'EMAIL_SENT',
-      });
+  // Try each method in order
+  for (const sendMethod of methods) {
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const result = await sendMethod();
 
-      return;
-    } catch (error: any) {
-      lastError = error;
-      logger.warn('Email send attempt failed', {
-        to,
-        subject,
-        attempt,
-        maxRetries: MAX_RETRIES,
-        error: error.message,
-        action: 'EMAIL_RETRY',
-      });
+        logger.info('Email sent successfully', {
+          to,
+          subject,
+          messageId: result.messageId,
+          attempt,
+          action: 'EMAIL_SENT',
+        });
 
-      if (attempt < MAX_RETRIES) {
-        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY * attempt));
+        return;
+      } catch (error: any) {
+        lastError = error;
+        logger.warn('Email send attempt failed', {
+          to,
+          subject,
+          attempt,
+          maxRetries: MAX_RETRIES,
+          error: error.message,
+          action: 'EMAIL_RETRY',
+        });
+
+        if (attempt < MAX_RETRIES) {
+          await new Promise(resolve => setTimeout(resolve, RETRY_DELAY * attempt));
+        }
       }
     }
   }
@@ -83,15 +184,16 @@ const sendEmail = async (
     action: 'EMAIL_FAILED',
   });
 
-  throw new ApiError(500, 'Failed to send email after multiple attempts');
+  // Don't throw - we want email failures to be non-blocking
+  // throw new ApiError(500, 'Failed to send email after multiple attempts');
 };
 
-// Email verification template
+// Email verification template with NILIN branding
 const getVerificationEmailTemplate = (firstName: string, verificationToken: string, to?: string): EmailTemplate => {
-  const verificationUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/verify-email/${verificationToken}`;
-  
+  const verificationUrl = `${FRONTEND_URL}/verify-email/${verificationToken}`;
+
   return {
-    subject: 'Verify Your Email Address',
+    subject: 'Verify Your Email Address - NILIN',
     html: `
       <!DOCTYPE html>
       <html lang="en">
@@ -99,71 +201,75 @@ const getVerificationEmailTemplate = (firstName: string, verificationToken: stri
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Email Verification</title>
-        <style>
-          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; }
-          .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; text-align: center; border-radius: 8px 8px 0 0; }
-          .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 8px 8px; }
-          .button { display: inline-block; background: #667eea; color: white; padding: 12px 30px; text-decoration: none; border-radius: 6px; font-weight: bold; margin: 20px 0; }
-          .footer { text-align: center; margin-top: 30px; font-size: 12px; color: #666; }
-          .logo { font-size: 24px; font-weight: bold; }
-        </style>
       </head>
-      <body>
-        <div class="header">
-          <div class="logo">🏠 Home Service Platform</div>
-          <p>Welcome to our community!</p>
-        </div>
-        <div class="content">
-          <h2>Hi ${firstName}! 👋</h2>
-          <p>Thank you for registering with Home Service Platform. To complete your registration and start using our services, please verify your email address.</p>
-          
-          <div style="text-align: center;">
-            <a href="${verificationUrl}" class="button">Verify Email Address</a>
-          </div>
-          
-          <p><strong>Or copy and paste this link:</strong></p>
-          <p style="word-break: break-all; background: #eee; padding: 10px; border-radius: 4px;">${verificationUrl}</p>
-          
-          <p>This verification link will expire in 24 hours for security reasons.</p>
-          
-          <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
-          
-          <h3>What's Next? 🚀</h3>
-          <ul>
-            <li>✅ Verify your email (you're doing this now!)</li>
-            <li>🏠 Complete your profile</li>
-            <li>🔍 Start browsing amazing services</li>
-            <li>⭐ Book your first appointment</li>
-          </ul>
-          
-          <p>If you didn't create this account, you can safely ignore this email.</p>
-        </div>
-        <div class="footer">
-          <p>© ${new Date().getFullYear()} Home Service Platform. All rights reserved.</p>
-          <p>This email was sent to ${to || 'you'}</p>
-        </div>
+      <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: ${BRAND_COLORS.background};">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width: 600px; margin: 0 auto; background-color: ${BRAND_COLORS.white}; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
+          <!-- Header -->
+          <tr>
+            <td style="background: linear-gradient(135deg, ${BRAND_COLORS.primary} 0%, ${BRAND_COLORS.primaryDark} 100%); padding: 32px 24px; text-align: center;">
+              <h1 style="margin: 0; font-size: 28px; font-weight: 700; color: ${BRAND_COLORS.white}; letter-spacing: -0.5px;">NILIN</h1>
+              <p style="margin: 8px 0 0; color: rgba(255,255,255,0.9); font-size: 14px;">Home Services Marketplace</p>
+            </td>
+          </tr>
+          <!-- Content -->
+          <tr>
+            <td style="padding: 32px 24px;">
+              <h2 style="margin: 0 0 16px; color: ${BRAND_COLORS.text}; font-size: 24px;">Hi ${firstName}!</h2>
+              <p style="margin: 0 0 24px; color: ${BRAND_COLORS.textLight}; font-size: 16px; line-height: 1.6;">
+                Thank you for joining NILIN! To complete your registration and start booking home services, please verify your email address.
+              </p>
+
+              <!-- CTA Button -->
+              <table role="presentation" cellspacing="0" cellpadding="0" style="margin: 0 auto;">
+                <tr>
+                  <td style="border-radius: 8px; background: ${BRAND_COLORS.primary}; text-align: center;">
+                    <a href="${verificationUrl}" style="display: inline-block; padding: 14px 32px; color: ${BRAND_COLORS.white}; text-decoration: none; font-weight: 600; font-size: 16px; border-radius: 8px;">Verify Email Address</a>
+                  </td>
+                </tr>
+              </table>
+
+              <p style="margin: 24px 0; color: ${BRAND_COLORS.textLight}; font-size: 14px; text-align: center;">or copy this link:</p>
+              <p style="margin: 0; padding: 12px; background: ${BRAND_COLORS.background}; border-radius: 6px; font-size: 12px; color: ${BRAND_COLORS.textLight}; word-break: break-all;">${verificationUrl}</p>
+
+              <div style="margin-top: 32px; padding: 16px; background: #FEF3C7; border-radius: 8px; border-left: 4px solid ${BRAND_COLORS.warning};">
+                <p style="margin: 0; color: #92400E; font-size: 14px;">
+                  <strong>Security Notice:</strong> This link expires in 24 hours. If you didn't create this account, you can safely ignore this email.
+                </p>
+              </div>
+            </td>
+          </tr>
+          <!-- Footer -->
+          <tr>
+            <td style="padding: 24px; background: ${BRAND_COLORS.background}; text-align: center;">
+              <p style="margin: 0; color: ${BRAND_COLORS.textLight}; font-size: 12px;">
+                &copy; ${new Date().getFullYear()} NILIN. All rights reserved.<br>
+                <span style="color: ${BRAND_COLORS.primary};">Transforming home services, one booking at a time.</span>
+              </p>
+            </td>
+          </tr>
+        </table>
       </body>
       </html>
     `,
     text: `
       Hi ${firstName}!
-      
-      Welcome to Home Service Platform! 
-      
+
+      Welcome to NILIN!
+
       Please verify your email address by clicking this link: ${verificationUrl}
-      
+
       This link will expire in 24 hours.
-      
+
       If you didn't create this account, you can safely ignore this email.
-      
-      © ${new Date().getFullYear()} Home Service Platform
+
+      &copy; ${new Date().getFullYear()} NILIN
     `
   };
 };
 
 // Welcome email template
 const getWelcomeEmailTemplate = (firstName: string, role: string, to?: string): EmailTemplate => {
-  const dashboardUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/${role}/dashboard`;
+  const dashboardUrl = `${FRONTEND_URL_FALLBACK || FRONTEND_URL}/${role}/dashboard`;
   
   const roleSpecificContent = {
     customer: {
@@ -269,7 +375,7 @@ const getWelcomeEmailTemplate = (firstName: string, role: string, to?: string): 
 
 // Password reset email template
 const getPasswordResetEmailTemplate = (firstName: string, resetToken: string, to?: string): EmailTemplate => {
-  const resetUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/reset-password/${resetToken}`;
+  const resetUrl = `${FRONTEND_URL_FALLBACK || FRONTEND_URL}/reset-password/${resetToken}`;
   
   return {
     subject: 'Reset Your Password',
@@ -450,7 +556,7 @@ export const sendBookingReminderEmail = async (
 // ===================================
 
 const getBookingRequestTemplate = (firstName: string, booking: any): EmailTemplate => {
-  const viewBookingUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/bookings/${booking.bookingNumber}`;
+  const viewBookingUrl = `${FRONTEND_URL_FALLBACK || FRONTEND_URL}/bookings/${booking.bookingNumber}`;
 
   return {
     subject: `Booking Request Submitted - ${booking.serviceName}`,
@@ -534,7 +640,7 @@ const getBookingRequestTemplate = (firstName: string, booking: any): EmailTempla
 };
 
 const getNewBookingRequestTemplate = (firstName: string, booking: any): EmailTemplate => {
-  const respondUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/provider/bookings/${booking.bookingNumber}`;
+  const respondUrl = `${FRONTEND_URL_FALLBACK || FRONTEND_URL}/provider/bookings/${booking.bookingNumber}`;
 
   return {
     subject: `New Booking Request - ${booking.serviceName}`,
@@ -616,7 +722,7 @@ const getNewBookingRequestTemplate = (firstName: string, booking: any): EmailTem
 };
 
 const getBookingConfirmationTemplate = (firstName: string, booking: any): EmailTemplate => {
-  const viewBookingUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/bookings/${booking.bookingNumber}`;
+  const viewBookingUrl = `${FRONTEND_URL_FALLBACK || FRONTEND_URL}/bookings/${booking.bookingNumber}`;
 
   return {
     subject: `Booking Confirmed! ${booking.serviceName} on ${booking.scheduledDate}`,
@@ -763,17 +869,907 @@ const getBookingCompletedTemplate = (firstName: string, booking: any, isProvider
 };
 
 const getBookingReminderTemplate = (firstName: string, booking: any): EmailTemplate => {
+  const viewBookingUrl = `${FRONTEND_URL_FALLBACK || FRONTEND_URL}/bookings/${booking.bookingNumber}`;
+
   return {
-    subject: `Reminder: ${booking.serviceName} Tomorrow`,
-    html: `<h2>Hi ${firstName}!</h2><p>Just a reminder that you have ${booking.serviceName} scheduled for tomorrow at ${booking.scheduledTime}.</p>`,
-    text: `Hi ${firstName}! Reminder: ${booking.serviceName} tomorrow at ${booking.scheduledTime}.`
+    subject: `Reminder: Your ${booking.serviceName} appointment is tomorrow!`,
+    html: `
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Booking Reminder</title>
+      </head>
+      <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: ${BRAND_COLORS.background};">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width: 600px; margin: 0 auto; background-color: ${BRAND_COLORS.white}; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
+          <!-- Header -->
+          <tr>
+            <td style="background: linear-gradient(135deg, ${BRAND_COLORS.primary} 0%, ${BRAND_COLORS.primaryDark} 100%); padding: 32px 24px; text-align: center;">
+              <h1 style="margin: 0; font-size: 28px; font-weight: 700; color: ${BRAND_COLORS.white};">NILIN</h1>
+              <p style="margin: 8px 0 0; color: rgba(255,255,255,0.9); font-size: 14px;">Appointment Reminder</p>
+            </td>
+          </tr>
+          <!-- Content -->
+          <tr>
+            <td style="padding: 32px 24px;">
+              <div style="text-align: center; margin-bottom: 24px;">
+                <span style="display: inline-block; width: 64px; height: 64px; background: ${BRAND_COLORS.primaryLight}; border-radius: 50%; line-height: 64px; font-size: 32px;">&#128276;</span>
+              </div>
+
+              <h2 style="margin: 0 0 16px; color: ${BRAND_COLORS.text}; font-size: 24px; text-align: center;">Don't forget your appointment!</h2>
+              <p style="margin: 0 0 24px; color: ${BRAND_COLORS.textLight}; font-size: 16px; text-align: center;">
+                Hi ${firstName}, this is a friendly reminder about your upcoming appointment tomorrow.
+              </p>
+
+              <!-- Booking Card -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background: ${BRAND_COLORS.background}; border-radius: 12px; padding: 24px; margin: 24px 0;">
+                <tr>
+                  <td>
+                    <h3 style="margin: 0 0 16px; color: ${BRAND_COLORS.primary}; font-size: 18px;">${booking.serviceName}</h3>
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+                      <tr>
+                        <td style="padding: 8px 0; border-bottom: 1px solid #E5E7EB;">
+                          <span style="color: ${BRAND_COLORS.textLight};">Date</span>
+                        </td>
+                        <td style="padding: 8px 0; border-bottom: 1px solid #E5E7EB; text-align: right;">
+                          <strong style="color: ${BRAND_COLORS.text};">${booking.scheduledDate}</strong>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 8px 0; border-bottom: 1px solid #E5E7EB;">
+                          <span style="color: ${BRAND_COLORS.textLight};">Time</span>
+                        </td>
+                        <td style="padding: 8px 0; border-bottom: 1px solid #E5E7EB; text-align: right;">
+                          <strong style="color: ${BRAND_COLORS.text};">${booking.scheduledTime}</strong>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 8px 0; border-bottom: 1px solid #E5E7EB;">
+                          <span style="color: ${BRAND_COLORS.textLight};">Provider</span>
+                        </td>
+                        <td style="padding: 8px 0; border-bottom: 1px solid #E5E7EB; text-align: right;">
+                          <strong style="color: ${BRAND_COLORS.text};">${booking.providerName}</strong>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 8px 0;">
+                          <span style="color: ${BRAND_COLORS.textLight};">Location</span>
+                        </td>
+                        <td style="padding: 8px 0; text-align: right;">
+                          <strong style="color: ${BRAND_COLORS.text};">${booking.location}</strong>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- CTA Button -->
+              <table role="presentation" cellspacing="0" cellpadding="0" style="margin: 0 auto;">
+                <tr>
+                  <td style="border-radius: 8px; background: ${BRAND_COLORS.primary}; text-align: center;">
+                    <a href="${viewBookingUrl}" style="display: inline-block; padding: 14px 32px; color: ${BRAND_COLORS.white}; text-decoration: none; font-weight: 600; font-size: 16px;">View Booking Details</a>
+                  </td>
+                </tr>
+              </table>
+
+              <div style="margin-top: 24px; padding: 16px; background: #FEF3C7; border-radius: 8px; border-left: 4px solid ${BRAND_COLORS.warning};">
+                <p style="margin: 0; color: #92400E; font-size: 14px;">
+                  <strong>Tip:</strong> Please ensure you're at the location 10 minutes before your scheduled time.
+                </p>
+              </div>
+            </td>
+          </tr>
+          <!-- Footer -->
+          <tr>
+            <td style="padding: 24px; background: ${BRAND_COLORS.background}; text-align: center;">
+              <p style="margin: 0; color: ${BRAND_COLORS.textLight}; font-size: 12px;">
+                &copy; ${new Date().getFullYear()} NILIN. All rights reserved.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </body>
+      </html>
+    `,
+    text: `Hi ${firstName}! Reminder: ${booking.serviceName} tomorrow at ${booking.scheduledTime}. Location: ${booking.location}.`
+  };
+};
+
+const getBookingReminderFullTemplate = (booking: BookingNotificationData, recipient: 'customer' | 'provider'): EmailTemplate => {
+  const viewBookingUrl = `${FRONTEND_URL}/bookings/${booking.bookingNumber}`;
+  const isCustomer = recipient === 'customer';
+  const greeting = isCustomer ? booking.customerName : booking.providerName;
+  const otherParty = isCustomer ? booking.providerName : booking.customerName;
+
+  return {
+    subject: `Reminder: Your ${booking.serviceName} appointment is tomorrow!`,
+    html: `
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Booking Reminder</title>
+      </head>
+      <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: ${BRAND_COLORS.background};">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width: 600px; margin: 0 auto; background-color: ${BRAND_COLORS.white}; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
+          <!-- Header -->
+          <tr>
+            <td style="background: linear-gradient(135deg, ${BRAND_COLORS.primary} 0%, ${BRAND_COLORS.primaryDark} 100%); padding: 32px 24px; text-align: center;">
+              <h1 style="margin: 0; font-size: 28px; font-weight: 700; color: ${BRAND_COLORS.white};">NILIN</h1>
+              <p style="margin: 8px 0 0; color: rgba(255,255,255,0.9); font-size: 14px;">Appointment Reminder</p>
+            </td>
+          </tr>
+          <!-- Content -->
+          <tr>
+            <td style="padding: 32px 24px;">
+              <div style="text-align: center; margin-bottom: 24px;">
+                <span style="display: inline-block; width: 64px; height: 64px; background: ${BRAND_COLORS.primaryLight}; border-radius: 50%; line-height: 64px; font-size: 32px;">&#128276;</span>
+              </div>
+
+              <h2 style="margin: 0 0 16px; color: ${BRAND_COLORS.text}; font-size: 24px; text-align: center;">Don't forget your appointment!</h2>
+              <p style="margin: 0 0 24px; color: ${BRAND_COLORS.textLight}; font-size: 16px; text-align: center;">
+                Hi ${greeting}, this is a friendly reminder about your upcoming appointment tomorrow.
+              </p>
+
+              <!-- Booking Card -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background: ${BRAND_COLORS.background}; border-radius: 12px; padding: 24px; margin: 24px 0;">
+                <tr>
+                  <td>
+                    <h3 style="margin: 0 0 16px; color: ${BRAND_COLORS.primary}; font-size: 18px;">${booking.serviceName}</h3>
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+                      <tr>
+                        <td style="padding: 8px 0; border-bottom: 1px solid #E5E7EB;">
+                          <span style="color: ${BRAND_COLORS.textLight};">Date</span>
+                        </td>
+                        <td style="padding: 8px 0; border-bottom: 1px solid #E5E7EB; text-align: right;">
+                          <strong style="color: ${BRAND_COLORS.text};">${booking.scheduledDate}</strong>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 8px 0; border-bottom: 1px solid #E5E7EB;">
+                          <span style="color: ${BRAND_COLORS.textLight};">Time</span>
+                        </td>
+                        <td style="padding: 8px 0; border-bottom: 1px solid #E5E7EB; text-align: right;">
+                          <strong style="color: ${BRAND_COLORS.text};">${booking.scheduledTime}</strong>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 8px 0; border-bottom: 1px solid #E5E7EB;">
+                          <span style="color: ${BRAND_COLORS.textLight};">${isCustomer ? 'Provider' : 'Customer'}</span>
+                        </td>
+                        <td style="padding: 8px 0; border-bottom: 1px solid #E5E7EB; text-align: right;">
+                          <strong style="color: ${BRAND_COLORS.text};">${otherParty}</strong>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 8px 0;">
+                          <span style="color: ${BRAND_COLORS.textLight};">Location</span>
+                        </td>
+                        <td style="padding: 8px 0; text-align: right;">
+                          <strong style="color: ${BRAND_COLORS.text};">${booking.location}</strong>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- CTA Button -->
+              <table role="presentation" cellspacing="0" cellpadding="0" style="margin: 0 auto;">
+                <tr>
+                  <td style="border-radius: 8px; background: ${BRAND_COLORS.primary}; text-align: center;">
+                    <a href="${viewBookingUrl}" style="display: inline-block; padding: 14px 32px; color: ${BRAND_COLORS.white}; text-decoration: none; font-weight: 600; font-size: 16px;">View Booking Details</a>
+                  </td>
+                </tr>
+              </table>
+
+              <div style="margin-top: 24px; padding: 16px; background: #FEF3C7; border-radius: 8px; border-left: 4px solid ${BRAND_COLORS.warning};">
+                <p style="margin: 0; color: #92400E; font-size: 14px;">
+                  <strong>Tip:</strong> Please ensure you're at the location 10 minutes before your scheduled time.
+                </p>
+              </div>
+            </td>
+          </tr>
+          <!-- Footer -->
+          <tr>
+            <td style="padding: 24px; background: ${BRAND_COLORS.background}; text-align: center;">
+              <p style="margin: 0; color: ${BRAND_COLORS.textLight}; font-size: 12px;">
+                &copy; ${new Date().getFullYear()} NILIN. All rights reserved.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </body>
+      </html>
+    `,
+    text: `Hi ${greeting}! Reminder: ${booking.serviceName} tomorrow at ${booking.scheduledTime}. Location: ${booking.location}.`
+  };
+};
+
+// ============================================
+// NEW BOOKING EMAIL FUNCTIONS
+// ============================================
+
+// Booking interface for notification functions
+interface BookingNotificationData {
+  bookingNumber: string;
+  serviceName: string;
+  providerName: string;
+  providerEmail: string;
+  customerName: string;
+  customerEmail: string;
+  scheduledDate: string;
+  scheduledTime: string;
+  duration: number;
+  location: string;
+  totalAmount: number;
+  currency: string;
+  status: string;
+  specialRequests?: string;
+  providerNotes?: string;
+}
+
+/**
+ * Send booking confirmation email to both customer and provider
+ */
+export const sendBookingConfirmation = async (booking: BookingNotificationData): Promise<void> => {
+  try {
+    // Send to customer
+    const customerTemplate = getBookingConfirmationFullTemplate(booking, 'customer');
+    await sendEmail(booking.customerEmail, customerTemplate.subject, customerTemplate.html, customerTemplate.text);
+
+    // Send to provider
+    const providerTemplate = getBookingConfirmationFullTemplate(booking, 'provider');
+    await sendEmail(booking.providerEmail, providerTemplate.subject, providerTemplate.html, providerTemplate.text);
+
+    logger.info('Booking confirmation emails sent', {
+      bookingNumber: booking.bookingNumber,
+      customerEmail: booking.customerEmail,
+      providerEmail: booking.providerEmail,
+      action: 'BOOKING_CONFIRMATION_SENT',
+    });
+  } catch (error) {
+    logger.error('Failed to send booking confirmation emails', {
+      bookingNumber: booking.bookingNumber,
+      error: error instanceof Error ? error.message : String(error),
+      action: 'BOOKING_CONFIRMATION_FAILED',
+    });
+    // Don't throw - email failure should not break booking flow
+  }
+};
+
+/**
+ * Send booking reminder email (24h before appointment)
+ */
+export const sendBookingReminder = async (booking: BookingNotificationData): Promise<void> => {
+  try {
+    // Send to customer
+    const customerTemplate = getBookingReminderFullTemplate(booking, 'customer');
+    await sendEmail(booking.customerEmail, customerTemplate.subject, customerTemplate.html, customerTemplate.text);
+
+    // Send to provider
+    const providerTemplate = getBookingReminderFullTemplate(booking, 'provider');
+    await sendEmail(booking.providerEmail, providerTemplate.subject, providerTemplate.html, providerTemplate.text);
+
+    logger.info('Booking reminder emails sent', {
+      bookingNumber: booking.bookingNumber,
+      action: 'BOOKING_REMINDER_SENT',
+    });
+  } catch (error) {
+    logger.error('Failed to send booking reminder emails', {
+      bookingNumber: booking.bookingNumber,
+      error: error instanceof Error ? error.message : String(error),
+      action: 'BOOKING_REMINDER_FAILED',
+    });
+  }
+};
+
+/**
+ * Send booking cancellation email to both parties
+ */
+export const sendBookingCancellation = async (
+  booking: BookingNotificationData,
+  cancelledBy: 'customer' | 'provider' | 'admin'
+): Promise<void> => {
+  try {
+    const recipient = cancelledBy === 'customer' ? booking.providerEmail : booking.customerEmail;
+    const cancellerName = cancelledBy === 'customer' ? booking.customerName : booking.providerName;
+
+    const template = getBookingCancellationFullTemplate(booking, cancelledBy, cancellerName);
+    await sendEmail(recipient, template.subject, template.html, template.text);
+
+    logger.info('Booking cancellation email sent', {
+      bookingNumber: booking.bookingNumber,
+      cancelledBy,
+      recipient,
+      action: 'BOOKING_CANCELLATION_SENT',
+    });
+  } catch (error) {
+    logger.error('Failed to send booking cancellation email', {
+      bookingNumber: booking.bookingNumber,
+      error: error instanceof Error ? error.message : String(error),
+      action: 'BOOKING_CANCELLATION_FAILED',
+    });
+  }
+};
+
+/**
+ * Send booking rescheduled email to both parties
+ */
+export const sendBookingRescheduled = async (
+  booking: BookingNotificationData,
+  oldDate: string,
+  newDate: string
+): Promise<void> => {
+  try {
+    // Send to customer
+    const customerTemplate = getBookingRescheduledFullTemplate(booking, oldDate, newDate, 'customer');
+    await sendEmail(booking.customerEmail, customerTemplate.subject, customerTemplate.html, customerTemplate.text);
+
+    // Send to provider
+    const providerTemplate = getBookingRescheduledFullTemplate(booking, oldDate, newDate, 'provider');
+    await sendEmail(booking.providerEmail, providerTemplate.subject, providerTemplate.html, providerTemplate.text);
+
+    logger.info('Booking rescheduled emails sent', {
+      bookingNumber: booking.bookingNumber,
+      oldDate,
+      newDate,
+      action: 'BOOKING_RESCHEDULED_SENT',
+    });
+  } catch (error) {
+    logger.error('Failed to send booking rescheduled emails', {
+      bookingNumber: booking.bookingNumber,
+      error: error instanceof Error ? error.message : String(error),
+      action: 'BOOKING_RESCHEDULED_FAILED',
+    });
+  }
+};
+
+/**
+ * Send provider approval email (admin approval)
+ */
+export const sendProviderApproval = async (
+  provider: {
+    email: string;
+    firstName: string;
+    businessName: string;
+  }
+): Promise<void> => {
+  try {
+    const dashboardUrl = `${FRONTEND_URL}/provider/dashboard`;
+    const template = getProviderApprovalTemplate(provider, dashboardUrl);
+    await sendEmail(provider.email, template.subject, template.html, template.text);
+
+    logger.info('Provider approval email sent', {
+      email: provider.email,
+      businessName: provider.businessName,
+      action: 'PROVIDER_APPROVAL_SENT',
+    });
+  } catch (error) {
+    logger.error('Failed to send provider approval email', {
+      email: provider.email,
+      error: error instanceof Error ? error.message : String(error),
+      action: 'PROVIDER_APPROVAL_FAILED',
+    });
+  }
+};
+
+/**
+ * Send provider rejection email (admin rejection)
+ */
+export const sendProviderRejection = async (
+  provider: {
+    email: string;
+    firstName: string;
+    businessName: string;
+  },
+  reason: string
+): Promise<void> => {
+  try {
+    const helpUrl = `${FRONTEND_URL}/support`;
+    const template = getProviderRejectionTemplate(provider, reason, helpUrl);
+    await sendEmail(provider.email, template.subject, template.html, template.text);
+
+    logger.info('Provider rejection email sent', {
+      email: provider.email,
+      businessName: provider.businessName,
+      action: 'PROVIDER_REJECTION_SENT',
+    });
+  } catch (error) {
+    logger.error('Failed to send provider rejection email', {
+      email: provider.email,
+      error: error instanceof Error ? error.message : String(error),
+      action: 'PROVIDER_REJECTION_FAILED',
+    });
+  }
+};
+
+// ============================================
+// FULL TEMPLATE GENERATORS
+// ============================================
+
+const getBookingConfirmationFullTemplate = (booking: BookingNotificationData, recipient: 'customer' | 'provider'): EmailTemplate => {
+  const viewBookingUrl = `${FRONTEND_URL}/bookings/${booking.bookingNumber}`;
+  const isCustomer = recipient === 'customer';
+  const greeting = isCustomer ? `Great news, ${booking.customerName}!` : `Hello, ${booking.providerName}!`;
+  const subtitle = isCustomer ? 'Your booking has been confirmed!' : 'You have confirmed a booking!';
+
+  return {
+    subject: `Booking Confirmed! - ${booking.bookingNumber}`,
+    html: `
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Booking Confirmation</title>
+      </head>
+      <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: ${BRAND_COLORS.background};">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width: 600px; margin: 0 auto; background-color: ${BRAND_COLORS.white}; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
+          <!-- Header -->
+          <tr>
+            <td style="background: linear-gradient(135deg, ${BRAND_COLORS.success} 0%, #059669 100%); padding: 32px 24px; text-align: center;">
+              <h1 style="margin: 0; font-size: 28px; font-weight: 700; color: ${BRAND_COLORS.white};">NILIN</h1>
+              <p style="margin: 8px 0 0; color: rgba(255,255,255,0.9); font-size: 14px;">Booking Confirmed</p>
+            </td>
+          </tr>
+          <!-- Content -->
+          <tr>
+            <td style="padding: 32px 24px;">
+              <h2 style="margin: 0 0 8px; color: ${BRAND_COLORS.text}; font-size: 24px;">${greeting}</h2>
+              <p style="margin: 0 0 24px; color: ${BRAND_COLORS.textLight}; font-size: 16px;">${subtitle}</p>
+
+              <!-- Booking Card -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background: ${BRAND_COLORS.background}; border-radius: 12px; padding: 24px; margin: 24px 0;">
+                <tr>
+                  <td style="border-left: 4px solid ${BRAND_COLORS.success}; padding-left: 16px;">
+                    <p style="margin: 0 0 4px; font-size: 12px; color: ${BRAND_COLORS.textLight}; text-transform: uppercase; letter-spacing: 0.5px;">Booking Number</p>
+                    <p style="margin: 0 0 16px; font-size: 20px; font-weight: 700; color: ${BRAND_COLORS.text};">${booking.bookingNumber}</p>
+
+                    <h3 style="margin: 0 0 16px; font-size: 18px; color: ${BRAND_COLORS.primary};">${booking.serviceName}</h3>
+
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+                      <tr>
+                        <td style="padding: 8px 0; border-bottom: 1px solid #E5E7EB;">
+                          <span style="color: ${BRAND_COLORS.textLight};">${isCustomer ? 'Provider' : 'Customer'}</span>
+                        </td>
+                        <td style="padding: 8px 0; border-bottom: 1px solid #E5E7EB; text-align: right;">
+                          <strong style="color: ${BRAND_COLORS.text};">${isCustomer ? booking.providerName : booking.customerName}</strong>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 8px 0; border-bottom: 1px solid #E5E7EB;">
+                          <span style="color: ${BRAND_COLORS.textLight};">Date</span>
+                        </td>
+                        <td style="padding: 8px 0; border-bottom: 1px solid #E5E7EB; text-align: right;">
+                          <strong style="color: ${BRAND_COLORS.text};">${booking.scheduledDate}</strong>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 8px 0; border-bottom: 1px solid #E5E7EB;">
+                          <span style="color: ${BRAND_COLORS.textLight};">Time</span>
+                        </td>
+                        <td style="padding: 8px 0; border-bottom: 1px solid #E5E7EB; text-align: right;">
+                          <strong style="color: ${BRAND_COLORS.text};">${booking.scheduledTime}</strong>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 8px 0; border-bottom: 1px solid #E5E7EB;">
+                          <span style="color: ${BRAND_COLORS.textLight};">Duration</span>
+                        </td>
+                        <td style="padding: 8px 0; border-bottom: 1px solid #E5E7EB; text-align: right;">
+                          <strong style="color: ${BRAND_COLORS.text};">${booking.duration} minutes</strong>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 8px 0; border-bottom: 1px solid #E5E7EB;">
+                          <span style="color: ${BRAND_COLORS.textLight};">Location</span>
+                        </td>
+                        <td style="padding: 8px 0; border-bottom: 1px solid #E5E7EB; text-align: right;">
+                          <strong style="color: ${BRAND_COLORS.text};">${booking.location}</strong>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 8px 0;">
+                          <span style="color: ${BRAND_COLORS.textLight};">Total Amount</span>
+                        </td>
+                        <td style="padding: 8px 0; text-align: right;">
+                          <strong style="color: ${BRAND_COLORS.primary}; font-size: 18px;">${booking.currency} ${booking.totalAmount}</strong>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- CTA Button -->
+              <table role="presentation" cellspacing="0" cellpadding="0" style="margin: 0 auto;">
+                <tr>
+                  <td style="border-radius: 8px; background: ${BRAND_COLORS.primary}; text-align: center;">
+                    <a href="${viewBookingUrl}" style="display: inline-block; padding: 14px 32px; color: ${BRAND_COLORS.white}; text-decoration: none; font-weight: 600; font-size: 16px;">View Booking Details</a>
+                  </td>
+                </tr>
+              </table>
+
+              ${booking.providerNotes ? `
+              <div style="margin-top: 24px; padding: 16px; background: ${BRAND_COLORS.primaryLight}; border-radius: 8px;">
+                <p style="margin: 0; color: ${BRAND_COLORS.primaryDark}; font-size: 14px;">
+                  <strong>Provider Notes:</strong> ${booking.providerNotes}
+                </p>
+              </div>
+              ` : ''}
+            </td>
+          </tr>
+          <!-- Footer -->
+          <tr>
+            <td style="padding: 24px; background: ${BRAND_COLORS.background}; text-align: center;">
+              <p style="margin: 0; color: ${BRAND_COLORS.textLight}; font-size: 12px;">
+                &copy; ${new Date().getFullYear()} NILIN. All rights reserved.<br>
+                Questions? Contact us at support@nilin.com
+              </p>
+            </td>
+          </tr>
+        </table>
+      </body>
+      </html>
+    `,
+    text: `${greeting} Your booking ${booking.bookingNumber} for ${booking.serviceName} has been confirmed on ${booking.scheduledDate} at ${booking.scheduledTime}. ${booking.currency} ${booking.totalAmount}.`
+  };
+};
+
+const getBookingCancellationFullTemplate = (
+  booking: BookingNotificationData,
+  cancelledBy: 'customer' | 'provider' | 'admin',
+  cancellerName: string
+): EmailTemplate => {
+  const viewBookingUrl = `${FRONTEND_URL}/bookings/${booking.bookingNumber}`;
+
+  return {
+    subject: `Booking Cancelled - ${booking.bookingNumber}`,
+    html: `
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Booking Cancelled</title>
+      </head>
+      <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: ${BRAND_COLORS.background};">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width: 600px; margin: 0 auto; background-color: ${BRAND_COLORS.white}; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
+          <!-- Header -->
+          <tr>
+            <td style="background: linear-gradient(135deg, ${BRAND_COLORS.error} 0%, #DC2626 100%); padding: 32px 24px; text-align: center;">
+              <h1 style="margin: 0; font-size: 28px; font-weight: 700; color: ${BRAND_COLORS.white};">NILIN</h1>
+              <p style="margin: 8px 0 0; color: rgba(255,255,255,0.9); font-size: 14px;">Booking Cancelled</p>
+            </td>
+          </tr>
+          <!-- Content -->
+          <tr>
+            <td style="padding: 32px 24px;">
+              <h2 style="margin: 0 0 16px; color: ${BRAND_COLORS.text}; font-size: 24px;">Booking Cancelled</h2>
+              <p style="margin: 0 0 24px; color: ${BRAND_COLORS.textLight}; font-size: 16px;">
+                The booking <strong>${booking.bookingNumber}</strong> for <strong>${booking.serviceName}</strong> has been cancelled by <strong>${cancellerName}</strong>.
+              </p>
+
+              <!-- Booking Card -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background: ${BRAND_COLORS.background}; border-radius: 12px; padding: 24px; margin: 24px 0;">
+                <tr>
+                  <td>
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+                      <tr>
+                        <td style="padding: 8px 0; border-bottom: 1px solid #E5E7EB;">
+                          <span style="color: ${BRAND_COLORS.textLight};">Service</span>
+                        </td>
+                        <td style="padding: 8px 0; border-bottom: 1px solid #E5E7EB; text-align: right;">
+                          <strong style="color: ${BRAND_COLORS.text};">${booking.serviceName}</strong>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 8px 0; border-bottom: 1px solid #E5E7EB;">
+                          <span style="color: ${BRAND_COLORS.textLight};">Scheduled For</span>
+                        </td>
+                        <td style="padding: 8px 0; border-bottom: 1px solid #E5E7EB; text-align: right;">
+                          <strong style="color: ${BRAND_COLORS.text};">${booking.scheduledDate} at ${booking.scheduledTime}</strong>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 8px 0;">
+                          <span style="color: ${BRAND_COLORS.textLight};">Cancelled By</span>
+                        </td>
+                        <td style="padding: 8px 0; text-align: right;">
+                          <strong style="color: ${BRAND_COLORS.error};">${cancellerName}</strong>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+              <div style="margin-top: 24px; padding: 16px; background: #FEE2E2; border-radius: 8px; border-left: 4px solid ${BRAND_COLORS.error};">
+                <p style="margin: 0; color: #991B1B; font-size: 14px;">
+                  If you have any questions about this cancellation, please contact our support team.
+                </p>
+              </div>
+            </td>
+          </tr>
+          <!-- Footer -->
+          <tr>
+            <td style="padding: 24px; background: ${BRAND_COLORS.background}; text-align: center;">
+              <p style="margin: 0; color: ${BRAND_COLORS.textLight}; font-size: 12px;">
+                &copy; ${new Date().getFullYear()} NILIN. All rights reserved.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </body>
+      </html>
+    `,
+    text: `Booking ${booking.bookingNumber} for ${booking.serviceName} has been cancelled by ${cancellerName}.`
+  };
+};
+
+const getBookingRescheduledFullTemplate = (
+  booking: BookingNotificationData,
+  oldDate: string,
+  newDate: string,
+  recipient: 'customer' | 'provider'
+): EmailTemplate => {
+  const viewBookingUrl = `${FRONTEND_URL}/bookings/${booking.bookingNumber}`;
+  const greeting = recipient === 'customer' ? booking.customerName : booking.providerName;
+
+  return {
+    subject: `Booking Rescheduled - ${booking.bookingNumber}`,
+    html: `
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Booking Rescheduled</title>
+      </head>
+      <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: ${BRAND_COLORS.background};">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width: 600px; margin: 0 auto; background-color: ${BRAND_COLORS.white}; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
+          <!-- Header -->
+          <tr>
+            <td style="background: linear-gradient(135deg, ${BRAND_COLORS.secondary} 0%, #EA580C 100%); padding: 32px 24px; text-align: center;">
+              <h1 style="margin: 0; font-size: 28px; font-weight: 700; color: ${BRAND_COLORS.white};">NILIN</h1>
+              <p style="margin: 8px 0 0; color: rgba(255,255,255,0.9); font-size: 14px;">Booking Rescheduled</p>
+            </td>
+          </tr>
+          <!-- Content -->
+          <tr>
+            <td style="padding: 32px 24px;">
+              <h2 style="margin: 0 0 8px; color: ${BRAND_COLORS.text}; font-size: 24px;">Hi ${greeting}!</h2>
+              <p style="margin: 0 0 24px; color: ${BRAND_COLORS.textLight}; font-size: 16px;">Your booking has been rescheduled to a new time.</p>
+
+              <!-- Date Change Card -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background: ${BRAND_COLORS.background}; border-radius: 12px; padding: 24px; margin: 24px 0;">
+                <tr>
+                  <td style="text-align: center;">
+                    <p style="margin: 0 0 8px; font-size: 14px; color: ${BRAND_COLORS.textLight};">Booking Number</p>
+                    <p style="margin: 0 0 24px; font-size: 20px; font-weight: 700; color: ${BRAND_COLORS.text};">${booking.bookingNumber}</p>
+
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+                      <tr>
+                        <td style="padding: 16px; background: #FEE2E2; border-radius: 8px; text-align: center;">
+                          <p style="margin: 0 0 4px; font-size: 12px; color: #991B1B; text-transform: uppercase;">Previous</p>
+                          <p style="margin: 0; font-size: 18px; font-weight: 600; color: ${BRAND_COLORS.error}; text-decoration: line-through;">${oldDate}</p>
+                        </td>
+                        <td style="width: 40px; text-align: center; vertical-align: middle;">
+                          <span style="color: ${BRAND_COLORS.textLight}; font-size: 20px;">&rarr;</span>
+                        </td>
+                        <td style="padding: 16px; background: #D1FAE5; border-radius: 8px; text-align: center;">
+                          <p style="margin: 0 0 4px; font-size: 12px; color: #065F46; text-transform: uppercase;">New</p>
+                          <p style="margin: 0; font-size: 18px; font-weight: 600; color: ${BRAND_COLORS.success};">${newDate}</p>
+                        </td>
+                      </tr>
+                    </table>
+
+                    <h3 style="margin: 24px 0 8px; font-size: 16px; color: ${BRAND_COLORS.primary};">${booking.serviceName}</h3>
+                    <p style="margin: 0; color: ${BRAND_COLORS.textLight}; font-size: 14px;">at ${booking.scheduledTime}</p>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- CTA Button -->
+              <table role="presentation" cellspacing="0" cellpadding="0" style="margin: 0 auto;">
+                <tr>
+                  <td style="border-radius: 8px; background: ${BRAND_COLORS.primary}; text-align: center;">
+                    <a href="${viewBookingUrl}" style="display: inline-block; padding: 14px 32px; color: ${BRAND_COLORS.white}; text-decoration: none; font-weight: 600; font-size: 16px;">View Updated Booking</a>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <!-- Footer -->
+          <tr>
+            <td style="padding: 24px; background: ${BRAND_COLORS.background}; text-align: center;">
+              <p style="margin: 0; color: ${BRAND_COLORS.textLight}; font-size: 12px;">
+                &copy; ${new Date().getFullYear()} NILIN. All rights reserved.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </body>
+      </html>
+    `,
+    text: `Hi ${greeting}! Your booking ${booking.bookingNumber} for ${booking.serviceName} has been rescheduled from ${oldDate} to ${newDate}.`
+  };
+};
+
+const getProviderApprovalTemplate = (
+  provider: { email: string; firstName: string; businessName: string },
+  dashboardUrl: string
+): EmailTemplate => {
+  return {
+    subject: 'Congratulations! Your NILIN Provider Account is Approved',
+    html: `
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Provider Account Approved</title>
+      </head>
+      <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: ${BRAND_COLORS.background};">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width: 600px; margin: 0 auto; background-color: ${BRAND_COLORS.white}; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
+          <!-- Header -->
+          <tr>
+            <td style="background: linear-gradient(135deg, ${BRAND_COLORS.success} 0%, #059669 100%); padding: 32px 24px; text-align: center;">
+              <h1 style="margin: 0; font-size: 28px; font-weight: 700; color: ${BRAND_COLORS.white};">NILIN</h1>
+              <p style="margin: 8px 0 0; color: rgba(255,255,255,0.9); font-size: 14px;">Provider Account Approved</p>
+            </td>
+          </tr>
+          <!-- Content -->
+          <tr>
+            <td style="padding: 32px 24px;">
+              <div style="text-align: center; margin-bottom: 24px;">
+                <span style="display: inline-block; width: 80px; height: 80px; background: ${BRAND_COLORS.primaryLight}; border-radius: 50%; line-height: 80px; font-size: 40px;">&#127881;</span>
+              </div>
+
+              <h2 style="margin: 0 0 8px; color: ${BRAND_COLORS.text}; font-size: 24px; text-align: center;">Congratulations, ${provider.firstName}!</h2>
+              <p style="margin: 0 0 24px; color: ${BRAND_COLORS.textLight}; font-size: 16px; text-align: center;">
+                Your provider account for <strong>${provider.businessName}</strong> has been approved.
+              </p>
+
+              <p style="margin: 0 0 24px; color: ${BRAND_COLORS.text}; font-size: 16px; line-height: 1.6;">
+                Welcome to the NILIN provider community! You can now start listing your services and accepting bookings from customers.
+              </p>
+
+              <!-- Features List -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin: 24px 0;">
+                <tr>
+                  <td>
+                    ${['List and manage your services', 'Accept bookings from customers', 'Track your earnings and performance', 'Build your reputation with reviews'].map(
+                      feature => `
+                      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-bottom: 12px;">
+                        <tr>
+                          <td style="width: 24px; vertical-align: top;">
+                            <span style="color: ${BRAND_COLORS.success};">&#10003;</span>
+                          </td>
+                          <td style="color: ${BRAND_COLORS.text};">${feature}</td>
+                        </tr>
+                      </table>
+                    `
+                    ).join('')}
+                  </td>
+                </tr>
+              </table>
+
+              <!-- CTA Button -->
+              <table role="presentation" cellspacing="0" cellpadding="0" style="margin: 0 auto;">
+                <tr>
+                  <td style="border-radius: 8px; background: ${BRAND_COLORS.primary}; text-align: center;">
+                    <a href="${dashboardUrl}" style="display: inline-block; padding: 14px 32px; color: ${BRAND_COLORS.white}; text-decoration: none; font-weight: 600; font-size: 16px;">Go to Dashboard</a>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <!-- Footer -->
+          <tr>
+            <td style="padding: 24px; background: ${BRAND_COLORS.background}; text-align: center;">
+              <p style="margin: 0; color: ${BRAND_COLORS.textLight}; font-size: 12px;">
+                &copy; ${new Date().getFullYear()} NILIN. All rights reserved.<br>
+                Questions? Contact us at support@nilin.com
+              </p>
+            </td>
+          </tr>
+        </table>
+      </body>
+      </html>
+    `,
+    text: `Congratulations, ${provider.firstName}! Your provider account for ${provider.businessName} has been approved. Go to your dashboard to start accepting bookings: ${dashboardUrl}`
+  };
+};
+
+const getProviderRejectionTemplate = (
+  provider: { email: string; firstName: string; businessName: string },
+  reason: string,
+  helpUrl: string
+): EmailTemplate => {
+  return {
+    subject: 'Provider Application Update - NILIN',
+    html: `
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Provider Application Update</title>
+      </head>
+      <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: ${BRAND_COLORS.background};">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width: 600px; margin: 0 auto; background-color: ${BRAND_COLORS.white}; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
+          <!-- Header -->
+          <tr>
+            <td style="background: linear-gradient(135deg, ${BRAND_COLORS.textLight} 0%, ${BRAND_COLORS.text} 100%); padding: 32px 24px; text-align: center;">
+              <h1 style="margin: 0; font-size: 28px; font-weight: 700; color: ${BRAND_COLORS.white};">NILIN</h1>
+              <p style="margin: 8px 0 0; color: rgba(255,255,255,0.9); font-size: 14px;">Application Update</p>
+            </td>
+          </tr>
+          <!-- Content -->
+          <tr>
+            <td style="padding: 32px 24px;">
+              <h2 style="margin: 0 0 8px; color: ${BRAND_COLORS.text}; font-size: 24px;">Hello ${provider.firstName},</h2>
+              <p style="margin: 0 0 24px; color: ${BRAND_COLORS.textLight}; font-size: 16px;">
+                Thank you for your interest in becoming a NILIN provider. After careful review, we're unable to approve your application for <strong>${provider.businessName}</strong> at this time.
+              </p>
+
+              <!-- Reason Card -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background: ${BRAND_COLORS.background}; border-radius: 12px; padding: 24px; margin: 24px 0;">
+                <tr>
+                  <td>
+                    <p style="margin: 0 0 8px; font-size: 14px; color: ${BRAND_COLORS.textLight}; text-transform: uppercase;">Reason for Decision</p>
+                    <p style="margin: 0; color: ${BRAND_COLORS.text}; font-size: 16px; line-height: 1.6;">${reason}</p>
+                  </td>
+                </tr>
+              </table>
+
+              <p style="margin: 0 0 24px; color: ${BRAND_COLORS.text}; font-size: 16px; line-height: 1.6;">
+                If you believe this decision was made in error or if you'd like to address the concerns mentioned, please don't hesitate to reach out to our support team.
+              </p>
+
+              <!-- CTA Button -->
+              <table role="presentation" cellspacing="0" cellpadding="0" style="margin: 0 auto;">
+                <tr>
+                  <td style="border-radius: 8px; background: ${BRAND_COLORS.primary}; text-align: center;">
+                    <a href="${helpUrl}" style="display: inline-block; padding: 14px 32px; color: ${BRAND_COLORS.white}; text-decoration: none; font-weight: 600; font-size: 16px;">Contact Support</a>
+                  </td>
+                </tr>
+              </table>
+
+              <p style="margin: 24px 0 0; color: ${BRAND_COLORS.textLight}; font-size: 14px; text-align: center;">
+                We appreciate your interest in NILIN and hope to work with you in the future.
+              </p>
+            </td>
+          </tr>
+          <!-- Footer -->
+          <tr>
+            <td style="padding: 24px; background: ${BRAND_COLORS.background}; text-align: center;">
+              <p style="margin: 0; color: ${BRAND_COLORS.textLight}; font-size: 12px;">
+                &copy; ${new Date().getFullYear()} NILIN. All rights reserved.<br>
+                support@nilin.com
+              </p>
+            </td>
+          </tr>
+        </table>
+      </body>
+      </html>
+    `,
+    text: `Hello ${provider.firstName}, thank you for your interest in becoming a NILIN provider. After careful review, we're unable to approve your application for ${provider.businessName} at this time. Reason: ${reason}. If you have questions, please contact our support team.`
   };
 };
 
 export default {
+  // Auth emails
   sendVerificationEmail,
   sendWelcomeEmail,
   sendPasswordResetEmail,
+
+  // Booking emails
   sendBookingRequestEmail,
   sendNewBookingRequestEmail,
   sendBookingConfirmationEmail,
@@ -782,5 +1778,17 @@ export default {
   sendBookingRejectedEmail,
   sendBookingCompletedEmail,
   sendBookingReminderEmail,
-  sendLoyaltyPointsEmail
+
+  // New comprehensive booking emails
+  sendBookingConfirmation,
+  sendBookingReminder,
+  sendBookingCancellation,
+  sendBookingRescheduled,
+
+  // Provider emails
+  sendProviderApproval,
+  sendProviderRejection,
+
+  // Loyalty emails
+  sendLoyaltyPointsEmail,
 };

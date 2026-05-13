@@ -311,8 +311,9 @@ export async function checkGeolocationAnomaly(
     .lean();
 
   if (user?.address?.coordinates) {
-    const userLat = user.address.coordinates.lat;
-    const userLng = user.address.coordinates.lng;
+    const coords = user.address.coordinates as any;
+    const userLat = coords.lat;
+    const userLng = coords.lng;
 
     const latDiff = Math.abs(bookingCoords.lat - userLat);
     const lngDiff = Math.abs(bookingCoords.lng - userLng);

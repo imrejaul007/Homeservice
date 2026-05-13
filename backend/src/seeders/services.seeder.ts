@@ -3,6 +3,34 @@ import ProviderProfile from '../models/providerProfile.model';
 import User from '../models/user.model';
 import logger from '../utils/logger';
 
+/**
+ * Generate a random secure password
+ * @returns A random password with 16 characters
+ */
+const generateSecurePassword = (): string => {
+  const length = 16;
+  const lowercase = 'abcdefghijklmnopqrstuvwxyz';
+  const uppercase = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  const numbers = '0123456789';
+  const special = '!@#$%^&*';
+  const allChars = lowercase + uppercase + numbers + special;
+
+  let password = '';
+  // Ensure at least one of each type
+  password += lowercase[Math.floor(Math.random() * lowercase.length)];
+  password += uppercase[Math.floor(Math.random() * uppercase.length)];
+  password += numbers[Math.floor(Math.random() * numbers.length)];
+  password += special[Math.floor(Math.random() * special.length)];
+
+  // Fill the rest randomly
+  for (let i = password.length; i < length; i++) {
+    password += allChars[Math.floor(Math.random() * allChars.length)];
+  }
+
+  // Shuffle the password
+  return password.split('').sort(() => Math.random() - 0.5).join('');
+};
+
 const SAMPLE_SERVICES = [
   // Hair Services
   {
@@ -210,6 +238,9 @@ async function seedServices() {
     if (!provider) {
       logger.info('Services seeder: No provider found, creating test provider...');
 
+      // Generate secure random password
+      const securePassword = generateSecurePassword();
+
       // Find existing user or create one
       let user = await User.findOne({ email: 'provider@nilin.com' });
       if (!user) {
@@ -218,10 +249,11 @@ async function seedServices() {
           firstName: 'Sarah',
           lastName: 'Johnson',
           phone: '+971501234567',
-          password: 'Provider123!',
+          password: securePassword,
           role: 'provider',
           isEmailVerified: true,
         });
+        logger.info(`Services seeder: Created test provider with secure password`);
       }
 
       // Create provider profile

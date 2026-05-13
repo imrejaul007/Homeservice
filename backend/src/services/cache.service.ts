@@ -1,4 +1,4 @@
-import { cacheRedis } from '../config/redis';
+import { cache } from '../config/redis';
 import logger from '../utils/logger';
 
 interface CacheOptions {
@@ -28,7 +28,7 @@ const generateKey = (prefix: string, key: string): string => {
 export const get = async <T>(key: string, options?: CacheOptions): Promise<T | null> => {
   try {
     const fullKey = generateKey(options?.prefix || 'cache', key);
-    const cached = await cacheRedis.get(fullKey);
+    const cached = await cache.get(fullKey);
 
     if (cached) {
       logger.debug('Cache hit', { key: fullKey });
@@ -53,7 +53,7 @@ export const set = async <T>(
     const fullKey = generateKey(options?.prefix || 'cache', key);
     const ttl = options?.ttl || DEFAULT_TTL;
 
-    await cacheRedis.setex(fullKey, ttl, JSON.stringify(value));
+    await cache.set(fullKey, JSON.stringify(value), ttl);
 
     logger.debug('Cache set', { key: fullKey, ttl });
   } catch (error) {
@@ -65,7 +65,7 @@ export const set = async <T>(
 export const del = async (key: string, options?: CacheOptions): Promise<void> => {
   try {
     const fullKey = generateKey(options?.prefix || 'cache', key);
-    await cacheRedis.del(fullKey);
+    await cache.del(fullKey);
     logger.debug('Cache deleted', { key: fullKey });
   } catch (error) {
     logger.error('Cache delete error', { key, error });
@@ -75,10 +75,10 @@ export const del = async (key: string, options?: CacheOptions): Promise<void> =>
 // Delete by pattern
 export const delByPattern = async (pattern: string): Promise<void> => {
   try {
-    const keys = await cacheRedis.keys(`cache:${pattern}`);
+    const keys = await cache.keys(`cache:${pattern}`);
 
     if (keys.length > 0) {
-      await cacheRedis.del(...keys);
+      await cache.del(...keys);
       logger.debug('Cache pattern deleted', { pattern, count: keys.length });
     }
   } catch (error) {
@@ -90,10 +90,10 @@ export const delByPattern = async (pattern: string): Promise<void> => {
 export const clear = async (prefix?: string): Promise<void> => {
   try {
     const pattern = prefix ? `cache:${prefix}:*` : 'cache:*';
-    const keys = await cacheRedis.keys(pattern);
+    const keys = await cache.keys(pattern);
 
     if (keys.length > 0) {
-      await cacheRedis.del(...keys);
+      await cache.del(...keys);
       logger.info('Cache cleared', { prefix, count: keys.length });
     }
   } catch (error) {
@@ -123,10 +123,12 @@ export const getOrSet = async <T>(
 export const incr = async (key: string, options?: CacheOptions): Promise<number> => {
   try {
     const fullKey = generateKey(options?.prefix || 'cache', key);
-    const result = await cacheRedis.incr(fullKey);
+    const client = cache.client;
+    if (!client) return 0;
+    const result = await client.incr(fullKey);
 
     if (options?.ttl) {
-      await cacheRedis.expire(fullKey, options.ttl);
+      await client.expire(fullKey, options.ttl);
     }
 
     return result;
@@ -140,7 +142,9 @@ export const incr = async (key: string, options?: CacheOptions): Promise<number>
 export const decr = async (key: string): Promise<number> => {
   try {
     const fullKey = generateKey('cache', key);
-    return await cacheRedis.decr(fullKey);
+    const client = cache.client;
+    if (!client) return 0;
+    return await client.decr(fullKey);
   } catch (error) {
     logger.error('Cache decr error', { key, error });
     return 0;
@@ -154,18 +158,23 @@ export const rateLimit = async (
   windowSeconds: number
 ): Promise<{ allowed: boolean; remaining: number; resetAt: number }> => {
   try {
+    const client = cache.client;
+    if (!client) {
+      return { allowed: true, remaining: maxRequests, resetAt: 0 };
+    }
+
     const fullKey = `ratelimit:${key}`;
     const now = Math.floor(Date.now() / 1000);
     const windowStart = now - windowSeconds;
 
     // Remove old requests outside window
-    await cacheRedis.zremrangebyscore(fullKey, 0, windowStart);
+    await client.zremrangebyscore(fullKey, 0, windowStart);
 
     // Count current requests
-    const count = await cacheRedis.zcard(fullKey);
+    const count = await client.zcard(fullKey);
 
     if (count >= maxRequests) {
-      const oldestRequest = await cacheRedis.zrange(fullKey, 0, 0, 'WITHSCORES');
+      const oldestRequest = await client.zrange(fullKey, 0, 0, 'WITHSCORES');
       const resetAt = oldestRequest.length > 1 ? parseInt(oldestRequest[1]) + windowSeconds : now + windowSeconds;
 
       return {
@@ -176,8 +185,8 @@ export const rateLimit = async (
     }
 
     // Add current request
-    await cacheRedis.zadd(fullKey, now, `${now}-${Math.random()}`);
-    await cacheRedis.expire(fullKey, windowSeconds);
+    await client.zadd(fullKey, now, `${now}-${Math.random()}`);
+    await client.expire(fullKey, windowSeconds);
 
     return {
       allowed: true,

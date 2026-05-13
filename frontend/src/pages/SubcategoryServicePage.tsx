@@ -14,6 +14,37 @@ import ServicePrerequisites from '../components/service/ServicePrerequisites';
 import ServiceEquipment from '../components/service/ServiceEquipment';
 import ServiceFAQ from '../components/service/ServiceFAQ';
 import ServiceReviews from '../components/service/ServiceReviews';
+import type { ProviderCard } from '../types/provider';
+
+// Subcategory type
+interface Subcategory {
+  _id: string;
+  name: string;
+  slug: string;
+  description?: string;
+  icon?: string;
+  metadata?: {
+    displayName?: string;
+    averagePrice?: number;
+    averageDuration?: number;
+    [key: string]: unknown;
+  };
+}
+
+// Transformed provider type
+interface TransformedProvider {
+  id: string;
+  firstName: string;
+  lastName: string;
+  businessName: string;
+  profilePhoto: string;
+  tier: string;
+  rating: number;
+  reviewCount: number;
+  isVerified: boolean;
+  startingPrice: number;
+  maxPrice: number;
+}
 
 // Loading skeleton
 const ServicePageSkeleton: React.FC = () => (
@@ -95,7 +126,7 @@ const SubcategoryServicePage: React.FC = () => {
   );
 
   const subcategory = useMemo(() =>
-    category?.subcategories?.find((s: any) => s.slug === subcategorySlug),
+    category?.subcategories?.find((s) => s.slug === subcategorySlug) as Subcategory | undefined,
     [category, subcategorySlug]
   );
 
@@ -104,24 +135,27 @@ const SubcategoryServicePage: React.FC = () => {
     ? SERVICE_CONTENT?.[categorySlug]?.[subcategorySlug]
     : undefined;
 
-  const transformedProviders = useMemo(() => {
+  const transformedProviders = useMemo((): TransformedProvider[] => {
     if (!providers) return [];
-    return providers.map((provider: any) => ({
-      id: provider.id || provider._id,
-      firstName: provider.firstName,
-      lastName: provider.lastName,
-      businessName: provider.businessName,
-      profilePhoto: provider.profilePhoto,
-      tier: provider.tier || 'standard',
-      rating: provider.rating || 0,
-      reviewCount: provider.reviewCount || 0,
-      isVerified: provider.isVerified || false,
-      startingPrice: provider.startingPrice || subcategory?.metadata?.averagePrice || 500,
-      maxPrice: provider.maxPrice || (provider.startingPrice ? provider.startingPrice + 150 : 650),
-    }));
+    return providers.map((provider) => {
+      const p = provider as any;
+      return {
+        id: p.id || p._id,
+        firstName: p.firstName,
+        lastName: p.lastName,
+        businessName: p.businessName,
+        profilePhoto: p.profilePhoto,
+        tier: p.tier || 'standard',
+        rating: p.rating || 0,
+        reviewCount: p.reviewCount || 0,
+        isVerified: p.isVerified || false,
+        startingPrice: p.startingPrice || subcategory?.metadata?.averagePrice || 500,
+        maxPrice: p.maxPrice || (p.startingPrice ? p.startingPrice + 150 : 650),
+      };
+    });
   }, [providers, subcategory]);
 
-  const handleBookClick = () => {
+  const handleBookClick = (): void => {
     if (transformedProviders.length > 0) {
       navigate(`/provider/${transformedProviders[0].id}`);
     } else {
@@ -129,27 +163,27 @@ const SubcategoryServicePage: React.FC = () => {
     }
   };
 
-  const handleProviderClick = (provider: any) => {
+  const handleProviderClick = (provider: TransformedProvider): void => {
     navigate(`/provider/${provider.id}`);
   };
 
-  const handleViewProfile = (providerId: string) => {
+  const handleViewProfile = (providerId: string): void => {
     navigate(`/provider/${providerId}`);
   };
 
   if (categoryLoading) return <ServicePageSkeleton />;
   if (!category || !subcategory) return <NotFound />;
 
-  const metadata = (subcategory.metadata || {}) as any;
-  const displayName = metadata.displayName || subcategory.name;
-  const startingPrice = content?.startingPrice || metadata.averagePrice || 500;
+  const metadata = (subcategory.metadata || {}) as Record<string, string | number | undefined>;
+  const displayName = String(metadata.displayName || subcategory.name);
+  const startingPrice = content?.startingPrice || Number(metadata.averagePrice) || 500;
   const rating = content?.rating || 4.8;
   const reviewCount = content?.reviewCount || 1250;
   const duration = content?.duration || `${metadata.averageDuration || 60} min`;
 
   // Get hero image
-  const heroImage = (categorySlug && subcategorySlug && SUBCATEGORY_IMAGES[categorySlug]?.[subcategorySlug])
-    || metadata.heroImage
+  const heroImage: string = (categorySlug && subcategorySlug && SUBCATEGORY_IMAGES[categorySlug]?.[subcategorySlug])
+    || String(metadata.heroImage || '')
     || CATEGORY_IMAGES[categorySlug || '']?.hero
     || 'https://images.unsplash.com/photo-1560066984-138dadb4c035?w=1400&q=80&fit=crop';
 
@@ -270,16 +304,16 @@ const SubcategoryServicePage: React.FC = () => {
         {/* Recommended Providers */}
         <div className="animate-nilin-in" style={{animationDelay: '0.45s'}}>
           <RecommendedProviders
-            providers={transformedProviders}
+            providers={transformedProviders as any}
             isLoading={providersLoading}
-            onProviderClick={handleProviderClick}
+            onProviderClick={handleProviderClick as any}
             onViewProfile={handleViewProfile}
           />
         </div>
 
         {/* Reviews */}
         <div className="animate-nilin-in" style={{animationDelay: '0.5s'}}>
-          <ServiceReviews rating={rating} reviewCount={reviewCount} />
+          <ServiceReviews providerId={transformedProviders[0]?.id || ''} rating={rating} reviewCount={reviewCount} />
         </div>
 
         {/* FAQ */}

@@ -257,6 +257,34 @@ export const getCategoryStats = asyncHandler(async (_req: Request, res: Response
 });
 
 /**
+ * Get category by ID (returns slug for redirect)
+ * GET /api/categories/id/:id
+ */
+export const getCategoryById = asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+
+  // Validate MongoDB ObjectId format
+  if (!id.match(/^[0-9a-fA-F]{24}$/)) {
+    throw new ApiError(400, 'Invalid category ID format');
+  }
+
+  const category = await ServiceCategory.findById(id).select('slug name isActive');
+
+  if (!category) {
+    throw new ApiError(404, 'Category not found');
+  }
+
+  res.json({
+    success: true,
+    data: {
+      slug: category.slug,
+      name: category.name,
+      isActive: category.isActive
+    }
+  });
+});
+
+/**
  * Search categories and subcategories
  * GET /api/categories/search
  */
@@ -314,6 +342,7 @@ export const searchCategories = asyncHandler(async (req: Request, res: Response)
 export default {
   getMasterCategories,
   getCategoryBySlug,
+  getCategoryById,
   getSubcategories,
   getCategoryServices,
   getCategoryStats,

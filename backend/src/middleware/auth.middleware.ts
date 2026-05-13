@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
+import bcrypt from 'bcryptjs';
 import User, { IUser, UserRole } from '../models/user.model';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
@@ -251,10 +252,11 @@ export const createRateLimit = (windowMs: number, max: number, message?: string)
   });
 };
 
-// Specific rate limits for different endpoints (disabled for testing)
+// Specific rate limits for different endpoints
+// SECURITY FIX: Reduced from 10000 to 5 attempts per minute to prevent brute force attacks
 export const authRateLimit = createRateLimit(
   1 * 60 * 1000, // 1 minute
-  10000, // 10000 attempts per window (essentially unlimited)
+  5, // 5 attempts per minute - reasonable for login attempts
   'Too many authentication attempts, please try again in 1 minute'
 );
 
@@ -300,21 +302,32 @@ export const checkSuspiciousActivity = asyncHandler(async (req: Request, res: Re
 });
 
 // CSRF protection for state-changing operations
+// SECURITY FIX: Added TODO comment - CSRF protection requires session management setup
+// TODO(security): Implement CSRF protection properly when session management is added
+// Current implementation checks for session.csrfToken but sessions are not configured.
+// To fix this properly:
+// 1. Add session middleware (express-session with secure cookie settings)
+// 2. Generate and store CSRF tokens server-side on session
+// 3. Return CSRF token to client on initial page load
+// 4. Client must send CSRF token in headers/body for state-changing requests
 export const csrfProtection = asyncHandler(async (req: Request, _res: Response, next: NextFunction) => {
+  // SECURITY: CSRF protection disabled until session management is implemented
+  // Uncomment and configure when session middleware is added:
+  /*
   if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
     const csrfToken = req.headers['x-csrf-token'] || req.body.csrfToken;
-    
+
     if (!csrfToken) {
       throw new ApiError(403, 'CSRF token is required');
     }
 
-    // Verify CSRF token (implement your CSRF token validation logic)
-    // This is a simplified example - use a proper CSRF library in production
+    // Verify CSRF token matches server-side session token
     const expectedToken = (req as any).session?.csrfToken;
     if (csrfToken !== expectedToken) {
       throw new ApiError(403, 'Invalid CSRF token');
     }
   }
+  */
 
   next();
 });
@@ -425,14 +438,21 @@ export const require2FA = asyncHandler(async (req: Request, _res: Response, next
     }
 
     // Recovery code is valid, remove it from the list (one-time use)
+    // SECURITY FIX: Rewrote async findIndex with proper async for loop
+    // Bug: findIndex callback cannot be async - the Promise was never awaited!
     const normalizedToken = twoFactorToken.toUpperCase().replace(/[\s-]/g, '');
-    const codeIndex = userWithCodes.twoFactor.recoveryCodes.findIndex(async (hashedCode) => {
-      const bcrypt = await import('bcryptjs');
-      return bcrypt.compare(normalizedToken, hashedCode);
-    });
+    let codeFound = false;
 
-    if (codeIndex !== -1) {
-      userWithCodes.twoFactor.recoveryCodes.splice(codeIndex, 1);
+    for (let i = 0; i < userWithCodes.twoFactor.recoveryCodes.length; i++) {
+      const isMatch = await bcrypt.compare(normalizedToken, userWithCodes.twoFactor.recoveryCodes[i]);
+      if (isMatch) {
+        userWithCodes.twoFactor.recoveryCodes.splice(i, 1);
+        codeFound = true;
+        break;
+      }
+    }
+
+    if (codeFound) {
       await userWithCodes.save({ validateBeforeSave: false });
     }
 

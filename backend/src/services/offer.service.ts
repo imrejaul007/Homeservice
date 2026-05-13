@@ -19,6 +19,9 @@ export interface OfferResponse {
   featured?: boolean;
   validFrom: Date;
   validUntil: Date;
+  applicableServices?: string[];
+  applicableCategories?: string[];
+  isClaimed?: boolean; // Whether the current user has claimed this offer
 }
 
 export interface ClaimResponse {
@@ -39,7 +42,7 @@ export interface ValidationResult {
 
 export class OfferService {
   // Get active offers for homepage (public)
-  async getActiveOffers(): Promise<OfferResponse[]> {
+  async getActiveOffers(userId?: string): Promise<OfferResponse[]> {
     const now = new Date();
 
     const offers = await Coupon.find({
@@ -48,6 +51,13 @@ export class OfferService {
       validUntil: { $gte: now },
       $expr: { $lt: ['$currentUses', '$maxUses'] },
     }).sort({ featured: -1, createdAt: -1 }).lean();
+
+    // If userId provided, get their claimed offers
+    let claimedOfferIds: Set<string> = new Set();
+    if (userId) {
+      const claims = await OfferClaim.find({ userId: new mongoose.Types.ObjectId(userId) }).lean();
+      claimedOfferIds = new Set(claims.map(c => c.offerId.toString()));
+    }
 
     return offers.map((offer: any) => ({
       _id: offer._id.toString(),
@@ -66,13 +76,48 @@ export class OfferService {
       featured: offer.featured,
       validFrom: offer.validFrom,
       validUntil: offer.validUntil,
+      applicableServices: offer.targetServices?.map((s: any) => s.toString()) || offer.applicableServices || [],
+      applicableCategories: offer.targetCategories?.map((c: any) => c.toString()) || offer.applicableCategories || [],
+      isClaimed: claimedOfferIds.has(offer._id.toString()),
     }));
   }
 
-  // Get single offer by ID
-  async getOfferById(offerId: string): Promise<OfferResponse | null> {
-    const offer = await Coupon.findById(offerId).lean();
+  // Get single offer by ID with full service details
+  async getOfferById(offerId: string): Promise<any> {
+    const offer = await Coupon.findById(offerId)
+      .populate('targetServices', 'name shortDescription price duration images rating providerId category')
+      .populate('targetCategories', 'name')
+      .lean();
+
     if (!offer) return null;
+
+    // Get provider details for each service
+    const servicesWithProviders = await Promise.all(
+      ((offer as any).targetServices || []).map(async (service: any) => {
+        if (service.providerId) {
+          const provider = await mongoose.model('User').findById(service.providerId)
+            .select('firstName lastName avatar')
+            .lean();
+          service.provider = provider;
+        }
+        return {
+          _id: service._id.toString(),
+          name: service.name,
+          shortDescription: service.shortDescription,
+          price: service.price,
+          duration: service.duration,
+          images: service.images || [],
+          rating: service.rating || { average: 0, count: 0 },
+          category: service.category,
+          provider: service.provider ? {
+            _id: service.provider._id.toString(),
+            firstName: service.provider.firstName,
+            lastName: service.provider.lastName,
+            avatar: service.provider.avatar,
+          } : null,
+        };
+      })
+    );
 
     return {
       _id: (offer as any)._id.toString(),
@@ -91,6 +136,11 @@ export class OfferService {
       featured: (offer as any).featured,
       validFrom: (offer as any).validFrom,
       validUntil: (offer as any).validUntil,
+      applicableServices: servicesWithProviders,
+      applicableCategories: ((offer as any).targetCategories || []).map((c: any) => ({
+        _id: c._id.toString(),
+        name: c.name,
+      })),
     };
   }
 
@@ -215,13 +265,19 @@ export class OfferService {
       expiresAt: claim.expiresAt,
       isExpired: new Date() > claim.expiresAt && claim.status === 'claimed',
       offer: claim.offerId ? {
+        _id: claim.offerId._id.toString(),
+        code: claim.offerId.code,
         title: claim.offerId.displayTitle || claim.offerId.title,
         description: claim.offerId.description,
         type: claim.offerId.type,
         value: claim.offerId.value,
         maxDiscount: claim.offerId.maxDiscount,
+        minOrderValue: claim.offerId.minOrderValue,
         displayGradient: claim.offerId.displayGradient,
+        displayBadge: claim.offerId.displayBadge,
         imageUrl: claim.offerId.imageUrl,
+        applicableServices: claim.offerId.targetServices?.map((s: any) => s.toString()) || claim.offerId.applicableServices || [],
+        applicableCategories: claim.offerId.targetCategories?.map((c: any) => c.toString()) || claim.offerId.applicableCategories || [],
       } : null,
     }));
   }
@@ -299,6 +355,39 @@ export class OfferService {
       $push: {
         usedBy: {
           userId: claim.userId,
+          usedAt: new Date(),
+          orderId: bookingId,
+        },
+      },
+    });
+
+    return true;
+  }
+
+  // Mark coupon as used by code and user
+  async markCouponAsUsed(couponCode: string, userId: string, bookingId: string): Promise<boolean> {
+    const coupon = await Coupon.findOne({ code: couponCode.toUpperCase() });
+    if (!coupon) return false;
+
+    const claim = await OfferClaim.findOne({
+      userId: new mongoose.Types.ObjectId(userId),
+      offerId: coupon._id,
+      status: 'claimed'
+    });
+
+    if (!claim) return false;
+
+    claim.status = 'applied';
+    claim.usedAt = new Date();
+    claim.usedInBookingId = new mongoose.Types.ObjectId(bookingId);
+    await claim.save();
+
+    // Increment coupon usage
+    await Coupon.findByIdAndUpdate(coupon._id, {
+      $inc: { currentUses: 1 },
+      $push: {
+        usedBy: {
+          userId: new mongoose.Types.ObjectId(userId),
           usedAt: new Date(),
           orderId: bookingId,
         },

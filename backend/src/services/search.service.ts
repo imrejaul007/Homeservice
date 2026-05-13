@@ -4,6 +4,16 @@ import ServiceCategory from '../models/serviceCategory.model';
 import { getMeiliClient, INDEXES, isMeiliSearchConfigured } from '../config/meilisearch';
 import logger from '../utils/logger';
 
+/**
+ * Escape special regex characters to prevent ReDoS attacks
+ * @param str - The input string to escape
+ * @returns The escaped string safe for use in regex
+ */
+const escapeRegex = (str: string): string => {
+  if (!str) return '';
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+};
+
 // Default search ranking rules for Meilisearch
 const DEFAULT_RANKING_RULES = [
   'words',
@@ -389,12 +399,13 @@ const fallbackSearch = async (
       isActive: true,
     };
 
-    // Text search if query provided
+    // Text search if query provided - use escaped regex to prevent ReDoS
     if (query) {
+      const escapedQuery = escapeRegex(query);
       searchQuery.$or = [
-        { name: { $regex: query, $options: 'i' } },
-        { description: { $regex: query, $options: 'i' } },
-        { category: { $regex: query, $options: 'i' } },
+        { name: { $regex: escapedQuery, $options: 'i' } },
+        { description: { $regex: escapedQuery, $options: 'i' } },
+        { category: { $regex: escapedQuery, $options: 'i' } },
       ];
     }
 

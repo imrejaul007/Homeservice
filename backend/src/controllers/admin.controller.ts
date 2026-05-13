@@ -2,8 +2,39 @@ import { Request, Response } from 'express';
 import ProviderProfile from '../models/providerProfile.model';
 import User from '../models/user.model';
 import Service from '../models/service.model';
+import Booking from '../models/booking.model';
+import ServiceCategory from '../models/serviceCategory.model';
 import { asyncHandler } from '../utils/asyncHandler';
 import { ApiError } from '../utils/ApiError';
+import logger from '../utils/logger';
+
+/**
+ * Generate a random secure password
+ * @returns A random password with 16 characters
+ */
+const generateSecurePassword = (): string => {
+  const length = 16;
+  const lowercase = 'abcdefghijklmnopqrstuvwxyz';
+  const uppercase = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  const numbers = '0123456789';
+  const special = '!@#$%^&*';
+  const allChars = lowercase + uppercase + numbers + special;
+
+  let password = '';
+  // Ensure at least one of each type
+  password += lowercase[Math.floor(Math.random() * lowercase.length)];
+  password += uppercase[Math.floor(Math.random() * uppercase.length)];
+  password += numbers[Math.floor(Math.random() * numbers.length)];
+  password += special[Math.floor(Math.random() * special.length)];
+
+  // Fill the rest randomly
+  for (let i = password.length; i < length; i++) {
+    password += allChars[Math.floor(Math.random() * allChars.length)];
+  }
+
+  // Shuffle the password
+  return password.split('').sort(() => Math.random() - 0.5).join('');
+};
 
 /**
  * Get all pending providers for verification
@@ -71,7 +102,7 @@ export const getProviderForVerification = asyncHandler(async (req: Request, res:
 export const approveProvider = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
   const { notes } = req.body;
-  // const adminUser = req.user!; // TODO: Use for audit logging
+  const adminUser = req.user as any;
 
   const provider = await ProviderProfile.findById(id).populate('userId', 'email');
 
@@ -150,8 +181,9 @@ export const approveProvider = asyncHandler(async (req: Request, res: Response) 
               coordinates: {
                 type: 'Point',
                 coordinates: [
-                  provider.locationInfo.primaryAddress.coordinates?.lng || -74.006,
-                  provider.locationInfo.primaryAddress.coordinates?.lat || 40.7128
+                  // GeoJSON format: [longitude, latitude]
+                  provider.locationInfo.primaryAddress.coordinates?.coordinates?.[0] || -74.006,
+                  provider.locationInfo.primaryAddress.coordinates?.coordinates?.[1] || 40.7128
                 ]
               },
               serviceArea: {
@@ -209,6 +241,17 @@ export const approveProvider = asyncHandler(async (req: Request, res: Response) 
   // TODO: Send approval email
   console.log('Provider approved:', provider.businessInfo.businessName);
 
+  // Audit logging for provider approval
+  logger.info('ADMIN_AUDIT: Provider approved', {
+    action: 'PROVIDER_APPROVED',
+    adminId: adminUser._id,
+    adminEmail: adminUser.email,
+    providerId: id,
+    providerEmail: (provider.userId as any)?.email,
+    businessName: provider.businessInfo.businessName,
+    timestamp: new Date().toISOString()
+  });
+
   res.json({
     success: true,
     message: 'Provider approved successfully',
@@ -223,7 +266,7 @@ export const approveProvider = asyncHandler(async (req: Request, res: Response) 
 export const rejectProvider = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
   const { reason, notes } = req.body;
-  // const adminUser = req.user!; // TODO: Use for audit logging
+  const adminUser = req.user as any;
 
   if (!reason) {
     throw new ApiError(400, 'Rejection reason is required');
@@ -259,6 +302,18 @@ export const rejectProvider = asyncHandler(async (req: Request, res: Response) =
 
   // TODO: Send rejection email
   console.log('Provider rejected:', provider.businessInfo.businessName, 'Reason:', reason);
+
+  // Audit logging for provider rejection
+  logger.info('ADMIN_AUDIT: Provider rejected', {
+    action: 'PROVIDER_REJECTED',
+    adminId: adminUser._id,
+    adminEmail: adminUser.email,
+    providerId: id,
+    providerEmail: (provider.userId as any)?.email,
+    businessName: provider.businessInfo.businessName,
+    rejectionReason: reason,
+    timestamp: new Date().toISOString()
+  });
 
   res.json({
     success: true,
@@ -317,12 +372,15 @@ export const createTestProvider = asyncHandler(async (req: Request, res: Respons
   const timestamp = Date.now();
   const providerEmail = email || `plumber${timestamp}@example.com`;
 
+  // Generate secure random password
+  const securePassword = generateSecurePassword();
+
   // Create provider user
   const testUser = new User({
     firstName,
     lastName,
     email: providerEmail,
-    password: 'Plumber123!',
+    password: securePassword,
     phone,
     role: 'provider',
     isEmailVerified: true,
@@ -440,8 +498,20 @@ export const createTestProvider = asyncHandler(async (req: Request, res: Respons
     success: true,
     message: 'Test provider created successfully',
     data: {
-      user: testUser,
-      profile: testProviderProfile
+      user: {
+        id: testUser._id,
+        email: testUser.email,
+        firstName: testUser.firstName,
+        lastName: testUser.lastName,
+        // Note: password is shown only once for security
+        password: securePassword
+      },
+      profile: {
+        id: testProviderProfile._id,
+        businessName: testProviderProfile.businessInfo.businessName,
+        verificationStatus: testProviderProfile.verificationStatus.overall
+      },
+      securityNote: 'Store the generated password securely. It is only shown once and cannot be retrieved.'
     }
   });
 });
@@ -556,8 +626,8 @@ export const updateServiceStatus = asyncHandler(async (req: Request, res: Respon
   const { id } = req.params;
   const { status, reason, notes } = req.body;
 
-  // Validate status
-  const validStatuses = ['active', 'inactive', 'pending_review', 'draft'];
+  // Validate status - FIX: Added 'rejected' to valid statuses
+  const validStatuses = ['active', 'inactive', 'pending_review', 'draft', 'rejected'];
   if (!validStatuses.includes(status)) {
     throw new ApiError(400, 'Invalid status');
   }
@@ -997,6 +1067,670 @@ export const getProviderServices = asyncHandler(async (req: Request, res: Respon
     data: {
       provider,
       services
+    }
+  });
+});
+
+// ========================================
+// Admin Bookings Management
+// ========================================
+
+/**
+ * Get all bookings with filtering and pagination for admin
+ * GET /api/admin/bookings
+ */
+export const getAllBookings = asyncHandler(async (req: Request, res: Response) => {
+  const {
+    page = 1,
+    limit = 20,
+    search,
+    status,
+    provider,
+    customer,
+    dateFrom,
+    dateTo,
+    sortBy = 'createdAt',
+    order = 'desc'
+  } = req.query;
+
+  // Build query
+  const query: any = {};
+
+  if (search && typeof search === 'string') {
+    query.$or = [
+      { bookingNumber: { $regex: search, $options: 'i' } },
+      { 'customerInfo.email': { $regex: search, $options: 'i' } },
+      { 'customerInfo.firstName': { $regex: search, $options: 'i' } }
+    ];
+  }
+
+  if (status && typeof status === 'string') {
+    if (status === 'active') {
+      query.status = { $in: ['pending', 'confirmed', 'in_progress'] };
+    } else {
+      query.status = status;
+    }
+  }
+
+  if (provider && typeof provider === 'string') {
+    query.providerId = provider;
+  }
+
+  if (customer && typeof customer === 'string') {
+    query.customerId = customer;
+  }
+
+  if (dateFrom || dateTo) {
+    query.scheduledDate = {};
+    if (dateFrom) {
+      (query.scheduledDate as any).$gte = new Date(dateFrom as string);
+    }
+    if (dateTo) {
+      (query.scheduledDate as any).$lte = new Date(dateTo as string);
+    }
+  }
+
+  // Sort options
+  const sortOptions: any = {};
+  sortOptions[sortBy as string] = order === 'desc' ? -1 : 1;
+
+  const bookings = await Booking.find(query)
+    .populate('customerId', 'firstName lastName email phone')
+    .populate('providerId', 'firstName lastName email')
+    .populate('serviceId', 'name category')
+    .sort(sortOptions)
+    .skip((Number(page) - 1) * Number(limit))
+    .limit(Number(limit));
+
+  const total = await Booking.countDocuments(query);
+
+  res.json({
+    success: true,
+    data: {
+      bookings,
+      pagination: {
+        page: Number(page),
+        limit: Number(limit),
+        total,
+        pages: Math.ceil(total / Number(limit)),
+        hasNext: Number(page) * Number(limit) < total,
+        hasPrev: Number(page) > 1
+      }
+    }
+  });
+});
+
+/**
+ * Get booking details for admin
+ * GET /api/admin/bookings/:id
+ */
+export const getBookingDetails = asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+
+  const booking = await Booking.findById(id)
+    .populate('customerId', 'firstName lastName email phone')
+    .populate('providerId', 'firstName lastName email')
+    .populate('serviceId', 'name category description price');
+
+  if (!booking) {
+    throw new ApiError(404, 'Booking not found');
+  }
+
+  res.json({
+    success: true,
+    data: { booking }
+  });
+});
+
+/**
+ * Update booking status (admin override)
+ * PATCH /api/admin/bookings/:id/status
+ */
+export const updateBookingStatus = asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { status, reason, notes } = req.body;
+  const adminUser = req.user as any;
+
+  const validStatuses = ['pending', 'confirmed', 'in_progress', 'completed', 'cancelled', 'no_show'];
+  if (!validStatuses.includes(status)) {
+    throw new ApiError(400, 'Invalid status');
+  }
+
+  const booking = await Booking.findById(id);
+
+  if (!booking) {
+    throw new ApiError(404, 'Booking not found');
+  }
+
+  const previousStatus = booking.status;
+  booking.status = status;
+
+  // Add to status history
+  booking.statusHistory.push({
+    status,
+    timestamp: new Date(),
+    reason,
+    updatedBy: 'admin',
+    notes
+  });
+
+  // Update specific timestamps based on status
+  if (status === 'completed') {
+    booking.completedAt = new Date();
+  } else if (status === 'cancelled') {
+    booking.cancelledAt = new Date();
+  }
+
+  await booking.save();
+
+  // Audit logging
+  logger.info('ADMIN_AUDIT: Booking status updated', {
+    action: 'BOOKING_STATUS_UPDATED',
+    adminId: adminUser._id,
+    adminEmail: adminUser.email,
+    bookingId: id,
+    bookingNumber: booking.bookingNumber,
+    previousStatus,
+    newStatus: status,
+    reason,
+    timestamp: new Date().toISOString()
+  });
+
+  res.json({
+    success: true,
+    message: 'Booking status updated successfully',
+    data: { booking }
+  });
+});
+
+/**
+ * Get booking statistics for admin dashboard
+ * GET /api/admin/bookings/stats
+ */
+export const getBookingStats = asyncHandler(async (_req: Request, res: Response) => {
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfWeek = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+  const [stats, todayCount, weekCount, monthCount, revenueStats] = await Promise.all([
+    Booking.aggregate([
+      {
+        $group: {
+          _id: '$status',
+          count: { $sum: 1 }
+        }
+      }
+    ]),
+    Booking.countDocuments({ scheduledDate: { $gte: startOfToday } }),
+    Booking.countDocuments({ scheduledDate: { $gte: startOfWeek } }),
+    Booking.countDocuments({ scheduledDate: { $gte: startOfMonth } }),
+    Booking.aggregate([
+      { $match: { status: 'completed' } },
+      {
+        $group: {
+          _id: null,
+          totalRevenue: { $sum: '$pricing.totalAmount' },
+          avgBookingValue: { $avg: '$pricing.totalAmount' }
+        }
+      }
+    ])
+  ]);
+
+  const statusCounts = {
+    pending: 0,
+    confirmed: 0,
+    in_progress: 0,
+    completed: 0,
+    cancelled: 0,
+    no_show: 0
+  };
+
+  stats.forEach((s: any) => {
+    statusCounts[s._id as keyof typeof statusCounts] = s.count;
+  });
+
+  const totalBookings = Object.values(statusCounts).reduce((a, b) => a + b, 0);
+
+  res.json({
+    success: true,
+    data: {
+      stats: {
+        ...statusCounts,
+        total: totalBookings,
+        activeBookings: statusCounts.pending + statusCounts.confirmed + statusCounts.in_progress
+      },
+      todayBookings: todayCount,
+      weekBookings: weekCount,
+      monthBookings: monthCount,
+      revenue: {
+        total: revenueStats[0]?.totalRevenue || 0,
+        average: revenueStats[0]?.avgBookingValue || 0
+      },
+      completionRate: totalBookings > 0 ? Math.round((statusCounts.completed / totalBookings) * 100) : 0,
+      cancellationRate: totalBookings > 0 ? Math.round((statusCounts.cancelled / totalBookings) * 100) : 0
+    }
+  });
+});
+
+/**
+ * Cancel booking (admin override)
+ * POST /api/admin/bookings/:id/cancel
+ */
+export const cancelBooking = asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { reason, refundAmount } = req.body;
+  const adminUser = req.user as any;
+
+  const booking = await Booking.findById(id);
+
+  if (!booking) {
+    throw new ApiError(404, 'Booking not found');
+  }
+
+  if (['completed', 'cancelled'].includes(booking.status)) {
+    throw new ApiError(400, 'Cannot cancel a completed or already cancelled booking');
+  }
+
+  booking.status = 'cancelled';
+  booking.cancelledAt = new Date();
+  booking.cancellationDetails = {
+    cancelledBy: 'admin',
+    cancelledAt: new Date(),
+    reason: reason || 'Cancelled by admin',
+    refundAmount: refundAmount || 0,
+    refundStatus: refundAmount > 0 ? 'pending' : 'processed'
+  };
+
+  booking.statusHistory.push({
+    status: 'cancelled',
+    timestamp: new Date(),
+    reason,
+    updatedBy: 'admin',
+    notes: `Cancelled by admin. Refund: ${refundAmount || 0}`
+  });
+
+  await booking.save();
+
+  // Audit logging
+  logger.info('ADMIN_AUDIT: Booking cancelled', {
+    action: 'BOOKING_CANCELLED',
+    adminId: adminUser._id,
+    adminEmail: adminUser.email,
+    bookingId: id,
+    bookingNumber: booking.bookingNumber,
+    reason,
+    refundAmount: refundAmount || 0,
+    timestamp: new Date().toISOString()
+  });
+
+  res.json({
+    success: true,
+    message: 'Booking cancelled successfully',
+    data: { booking }
+  });
+});
+
+// ========================================
+// Admin Categories Management
+// ========================================
+
+/**
+ * Get all service categories for admin
+ * GET /api/admin/categories
+ */
+export const getAllCategories = asyncHandler(async (req: Request, res: Response) => {
+  const {
+    page = 1,
+    limit = 20,
+    search,
+    isActive,
+    isFeatured,
+    sortBy = 'sortOrder',
+    order = 'asc'
+  } = req.query;
+
+  // Build query
+  const query: any = {};
+
+  if (search && typeof search === 'string') {
+    query.$or = [
+      { name: { $regex: search, $options: 'i' } },
+      { description: { $regex: search, $options: 'i' } }
+    ];
+  }
+
+  if (isActive !== undefined) {
+    query.isActive = isActive === 'true';
+  }
+
+  if (isFeatured !== undefined) {
+    query.isFeatured = isFeatured === 'true';
+  }
+
+  // Sort options
+  const sortOptions: any = {};
+  sortOptions[sortBy as string] = order === 'asc' ? 1 : -1;
+
+  const categories = await ServiceCategory.find(query)
+    .sort(sortOptions)
+    .skip((Number(page) - 1) * Number(limit))
+    .limit(Number(limit));
+
+  const total = await ServiceCategory.countDocuments(query);
+
+  res.json({
+    success: true,
+    data: {
+      categories,
+      pagination: {
+        page: Number(page),
+        limit: Number(limit),
+        total,
+        pages: Math.ceil(total / Number(limit)),
+        hasNext: Number(page) * Number(limit) < total,
+        hasPrev: Number(page) > 1
+      }
+    }
+  });
+});
+
+/**
+ * Get category details for admin
+ * GET /api/admin/categories/:id
+ */
+export const getCategoryDetails = asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+
+  const category = await ServiceCategory.findById(id);
+
+  if (!category) {
+    throw new ApiError(404, 'Category not found');
+  }
+
+  res.json({
+    success: true,
+    data: { category }
+  });
+});
+
+/**
+ * Create new category
+ * POST /api/admin/categories
+ */
+export const createCategory = asyncHandler(async (req: Request, res: Response) => {
+  const { name, description, icon, color, imageUrl, subcategories, isActive, isFeatured, sortOrder } = req.body;
+  const adminUser = req.user as any;
+
+  // Check if category with same name or slug exists
+  const slug = name.toLowerCase().trim().replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, '-');
+  const existing = await ServiceCategory.findOne({
+    $or: [{ name }, { slug }]
+  });
+
+  if (existing) {
+    throw new ApiError(400, 'Category with this name already exists');
+  }
+
+  const category = new ServiceCategory({
+    name,
+    slug,
+    description,
+    icon,
+    color,
+    imageUrl,
+    subcategories: subcategories || [],
+    isActive: isActive !== false,
+    isFeatured: isFeatured || false,
+    sortOrder: sortOrder || 0,
+    createdBy: adminUser._id,
+    updatedBy: adminUser._id
+  });
+
+  await category.save();
+
+  // Audit logging
+  logger.info('ADMIN_AUDIT: Category created', {
+    action: 'CATEGORY_CREATED',
+    adminId: adminUser._id,
+    adminEmail: adminUser.email,
+    categoryId: category._id,
+    categoryName: name,
+    timestamp: new Date().toISOString()
+  });
+
+  res.status(201).json({
+    success: true,
+    message: 'Category created successfully',
+    data: { category }
+  });
+});
+
+/**
+ * Update category
+ * PATCH /api/admin/categories/:id
+ */
+export const updateCategory = asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const updates = req.body;
+  const adminUser = req.user as any;
+
+  const category = await ServiceCategory.findById(id);
+
+  if (!category) {
+    throw new ApiError(404, 'Category not found');
+  }
+
+  // If name is being updated, regenerate slug
+  if (updates.name && updates.name !== category.name) {
+    updates.slug = updates.name.toLowerCase().trim().replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, '-');
+
+    // Check if new slug conflicts
+    const existing = await ServiceCategory.findOne({ slug: updates.slug, _id: { $ne: id } });
+    if (existing) {
+      throw new ApiError(400, 'Category with this name already exists');
+    }
+  }
+
+  // Update fields
+  Object.keys(updates).forEach(key => {
+    (category as any)[key] = updates[key];
+  });
+  category.updatedBy = adminUser._id;
+
+  await category.save();
+
+  // Audit logging
+  logger.info('ADMIN_AUDIT: Category updated', {
+    action: 'CATEGORY_UPDATED',
+    adminId: adminUser._id,
+    adminEmail: adminUser.email,
+    categoryId: id,
+    categoryName: category.name,
+    updatedFields: Object.keys(updates),
+    timestamp: new Date().toISOString()
+  });
+
+  res.json({
+    success: true,
+    message: 'Category updated successfully',
+    data: { category }
+  });
+});
+
+/**
+ * Delete category
+ * DELETE /api/admin/categories/:id
+ */
+export const deleteCategory = asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { reason } = req.body;
+  const adminUser = req.user as any;
+
+  const category = await ServiceCategory.findById(id);
+
+  if (!category) {
+    throw new ApiError(404, 'Category not found');
+  }
+
+  // Check if category has active services
+  const serviceCount = await Service.countDocuments({ category: category.name });
+  if (serviceCount > 0) {
+    throw new ApiError(400, `Cannot delete category with ${serviceCount} active services. Remove or reassign services first.`);
+  }
+
+  await ServiceCategory.findByIdAndDelete(id);
+
+  // Audit logging
+  logger.info('ADMIN_AUDIT: Category deleted', {
+    action: 'CATEGORY_DELETED',
+    adminId: adminUser._id,
+    adminEmail: adminUser.email,
+    categoryId: id,
+    categoryName: category.name,
+    reason: reason || 'No reason provided',
+    timestamp: new Date().toISOString()
+  });
+
+  res.json({
+    success: true,
+    message: 'Category deleted successfully'
+  });
+});
+
+/**
+ * Toggle category featured status
+ * POST /api/admin/categories/:id/featured
+ */
+export const toggleCategoryFeatured = asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const adminUser = req.user as any;
+
+  const category = await ServiceCategory.findById(id);
+
+  if (!category) {
+    throw new ApiError(404, 'Category not found');
+  }
+
+  category.isFeatured = !category.isFeatured;
+  category.updatedBy = adminUser._id;
+  await category.save();
+
+  // Audit logging
+  logger.info('ADMIN_AUDIT: Category featured toggled', {
+    action: 'CATEGORY_FEATURED_TOGGLED',
+    adminId: adminUser._id,
+    adminEmail: adminUser.email,
+    categoryId: id,
+    categoryName: category.name,
+    isFeatured: category.isFeatured,
+    timestamp: new Date().toISOString()
+  });
+
+  res.json({
+    success: true,
+    message: `Category ${category.isFeatured ? 'featured' : 'unfeatured'} successfully`,
+    data: { category }
+  });
+});
+
+/**
+ * Add subcategory to category
+ * POST /api/admin/categories/:id/subcategories
+ */
+export const addSubcategory = asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { name, description, icon, color, imageUrl } = req.body;
+  const adminUser = req.user as any;
+
+  const category = await ServiceCategory.findById(id);
+
+  if (!category) {
+    throw new ApiError(404, 'Category not found');
+  }
+
+  const slug = name.toLowerCase().trim().replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, '-');
+
+  // Check if subcategory with same slug exists
+  const existingSub = category.subcategories.find(sub => sub.slug === slug);
+  if (existingSub) {
+    throw new ApiError(400, 'Subcategory with this name already exists');
+  }
+
+  const maxSortOrder = category.subcategories.length > 0
+    ? Math.max(...category.subcategories.map(s => s.sortOrder || 0))
+    : 0;
+
+  category.subcategories.push({
+    name,
+    slug,
+    description,
+    icon,
+    color,
+    imageUrl,
+    isActive: true,
+    sortOrder: maxSortOrder + 1
+  });
+
+  category.updatedBy = adminUser._id;
+  await category.save();
+
+  // Audit logging
+  logger.info('ADMIN_AUDIT: Subcategory added', {
+    action: 'SUBCATEGORY_ADDED',
+    adminId: adminUser._id,
+    adminEmail: adminUser.email,
+    categoryId: id,
+    categoryName: category.name,
+    subcategoryName: name,
+    timestamp: new Date().toISOString()
+  });
+
+  res.status(201).json({
+    success: true,
+    message: 'Subcategory added successfully',
+    data: { category }
+  });
+});
+
+/**
+ * Get category statistics for admin dashboard
+ * GET /api/admin/categories/stats
+ */
+export const getCategoryStats = asyncHandler(async (_req: Request, res: Response) => {
+  const [totalCategories, activeCategories, featuredCategories, withSubcategories] = await Promise.all([
+    ServiceCategory.countDocuments(),
+    ServiceCategory.countDocuments({ isActive: true }),
+    ServiceCategory.countDocuments({ isFeatured: true }),
+    ServiceCategory.countDocuments({ 'subcategories.0': { $exists: true } })
+  ]);
+
+  // Get category with most services
+  const topCategories = await Service.aggregate([
+    {
+      $group: {
+        _id: '$category',
+        count: { $sum: 1 }
+      }
+    },
+    { $sort: { count: -1 } },
+    { $limit: 10 }
+  ]);
+
+  res.json({
+    success: true,
+    data: {
+      stats: {
+        total: totalCategories,
+        active: activeCategories,
+        featured: featuredCategories,
+        withSubcategories,
+        inactive: totalCategories - activeCategories
+      },
+      topCategories: topCategories.map(c => ({
+        name: c._id,
+        serviceCount: c.count
+      }))
     }
   });
 });

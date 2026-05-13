@@ -37,10 +37,10 @@ const BookingDetailPage: React.FC = () => {
 
   if (!user) {
     return (
-      <div className="min-h-screen bg-gray-50 flex flex-col">
+      <div className="min-h-screen bg-nilin-cream flex flex-col">
         <NavigationHeader />
         <div className="flex-1 flex items-center justify-center">
-          <p className="text-gray-600">Please log in to view booking details.</p>
+          <p className="text-nilin-warmGray">Please log in to view booking details.</p>
         </div>
         <Footer />
       </div>
@@ -120,10 +120,10 @@ const BookingDetailPage: React.FC = () => {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex flex-col">
+      <div className="min-h-screen bg-nilin-cream flex flex-col">
         <NavigationHeader />
         <div className="flex-1 flex items-center justify-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gray-900"></div>
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-nilin-coral"></div>
         </div>
         <Footer />
       </div>
@@ -132,15 +132,15 @@ const BookingDetailPage: React.FC = () => {
 
   if (!currentBooking) {
     return (
-      <div className="min-h-screen bg-gray-50 flex flex-col">
+      <div className="min-h-screen bg-nilin-cream flex flex-col">
         <NavigationHeader />
         <div className="flex-1 flex items-center justify-center px-4">
           <div className="text-center">
-            <h2 className="text-2xl font-bold text-gray-900 mb-2">Booking Not Found</h2>
-            <p className="text-gray-600 mb-6">We couldn't find the booking you're looking for.</p>
+            <h2 className="text-2xl font-bold text-nilin-charcoal mb-2">Booking Not Found</h2>
+            <p className="text-nilin-warmGray mb-6">We couldn't find the booking you're looking for.</p>
             <button
               onClick={() => navigate('/customer/bookings')}
-              className="px-6 py-3 bg-gradient-nilin-primary text-gray-900 font-semibold rounded-lg hover:shadow-lg transition-shadow"
+              className="px-6 py-3 bg-nilin-coral text-white font-semibold rounded-lg hover:shadow-lg transition-shadow"
             >
               View All Bookings
             </button>
@@ -160,7 +160,7 @@ const BookingDetailPage: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
+    <div className="min-h-screen bg-nilin-cream flex flex-col">
       <NavigationHeader />
 
       {/* Breadcrumb Navigation */}
@@ -172,13 +172,13 @@ const BookingDetailPage: React.FC = () => {
         <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
 
           {/* Header */}
-          <div className="bg-white rounded-xl border p-6 mb-6">
+          <div className="bg-white rounded-xl border border-nilin-border p-6 mb-6">
             <div className="flex items-start justify-between mb-4">
               <div>
-                <h1 className="text-2xl font-bold text-gray-900 mb-2">
+                <h1 className="text-2xl font-bold text-nilin-charcoal mb-2">
                   {currentBooking.service?.name || 'Service Booking'}
                 </h1>
-                <p className="text-gray-600">Booking #{currentBooking.bookingNumber}</p>
+                <p className="text-nilin-warmGray">Booking #{currentBooking.bookingNumber}</p>
               </div>
               <span className={`px-4 py-2 rounded-full text-sm font-semibold ${statusColors[currentBooking.status]}`}>
                 {currentBooking.status.replace('_', ' ').toUpperCase()}
@@ -187,24 +187,24 @@ const BookingDetailPage: React.FC = () => {
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="space-y-3">
-                <div className="flex items-center gap-3 text-gray-700">
-                  <Calendar className="h-5 w-5 text-gray-400" />
+                <div className="flex items-center gap-3 text-nilin-charcoal">
+                  <Calendar className="h-5 w-5 text-nilin-rose" />
                   <div>
-                    <div className="text-sm text-gray-500">Date</div>
+                    <div className="text-sm text-nilin-warmGray">Date</div>
                     <div className="font-medium">{new Date(currentBooking.scheduledDate).toLocaleDateString()}</div>
                   </div>
                 </div>
-                <div className="flex items-center gap-3 text-gray-700">
-                  <Clock className="h-5 w-5 text-gray-400" />
+                <div className="flex items-center gap-3 text-nilin-charcoal">
+                  <Clock className="h-5 w-5 text-nilin-rose" />
                   <div>
-                    <div className="text-sm text-gray-500">Time</div>
+                    <div className="text-sm text-nilin-warmGray">Time</div>
                     <div className="font-medium">{currentBooking.scheduledTime}</div>
                   </div>
                 </div>
-                <div className="flex items-center gap-3 text-gray-700">
-                  <MapPin className="h-5 w-5 text-gray-400" />
+                <div className="flex items-center gap-3 text-nilin-charcoal">
+                  <MapPin className="h-5 w-5 text-nilin-rose" />
                   <div>
-                    <div className="text-sm text-gray-500">Location</div>
+                    <div className="text-sm text-nilin-warmGray">Location</div>
                     <div className="font-medium">
                       {currentBooking.address?.street}, {currentBooking.address?.city}
                     </div>
@@ -213,40 +213,40 @@ const BookingDetailPage: React.FC = () => {
               </div>
 
               <div className="space-y-3">
-                <div className="flex items-center gap-3 text-gray-700">
-                  <User className="h-5 w-5 text-gray-400" />
+                <div className="flex items-center gap-3 text-nilin-charcoal">
+                  <User className="h-5 w-5 text-nilin-rose" />
                   <div>
-                    <div className="text-sm text-gray-500">Provider</div>
+                    <div className="text-sm text-nilin-warmGray">Provider</div>
                     <div className="font-medium">
                       {currentBooking.provider?.firstName} {currentBooking.provider?.lastName}
                     </div>
                   </div>
                 </div>
-                <div className="flex items-center gap-3 text-gray-700">
-                  <Phone className="h-5 w-5 text-gray-400" />
+                <div className="flex items-center gap-3 text-nilin-charcoal">
+                  <Phone className="h-5 w-5 text-nilin-rose" />
                   <div>
-                    <div className="text-sm text-gray-500">Contact</div>
+                    <div className="text-sm text-nilin-warmGray">Contact</div>
                     <div className="font-medium">{currentBooking.customerInfo?.phone}</div>
                   </div>
                 </div>
-                <div className="p-4 bg-gray-50 rounded-lg">
-                  <div className="text-sm text-gray-600 mb-1">Total Amount</div>
-                  <div className="text-2xl font-bold text-gray-900">{currentBooking.pricing.currency || 'AED'} {currentBooking.pricing.totalAmount}</div>
+                <div className="p-4 bg-nilin-blush/30 rounded-lg">
+                  <div className="text-sm text-nilin-warmGray mb-1">Total Amount</div>
+                  <div className="text-2xl font-bold text-nilin-coral">{currentBooking.pricing.currency || 'AED'} {currentBooking.pricing.totalAmount}</div>
                 </div>
               </div>
             </div>
           </div>
 
           {/* Timeline */}
-          <div className="bg-white rounded-xl border p-6 mb-6">
-            <h2 className="text-xl font-bold text-gray-900 mb-6">Booking Timeline</h2>
+          <div className="bg-white rounded-xl border border-nilin-border p-6 mb-6">
+            <h2 className="text-xl font-bold text-nilin-charcoal mb-6">Booking Timeline</h2>
             <Timeline events={getTimelineEvents()} />
           </div>
 
           {/* Actions */}
           {(currentBooking.status === 'pending' || currentBooking.status === 'confirmed') && (
-            <div className="bg-white rounded-xl border p-6">
-              <h3 className="text-lg font-semibold text-gray-900 mb-4">Actions</h3>
+            <div className="bg-white rounded-xl border border-nilin-border p-6">
+              <h3 className="text-lg font-semibold text-nilin-charcoal mb-4">Actions</h3>
               <div className="flex gap-3">
                 <button
                   onClick={handleCancelBooking}

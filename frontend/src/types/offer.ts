@@ -15,6 +15,8 @@ export interface Offer {
   featured?: boolean;
   validFrom: string;
   validUntil: string;
+  applicableServices?: string[];
+  applicableCategories?: string[];
 }
 
 export interface ClaimedOffer {
@@ -25,7 +27,9 @@ export interface ClaimedOffer {
   usedAt?: string;
   expiresAt: string;
   isExpired: boolean;
+  offerId?: string;
   offer?: {
+    _id: string;
     title: string;
     description?: string;
     type: 'percentage' | 'fixed' | 'free_service';

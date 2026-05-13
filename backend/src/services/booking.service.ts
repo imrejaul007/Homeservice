@@ -6,6 +6,7 @@ import Service from '../models/service.model';
 import ProviderProfile from '../models/providerProfile.model';
 import { ApiError } from '../utils/ApiError';
 import { validateProviderSlotAvailability } from '../utils/availabilityHelper';
+import { eventBus, EVENT_TYPES } from '../event-bus';
 import {
   BookingInputDTO,
   GuestBookingInputDTO,
@@ -16,6 +17,22 @@ import {
   PaginatedBookingsResult,
   PublicBookingTrackingDTO,
 } from '../dto/booking.dto';
+
+// ============================================
+// Helper Functions
+// ============================================
+
+/**
+ * Get cancellation window hours from settings (default: 24)
+ */
+async function getCancellationWindowHours(): Promise<number> {
+  try {
+    const { getSetting } = await import('./settings.service');
+    return await getSetting('cancellationWindowHours') || 24;
+  } catch {
+    return 24; // Default fallback
+  }
+}
 
 // ============================================
 // BookingService Class
@@ -59,13 +76,30 @@ export class BookingService {
     // Calculate pricing
     const pricing = this.calculatePricing(service, data.addOns, data.selectedDuration);
 
+    // Apply coupon discount if provided
+    let couponDiscount = 0;
+    let couponCode = data.couponCode;
+    if (couponCode) {
+      try {
+        const { OfferService } = await import("./offer.service");
+        const offerService = new OfferService();
+        const validation = await offerService.validatePromoCode(couponCode, customerId, pricing.totalAmount);
+        if (validation.valid && validation.discount) {
+          couponDiscount = validation.discount;
+        }
+      } catch (error) {
+        console.error("Coupon validation error:", error);
+      }
+    }
+
     // Calculate times
     const requestedDate = new Date(data.scheduledDate);
     const [hours, minutes] = data.scheduledTime.split(':').map(Number);
     const serviceStart = new Date(requestedDate);
     serviceStart.setHours(hours, minutes, 0, 0);
     const estimatedEndTime = new Date(serviceStart.getTime() + (pricing.bookingDuration * 60 * 1000));
-    const cancellationDeadline = new Date(serviceStart.getTime() - 24 * 60 * 60 * 1000);
+    const cancellationWindowHours = await getCancellationWindowHours();
+    const cancellationDeadline = new Date(serviceStart.getTime() - cancellationWindowHours * 60 * 60 * 1000);
 
     // Process location
     const processedLocation = this.processLocation(data.location);
@@ -91,10 +125,15 @@ export class BookingService {
       pricing: {
         basePrice: pricing.basePrice,
         addOns: data.addOns || [],
-        discounts: [],
+        discounts: couponDiscount > 0 ? [{
+          type: 'coupon',
+          code: couponCode,
+          amount: couponDiscount
+        }] : [],
         subtotal: pricing.subtotal,
         tax: pricing.tax,
-        totalAmount: pricing.totalAmount,
+        totalAmount: Math.max(0, pricing.totalAmount - couponDiscount),
+        couponDiscount: couponDiscount,
         currency: pricing.currency,
       },
       customerInfo: {
@@ -120,6 +159,17 @@ export class BookingService {
 
     await booking.save();
 
+    // Mark coupon as used if applicable
+    if (couponCode && couponDiscount > 0) {
+      try {
+        const { OfferService } = await import("./offer.service");
+        const offerService = new OfferService();
+        await offerService.markCouponAsUsed(couponCode, customerId, booking._id.toString());
+      } catch (error) {
+        console.error("Failed to mark coupon as used:", error);
+      }
+    }
+
     // Create notifications
     await this.createBookingNotifications(booking, 'booking_request');
 
@@ -132,6 +182,17 @@ export class BookingService {
 
     // Send email
     await this.sendBookingRequestEmail(booking, service, provider);
+
+    // Emit event for analytics, notifications, loyalty points, etc.
+    eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
+      bookingId: booking._id,
+      bookingNumber: booking.bookingNumber,
+      customerId: booking.customerId,
+      providerId: booking.providerId,
+      serviceId: booking.serviceId,
+      totalAmount: booking.pricing.totalAmount,
+      status: booking.status,
+    });
 
     return { booking };
   }
@@ -184,13 +245,31 @@ export class BookingService {
     // Calculate pricing
     const pricing = this.calculatePricing(service, data.addOns, data.selectedDuration);
 
+    // Apply coupon discount if provided (for guest bookings too)
+    let couponDiscount = 0;
+    let couponCode = data.couponCode;
+    if (couponCode) {
+      try {
+        const { OfferService } = await import('./offer.service');
+        const offerService = new OfferService();
+        // For guest, use a temporary user ID
+        const validation = await offerService.validatePromoCode(couponCode, '000000000000000000000000', pricing.totalAmount);
+        if (validation.valid && validation.discount) {
+          couponDiscount = validation.discount;
+        }
+      } catch (error) {
+        console.error('Coupon validation error:', error);
+      }
+    }
+
     // Calculate times
     const requestedDate = new Date(data.scheduledDate);
     const [hours, minutes] = data.scheduledTime.split(':').map(Number);
     const serviceStart = new Date(requestedDate);
     serviceStart.setHours(hours, minutes, 0, 0);
     const estimatedEndTime = new Date(serviceStart.getTime() + (pricing.bookingDuration * 60 * 1000));
-    const cancellationDeadline = new Date(serviceStart.getTime() - 24 * 60 * 60 * 1000);
+    const cancellationWindowHours = await getCancellationWindowHours();
+    const cancellationDeadline = new Date(serviceStart.getTime() - cancellationWindowHours * 60 * 60 * 1000);
 
     // Process location
     const processedLocation = this.processLocation(data.location);
@@ -222,10 +301,15 @@ export class BookingService {
       pricing: {
         basePrice: pricing.basePrice,
         addOns: data.addOns || [],
-        discounts: [],
+        discounts: couponDiscount > 0 ? [{
+          type: 'coupon',
+          code: couponCode,
+          amount: couponDiscount
+        }] : [],
         subtotal: pricing.subtotal,
         tax: pricing.tax,
-        totalAmount: pricing.totalAmount,
+        totalAmount: Math.max(0, pricing.totalAmount - couponDiscount),
+        couponDiscount: couponDiscount,
         currency: pricing.currency,
       },
       customerInfo: {
@@ -413,6 +497,7 @@ export class BookingService {
             name: (booking.serviceId as any).name,
             category: (booking.serviceId as any).category,
             subcategory: (booking.serviceId as any).subcategory,
+            image: (booking.serviceId as any).images?.[0],
           }
         : undefined,
       provider: booking.providerId
@@ -420,13 +505,20 @@ export class BookingService {
             name: `${(booking.providerId as any).firstName} ${(booking.providerId as any).lastName}`,
           }
         : undefined,
+      location: booking.location,
       scheduledDate: booking.scheduledDate,
       scheduledTime: booking.scheduledTime,
       duration: booking.duration,
       pricing: {
+        basePrice: booking.pricing.basePrice,
+        addOns: booking.pricing.addOns,
+        discounts: booking.pricing.discounts,
+        subtotal: booking.pricing.subtotal,
+        tax: booking.pricing.tax,
         totalAmount: booking.pricing.totalAmount,
         currency: booking.pricing.currency,
       },
+      customerInfo: booking.customerInfo,
       isGuestBooking: booking.isGuestBooking,
       createdAt: booking.createdAt,
     };
@@ -470,6 +562,15 @@ export class BookingService {
 
     // Send confirmation email
     await this.sendBookingConfirmationEmail(booking);
+
+    // Emit event for analytics and notifications
+    eventBus.publish(EVENT_TYPES.BOOKING_CONFIRMED, {
+      bookingId: booking._id,
+      bookingNumber: booking.bookingNumber,
+      customerId: booking.customerId,
+      providerId: booking.providerId,
+      totalAmount: booking.pricing.totalAmount,
+    });
 
     return booking;
   }
@@ -515,6 +616,16 @@ export class BookingService {
     // Send notification
     await this.createBookingNotifications(booking, 'booking_rejected');
 
+    // Emit event for analytics and notifications
+    eventBus.publish(EVENT_TYPES.BOOKING_REJECTED, {
+      bookingId: booking._id,
+      bookingNumber: booking.bookingNumber,
+      customerId: booking.customerId,
+      providerId: booking.providerId,
+      cancelledBy: 'provider',
+      reason: data?.reason,
+    });
+
     return booking;
   }
 
@@ -552,6 +663,14 @@ export class BookingService {
 
     // Send notification
     await this.createBookingNotifications(booking, 'booking_started');
+
+    // Emit event for analytics
+    eventBus.publish(EVENT_TYPES.BOOKING_STARTED, {
+      bookingId: booking._id,
+      bookingNumber: booking.bookingNumber,
+      customerId: booking.customerId,
+      providerId: booking.providerId,
+    });
 
     return booking;
   }
@@ -595,6 +714,16 @@ export class BookingService {
 
     // Send completion notification
     await this.createBookingNotifications(booking, 'booking_completed');
+
+    // Emit event for analytics, loyalty points, etc.
+    eventBus.publish(EVENT_TYPES.BOOKING_COMPLETED, {
+      bookingId: booking._id,
+      bookingNumber: booking.bookingNumber,
+      customerId: booking.customerId,
+      providerId: booking.providerId,
+      totalAmount: booking.pricing.totalAmount,
+      serviceId: booking.serviceId,
+    });
 
     return booking;
   }
@@ -641,11 +770,136 @@ export class BookingService {
     // Send notifications
     await this.createBookingNotifications(booking, 'booking_cancelled');
 
+    // Emit event for analytics and notifications
+    eventBus.publish(EVENT_TYPES.BOOKING_CANCELLED, {
+      bookingId: booking._id,
+      bookingNumber: booking.bookingNumber,
+      customerId: booking.customerId,
+      providerId: booking.providerId,
+      cancelledBy: 'customer',
+      reason: data?.reason,
+      refundAmount,
+    });
+
     return {
       booking: booking as any,
       refundAmount,
       refundProcessingTime: '3-5 business days',
     };
+  }
+
+  // ========================================
+  // Reschedule Booking
+  // ========================================
+
+  async rescheduleBooking(
+    bookingId: string,
+    userId: string,
+    userRole: string,
+    data: { scheduledDate: string; scheduledTime: string; reason?: string }
+  ): Promise<any> {
+    const booking = await Booking.findById(bookingId);
+    if (!booking) {
+      throw new ApiError(404, 'Booking not found');
+    }
+
+    // Authorization check - allow customer or provider to reschedule
+    const isCustomer = booking.customerId && booking.customerId.toString() === userId;
+    const isProvider = booking.providerId.toString() === userId;
+    const isAdmin = userRole === 'admin';
+
+    if (!isCustomer && !isProvider && !isAdmin) {
+      throw new ApiError(403, 'Not authorized to reschedule this booking');
+    }
+
+    // Check if booking status allows reschedule
+    if (!['pending', 'confirmed'].includes(booking.status)) {
+      const error: any = new ApiError(400, 'Booking cannot be rescheduled');
+      error.currentStatus = booking.status;
+      throw error;
+    }
+
+    // Validate new date is not in the past
+    const requestedDate = new Date(data.scheduledDate);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    if (requestedDate < today) {
+      throw new ApiError(400, 'Cannot reschedule to a past date');
+    }
+
+    // Validate availability with new time slot
+    const service = await Service.findById(booking.serviceId);
+    if (!service) {
+      throw new ApiError(404, 'Service not found');
+    }
+
+    const availabilityResult = await validateProviderSlotAvailability({
+      providerId: booking.providerId.toString(),
+      scheduledDate: data.scheduledDate,
+      scheduledTime: data.scheduledTime,
+      serviceDurationMinutes: booking.duration,
+    });
+
+    if (!availabilityResult.isValid) {
+      const error: any = new ApiError(
+        availabilityResult.errorCode === 'CONFLICT' ? 409 : 400,
+        availabilityResult.errorMessage || 'Time slot is not available'
+      );
+      if (availabilityResult.availableSlots) {
+        error.availableSlots = availabilityResult.availableSlots;
+      }
+      throw error;
+    }
+
+    // Store original schedule for status history
+    const originalScheduledDate = booking.scheduledDate;
+    const originalScheduledTime = booking.scheduledTime;
+
+    // Update booking with new schedule
+    const newScheduledDate = new Date(data.scheduledDate);
+    const [hours, minutes] = data.scheduledTime.split(':').map(Number);
+    const serviceStart = new Date(newScheduledDate);
+    serviceStart.setHours(hours, minutes, 0, 0);
+    booking.scheduledDate = newScheduledDate;
+    booking.scheduledTime = data.scheduledTime;
+    booking.estimatedEndTime = new Date(serviceStart.getTime() + (booking.duration * 60 * 1000));
+
+    // Update cancellation policy deadline if needed
+    const cancellationWindowHours = await getCancellationWindowHours();
+    const cancellationDeadline = new Date(serviceStart.getTime() - cancellationWindowHours * 60 * 60 * 1000);
+    booking.cancellationPolicy.allowedUntil = cancellationDeadline;
+
+    // Add reschedule entry to status history
+    const rescheduledBy = isCustomer ? 'customer' : isProvider ? 'provider' : 'admin';
+    booking.statusHistory.push({
+      status: 'rescheduled',
+      timestamp: new Date(),
+      reason: data.reason || 'Booking rescheduled',
+      updatedBy: rescheduledBy as 'customer' | 'provider' | 'system' | 'admin',
+      notes: `Rescheduled from ${originalScheduledDate.toLocaleDateString()} ${originalScheduledTime} to ${newScheduledDate.toLocaleDateString()} ${data.scheduledTime}`,
+    });
+
+    await booking.save();
+
+    // Send notifications
+    await this.createBookingNotifications(booking, 'booking_rescheduled');
+
+    // Emit event for analytics and notifications
+    eventBus.publish(EVENT_TYPES.BOOKING_RESCHEDULED, {
+      bookingId: booking._id,
+      bookingNumber: booking.bookingNumber,
+      customerId: booking.customerId,
+      providerId: booking.providerId,
+      originalDate: originalScheduledDate,
+      originalTime: originalScheduledTime,
+      newDate: booking.scheduledDate,
+      newTime: booking.scheduledTime,
+      rescheduledBy,
+      reason: data.reason,
+    });
+
+    return booking;
   }
 
   // ========================================
@@ -827,6 +1081,7 @@ export class BookingService {
       booking_rejected: { customer: 'Booking Request Declined', provider: 'Booking Rejected' },
       booking_started: { customer: 'Service Started', provider: 'Service Started' },
       booking_completed: { customer: 'Service Completed', provider: 'Service Completed' },
+      booking_rescheduled: { customer: 'Booking Rescheduled', provider: 'Booking Rescheduled' },
     };
     return titles[type]?.[recipient] || 'Booking Update';
   }
@@ -850,6 +1105,10 @@ export class BookingService {
       booking_completed: {
         customer: 'Your service has been completed.',
         provider: 'Service completed successfully.',
+      },
+      booking_rescheduled: {
+        customer: 'Your booking has been rescheduled.',
+        provider: 'A booking has been rescheduled.',
       },
     };
     return messages[type]?.[recipient] || 'Your booking has been updated.';

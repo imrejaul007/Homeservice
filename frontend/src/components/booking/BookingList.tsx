@@ -21,6 +21,7 @@ import { useAuthStore } from '../../stores/authStore';
 import type { Booking, BookingFilters } from '../../services/BookingService';
 import bookingService from '../../services/BookingService';
 import { cn, formatPrice } from '../../lib/utils';
+import { toast } from 'react-hot-toast';
 
 interface BookingListProps {
   userType: 'customer' | 'provider';
@@ -172,8 +173,8 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className }) => {
           });
           break;
       }
-    } catch (error) {
-      console.error(`Failed to ${action} booking:`, error);
+    } catch (err: any) {
+      toast.error(err.response?.data?.message || 'Failed to perform action');
     } finally {
       setActionLoading(prev => ({ ...prev, [bookingId]: null }));
     }

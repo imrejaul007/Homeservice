@@ -3,7 +3,19 @@ import { bookingService } from '../services/booking.service';
 import { asyncHandler } from '../utils/asyncHandler';
 import { ApiError } from '../utils/ApiError';
 import { eventBus, EVENT_TYPES } from '../event-bus';
+import Booking from '../models/booking.model';
+import User from '../models/user.model';
+import Service from '../models/service.model';
 import Joi from 'joi';
+import logger from '../utils/logger';
+
+// Email service imports
+import {
+  sendBookingConfirmation,
+  sendBookingCancellation,
+  sendBookingReminder,
+  sendBookingRescheduled,
+} from '../services/email.service';
 
 // ============================================
 // Validation Schemas
@@ -53,7 +65,8 @@ const bookingInputSchema = Joi.object({
   }),
   locationType: Joi.string().valid('at_home', 'at_provider', 'at_hotel'),
   selectedDuration: Joi.number(),
-  professionalPreference: Joi.string().valid('no_preference', 'specific', 'any_experience'),
+  genderPreference: Joi.string().valid('male', 'female', 'no_preference').default('no_preference'),
+  experiencePreference: Joi.string().valid('no_preference', 'specific', 'any_experience').default('no_preference'),
   paymentMethod: Joi.string(),
 });
 
@@ -75,7 +88,8 @@ const guestBookingInputSchema = Joi.object({
   metadata: Joi.object(),
   locationType: Joi.string().valid('at_home', 'at_provider', 'at_hotel'),
   selectedDuration: Joi.number(),
-  professionalPreference: Joi.string().valid('no_preference', 'specific', 'any_experience'),
+  genderPreference: Joi.string().valid('male', 'female', 'no_preference').default('no_preference'),
+  experiencePreference: Joi.string().valid('no_preference', 'specific', 'any_experience').default('no_preference'),
   paymentMethod: Joi.string(),
 });
 
@@ -108,6 +122,137 @@ const completeBookingSchema = Joi.object({
 const addMessageSchema = Joi.object({
   message: Joi.string().required().min(1),
 });
+
+const rescheduleBookingSchema = Joi.object({
+  scheduledDate: Joi.string().required(),
+  scheduledTime: Joi.string().required(),
+  reason: Joi.string(),
+});
+
+// ============================================
+// Email Notification Helper
+// ============================================
+
+interface BookingNotificationData {
+  bookingNumber: string;
+  serviceName: string;
+  providerName: string;
+  providerEmail: string;
+  customerName: string;
+  customerEmail: string;
+  scheduledDate: string;
+  scheduledTime: string;
+  duration: number;
+  location: string;
+  totalAmount: number;
+  currency: string;
+  status: string;
+  specialRequests?: string;
+  providerNotes?: string;
+}
+
+/**
+ * Format booking data for email notifications
+ */
+const formatBookingForEmail = async (booking: any): Promise<BookingNotificationData | null> => {
+  try {
+    // Get service name
+    const service = await Service.findById(booking.serviceId).select('name duration').lean();
+    if (!service) {
+      logger.warn('Service not found for booking email', { bookingId: booking._id });
+      return null;
+    }
+
+    // Get customer info
+    let customerName = '';
+    let customerEmail = '';
+
+    if (booking.isGuestBooking && booking.guestInfo) {
+      customerName = booking.guestInfo.name;
+      customerEmail = booking.guestInfo.email;
+    } else if (booking.customerId) {
+      const customer = await User.findById(booking.customerId).select('firstName lastName email').lean();
+      if (customer) {
+        customerName = `${customer.firstName || ''} ${customer.lastName || ''}`.trim() || 'Customer';
+        customerEmail = customer.email || '';
+      }
+    }
+
+    // Get provider info
+    const provider = await User.findById(booking.providerId).select('firstName lastName email').lean();
+    if (!provider) {
+      logger.warn('Provider not found for booking email', { bookingId: booking._id });
+      return null;
+    }
+
+    const providerName = `${provider.firstName || ''} ${provider.lastName || ''}`.trim() || 'Provider';
+    const providerEmail = provider.email || '';
+
+    // Format location
+    let location = 'Location not specified';
+    if (booking.location?.address) {
+      const addr = booking.location.address;
+      location = [addr.street, addr.city, addr.state].filter(Boolean).join(', ') || 'Location specified';
+    }
+
+    // Format date
+    const scheduledDate = new Date(booking.scheduledDate).toLocaleDateString('en-US', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    });
+
+    return {
+      bookingNumber: booking.bookingNumber,
+      serviceName: service.name || 'Service',
+      providerName,
+      providerEmail,
+      customerName,
+      customerEmail,
+      scheduledDate,
+      scheduledTime: booking.scheduledTime,
+      duration: booking.duration || service.duration || 60,
+      location,
+      totalAmount: booking.pricing?.totalAmount || 0,
+      currency: booking.pricing?.currency || 'AED',
+      status: booking.status,
+      specialRequests: booking.customerInfo?.specialRequests,
+      providerNotes: booking.providerResponse?.notes,
+    };
+  } catch (error) {
+    logger.error('Error formatting booking for email', {
+      bookingId: booking._id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+};
+
+/**
+ * Send email notification with error handling
+ */
+const sendEmailNotification = async (
+  emailFn: (data: BookingNotificationData) => Promise<void>,
+  booking: any,
+  notificationType: string
+): Promise<void> => {
+  try {
+    const emailData = await formatBookingForEmail(booking);
+    if (emailData && emailData.customerEmail && emailData.providerEmail) {
+      await emailFn(emailData);
+      logger.info(`${notificationType} email notification sent`, {
+        bookingNumber: booking.bookingNumber,
+      });
+    }
+  } catch (error) {
+    // Log but don't fail the booking action
+    logger.error(`Failed to send ${notificationType} email`, {
+      bookingNumber: booking.bookingNumber,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+};
 
 // ============================================
 // Customer Booking Operations
@@ -211,6 +356,17 @@ export const cancelBooking = asyncHandler(async (req: Request, res: Response) =>
     userAgent: req.get('user-agent'),
   });
 
+  // Send booking cancellation email to provider
+  if (result.booking) {
+    await sendEmailNotification(
+      async (emailData) => {
+        await sendBookingCancellation(emailData, 'customer');
+      },
+      result.booking,
+      'Booking Cancellation'
+    );
+  }
+
   res.json({
     success: true,
     message: 'Booking cancelled successfully',
@@ -219,6 +375,71 @@ export const cancelBooking = asyncHandler(async (req: Request, res: Response) =>
       refundAmount: result.refundAmount,
       refundProcessingTime: result.refundProcessingTime,
     },
+  });
+});
+
+export const rescheduleBooking = asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { error, value } = rescheduleBookingSchema.validate(req.body);
+  if (error) {
+    throw new ApiError(400, error.details[0].message);
+  }
+
+  // Get the current booking to capture the old date
+  const currentBooking = await Booking.findById(id);
+  const oldDate = currentBooking
+    ? new Date(currentBooking.scheduledDate).toLocaleDateString('en-US', {
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+      })
+    : '';
+
+  const user = req.user as any;
+  const booking = await bookingService.rescheduleBooking(
+    id,
+    user._id.toString(),
+    user.role,
+    value
+  );
+
+  // Publish booking.rescheduled event
+  await eventBus.publish(EVENT_TYPES.BOOKING_RESCHEDULED, {
+    bookingId: id,
+    bookingNumber: booking.bookingNumber,
+    customerId: booking.customerId?.toString(),
+    providerId: booking.providerId?.toString(),
+    newDate: booking.scheduledDate,
+    newTime: booking.scheduledTime,
+    oldDate,
+    reason: value.reason,
+  }, {
+    userId: user._id.toString(),
+    ipAddress: req.ip,
+    userAgent: req.get('user-agent'),
+  });
+
+  // Send booking rescheduled email
+  const newDate = new Date(booking.scheduledDate).toLocaleDateString('en-US', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
+
+  await sendEmailNotification(
+    async (emailData) => {
+      await sendBookingRescheduled(emailData, oldDate, newDate);
+    },
+    booking,
+    'Booking Rescheduled'
+  );
+
+  res.json({
+    success: true,
+    message: 'Booking rescheduled successfully',
+    data: { booking },
   });
 });
 
@@ -275,6 +496,9 @@ export const acceptBooking = asyncHandler(async (req: Request, res: Response) =>
     ipAddress: req.ip,
     userAgent: req.get('user-agent'),
   });
+
+  // Send booking confirmation email
+  await sendEmailNotification(sendBookingConfirmation, booking, 'Booking Confirmation');
 
   res.json({
     success: true,
@@ -396,6 +620,38 @@ export const addBookingMessage = asyncHandler(async (req: Request, res: Response
   });
 });
 
+// Mark all messages as read for a booking
+export const markMessagesAsRead = asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const user = req.user as any;
+
+  const booking = await Booking.findById(id);
+  if (!booking) {
+    throw new ApiError(404, 'Booking not found');
+  }
+
+  // Mark all unread messages from the other party as read
+  const isCustomer = booking.customerId?.toString() === user._id.toString();
+  const isProvider = booking.providerId?.toString() === user._id.toString();
+
+  if (!isCustomer && !isProvider) {
+    throw new ApiError(403, 'Not authorized to view this booking');
+  }
+
+  const unreadField = isCustomer ? 'readByCustomer' : 'readByProvider';
+
+  // Update all messages where the other party sent them
+  await Booking.updateOne(
+    { _id: id },
+    { $set: { [unreadField]: true } }
+  );
+
+  res.json({
+    success: true,
+    message: 'Messages marked as read',
+  });
+});
+
 // ============================================
 // Guest Booking
 // ============================================
@@ -443,12 +699,14 @@ export default {
   getCustomerBookings,
   getBookingDetails,
   cancelBooking,
+  rescheduleBooking,
   getProviderBookings,
   acceptBooking,
   rejectBooking,
   startBooking,
   completeBooking,
   addBookingMessage,
+  markMessagesAsRead,
   createGuestBooking,
   trackBooking,
 };

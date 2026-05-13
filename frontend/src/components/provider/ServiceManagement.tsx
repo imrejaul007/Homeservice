@@ -140,7 +140,7 @@ const ServiceManagement: React.FC = () => {
     duration: 60,
     price: {
       amount: 0,
-      currency: 'USD',
+      currency: 'AED',
       type: 'fixed'
     },
     tags: [] as string[],

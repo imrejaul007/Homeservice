@@ -17,6 +17,7 @@ import { useBookingStore } from '../../stores/bookingStore';
 import { useAuthStore } from '../../stores/authStore';
 import type { Service } from '../../types/search';
 import type { CreateBookingData, BookingAddOn } from '../../services/BookingService';
+import { API_BASE_URL } from '../../config/api';
 
 // New UI Components
 import DateCarousel from './ui/DateCarousel';
@@ -45,6 +46,7 @@ interface FormData {
   locationType: 'at_home' | 'hotel';
   selectedDuration: number;
   professionalPreference: 'male' | 'female' | 'no_preference';
+  experiencePreference: 'no_preference' | 'specific' | 'any_experience';
   specialRequests: string;
 
   // Step 3: Payment
@@ -71,6 +73,34 @@ interface FormData {
   addOns: BookingAddOn[];
 }
 
+// Initial form data factory to avoid reference issues
+const createInitialFormData = (serviceDuration: number): FormData => ({
+  scheduledDate: new Date().toISOString().split('T')[0],
+  scheduledTime: '',
+  locationType: 'at_home',
+  selectedDuration: serviceDuration,
+  professionalPreference: 'no_preference',
+  experiencePreference: 'no_preference',
+  specialRequests: '',
+  guestName: '',
+  guestEmail: '',
+  guestPhone: '',
+  paymentMethod: 'cash',
+  address: {
+    street: '',
+    city: '',
+    state: '',
+    zipCode: '',
+    country: 'AE'
+  },
+  customerInfo: {
+    phone: '',
+    specialRequests: '',
+    accessInstructions: ''
+  },
+  addOns: []
+});
+
 const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
   service,
   providerId,
@@ -79,7 +109,7 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
   guestMode = false
 }) => {
   const navigate = useNavigate();
-  const { user } = useAuthStore();
+  const { user, isAuthenticated, tokens } = useAuthStore();
   const { createBooking, getAvailableSlots, availableSlots, isSubmitting, isLoading, errors } = useBookingStore();
 
   const [currentStep, setCurrentStep] = useState(1);
@@ -88,37 +118,18 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
   const [confirmedBookingId, setConfirmedBookingId] = useState<string | null>(null);
   const [confirmedBookingNumber, setConfirmedBookingNumber] = useState<string | null>(null);
   const [guestSubmitting, setGuestSubmitting] = useState(false);
+  const [claimedOffers, setClaimedOffers] = useState<any[]>([]);
+  const [selectedOffer, setSelectedOffer] = useState<any>(null);
+  const [loadingOffers, setLoadingOffers] = useState(false);
 
   // Get duration options from service or create default
   const durationOptions = service.durationOptions && service.durationOptions.length > 0
     ? service.durationOptions
     : [{ duration: service.duration, price: typeof service.price === 'number' ? service.price : service.price?.amount || 0, label: `${service.duration} min` }];
 
-  const [formData, setFormData] = useState<FormData>({
-    scheduledDate: new Date().toISOString().split('T')[0],
-    scheduledTime: '',
-    locationType: 'at_home',
-    selectedDuration: durationOptions[0]?.duration || service.duration,
-    professionalPreference: 'no_preference',
-    specialRequests: '',
-    guestName: '',
-    guestEmail: '',
-    guestPhone: '',
-    paymentMethod: 'cash',
-    address: {
-      street: '',
-      city: '',
-      state: '',
-      zipCode: '',
-      country: 'AE'
-    },
-    customerInfo: {
-      phone: user?.phone || '',
-      specialRequests: '',
-      accessInstructions: ''
-    },
-    addOns: []
-  });
+  const [formData, setFormData] = useState<FormData>(
+    createInitialFormData(durationOptions[0]?.duration || service.duration)
+  );
 
   // New step order as per mockups
   const steps = [
@@ -139,11 +150,6 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
     const fetchSlots = async () => {
       if (formData.scheduledDate && providerId) {
         const duration = formData.selectedDuration || service.duration;
-        console.log('Fetching slots for:', {
-          providerId,
-          date: formData.scheduledDate,
-          duration
-        });
 
         setIsFetchingSlots(true);
         await getAvailableSlots(providerId, {
@@ -157,6 +163,57 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
 
     fetchSlots();
   }, [formData.scheduledDate, formData.selectedDuration, providerId, service.duration, getAvailableSlots]);
+
+  // Fetch user's claimed offers
+  useEffect(() => {
+    const fetchClaimedOffers = async () => {
+      if (!isAuthenticated || guestMode) return;
+
+      setLoadingOffers(true);
+      try {
+        const token = tokens?.accessToken || '';
+
+        const response = await fetch(`${API_BASE_URL}/offers/my/claims`, {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success && data.data) {
+            // Filter offers that are applicable to this service or have no restrictions
+            const serviceId = String(service._id);
+            const categoryId = typeof service.category === 'string' ? service.category : null;
+
+            const applicableOffers = data.data.filter((claim: any) => {
+              // If no service linking, offer applies to all services
+              const offer = claim.offerId || claim;
+              if (!offer.applicableServices?.length && !offer.applicableCategories?.length) {
+                return true;
+              }
+              // Check if this service is in applicable services
+              if (offer.applicableServices?.some((s: string) => s === serviceId)) {
+                return true;
+              }
+              // Check if service's category is in applicable categories
+              if (categoryId && offer.applicableCategories?.some((c: string) => c === categoryId)) {
+                return true;
+              }
+              return false;
+            });
+            setClaimedOffers(applicableOffers);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to fetch claimed offers:', error);
+      } finally {
+        setLoadingOffers(false);
+      }
+    };
+
+    fetchClaimedOffers();
+  }, [service, isAuthenticated, guestMode]);
 
   const handleNext = () => {
     // Validation for Step 1: Date & Time
@@ -201,14 +258,24 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
       }
     }
 
-    console.log('Submitting booking with data:', {
-      serviceId: service._id,
-      providerId,
-      scheduledDate: formData.scheduledDate,
-      scheduledTime: formData.scheduledTime,
-      guestMode,
-      formData
-    });
+    // Location validation for at_home bookings - require address
+    if (formData.locationType === 'at_home') {
+      if (!formData.address.street.trim()) {
+        alert('Please enter your street address for at-home service');
+        return;
+      }
+      if (!formData.address.city.trim()) {
+        alert('Please enter your city for at-home service');
+        return;
+      }
+    }
+
+    // Ensure scheduledDate is always a string in YYYY-MM-DD format
+    const formatDateString = (date: string | Date) => {
+      if (!date) return new Date().toISOString().split('T')[0];
+      if (date instanceof Date) return date.toISOString().split('T')[0];
+      return String(date).split('T')[0];
+    };
 
     if (guestMode) {
       // Guest booking - call guest API directly
@@ -217,7 +284,7 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
         const guestBookingData = {
           serviceId: service._id,
           providerId,
-          scheduledDate: formData.scheduledDate,
+          scheduledDate: formatDateString(formData.scheduledDate),
           scheduledTime: formData.scheduledTime,
           guestInfo: {
             name: formData.guestName,
@@ -239,10 +306,12 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
           locationType: formData.locationType,
           selectedDuration: formData.selectedDuration,
           professionalPreference: formData.professionalPreference,
-          paymentMethod: formData.paymentMethod
+          experiencePreference: formData.experiencePreference,
+          paymentMethod: formData.paymentMethod,
+          couponCode: selectedOffer ? ((selectedOffer.offerId || selectedOffer).code) : undefined
         };
 
-        const response = await fetch('http://localhost:5000/api/bookings/guest', {
+        const response = await fetch(`${API_BASE_URL}/bookings/guest`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(guestBookingData)
@@ -251,12 +320,14 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
         const result = await response.json();
 
         if (response.ok && result.data) {
-          console.log('Guest booking created:', result.data);
+          // Guest booking response: bookingNumber, status, scheduledDate, etc. (no _id for guest)
           const bookingData = result.data.booking || result.data;
           setBookingConfirmed(true);
-          setConfirmedBookingId(bookingData._id || null);
+          setConfirmedBookingId(null); // Guest bookings don't have _id linked to user
           setConfirmedBookingNumber(bookingData.bookingNumber || null);
           setCurrentStep(4);
+          // Clear form data after successful booking
+          setFormData(createInitialFormData(durationOptions[0]?.duration || service.duration));
         } else {
           alert(result.message || 'Failed to create booking. Please try again.');
         }
@@ -268,10 +339,10 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
       }
     } else {
       // Authenticated booking - use store
-      const bookingData: CreateBookingData = {
+      const bookingData = {
         serviceId: service._id,
         providerId,
-        scheduledDate: formData.scheduledDate,
+        scheduledDate: formatDateString(formData.scheduledDate),
         scheduledTime: formData.scheduledTime,
         location: {
           type: formData.locationType === 'at_home' ? 'customer_address' : 'provider_location',
@@ -294,20 +365,21 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
         locationType: formData.locationType,
         selectedDuration: formData.selectedDuration,
         professionalPreference: formData.professionalPreference,
-        paymentMethod: formData.paymentMethod
-      };
-
-      console.log('Sending booking data to API:', bookingData);
+        experiencePreference: formData.experiencePreference,
+        paymentMethod: formData.paymentMethod,
+        couponCode: selectedOffer ? ((selectedOffer.offerId || selectedOffer).code) : undefined
+      } as CreateBookingData;
 
       try {
         const booking = await createBooking(bookingData);
-        console.log('Booking created successfully:', booking);
 
         if (booking && booking._id) {
           setBookingConfirmed(true);
           setConfirmedBookingId(booking._id);
           setConfirmedBookingNumber(booking.bookingNumber || null);
           setCurrentStep(4);
+          // Clear form data after successful booking
+          setFormData(createInitialFormData(durationOptions[0]?.duration || service.duration));
         }
       } catch (error: any) {
         console.error('Booking creation failed:', error);
@@ -556,15 +628,31 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
                   </div>
                 )}
 
-                {/* Professional Preference */}
+                {/* Gender Preference */}
                 <div className="mb-6">
                   <label className="block text-sm font-semibold text-nilin-charcoal mb-3">
-                    Professional Preference
+                    Gender Preference
                   </label>
                   <ProfessionalPreference
                     selected={formData.professionalPreference}
                     onChange={(pref) => setFormData({ ...formData, professionalPreference: pref })}
                   />
+                </div>
+
+                {/* Experience Preference */}
+                <div className="mb-6">
+                  <label className="block text-sm font-semibold text-nilin-charcoal mb-3">
+                    Experience Preference
+                  </label>
+                  <select
+                    value={formData.experiencePreference}
+                    onChange={(e) => setFormData({ ...formData, experiencePreference: e.target.value as any })}
+                    className="w-full px-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-coral/30 font-sans border-2 border-nilin-border bg-white/80 transition-all duration-300 focus:border-nilin-coral"
+                  >
+                    <option value="no_preference">No Preference</option>
+                    <option value="specific">Specific Provider Required</option>
+                    <option value="any_experience">Any Experience Level</option>
+                  </select>
                 </div>
 
                 {/* Special Requests */}
@@ -588,6 +676,83 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
               <div>
                 <h2 className="text-2xl font-bold text-nilin-charcoal mb-2 font-serif">Payment Authorization</h2>
                 <p className="text-nilin-warmGray mb-6">Select your preferred payment method</p>
+
+                {/* Claimed Offers Section */}
+                {!guestMode && (claimedOffers.length > 0 || loadingOffers) && (
+                  <div className="mb-6 card-nilin p-6 rounded-xl transition-all duration-300">
+                    <h3 className="text-sm font-semibold text-nilin-charcoal mb-3 flex items-center gap-2">
+                      <svg className="w-4 h-4 text-nilin-coral" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
+                      </svg>
+                      Apply Your Claimed Offers
+                    </h3>
+
+                    {loadingOffers ? (
+                      <div className="flex items-center gap-2 text-nilin-warmGray text-sm">
+                        <div className="w-4 h-4 border-2 border-nilin-coral border-t-transparent rounded-full animate-spin"></div>
+                        Loading your offers...
+                      </div>
+                    ) : (
+                      <>
+                        {claimedOffers.length === 0 ? (
+                          <p className="text-sm text-nilin-warmGray">No offers available for this service.</p>
+                        ) : (
+                          <select
+                            value={selectedOffer ? JSON.stringify(selectedOffer) : ''}
+                            onChange={(e) => {
+                              if (e.target.value) {
+                                setSelectedOffer(JSON.parse(e.target.value));
+                              } else {
+                                setSelectedOffer(null);
+                              }
+                            }}
+                            className="w-full px-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-coral/30 font-sans border-2 border-nilin-border bg-white/80 transition-all duration-300 focus:border-nilin-coral"
+                          >
+                            <option value="">No offer selected</option>
+                            {claimedOffers.map((claim, index) => {
+                              const offer = claim.offerId || claim;
+                              const discountText = offer.type === 'percentage'
+                                ? `${offer.value}% OFF`
+                                : offer.type === 'fixed'
+                                  ? `AED ${offer.value} OFF`
+                                  : 'Free Service';
+                              return (
+                                <option key={offer._id || index} value={JSON.stringify(claim)}>
+                                  {offer.code} - {discountText} {offer.title ? `(${offer.title})` : ''}
+                                </option>
+                              );
+                            })}
+                          </select>
+                        )}
+
+                        {selectedOffer && (
+                          <div className="mt-3 p-3 bg-green-50 rounded-lg border border-green-200">
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <p className="text-sm font-medium text-green-800">
+                                  {((selectedOffer.offerId || selectedOffer).type === 'percentage'
+                                    ? `${(selectedOffer.offerId || selectedOffer).value}% OFF`
+                                    : (selectedOffer.offerId || selectedOffer).type === 'fixed'
+                                      ? `AED ${(selectedOffer.offerId || selectedOffer).value} OFF`
+                                      : 'Free Service')} Applied!
+                                </p>
+                                <p className="text-xs text-green-600">
+                                  Code: {(selectedOffer.offerId || selectedOffer).code}
+                                </p>
+                              </div>
+                              <button
+                                onClick={() => setSelectedOffer(null)}
+                                className="text-xs text-green-700 hover:text-green-900 underline"
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
 
                 {/* Guest Info Section */}
                 {guestMode && (

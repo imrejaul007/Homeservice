@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
 import { Mail, CheckCircle, AlertCircle, RefreshCw } from 'lucide-react';
@@ -6,33 +6,58 @@ import { Mail, CheckCircle, AlertCircle, RefreshCw } from 'lucide-react';
 const EmailVerificationRequired: React.FC = () => {
   const [isResendSuccess, setIsResendSuccess] = useState(false);
   const [resendCooldown, setResendCooldown] = useState(0);
-  
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+
   const { user, resendVerification, logout, isLoading, errors, clearErrors } = useAuthStore();
+
+  // Cleanup timer on unmount
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, []);
+
+  // Hide success message after 5 seconds
+  useEffect(() => {
+    if (isResendSuccess) {
+      const timeout = setTimeout(() => {
+        setIsResendSuccess(false);
+      }, 5000);
+      return () => clearTimeout(timeout);
+    }
+  }, [isResendSuccess]);
 
   const handleResendVerification = async () => {
     if (!user?.email || resendCooldown > 0) return;
+
+    // Clear any existing timer
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
 
     try {
       clearErrors();
       await resendVerification(user.email);
       setIsResendSuccess(true);
-      
+
       // Start cooldown timer (60 seconds)
       setResendCooldown(60);
-      const timer = setInterval(() => {
+      timerRef.current = setInterval(() => {
         setResendCooldown((prev) => {
           if (prev <= 1) {
-            clearInterval(timer);
+            if (timerRef.current) {
+              clearInterval(timerRef.current);
+              timerRef.current = null;
+            }
             return 0;
           }
           return prev - 1;
         });
       }, 1000);
-
-      // Hide success message after 5 seconds
-      setTimeout(() => {
-        setIsResendSuccess(false);
-      }, 5000);
     } catch (error) {
       console.error('Failed to resend verification:', error);
     }

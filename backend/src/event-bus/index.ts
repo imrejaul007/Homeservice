@@ -14,6 +14,7 @@ export const EVENT_TYPES = {
   BOOKING_ACCEPTED: 'booking.accepted',
   BOOKING_REJECTED: 'booking.rejected',
   BOOKING_STARTED: 'booking.started',
+  BOOKING_RESCHEDULED: 'booking.rescheduled',
 
   // Payment events
   PAYMENT_COMPLETED: 'payment.completed',
@@ -24,6 +25,9 @@ export const EVENT_TYPES = {
   USER_REGISTERED: 'user.registered',
   USER_LOGGED_IN: 'user.logged_in',
   USER_VERIFIED: 'user.verified',
+
+  // Notification events
+  NOTIFICATION_CREATED: 'notification.created',
 
   // Analytics events
   PAGE_VIEW: 'analytics.page_view',
@@ -351,6 +355,59 @@ export const eventBus = new EventBus();
 export default eventBus;
 
 // ============================================
+// Socket Server Integration
+// ============================================
+
+/**
+ * Get socket emitter functions with lazy loading to avoid circular dependency
+ */
+async function getSocketEmitter() {
+  const socketModule = await import('../socket');
+  return {
+    getSocketServer: socketModule.getSocketServer,
+    emitBookingStatusChange: (data: unknown) => {
+      const socket = socketModule.getSocketServer();
+      if (socket) {
+        socket.emitBookingStatusChange(data as Parameters<typeof socket.emitBookingStatusChange>[0]);
+      }
+    },
+    emitNewBookingRequest: (data: unknown) => {
+      const socket = socketModule.getSocketServer();
+      if (socket) {
+        socket.emitNewBookingRequest(data as Parameters<typeof socket.emitNewBookingRequest>[0]);
+      }
+    },
+    emitNotification: (data: unknown) => {
+      const socket = socketModule.getSocketServer();
+      if (socket) {
+        socket.emitNotification(data as Parameters<typeof socket.emitNotification>[0]);
+      }
+    },
+  };
+}
+
+/**
+ * Emit socket event safely, handling cases where socket might not be initialized
+ */
+async function emitSocketSafely<T>(
+  emitter: (data: T) => void,
+  data: T,
+  eventType: string,
+  target: string
+): Promise<void> {
+  try {
+    emitter(data);
+  } catch (error) {
+    logger.warn('Socket emission failed', {
+      eventType,
+      target,
+      error: error instanceof Error ? error.message : String(error),
+      action: 'SOCKET_EMISSION_FAILED',
+    });
+  }
+}
+
+// ============================================
 // Event Subscriptions Setup
 // ============================================
 
@@ -360,6 +417,7 @@ export default eventBus;
  */
 export const initializeEventSubscriptions = async (): Promise<void> => {
   const { addJob } = await import('../queue');
+  const socketEmitter = await getSocketEmitter();
 
   // ============================================
   // Analytics Subscription
@@ -467,6 +525,7 @@ export const initializeEventSubscriptions = async (): Promise<void> => {
         customerId?: string;
         providerId?: string;
         bookingNumber?: string;
+        totalAmount?: number;
       };
 
       // Notify customer
@@ -478,6 +537,27 @@ export const initializeEventSubscriptions = async (): Promise<void> => {
           message: `Your booking #${data.bookingNumber || 'Unknown'} has been completed`,
           data: { bookingId: data.bookingId },
         });
+
+        // Award loyalty points to customer (1 point per AED 10 spent)
+        if (data.customerId && data.totalAmount) {
+          const pointsEarned = Math.floor(data.totalAmount / 10);
+          if (pointsEarned > 0) {
+            await addJob('loyalty-queue', 'award_points', {
+              userId: data.customerId,
+              amount: pointsEarned,
+              type: 'earned',
+              description: `Booking #${data.bookingNumber || data.bookingId} completed`,
+              relatedBooking: data.bookingId,
+            });
+
+            logger.info('Loyalty points awarded for booking completion', {
+              customerId: data.customerId,
+              bookingId: data.bookingId,
+              pointsEarned,
+              totalAmount: data.totalAmount,
+            });
+          }
+        }
       }
 
       // Notify provider
@@ -725,6 +805,142 @@ export const initializeEventSubscriptions = async (): Promise<void> => {
       });
     }
   }, 3); // Lower priority - not critical
+
+  // ============================================
+  // Socket Emission Subscriptions
+  // Real-time WebSocket events for connected clients
+  // ============================================
+
+  // Socket: Emit new booking request to provider
+  eventBus.subscribe('booking.created', async (event) => {
+    try {
+      const data = event.data as {
+        _id?: string;
+        id?: string;
+        bookingNumber?: string;
+        status?: string;
+        providerId?: string;
+      };
+
+      // Transform data to match socket method signature
+      const bookingData = {
+        _id: (data._id || data.id) as string,
+        bookingNumber: data.bookingNumber || '',
+        status: data.status || 'pending',
+        providerId: data.providerId as string,
+      };
+
+      if (bookingData._id && bookingData.providerId) {
+        socketEmitter.emitNewBookingRequest(bookingData);
+        logger.debug('Socket: Emitted new booking request', {
+          bookingId: bookingData._id,
+          providerId: bookingData.providerId,
+          action: 'SOCKET_BOOKING_CREATED',
+        });
+      }
+    } catch (error) {
+      logger.error('Socket: Failed to emit new booking request', {
+        eventId: event.eventId,
+        error: error instanceof Error ? error.message : String(error),
+        action: 'SOCKET_EMISSION_FAILED',
+      });
+    }
+  }, 15); // Higher priority - immediate real-time delivery
+
+  // Socket: Emit booking status change to customer and provider
+  const statusChangeEvents = [
+    'booking.confirmed',
+    'booking.completed',
+    'booking.cancelled',
+    'booking.accepted',
+    'booking.rejected',
+    'booking.started',
+    'booking.rescheduled',
+  ];
+
+  for (const statusEvent of statusChangeEvents) {
+    eventBus.subscribe(statusEvent, async (event) => {
+      try {
+        const data = event.data as {
+          _id?: string;
+          id?: string;
+          bookingNumber?: string;
+          status?: string;
+          customerId?: string;
+          providerId?: string;
+        };
+
+        // Transform data to match socket method signature
+        const bookingData = {
+          _id: (data._id || data.id) as string,
+          bookingNumber: data.bookingNumber || '',
+          status: data.status || statusEvent.replace('booking.', ''),
+          customerId: data.customerId as string | undefined,
+          providerId: data.providerId as string | undefined,
+        };
+
+        if (bookingData._id) {
+          socketEmitter.emitBookingStatusChange(bookingData);
+          logger.debug('Socket: Emitted booking status change', {
+            bookingId: bookingData._id,
+            status: bookingData.status,
+            action: 'SOCKET_BOOKING_STATUS_CHANGED',
+          });
+        }
+      } catch (error) {
+        logger.error('Socket: Failed to emit booking status change', {
+          eventId: event.eventId,
+          eventType: statusEvent,
+          error: error instanceof Error ? error.message : String(error),
+          action: 'SOCKET_EMISSION_FAILED',
+        });
+      }
+    }, 15); // Higher priority - immediate real-time delivery
+  }
+
+  // Socket: Emit notifications to users
+  // Note: This requires NOTIFICATION_CREATED to be published via eventBus.publish()
+  // If your notification service publishes events, add this subscription
+  eventBus.subscribe('notification.created', async (event) => {
+    try {
+      const data = event.data as {
+        id?: string;
+        type?: 'booking' | 'message' | 'system' | 'promotion';
+        title?: string;
+        message?: string;
+        data?: Record<string, unknown>;
+        userId?: string;
+        read?: boolean;
+      };
+
+      // Transform data to match socket method signature
+      const notificationData = {
+        id: data.id as string,
+        type: (data.type || 'system') as 'booking' | 'message' | 'system' | 'promotion',
+        title: data.title || '',
+        message: data.message || '',
+        data: data.data,
+        userId: data.userId as string,
+        timestamp: event.timestamp,
+        read: data.read ?? false,
+      };
+
+      if (notificationData.id && notificationData.userId) {
+        socketEmitter.emitNotification(notificationData);
+        logger.debug('Socket: Emitted notification', {
+          notificationId: notificationData.id,
+          userId: notificationData.userId,
+          action: 'SOCKET_NOTIFICATION',
+        });
+      }
+    } catch (error) {
+      logger.error('Socket: Failed to emit notification', {
+        eventId: event.eventId,
+        error: error instanceof Error ? error.message : String(error),
+        action: 'SOCKET_EMISSION_FAILED',
+      });
+    }
+  }, 15); // Higher priority - immediate real-time delivery
 
   logger.info('Event subscriptions initialized', {
     subscriptionCount: eventBus.getSubscriptionCount(),

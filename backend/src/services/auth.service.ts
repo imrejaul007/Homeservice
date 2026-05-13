@@ -1,12 +1,15 @@
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
+import mongoose from 'mongoose';
 import User from '../models/user.model';
 import CustomerProfile from '../models/customerProfile.model';
 import ProviderProfile from '../models/providerProfile.model';
 import Service from '../models/service.model';
 import ServiceCategory from '../models/serviceCategory.model';
-import { ApiError } from '../utils/ApiError';
+import Booking from '../models/booking.model';
+import { ApiError, ERROR_CODES } from '../utils/ApiError';
 import { sendVerificationEmail, sendWelcomeEmail, sendPasswordResetEmail } from './email.service';
+import { uploadBufferToCloudinary } from '../utils/cloudinary';
 import {
   CustomerRegistrationDTO,
   ProviderRegistrationDTO,
@@ -60,7 +63,7 @@ export class AuthService {
     // Check if user already exists
     const existingUser = await User.findOne({ email: data.email });
     if (existingUser) {
-      throw new ApiError(409, 'User with this email already exists');
+      throw new ApiError(409, 'User with this email already exists', [], ERROR_CODES.EMAIL_ALREADY_EXISTS);
     }
 
     // Handle referral code
@@ -74,7 +77,7 @@ export class AuthService {
       }
     }
 
-    // Create user
+    // Create user data
     const userData = {
       firstName: data.firstName,
       lastName: data.lastName,
@@ -153,12 +156,9 @@ export class AuthService {
       },
     };
 
-    const user = new User(userData);
-    await user.save();
-
-    // Create customer profile
-    const customerProfile = new CustomerProfile({
-      userId: user._id,
+    // Customer profile data
+    const customerProfileData = {
+      userId: undefined as any, // Will be set after user creation
       preferences: {
         categories: [],
         maxDistance: 25,
@@ -185,22 +185,6 @@ export class AuthService {
         : [],
       paymentMethods: [],
       favoriteProviders: [],
-      loyaltyData: {
-        totalPointsEarned: 0,
-        totalPointsSpent: 0,
-        currentPoints: 0,
-        tier: 'bronze',
-        tierProgress: {
-          currentTierPoints: 0,
-          nextTierRequirement: 1000,
-          nextTier: 'silver',
-        },
-        achievements: [],
-        streakInfo: {
-          currentStreak: 0,
-          longestStreak: 0,
-        },
-      },
       bookingHistory: {
         totalBookings: 0,
         completedBookings: 0,
@@ -247,25 +231,58 @@ export class AuthService {
       accessibilityNeeds: {
         hasSpecialRequirements: false,
       },
-    });
-
-    await customerProfile.save();
-
-    // Award referral/welcome bonus
-    await this.awardCustomerWelcomeBonus(user, referredBy);
-
-    // Auto-verify email (skip email verification)
-    user.isEmailVerified = true;
-    await user.save();
-
-    // Generate tokens
-    const tokens = generateTokens(user);
-
-    return {
-      user: formatUserResponse(user),
-      tokens,
-      requiresEmailVerification: false,
     };
+
+    // Use transaction for atomicity
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      // Create user
+      const user = new User(userData);
+      await user.save({ session });
+
+      // Set userId for profile
+      customerProfileData.userId = user._id;
+
+      // Create customer profile
+      const customerProfile = new CustomerProfile(customerProfileData);
+      await customerProfile.save({ session });
+
+      // Award referral/welcome bonus (within transaction)
+      await this.awardCustomerWelcomeBonus(user, referredBy);
+
+      // Generate and save verification token (within transaction)
+      const verificationToken = user.generateVerificationToken();
+      user.verificationExpire = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      await user.save({ session });
+
+      // Commit transaction
+      await session.commitTransaction();
+
+      // Send verification email (non-blocking - outside transaction)
+      try {
+        await sendVerificationEmail(user.email, user.firstName, verificationToken);
+      } catch (emailError) {
+        console.error('Failed to send verification email:', emailError);
+        // Continue - user can request a new verification email later
+      }
+
+      // Generate tokens
+      const tokens = generateTokens(user);
+
+      return {
+        user: formatUserResponse(user),
+        tokens,
+        requiresEmailVerification: true,
+      };
+    } catch (error) {
+      // Abort transaction on any error
+      await session.abortTransaction();
+      throw error;
+    } finally {
+      session.endSession();
+    }
   }
 
   private async awardCustomerWelcomeBonus(user: any, referredBy?: any): Promise<void> {
@@ -290,10 +307,10 @@ export class AuthService {
     // Check if user already exists
     const existingUser = await User.findOne({ email: data.email });
     if (existingUser) {
-      throw new ApiError(409, 'User with this email already exists');
+      throw new ApiError(409, 'User with this email already exists', [], ERROR_CODES.EMAIL_ALREADY_EXISTS);
     }
 
-    // Create provider user
+    // Create provider user data
     const userData = {
       firstName: data.firstName,
       lastName: data.lastName,
@@ -369,12 +386,9 @@ export class AuthService {
       },
     };
 
-    const user = new User(userData);
-    await user.save();
-
-    // Create provider profile
-    const providerProfile = new ProviderProfile({
-      userId: user._id,
+    // Provider profile data
+    const providerProfileData = {
+      userId: undefined as any, // Will be set after user creation
       tier: 'standard',
       businessInfo: {
         businessName: data.businessInfo.businessName,
@@ -451,8 +465,8 @@ export class AuthService {
         primaryAddress: {
           ...data.locationInfo.primaryAddress,
           coordinates: data.locationInfo.primaryAddress?.coordinates || {
-            lat: 25.2048,
-            lng: 55.2708,
+            type: 'Point',
+            coordinates: [55.2708, 25.2048] as [number, number], // [longitude, latitude]
           },
         },
         serviceAreas: [],
@@ -561,37 +575,74 @@ export class AuthService {
       },
       isProfileComplete: false,
       completionPercentage: 0,
-    });
-
-    await providerProfile.save();
-
-    // Create services in the services collection
-    if (data.services && data.services.length > 0) {
-      await this.createProviderServices(user._id, data.services, data.locationInfo);
-    }
-
-    // Award provider welcome bonus
-    await user.addLoyaltyPoints(500, 'bonus', 'Welcome to our provider community!', undefined);
-
-    // Auto-verify email
-    user.isEmailVerified = true;
-    await user.save();
-
-    // Generate tokens
-    const tokens = generateTokens(user);
-
-    return {
-      user: formatUserResponse(user),
-      tokens,
-      requiresEmailVerification: false,
-      providerProfile: {
-        id: providerProfile._id,
-        businessName: providerProfile.businessInfo.businessName,
-        completionPercentage: providerProfile.completionPercentage,
-        verificationStatus: providerProfile.verificationStatus,
-        servicesCount: providerProfile.services.length,
-      },
     };
+
+    // Use transaction for atomicity
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    let user: any;
+    let providerProfile: any;
+
+    try {
+      // Create user
+      user = new User(userData);
+      await user.save({ session });
+
+      // Set userId for profile
+      providerProfileData.userId = user._id;
+
+      // Create provider profile
+      providerProfile = new ProviderProfile(providerProfileData);
+      await providerProfile.save({ session });
+
+      // Award provider welcome bonus (within transaction)
+      await user.addLoyaltyPoints(500, 'bonus', 'Welcome to our provider community!', undefined);
+
+      // Generate and save verification token (within transaction)
+      const verificationToken = user.generateVerificationToken();
+      user.verificationExpire = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      await user.save({ session });
+
+      // Commit transaction
+      await session.commitTransaction();
+
+      // Create services in the services collection (outside transaction - these are independent)
+      if (data.services && data.services.length > 0) {
+        await this.createProviderServices(user._id, data.services, data.locationInfo);
+      }
+
+      // Send verification email (non-blocking - outside transaction)
+      try {
+        const verificationToken = user.generateVerificationToken();
+        await sendVerificationEmail(user.email, user.firstName, verificationToken);
+      } catch (emailError) {
+        console.error('Failed to send verification email:', emailError);
+        // Continue - user can request a new verification email later
+      }
+
+      // Generate tokens
+      const tokens = generateTokens(user);
+
+      return {
+        user: formatUserResponse(user),
+        tokens,
+        requiresEmailVerification: true,
+        providerProfile: {
+          id: providerProfile._id,
+          businessName: providerProfile.businessInfo.businessName,
+          completionPercentage: providerProfile.completionPercentage,
+          verificationStatus: providerProfile.verificationStatus,
+          servicesCount: providerProfile.services.length,
+        },
+      };
+    } catch (error) {
+      // Abort transaction on any error
+      await session.abortTransaction();
+      throw error;
+    } finally {
+      session.endSession();
+    }
   }
 
   private async createProviderServices(providerId: any, services: any[], locationInfo: any): Promise<void> {
@@ -658,10 +709,18 @@ export class AuthService {
           location: {
             coordinates: {
               type: 'Point',
-              coordinates: [
-                locationInfo.primaryAddress?.coordinates?.lng || 0,
-                locationInfo.primaryAddress?.coordinates?.lat || 0,
-              ],
+              coordinates: (() => {
+                // Extract from GeoJSON format: { type: 'Point', coordinates: [lng, lat] }
+                const coords = locationInfo.primaryAddress?.coordinates;
+                if (coords?.coordinates && Array.isArray(coords.coordinates)) {
+                  return coords.coordinates as [number, number];
+                }
+                // Handle legacy format { lat, lng } for backwards compatibility
+                if (coords?.lat !== undefined && coords?.lng !== undefined) {
+                  return [coords.lng, coords.lat] as [number, number];
+                }
+                return [0, 0] as [number, number];
+              })(),
             },
             address: {
               street: locationInfo.primaryAddress?.street || '',
@@ -898,8 +957,9 @@ export class AuthService {
               id: customerProfile._id,
               favoriteProvidersCount: customerProfile.favoriteProviders.length,
               totalBookings: customerProfile.bookingHistory.totalBookings,
-              loyaltyPoints: customerProfile.loyaltyData.currentPoints,
-              tier: customerProfile.loyaltyData.tier,
+              // Loyalty data is now read from User model's loyaltySystem
+              loyaltyPoints: user.loyaltySystem?.coins || 0,
+              tier: user.loyaltySystem?.tier || 'bronze',
             }
           : null,
       };
@@ -1197,6 +1257,200 @@ export class AuthService {
     await user.save();
 
     return this.getProfile(userId);
+  }
+
+  // ========================================
+  // Profile Image Upload
+  // ========================================
+
+  async uploadProfileImage(userId: string, file: Express.Multer.File): Promise<{ avatar: string }> {
+    const user = await User.findById(userId);
+    if (!user) {
+      throw new ApiError(404, 'User not found');
+    }
+
+    // Upload to Cloudinary
+    const uploadResult = await uploadBufferToCloudinary(file.buffer, 'avatars', {
+      publicId: `user_${userId}_${Date.now()}`,
+      transformation: [
+        { width: 400, height: 400, crop: 'fill', gravity: 'face', radius: 200, quality: 'auto', format: 'webp' },
+      ],
+    });
+
+    // Update user avatar
+    user.avatar = uploadResult.secureUrl;
+    await user.save({ validateBeforeSave: false });
+
+    return { avatar: uploadResult.secureUrl };
+  }
+
+  // ========================================
+  // Export User Data
+  // ========================================
+
+  async exportUserData(userId: string): Promise<{
+    user: any;
+    customerProfile?: any;
+    providerProfile?: any;
+    bookings?: any[];
+    services?: any[];
+  }> {
+    const user = await User.findById(userId);
+    if (!user) {
+      throw new ApiError(404, 'User not found');
+    }
+
+    const result: any = {
+      exportedAt: new Date().toISOString(),
+      user: {
+        id: user._id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        phone: user.phone,
+        role: user.role,
+        avatar: user.avatar,
+        bio: user.bio,
+        dateOfBirth: user.dateOfBirth,
+        gender: user.gender,
+        address: user.address,
+        isEmailVerified: user.isEmailVerified,
+        accountStatus: user.accountStatus,
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt,
+        loyaltySystem: user.loyaltySystem,
+        communicationPreferences: user.communicationPreferences,
+      },
+    };
+
+    // Get customer profile if exists
+    if (user.role === 'customer') {
+      const customerProfile = await CustomerProfile.findOne({ userId: user._id });
+      if (customerProfile) {
+        result.customerProfile = {
+          preferences: customerProfile.preferences,
+          addresses: customerProfile.addresses,
+          paymentMethods: customerProfile.paymentMethods,
+          favoriteProviders: customerProfile.favoriteProviders,
+          // NOTE: loyaltyData removed - loyalty is now stored in User model's loyaltySystem
+          bookingHistory: customerProfile.bookingHistory,
+          socialActivity: customerProfile.socialActivity,
+          privacySettings: customerProfile.privacySettings,
+        };
+
+        // Get user's bookings
+        const bookings = await Booking.find({ customerId: user._id })
+          .populate('service', 'name category')
+          .populate('provider', 'firstName lastName')
+          .sort({ createdAt: -1 })
+          .limit(100);
+
+        result.bookings = bookings.map(b => ({
+          id: b._id,
+          service: b.service,
+          provider: b.provider,
+          scheduledDate: b.scheduledDate,
+          scheduledTime: b.scheduledTime,
+          status: b.status,
+          totalPrice: b.pricing?.totalAmount,
+          location: b.location,
+          createdAt: b.createdAt,
+        }));
+      }
+    }
+
+    // Get provider profile if exists
+    if (user.role === 'provider') {
+      const providerProfile = await ProviderProfile.findOne({ userId: user._id });
+      if (providerProfile) {
+        result.providerProfile = {
+          businessInfo: providerProfile.businessInfo,
+          services: providerProfile.services,
+          instagramStyleProfile: providerProfile.instagramStyleProfile,
+          verificationStatus: providerProfile.verificationStatus,
+          settings: providerProfile.settings,
+          createdAt: providerProfile.createdAt,
+        };
+
+        // Get provider's services
+        const services = await Service.find({ providerId: user._id })
+          .sort({ createdAt: -1 })
+          .limit(100);
+
+        result.services = services.map(s => ({
+          id: s._id,
+          name: s.name,
+          category: s.category,
+          subcategory: s.subcategory,
+          description: s.description,
+          duration: s.duration,
+          price: s.price,
+          status: s.status,
+          rating: s.rating,
+          createdAt: s.createdAt,
+        }));
+      }
+    }
+
+    return result;
+  }
+
+  // ========================================
+  // Delete Account
+  // ========================================
+
+  async deleteAccount(userId: string, password: string): Promise<{ message: string }> {
+    const user = await User.findById(userId).select('+password');
+    if (!user) {
+      throw new ApiError(404, 'User not found');
+    }
+
+    // Verify password
+    const isValid = await user.comparePassword(password);
+    if (!isValid) {
+      throw new ApiError(400, 'Incorrect password. Account deletion requires password verification.');
+    }
+
+    // Soft delete - mark as deleted
+    user.isDeleted = true;
+    user.isActive = false;
+    user.accountStatus = 'deactivated';
+    user.email = `deleted_${user._id}_${user.email}`;
+    user.phone = undefined;
+    user.refreshTokens = [];
+
+    // Clear sensitive data
+    if (user.address) {
+      user.address = undefined;
+    }
+
+    await user.save({ validateBeforeSave: false });
+
+    // If customer, anonymize related data
+    if (user.role === 'customer') {
+      await CustomerProfile.updateOne(
+        { userId: user._id },
+        {
+          $set: {
+            addresses: [],
+            favoriteProviders: [],
+            'paymentMethods': [],
+          },
+        }
+      );
+    }
+
+    // If provider, deactivate services
+    if (user.role === 'provider') {
+      await Service.updateMany(
+        { providerId: user._id },
+        { $set: { isActive: false, status: 'deactivated' } }
+      );
+    }
+
+    return {
+      message: 'Your account has been permanently deleted. We\'re sorry to see you go.',
+    };
   }
 }
 

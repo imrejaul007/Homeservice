@@ -23,7 +23,7 @@ const AvailabilityPage: React.FC = () => {
         <div className="mb-8">
           <button
             onClick={() => navigate('/provider/dashboard')}
-            className="flex items-center text-gray-600 hover:text-gray-900 mb-4"
+            className="flex items-center text-nilin-warmGray hover:text-nilin-charcoal mb-4"
           >
             <ArrowLeft className="mr-2 h-4 w-4" />
             Back to Dashboard
@@ -31,8 +31,8 @@ const AvailabilityPage: React.FC = () => {
 
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-3xl font-bold text-gray-900">Availability Management</h1>
-              <p className="mt-1 text-sm text-gray-600">
+              <h1 className="text-3xl font-bold text-nilin-charcoal">Availability Management</h1>
+              <p className="mt-1 text-sm text-nilin-warmGray">
                 Set your working hours and manage your availability for bookings
               </p>
             </div>
@@ -43,9 +43,9 @@ const AvailabilityPage: React.FC = () => {
         <AvailabilityManager className="mt-6" />
 
         {/* Additional Information */}
-        <div className="mt-8 bg-blue-50 border border-blue-200 rounded-lg p-4">
-          <h3 className="text-sm font-medium text-blue-900 mb-2">Tips for Managing Availability</h3>
-          <ul className="space-y-1 text-sm text-blue-700">
+        <div className="mt-8 glass-nilin rounded-nilin-lg p-4">
+          <h3 className="text-sm font-medium text-nilin-charcoal mb-2">Tips for Managing Availability</h3>
+          <ul className="space-y-1 text-sm text-nilin-warmGray">
             <li>• Set regular working hours for each day of the week</li>
             <li>• Add buffer time between appointments to avoid back-to-back bookings</li>
             <li>• Block out dates for holidays or personal time off in advance</li>

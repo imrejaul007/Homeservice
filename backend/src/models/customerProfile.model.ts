@@ -25,8 +25,8 @@ export interface ICustomerProfile extends Document {
     zipCode: string;
     country: string;
     coordinates: {
-      lat: number;
-      lng: number;
+      type: 'Point';
+      coordinates: [number, number]; // [longitude, latitude]
     };
     isDefault: boolean;
     instructions?: string;
@@ -64,31 +64,11 @@ export interface ICustomerProfile extends Document {
     category?: string;
     notes?: string;
   }>;
-  
-  loyaltyData: {
-    totalPointsEarned: number;
-    totalPointsSpent: number;
-    currentPoints: number;
-    tier: 'bronze' | 'silver' | 'gold' | 'platinum';
-    tierProgress: {
-      currentTierPoints: number;
-      nextTierRequirement: number;
-      nextTier: string;
-    };
-    achievements: Array<{
-      badgeId: string;
-      name: string;
-      description: string;
-      earnedAt: Date;
-      icon?: string;
-    }>;
-    streakInfo: {
-      currentStreak: number;
-      longestStreak: number;
-      lastBookingDate?: Date;
-    };
-  };
-  
+
+  // NOTE: Loyalty data is stored in the User model (loyaltySystem field).
+  // Achievements are also stored in User model (achievements field).
+  // This is the single source of truth for loyalty/points data.
+
   bookingHistory: {
     totalBookings: number;
     completedBookings: number;
@@ -223,18 +203,8 @@ const customerProfileSchema = new Schema<ICustomerProfile>(
       zipCode: { type: String, required: true },
       country: { type: String, default: 'US' },
       coordinates: {
-        lat: { 
-          type: Number, 
-          required: true,
-          min: -90,
-          max: 90
-        },
-        lng: { 
-          type: Number, 
-          required: true,
-          min: -180,
-          max: 180
-        }
+        type: { type: String, enum: ['Point'], default: 'Point' },
+        coordinates: { type: [Number], required: true } // [longitude, latitude]
       },
       isDefault: { type: Boolean, default: false },
       instructions: String,
@@ -283,35 +253,7 @@ const customerProfileSchema = new Schema<ICustomerProfile>(
       category: String,
       notes: String
     }],
-    
-    loyaltyData: {
-      totalPointsEarned: { type: Number, default: 0, min: 0 },
-      totalPointsSpent: { type: Number, default: 0, min: 0 },
-      currentPoints: { type: Number, default: 0, min: 0 },
-      tier: {
-        type: String,
-        enum: ['bronze', 'silver', 'gold', 'platinum'],
-        default: 'bronze'
-      },
-      tierProgress: {
-        currentTierPoints: { type: Number, default: 0 },
-        nextTierRequirement: { type: Number, default: 1000 },
-        nextTier: { type: String, default: 'silver' }
-      },
-      achievements: [{
-        badgeId: { type: String, required: true },
-        name: { type: String, required: true },
-        description: String,
-        earnedAt: { type: Date, default: Date.now },
-        icon: String
-      }],
-      streakInfo: {
-        currentStreak: { type: Number, default: 0 },
-        longestStreak: { type: Number, default: 0 },
-        lastBookingDate: Date
-      }
-    },
-    
+
     bookingHistory: {
       totalBookings: { type: Number, default: 0, min: 0 },
       completedBookings: { type: Number, default: 0, min: 0 },
@@ -412,8 +354,6 @@ const customerProfileSchema = new Schema<ICustomerProfile>(
 // Indexes for performance (userId already has index from unique: true)
 customerProfileSchema.index({ 'addresses.coordinates': '2dsphere' });
 customerProfileSchema.index({ 'favoriteProviders.providerId': 1 });
-customerProfileSchema.index({ 'loyaltyData.tier': 1 });
-customerProfileSchema.index({ 'loyaltyData.currentPoints': -1 });
 customerProfileSchema.index({ isActive: 1, isDeleted: 1 });
 customerProfileSchema.index({ 'bookingHistory.totalBookings': -1 });
 customerProfileSchema.index({ 'preferences.categories': 1 });
@@ -450,12 +390,7 @@ customerProfileSchema.pre('save', function(next) {
   next();
 });
 
-// Virtual for loyalty tier progress percentage
-customerProfileSchema.virtual('loyaltyData.tierProgressPercentage').get(function() {
-  const progress = this.loyaltyData.tierProgress;
-  if (progress.nextTierRequirement === 0) return 100;
-  return Math.min((progress.currentTierPoints / progress.nextTierRequirement) * 100, 100);
-});
+// NOTE: Virtual for loyalty tier progress percentage removed - loyalty data is now in User model
 
 // Virtual for completion rate
 customerProfileSchema.virtual('bookingHistory.completionRate').get(function() {
@@ -492,13 +427,7 @@ customerProfileSchema.statics.findCustomersInArea = function(lat: number, lng: n
   });
 };
 
-customerProfileSchema.statics.findByTier = function(tier: string) {
-  return this.find({
-    'loyaltyData.tier': tier,
-    isActive: true,
-    isDeleted: false
-  });
-};
+// NOTE: findByTier moved to User model since loyalty data is now in User
 
 const CustomerProfile: Model<ICustomerProfile> = mongoose.model<ICustomerProfile>('CustomerProfile', customerProfileSchema);
 

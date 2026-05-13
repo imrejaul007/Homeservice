@@ -27,29 +27,49 @@ const SearchPage: React.FC = () => {
 
   const [selectedCategory, setSelectedCategory] = useState<string>('');
   const [priceRange, setPriceRange] = useState<[number, number]>([0, 10000]);
+  const [maxPriceLimit, setMaxPriceLimit] = useState<number>(10000);
   const [minRating, setMinRating] = useState<number>(0);
   const [sortBy, setSortBy] = useState<string>('popularity');
 
   const { categories: apiCategories } = useCategories();
 
   const categoryList = useMemo(() => {
-    return apiCategories.map(cat => ({ value: cat.name, label: cat.name }));
+    return apiCategories.map(cat => ({ value: cat.slug || cat.name, label: cat.name }));
   }, [apiCategories]);
 
   const hasActiveFilters = () => {
-    return selectedCategory !== '' || priceRange[1] !== 10000 || minRating > 0;
+    return selectedCategory !== '' || priceRange[1] !== maxPriceLimit || minRating > 0;
   };
+
+  // Fetch price filter limits from API
+  useEffect(() => {
+    const fetchFilterLimits = async () => {
+      try {
+        const response = await searchApi.getSearchFilters();
+        if (response.success && response.data?.priceRange) {
+          setMaxPriceLimit(response.data.priceRange.max);
+          setPriceRange([0, response.data.priceRange.max]);
+        }
+      } catch (error) {
+        console.error('Failed to fetch filter limits:', error);
+      }
+    };
+    fetchFilterLimits();
+  }, []);
 
   // Sync URL params on initial load
   useEffect(() => {
     const categoryParam = searchParams.get('category');
     if (categoryParam && !selectedCategory) {
-      const capitalized = categoryParam.charAt(0).toUpperCase() + categoryParam.slice(1);
-      setSelectedCategory(capitalized);
+      // Use slug directly from URL, match against category slugs
+      const matchingCategory = apiCategories.find(
+        cat => cat.slug === categoryParam || cat.name.toLowerCase() === categoryParam.toLowerCase()
+      );
+      setSelectedCategory(matchingCategory ? matchingCategory.name : categoryParam);
     }
     const sortParam = searchParams.get('sortBy');
     if (sortParam) setSortBy(sortParam);
-  }, []);
+  }, [apiCategories]);
 
   // Fetch services
   useEffect(() => {
@@ -104,7 +124,7 @@ const SearchPage: React.FC = () => {
 
   const clearFilters = () => {
     setSelectedCategory('');
-    setPriceRange([0, 10000]);
+    setPriceRange([0, maxPriceLimit]);
     setMinRating(0);
     setSortBy('popularity');
     setPagination(prev => ({ ...prev, page: 1 }));
@@ -131,9 +151,9 @@ const SearchPage: React.FC = () => {
       <NavigationHeader />
 
       {/* Page Header */}
-      <div className="bg-gray-50 border-b border-gray-100">
+      <div className="bg-nilin-cream border-b border-nilin-border">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 md:py-8">
-          <h1 className="text-2xl md:text-3xl font-bold text-gray-900 mb-1">
+          <h1 className="text-2xl md:text-3xl font-bold text-nilin-charcoal mb-1">
             {searchParams.get('q')
               ? `Results for "${searchParams.get('q')}"`
               : selectedCategory
@@ -141,7 +161,7 @@ const SearchPage: React.FC = () => {
                 : 'Browse All Services'
             }
           </h1>
-          <p className="text-sm text-gray-500">
+          <p className="text-sm text-nilin-warmGray">
             {pagination.total > 0
               ? `${pagination.total} services available`
               : 'Find the perfect beauty service'
@@ -191,7 +211,7 @@ const SearchPage: React.FC = () => {
               </button>
             )}
             {hasActiveFilters() && (
-              <button onClick={clearFilters} className="text-sm text-gray-500 hover:text-gray-700 underline">
+              <button onClick={clearFilters} className="text-sm text-nilin-warmGray hover:text-nilin-charcoal underline">
                 Clear all
               </button>
             )}
@@ -269,18 +289,18 @@ const SearchPage: React.FC = () => {
             )}
           </>
         ) : (
-          <div className="bg-gray-50 rounded-2xl p-12 text-center">
-            <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-5">
-              <Search className="h-10 w-10 text-gray-400" />
+          <div className="bg-nilin-blush/30 rounded-2xl p-12 text-center border border-nilin-border">
+            <div className="w-20 h-20 bg-nilin-cream rounded-full flex items-center justify-center mx-auto mb-5">
+              <Search className="h-10 w-10 text-nilin-coral" />
             </div>
-            <h3 className="text-xl font-bold text-gray-900 mb-2">No services found</h3>
-            <p className="text-gray-500 mb-6 text-sm">
+            <h3 className="text-xl font-bold text-nilin-charcoal mb-2">No services found</h3>
+            <p className="text-nilin-warmGray mb-6 text-sm">
               Try adjusting your search or browse categories above.
             </p>
             {hasActiveFilters() && (
               <button
                 onClick={clearFilters}
-                className="px-6 py-3 bg-nilin-primary text-white rounded-full font-semibold hover:bg-nilin-primary-dark transition-colors"
+                className="px-6 py-3 bg-nilin-coral text-white rounded-full font-semibold hover:bg-nilin-rose transition-colors"
               >
                 Clear All Filters
               </button>
@@ -317,7 +337,7 @@ const SearchPage: React.FC = () => {
                 <h4 className="text-sm font-semibold text-gray-900 mb-3">Price Range</h4>
                 <input
                   type="range"
-                  min="0" max="10000" step="500"
+                  min="0" max={maxPriceLimit} step="500"
                   value={priceRange[1]}
                   onChange={(e) => setPriceRange([0, parseInt(e.target.value)])}
                   className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-nilin-primary"
@@ -332,17 +352,17 @@ const SearchPage: React.FC = () => {
               <div>
                 <h4 className="text-sm font-semibold text-gray-900 mb-3">Minimum Rating</h4>
                 <div className="flex flex-wrap gap-2">
-                  {[0, 3, 4, 4.5].map((r) => (
+                  {[1, 2, 3, 4, 5].map((r) => (
                     <button
                       key={r}
-                      onClick={() => setMinRating(r)}
+                      onClick={() => setMinRating(minRating === r ? 0 : r)}
                       className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
                         minRating === r
                           ? 'bg-nilin-primary text-white'
                           : 'bg-gray-100 text-gray-700'
                       }`}
                     >
-                      {r === 0 ? 'All' : `${r}+`}
+                      {r}+
                     </button>
                   ))}
                 </div>

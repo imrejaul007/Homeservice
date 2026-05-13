@@ -31,6 +31,7 @@ import {
   sentryRequestHandler,
   sentryErrorHandler,
 } from './config/sentry';
+import { checkRedisConnection } from './config/redis';
 
 // Load environment variables
 dotenv.config({ path: path.join(__dirname, '../.env') });
@@ -53,6 +54,12 @@ app.use(sentryRequestHandler);
 
 // Add correlation ID to all requests
 app.use(correlationIdMiddleware);
+
+// API version header for all responses
+app.use((req, res, next) => {
+  res.setHeader('X-API-Version', process.env.API_VERSION || 'v1');
+  next();
+});
 
 // Security middleware - Helmet with strict CSP
 app.use(helmetConfig);
@@ -213,14 +220,20 @@ app.get('/health/ready', async (_req: Request, res: Response) => {
     const mongoose = (await import('mongoose')).default;
     const dbState = mongoose.connection.readyState;
     const isConnected = dbState === 1;
+    const redisHealthy = await checkRedisConnection();
 
-    if (!isConnected) {
+    const checks = {
+      database: isConnected ? 'connected' : 'disconnected',
+      redis: redisHealthy ? 'connected' : 'disconnected',
+    };
+
+    const allHealthy = isConnected && redisHealthy;
+
+    if (!allHealthy) {
       res.status(503).json({
         status: 'unhealthy',
         ready: false,
-        checks: {
-          database: 'disconnected',
-        },
+        checks,
       });
       return;
     }
@@ -228,9 +241,7 @@ app.get('/health/ready', async (_req: Request, res: Response) => {
     res.json({
       status: 'healthy',
       ready: true,
-      checks: {
-        database: 'connected',
-      },
+      checks,
     });
   } catch {
     res.status(503).json({
@@ -263,6 +274,10 @@ app.get('/api/test', (_req: Request, res: Response) => {
     api_version: APP_CONSTANTS.API_VERSION,
   });
 });
+
+// Maintenance mode check (after health checks, before routes)
+import { checkMaintenanceMode } from './middleware/maintenance.middleware';
+app.use(checkMaintenanceMode);
 
 // API routes
 app.use('/api', routes);

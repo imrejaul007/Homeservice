@@ -46,8 +46,8 @@ export interface IUser extends Document {
     country?: string;
     zipCode?: string;
     coordinates?: {
-      lat: number;
-      lng: number;
+      type: 'Point';
+      coordinates: [number, number]; // [longitude, latitude]
     };
   };
   
@@ -185,6 +185,20 @@ export interface IUser extends Document {
   refreshTokens: string[];
   tokenVersion?: number;
 
+  // Sessions (login history)
+  sessions: Array<{
+    token: string;
+    device: string;
+    browser?: string;
+    os?: string;
+    ip?: string;
+    location?: string;
+    userAgent?: string;
+    lastActive: Date;
+    createdAt: Date;
+    isCurrent: boolean;
+  }>;
+
   // Two-Factor Authentication
   twoFactor: {
     enabled: boolean;
@@ -199,7 +213,19 @@ export interface IUser extends Document {
       lastUsed?: Date;
     }>;
   };
-  
+
+  // Notifications
+  notifications: Array<{
+    _id: mongoose.Types.ObjectId;
+    type: 'booking' | 'payment' | 'review' | 'system' | 'promotion';
+    title: string;
+    message: string;
+    isRead: boolean;
+    data?: Record<string, unknown>;
+    createdAt: Date;
+    readAt?: Date;
+  }>;
+
   // Audit
   createdAt: Date;
   updatedAt: Date;
@@ -226,6 +252,12 @@ export interface IUser extends Document {
   updateTier(): Promise<void>;
   invalidateAllTokens(): Promise<any>;
   updateSecurityInfo(req: any): Promise<any>;
+}
+
+// Static methods interface
+export interface IUserModel extends Model<IUser> {
+  findByTier(tier: string): Promise<IUser[]>;
+  findByReferralCode(code: string): Promise<IUser | null>;
 }
 
 const userSchema = new Schema<IUser>(
@@ -352,8 +384,8 @@ const userSchema = new Schema<IUser>(
       country: { type: String, default: 'US' },
       zipCode: String,
       coordinates: {
-        lat: { type: Number, min: -90, max: 90 },
-        lng: { type: Number, min: -180, max: 180 }
+        type: { type: String, enum: ['Point'], default: 'Point' },
+        coordinates: { type: [Number] } // [longitude, latitude]
       }
     },
     
@@ -525,6 +557,20 @@ const userSchema = new Schema<IUser>(
     refreshTokens: [String],
     tokenVersion: { type: Number, default: 1 },
 
+    // Sessions (login history)
+    sessions: [{
+      token: { type: String, select: false },
+      device: String,
+      browser: String,
+      os: String,
+      ip: String,
+      location: String,
+      userAgent: String,
+      lastActive: { type: Date, default: Date.now },
+      createdAt: { type: Date, default: Date.now },
+      isCurrent: { type: Boolean, default: false },
+    }],
+
     // Two-Factor Authentication
     twoFactor: {
       enabled: { type: Boolean, default: false },
@@ -539,6 +585,18 @@ const userSchema = new Schema<IUser>(
         lastUsed: Date
       }]
     },
+
+    // Notifications
+    notifications: [{
+      _id: { type: Schema.Types.ObjectId, auto: true },
+      type: { type: String, enum: ['booking', 'payment', 'review', 'system', 'promotion'], default: 'system' },
+      title: { type: String, required: true },
+      message: { type: String, required: true },
+      isRead: { type: Boolean, default: false },
+      data: { type: Schema.Types.Mixed },
+      createdAt: { type: Date, default: Date.now },
+      readAt: Date,
+    }],
 
     // Audit
     createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
@@ -875,6 +933,23 @@ userSchema.methods.updateSecurityInfo = async function(req: any) {
   return this.updateOne(updates, { validateBeforeSave: false });
 };
 
-const User: Model<IUser> = mongoose.model<IUser>('User', userSchema);
+// Static Methods
+userSchema.statics.findByTier = function(tier: string) {
+  return this.find({
+    'loyaltySystem.tier': tier,
+    isActive: true,
+    isDeleted: false
+  });
+};
+
+userSchema.statics.findByReferralCode = function(code: string) {
+  return this.findOne({
+    'loyaltySystem.referralCode': code,
+    isActive: true,
+    isDeleted: false
+  });
+};
+
+const User: Model<IUser> = mongoose.model<IUser, IUserModel>('User', userSchema);
 
 export default User;

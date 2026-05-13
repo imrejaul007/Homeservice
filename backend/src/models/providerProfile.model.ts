@@ -70,8 +70,8 @@ export interface IProviderProfile extends Document {
       location?: {
         name: string;
         coordinates: {
-          lat: number;
-          lng: number;
+          type: 'Point';
+          coordinates: [number, number]; // [longitude, latitude]
         };
       };
       likes: Array<{
@@ -220,8 +220,8 @@ export interface IProviderProfile extends Document {
       zipCode: string;
       country: string;
       coordinates: {
-        lat: number;
-        lng: number;
+        type: 'Point';
+        coordinates: [number, number]; // [longitude, latitude]
       };
     };
     serviceAreas: Array<{
@@ -588,8 +588,8 @@ const providerProfileSchema = new Schema<IProviderProfile>(
         location: {
           name: String,
           coordinates: {
-            lat: { type: Number, min: -90, max: 90 },
-            lng: { type: Number, min: -180, max: 180 }
+            type: { type: String, enum: ['Point'], default: 'Point' },
+            coordinates: { type: [Number], required: true } // [longitude, latitude]
           }
         },
         likes: [{
@@ -792,8 +792,8 @@ const providerProfileSchema = new Schema<IProviderProfile>(
         zipCode: { type: String, required: true },
         country: { type: String, default: 'AE' },
         coordinates: {
-          lat: { type: Number, required: true, min: -90, max: 90 },
-          lng: { type: Number, required: true, min: -180, max: 180 }
+          type: { type: String, enum: ['Point'], default: 'Point' },
+          coordinates: { type: [Number], required: true } // [longitude, latitude]
         }
       },
       serviceAreas: [{

@@ -6,6 +6,7 @@ import Footer from '../../components/layout/Footer';
 import BookingFormWizard from '../../components/booking/BookingFormWizard';
 import { useAuthStore } from '../../stores/authStore';
 import type { Service } from '../../types/search';
+import { API_BASE_URL } from '../../config/api';
 
 const BookServicePage: React.FC = () => {
   const { serviceId } = useParams<{ serviceId: string }>();
@@ -29,7 +30,7 @@ const BookServicePage: React.FC = () => {
       setError(null);
 
       // Use the correct search API endpoint to fetch service details
-      const response = await fetch(`http://localhost:5000/api/search/service/${serviceId}`);
+      const response = await fetch(`${API_BASE_URL}/search/service/${serviceId}`);
 
       if (response.ok) {
         const data = await response.json();
@@ -134,15 +135,6 @@ const BookServicePage: React.FC = () => {
     ...service,
     providerId: service.providerId || (service.provider as any)?._id || ''
   };
-
-  // Debug logging to identify provider ID issues
-  console.log('🔍 Service Provider Debug:', {
-    service,
-    serviceProviderId: service.providerId,
-    serviceProviderObject: service.provider,
-    serviceProviderObjectId: (service.provider as any)?._id,
-    finalProviderId: serviceWithDefaults.providerId
-  });
 
   return (
     <BookingFormWizard

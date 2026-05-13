@@ -1,6 +1,35 @@
 import mongoose from 'mongoose';
+import crypto from 'crypto';
 import User from '../models/user.model';
 import ProviderProfile from '../models/providerProfile.model';
+
+/**
+ * Generate a random secure password
+ * @returns A random password with 16 characters
+ */
+const generateSecurePassword = (): string => {
+  const length = 16;
+  const lowercase = 'abcdefghijklmnopqrstuvwxyz';
+  const uppercase = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  const numbers = '0123456789';
+  const special = '!@#$%^&*';
+  const allChars = lowercase + uppercase + numbers + special;
+
+  let password = '';
+  // Ensure at least one of each type
+  password += lowercase[Math.floor(Math.random() * lowercase.length)];
+  password += uppercase[Math.floor(Math.random() * uppercase.length)];
+  password += numbers[Math.floor(Math.random() * numbers.length)];
+  password += special[Math.floor(Math.random() * special.length)];
+
+  // Fill the rest randomly
+  for (let i = password.length; i < length; i++) {
+    password += allChars[Math.floor(Math.random() * allChars.length)];
+  }
+
+  // Shuffle the password
+  return password.split('').sort(() => Math.random() - 0.5).join('');
+};
 
 async function createTestProvider() {
   try {
@@ -15,7 +44,7 @@ async function createTestProvider() {
     if (existingUser) {
       console.log('✅ Test provider already exists!');
       console.log('📧 Email: testprovider@example.com');
-      console.log('🔐 Password: TestProvider123!');
+      console.log('🔐 Password: [Use the password from initial creation or reset via forgot password]');
       console.log('👤 User ID:', existingUser._id);
 
       // Check provider profile
@@ -31,12 +60,15 @@ async function createTestProvider() {
       return;
     }
 
+    // Generate secure random password
+    const securePassword = generateSecurePassword();
+
     // Create provider user
     const testUser = new User({
       firstName: 'Test',
       lastName: 'Provider',
       email: 'testprovider@example.com',
-      password: 'TestProvider123!',
+      password: securePassword,
       phone: '+15551234567',
       role: 'provider',
       isEmailVerified: true,
@@ -196,7 +228,7 @@ async function createTestProvider() {
 
     console.log('\n🎉 Test provider created successfully!');
     console.log('📧 Email: testprovider@example.com');
-    console.log('🔐 Password: TestProvider123!');
+    console.log('🔐 Password:', securePassword);
     console.log('👤 User ID:', testUser._id);
     console.log('🏢 Profile ID:', testProviderProfile._id);
     console.log('📊 Verification Status:', testProviderProfile.verificationStatus.overall);

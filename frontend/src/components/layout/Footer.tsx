@@ -1,9 +1,11 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Mail, Phone, MapPin, ArrowRight, Heart } from 'lucide-react';
 
 const Footer: React.FC = () => {
   const currentYear = new Date().getFullYear();
+  const [email, setEmail] = useState('');
+  const [isSubscribed, setIsSubscribed] = useState(false);
 
   const services = [
     { name: 'Hair Styling', path: '/category/hair' },
@@ -16,10 +18,13 @@ const Footer: React.FC = () => {
 
   const company = [
     { name: 'About Us', path: '/about' },
-    { name: 'Careers', path: '/careers' },
-    { name: 'Blog', path: '/blog' },
-    { name: 'Press', path: '/press' },
-    { name: 'Partners', path: '/partners' },
+    // { name: 'Careers', path: '/careers' },
+    // { name: 'Blog', path: '/blog' },
+    // { name: 'Press', path: '/press' },
+    // { name: 'Partners', path: '/partners' },
+    { name: 'Home', path: '/' },
+    { name: 'Search', path: '/search' },
+    { name: 'For Providers', path: '/provider/register' },
   ];
 
   const support = [
@@ -28,6 +33,16 @@ const Footer: React.FC = () => {
     { name: 'FAQs', path: '/faq' },
     { name: 'Safety', path: '/safety' },
   ];
+
+  const handleSubscribe = async () => {
+    if (!email || !email.includes('@')) {
+      return;
+    }
+    // In a real app, this would call an API endpoint
+    // await fetch('/api/newsletter/subscribe', { method: 'POST', body: JSON.stringify({ email }) });
+    setIsSubscribed(true);
+    setEmail('');
+  };
 
   return (
     <footer className="relative bg-[#2D2D2D] mt-auto overflow-hidden">
@@ -50,17 +65,26 @@ const Footer: React.FC = () => {
             {/* Newsletter */}
             <div className="max-w-md">
               <p className="text-white/80 text-sm mb-3">Subscribe for updates</p>
-              <div className="flex gap-2">
-                <input
-                  type="email"
-                  placeholder="Your email"
-                  className="flex-1 px-4 py-3 bg-white/10 backdrop-blur-sm border border-white/20 rounded-xl text-white placeholder-white/40 focus:outline-none focus:border-[#E8B4A8]/60 focus:bg-white/15 transition-all"
-                />
-                <button className="px-5 py-3 bg-[#E8B4A8] text-white font-medium rounded-xl hover:bg-[#D4A89A] hover:shadow-lg hover:shadow-[#E8B4A8]/20 transition-all flex items-center gap-2">
-                  <span>Join</span>
-                  <ArrowRight className="w-4 h-4" />
-                </button>
-              </div>
+              {isSubscribed ? (
+                <p className="text-[#E8B4A8] text-sm">Thank you for subscribing!</p>
+              ) : (
+                <div className="flex gap-2">
+                  <input
+                    type="email"
+                    placeholder="Your email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="flex-1 px-4 py-3 bg-white/10 backdrop-blur-sm border border-white/20 rounded-xl text-white placeholder-white/40 focus:outline-none focus:border-[#E8B4A8]/60 focus:bg-white/15 transition-all"
+                  />
+                  <button
+                    onClick={handleSubscribe}
+                    className="px-5 py-3 bg-[#E8B4A8] text-white font-medium rounded-xl hover:bg-[#D4A89A] hover:shadow-lg hover:shadow-[#E8B4A8]/20 transition-all flex items-center gap-2"
+                  >
+                    <span>Join</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 

@@ -275,8 +275,44 @@ export const login = asyncHandler(async (req: Request, res: Response) => {
   }
 
   const clientIP = req.ip || req.connection.remoteAddress || 'unknown';
+  const userAgent = req.headers['user-agent'] || 'unknown';
   const rememberMe = value.rememberMe || false;
   const result = await authService.login(value.email, value.password, clientIP, rememberMe);
+
+  // Parse user agent for device info
+  const deviceInfo = parseUserAgent(userAgent);
+
+  // Add session tracking
+  const User = (await import('../models/user.model')).default;
+  const userDoc = await User.findById(result.user.id);
+
+  if (userDoc) {
+    // Mark all existing sessions as not current
+    userDoc.sessions = userDoc.sessions || [];
+    userDoc.sessions.forEach(session => {
+      session.isCurrent = false;
+    });
+
+    // Add new session
+    userDoc.sessions.push({
+      token: result.tokens.accessToken,
+      device: deviceInfo.device,
+      browser: deviceInfo.browser,
+      os: deviceInfo.os,
+      ip: clientIP,
+      userAgent: userAgent,
+      lastActive: new Date(),
+      createdAt: new Date(),
+      isCurrent: true,
+    });
+
+    // Keep only last 10 sessions
+    if (userDoc.sessions.length > 10) {
+      userDoc.sessions = userDoc.sessions.slice(-10);
+    }
+
+    await userDoc.save({ validateBeforeSave: false });
+  }
 
   // Set refresh token as HTTP-only cookie
   // Cookie expiry: 30 days if rememberMe, 7 days otherwise
@@ -297,6 +333,51 @@ export const login = asyncHandler(async (req: Request, res: Response) => {
     },
   });
 });
+
+// Helper function to parse user agent
+function parseUserAgent(userAgent: string): { device: string; browser: string; os: string } {
+  let device = 'Unknown Device';
+  let browser = 'Unknown Browser';
+  let os = 'Unknown OS';
+
+  // Detect OS
+  if (userAgent.includes('Windows')) {
+    os = 'Windows';
+    device = 'Windows PC';
+  } else if (userAgent.includes('Mac OS') || userAgent.includes('Macintosh')) {
+    os = 'macOS';
+    if (userAgent.includes('iPhone')) {
+      os = 'iOS';
+      device = 'iPhone';
+    } else if (userAgent.includes('iPad')) {
+      os = 'iPadOS';
+      device = 'iPad';
+    } else {
+      device = 'Mac';
+    }
+  } else if (userAgent.includes('Android')) {
+    os = 'Android';
+    device = 'Android Device';
+  } else if (userAgent.includes('Linux')) {
+    os = 'Linux';
+    device = 'Linux PC';
+  }
+
+  // Detect Browser
+  if (userAgent.includes('Chrome') && !userAgent.includes('Edg')) {
+    browser = 'Chrome';
+  } else if (userAgent.includes('Firefox')) {
+    browser = 'Firefox';
+  } else if (userAgent.includes('Safari') && !userAgent.includes('Chrome')) {
+    browser = 'Safari';
+  } else if (userAgent.includes('Edg')) {
+    browser = 'Edge';
+  } else if (userAgent.includes('Opera') || userAgent.includes('OPR')) {
+    browser = 'Opera';
+  }
+
+  return { device, browser, os };
+}
 
 // ============================================
 // Refresh Token
@@ -501,6 +582,283 @@ export const updateProfile = asyncHandler(async (req: Request, res: Response) =>
 });
 
 // ============================================
+// Upload Profile Image
+// ============================================
+
+export const uploadProfileImage = asyncHandler(async (req: Request, res: Response) => {
+  const user = req.user as any;
+  const file = req.file;
+
+  if (!file) {
+    throw new ApiError(400, 'No image file provided');
+  }
+
+  const result = await authService.uploadProfileImage(user._id.toString(), file);
+
+  res.json({
+    success: true,
+    message: 'Profile image uploaded successfully',
+    data: result,
+  });
+});
+
+// ============================================
+// Export User Data
+// ============================================
+
+export const exportUserData = asyncHandler(async (req: Request, res: Response) => {
+  const user = req.user as any;
+  const result = await authService.exportUserData(user._id.toString());
+
+  res.json({
+    success: true,
+    message: 'User data exported successfully',
+    data: result,
+  });
+});
+
+// ============================================
+// Delete Account
+// ============================================
+
+export const deleteAccount = asyncHandler(async (req: Request, res: Response) => {
+  const user = req.user as any;
+  const { password } = req.body;
+
+  if (!password) {
+    throw new ApiError(400, 'Password is required to delete your account');
+  }
+
+  const result = await authService.deleteAccount(user._id.toString(), password);
+
+  res.clearCookie('refreshToken');
+
+  res.json({
+    success: true,
+    message: result.message,
+  });
+});
+
+// ============================================
+// Get Login History
+// ============================================
+
+export const getLoginHistory = asyncHandler(async (req: Request, res: Response) => {
+  const user = (req as any).user;
+
+  const User = (await import('../models/user.model')).default;
+  const userDoc = await User.findById(user._id).select('sessions');
+
+  if (!userDoc) {
+    throw new ApiError(404, 'User not found');
+  }
+
+  // Return sessions without the actual tokens for security
+  const sessions = (userDoc.sessions || []).map(session => ({
+    device: session.device,
+    browser: session.browser,
+    os: session.os,
+    ip: session.ip,
+    location: session.location,
+    lastActive: session.lastActive,
+    createdAt: session.createdAt,
+    isCurrent: session.isCurrent,
+  }));
+
+  // Sort by lastActive descending
+  sessions.sort((a, b) => new Date(b.lastActive).getTime() - new Date(a.lastActive).getTime());
+
+  res.json({
+    success: true,
+    data: {
+      sessions,
+      total: sessions.length,
+    },
+  });
+});
+
+// ============================================
+// Logout All Devices
+// ============================================
+
+export const logoutAllDevices = asyncHandler(async (req: Request, res: Response) => {
+  const user = (req as any).user;
+  const currentToken = req.headers.authorization?.replace('Bearer ', '');
+
+  const User = (await import('../models/user.model')).default;
+  const userDoc = await User.findById(user._id);
+
+  if (!userDoc) {
+    throw new ApiError(404, 'User not found');
+  }
+
+  // Clear all refresh tokens
+  await userDoc.updateOne({
+    refreshTokens: [],
+    tokenVersion: (userDoc.tokenVersion || 1) + 1,
+    // Keep current session but mark others as not current
+    $set: {
+      'sessions.$[].isCurrent': false,
+    },
+  });
+
+  // Find current session and mark it as current
+  if (currentToken) {
+    await userDoc.updateOne(
+      { 'sessions.token': currentToken },
+      { $set: { 'sessions.$.isCurrent': true, 'sessions.$.lastActive': new Date() } }
+    );
+  }
+
+  res.clearCookie('refreshToken');
+
+  res.json({
+    success: true,
+    message: 'Logged out from all other devices. Current session preserved.',
+  });
+});
+
+// ============================================
+// Two-Factor Authentication
+// ============================================
+
+// Setup 2FA - Generate secret and QR code
+export const setup2FA = asyncHandler(async (req: Request, res: Response) => {
+  const user = (req as any).user;
+  const crypto = await import('crypto');
+
+  const User = (await import('../models/user.model')).default;
+  const userDoc = await User.findById(user._id);
+
+  if (!userDoc) {
+    throw new ApiError(404, 'User not found');
+  }
+
+  // Generate a new secret
+  const secret = crypto.randomBytes(20).toString('hex');
+  const secretBase32 = Buffer.from(secret, 'hex').toString('base64').replace(/=/g, '');
+
+  // Generate OTPAuth URL for QR code
+  const otpauthUrl = `otpauth://totp/NILIN:${userDoc.email}?secret=${secretBase32}&issuer=NILIN&algorithm=SHA1&digits=6&period=30`;
+
+  // In production, encrypt the secret before storing
+  // For now, store it (in production, encrypt this)
+  userDoc.twoFactor = userDoc.twoFactor || { enabled: false, backupEnabled: true };
+  userDoc.twoFactor.secret = secretBase32;
+
+  // Generate recovery codes
+  const recoveryCodes: string[] = [];
+  for (let i = 0; i < 8; i++) {
+    recoveryCodes.push(crypto.randomBytes(4).toString('hex').toUpperCase());
+  }
+  userDoc.twoFactor.recoveryCodes = recoveryCodes;
+
+  await userDoc.save({ validateBeforeSave: false });
+
+  res.json({
+    success: true,
+    data: {
+      secret: secretBase32,
+      otpauthUrl,
+      qrCodeUrl: `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(otpauthUrl)}`,
+      recoveryCodes,
+    },
+  });
+});
+
+// Verify 2FA code and enable
+export const enable2FA = asyncHandler(async (req: Request, res: Response) => {
+  const user = (req as any).user;
+  const { code } = req.body;
+
+  if (!code) {
+    throw new ApiError(400, 'Verification code is required');
+  }
+
+  const User = (await import('../models/user.model')).default;
+  const userDoc = await User.findById(user._id);
+
+  if (!userDoc || !userDoc.twoFactor?.secret) {
+    throw new ApiError(400, 'Please setup 2FA first');
+  }
+
+  // SECURITY FIX: Verify the TOTP code using proper speakeasy validation
+  // Import the 2FA service for proper token verification
+  const { verifyToken } = await import('../services/auth/2fa.service');
+  const isValidCode = verifyToken(userDoc.twoFactor.secret, code);
+
+  if (!isValidCode) {
+    throw new ApiError(400, 'Invalid verification code');
+  }
+
+  userDoc.twoFactor.enabled = true;
+  userDoc.twoFactor.lastVerified = new Date();
+  await userDoc.save({ validateBeforeSave: false });
+
+  res.json({
+    success: true,
+    message: 'Two-factor authentication enabled successfully',
+  });
+});
+
+// Disable 2FA
+export const disable2FA = asyncHandler(async (req: Request, res: Response) => {
+  const user = (req as any).user;
+  const { code, password } = req.body;
+
+  if (!code || !password) {
+    throw new ApiError(400, 'Verification code and password are required');
+  }
+
+  const User = (await import('../models/user.model')).default;
+  const userDoc = await User.findById(user._id);
+
+  if (!userDoc || !userDoc.twoFactor?.enabled) {
+    throw new ApiError(400, '2FA is not enabled');
+  }
+
+  // Verify password
+  const isMatch = await userDoc.comparePassword(password);
+  if (!isMatch) {
+    throw new ApiError(401, 'Invalid password');
+  }
+
+  userDoc.twoFactor.enabled = false;
+  userDoc.twoFactor.secret = undefined;
+  userDoc.twoFactor.recoveryCodes = undefined;
+  await userDoc.save({ validateBeforeSave: false });
+
+  res.json({
+    success: true,
+    message: 'Two-factor authentication disabled',
+  });
+});
+
+// Get 2FA status
+export const get2FAStatus = asyncHandler(async (req: Request, res: Response) => {
+  const user = (req as any).user;
+
+  const User = (await import('../models/user.model')).default;
+  const userDoc = await User.findById(user._id);
+
+  if (!userDoc) {
+    throw new ApiError(404, 'User not found');
+  }
+
+  const twoFactor = userDoc.twoFactor || { enabled: false, backupEnabled: true };
+
+  res.json({
+    success: true,
+    data: {
+      enabled: twoFactor.enabled,
+      backupEnabled: twoFactor.backupEnabled,
+      hasRecoveryCodes: !!(twoFactor.recoveryCodes && twoFactor.recoveryCodes.length > 0),
+      lastVerified: twoFactor.lastVerified,
+    },
+  });
+});
+
+// ============================================
 // Export
 // ============================================
 
@@ -519,4 +877,13 @@ export default {
   verifyEmail,
   resendVerificationEmail,
   updateProfile,
+  uploadProfileImage,
+  exportUserData,
+  deleteAccount,
+  getLoginHistory,
+  logoutAllDevices,
+  setup2FA,
+  enable2FA,
+  disable2FA,
+  get2FAStatus,
 };

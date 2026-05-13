@@ -574,6 +574,22 @@ bookingSchema.index({ customerId: 1, scheduledDate: -1 });
 bookingSchema.index({ status: 1, createdAt: -1 });
 
 // ===================================
+// PERFORMANCE OPTIMIZATION INDEXES (ADDED)
+// ===================================
+
+// Provider analytics: get completed bookings by provider with status filter
+// Supports queries like: find completed bookings for provider X in last 30 days
+bookingSchema.index({ providerId: 1, status: 1, completedAt: -1 });
+
+// Customer dashboard: get bookings by customer with status filter, sorted by creation date
+// Supports queries like: find all pending bookings for customer X, newest first
+bookingSchema.index({ customerId: 1, status: 1, createdAt: -1 });
+
+// Provider revenue: get revenue data for provider analytics
+// Supports queries like: calculate total revenue for provider X this month
+bookingSchema.index({ providerId: 1, 'pricing.totalAmount': 1, status: 1 });
+
+// ===================================
 // VIRTUAL PROPERTIES
 // ===================================
 

@@ -4,16 +4,397 @@ import { authenticate } from '../middleware/auth.middleware';
 const router = Router();
 router.use(authenticate);
 
-router.get('/insights', (_req: Request, res: Response) => {
-  res.json({ success: true, data: [] });
+// Dynamic imports to avoid circular dependencies
+const getModels = async () => {
+  const Booking = (await import('../models/booking.model')).default;
+  const Service = (await import('../models/service.model')).default;
+  const User = (await import('../models/user.model')).default;
+  const ProviderProfile = (await import('../models/providerProfile.model')).default;
+  return { Booking, Service, User, ProviderProfile };
+};
+
+/**
+ * Get Business Insights
+ * GET /api/ai/insights
+ * Generates real insights from booking data
+ */
+router.get('/insights', async (_req: Request, res: Response) => {
+  try {
+    const { Booking, Service } = await getModels();
+
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+    // Get booking statistics
+    const [
+      totalBookings,
+      completedBookings,
+      cancelledBookings,
+      pendingBookings,
+      recentBookings
+    ] = await Promise.all([
+      Booking.countDocuments(),
+      Booking.countDocuments({ status: 'completed' }),
+      Booking.countDocuments({ status: 'cancelled' }),
+      Booking.countDocuments({ status: 'pending' }),
+      Booking.find({ createdAt: { $gte: thirtyDaysAgo } })
+        .populate('service', 'name category')
+        .sort({ createdAt: -1 })
+        .limit(10)
+    ]);
+
+    // Calculate revenue (completed bookings)
+    const completedWithPrice = await Booking.find({ status: 'completed' })
+      .select('pricing.totalAmount');
+    const totalRevenue = completedWithPrice.reduce(
+      (sum: number, b: any) => sum + (b.pricing?.totalAmount || 0),
+      0
+    );
+
+    // Get top performing services
+    const servicePerformance = await Booking.aggregate([
+      { $match: { status: 'completed' } },
+      { $group: { _id: '$service', count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+      { $limit: 5 }
+    ]);
+
+    const topServices = await Promise.all(
+      servicePerformance.map(async (item) => {
+        const service = await Service.findById(item._id).select('name category');
+        return {
+          service: service?.name || 'Unknown',
+          category: service?.category || 'Unknown',
+          bookings: item.count
+        };
+      })
+    );
+
+    // Calculate trends
+    const completionRate = totalBookings > 0
+      ? Math.round((completedBookings / totalBookings) * 100)
+      : 0;
+    const cancellationRate = totalBookings > 0
+      ? Math.round((cancelledBookings / totalBookings) * 100)
+      : 0;
+
+    // Generate insights
+    const insights: Array<{type: string; title: string; description: string; recommendation: string}> = [];
+
+    if (completionRate >= 80) {
+      insights.push({
+        type: 'positive',
+        title: 'High Completion Rate',
+        description: `${completionRate}% of bookings are completed successfully.`,
+        recommendation: 'Great job! Focus on reducing cancellation rate to improve further.'
+      });
+    } else if (completionRate < 50) {
+      insights.push({
+        type: 'warning',
+        title: 'Low Completion Rate',
+        description: `Only ${completionRate}% of bookings are completed.`,
+        recommendation: 'Consider adding reminders or making booking easier to reduce drop-offs.'
+      });
+    }
+
+    if (pendingBookings > completedBookings) {
+      insights.push({
+        type: 'info',
+        title: 'High Pending Bookings',
+        description: `${pendingBookings} bookings are awaiting action.`,
+        recommendation: 'Review pending bookings to ensure timely responses.'
+      });
+    }
+
+    if (totalRevenue > 10000) {
+      insights.push({
+        type: 'positive',
+        title: 'Strong Revenue',
+        description: `Total revenue: AED ${totalRevenue.toLocaleString()}`,
+        recommendation: 'Consider scaling successful services.'
+      });
+    }
+
+    if (topServices.length > 0) {
+      insights.push({
+        type: 'info',
+        title: 'Top Performing Services',
+        description: `"${topServices[0]?.service}" has the most bookings.`,
+        recommendation: 'Ensure adequate staffing for popular services.'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        stats: {
+          totalBookings,
+          completedBookings,
+          cancelledBookings,
+          pendingBookings,
+          completionRate,
+          cancellationRate,
+          totalRevenue
+        },
+        topServices,
+        insights,
+        recentBookings: recentBookings.map((b: any) => ({
+          id: b._id,
+          service: b.service?.name,
+          status: b.status,
+          createdAt: b.createdAt
+        }))
+      }
+    });
+  } catch (error) {
+    console.error('AI Insights Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to generate insights'
+    });
+  }
 });
 
-router.get('/provider/:id/score', (req: Request, res: Response) => {
-  res.json({ success: true, data: { providerId: req.params.id, score: 0.85 } });
+/**
+ * Get Provider Score
+ * GET /api/ai/provider/:id/score
+ * Calculates real provider score from performance metrics
+ */
+router.get('/provider/:id/score', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { Booking, ProviderProfile } = await getModels();
+
+    // Get provider's bookings
+    const bookings = await Booking.find({ providerId: id });
+    const totalBookings = bookings.length;
+
+    // Get provider profile for reviews
+    const providerProfile = await ProviderProfile.findOne({ userId: id });
+    const reviewsData = providerProfile?.reviewsData?.recentReviews || [];
+    const averageRating = reviewsData.length > 0
+      ? reviewsData.reduce((sum: number, r: any) => sum + r.rating, 0) / reviewsData.length
+      : 0;
+
+    if (totalBookings === 0 && reviewsData.length === 0) {
+      res.json({
+        success: true,
+        data: {
+          providerId: id,
+          score: 0.5,
+          grade: 'C',
+          totalBookings: 0,
+          completionRate: 0,
+          rating: 0,
+          responseRate: 0,
+          recentBookings: 0,
+          recommendation: 'Start taking bookings to build your score.'
+        }
+      });
+      return;
+    }
+
+    // Calculate completion rate (30% weight)
+    const completedBookings = bookings.filter((b: any) => b.status === 'completed').length;
+    const completionRate = totalBookings > 0
+      ? (completedBookings / totalBookings) * 100
+      : 0;
+
+    // Calculate response rate (20% weight) - based on booking acceptance
+    const respondedBookings = bookings.filter((b: any) =>
+      b.status === 'confirmed' || b.status === 'completed'
+    );
+    const responseRate = totalBookings > 0
+      ? (respondedBookings.length / totalBookings) * 100
+      : 0;
+
+    // Activity level (10% weight) - bookings in last 30 days
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    const recentBookings = bookings.filter((b: any) =>
+      new Date(b.createdAt) >= thirtyDaysAgo
+    ).length;
+    const activityLevel = Math.min((recentBookings / 10) * 100, 100);
+
+    // Calculate weighted score
+    const score = (
+      (completionRate * 0.3) +
+      (averageRating * 20) + // Scale 0-5 to 0-100
+      (responseRate * 0.2) +
+      (activityLevel * 0.1)
+    ) / 100;
+
+    // Determine grade
+    let grade: string;
+    let recommendation: string;
+
+    if (score >= 0.9) {
+      grade = 'A+';
+      recommendation = 'Outstanding performance! Keep up the excellent work.';
+    } else if (score >= 0.8) {
+      grade = 'A';
+      recommendation = 'Great performance! Focus on maintaining quality.';
+    } else if (score >= 0.7) {
+      grade = 'B';
+      recommendation = 'Good performance. Consider improving response times.';
+    } else if (score >= 0.5) {
+      grade = 'C';
+      recommendation = 'Average performance. Focus on completing more bookings.';
+    } else {
+      grade = 'D';
+      recommendation = 'Needs improvement. Focus on customer satisfaction and completion rate.';
+    }
+
+    res.json({
+      success: true,
+      data: {
+        providerId: id,
+        score: Math.round(score * 100) / 100,
+        grade,
+        totalBookings,
+        completionRate: Math.round(completionRate),
+        rating: Math.round(averageRating * 10) / 10,
+        responseRate: Math.round(responseRate),
+        recentBookings,
+        reviewCount: reviewsData.length,
+        recommendation
+      }
+    });
+  } catch (error) {
+    console.error('Provider Score Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to calculate provider score'
+    });
+  }
 });
 
-router.get('/user/:id/churn-risk', (req: Request, res: Response) => {
-  res.json({ success: true, data: { userId: req.params.id, riskScore: 0.3 } });
+/**
+ * Get User Churn Risk
+ * GET /api/ai/user/:id/churn-risk
+ * Calculates churn risk based on user behavior
+ */
+router.get('/user/:id/churn-risk', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { User, Booking } = await getModels();
+
+    const user = await User.findById(id);
+    if (!user) {
+      res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+      return;
+    }
+
+    const bookings = await Booking.find({ customerId: id })
+      .sort({ createdAt: -1 });
+    const totalBookings = bookings.length;
+
+    // No bookings = high churn risk
+    if (totalBookings === 0) {
+      res.json({
+        success: true,
+        data: {
+          userId: id,
+          riskScore: 0.8,
+          riskLevel: 'high',
+          factors: ['No booking history'],
+          lastBookingDate: null,
+          daysSinceLastBooking: null,
+          totalBookings: 0,
+          recommendation: 'Engage with welcome offers or tutorials.'
+        }
+      });
+      return;
+    }
+
+    // Calculate days since last booking
+    const lastBooking = bookings[0];
+    const daysSinceLastBooking = lastBooking
+      ? Math.floor((Date.now() - new Date(lastBooking.createdAt).getTime()) / (1000 * 60 * 60 * 24))
+      : 999;
+
+    // Calculate booking frequency
+    const firstBooking = bookings[bookings.length - 1];
+    const daysSinceFirstBooking = firstBooking
+      ? Math.floor((Date.now() - new Date(firstBooking.createdAt).getTime()) / (1000 * 60 * 60 * 24))
+      : 0;
+    const averageDaysBetweenBookings = daysSinceFirstBooking / Math.max(totalBookings - 1, 1);
+
+    // Check engagement decline
+    let engagementDecline = 0;
+    if (totalBookings >= 3) {
+      const recentBookings = bookings.slice(0, Math.ceil(totalBookings / 2));
+      const olderBookings = bookings.slice(Math.ceil(totalBookings / 2));
+      const recentCount = recentBookings.length;
+      const olderCount = olderBookings.length;
+
+      if (olderCount > recentCount) {
+        engagementDecline = ((olderCount - recentCount) / olderCount) * 100;
+      }
+    }
+
+    // Calculate churn risk score
+    let riskScore = 0;
+
+    // Days since last booking (40% weight)
+    if (daysSinceLastBooking > 60) riskScore += 0.4;
+    else if (daysSinceLastBooking > 30) riskScore += 0.3;
+    else if (daysSinceLastBooking > 14) riskScore += 0.2;
+    else if (daysSinceLastBooking > 7) riskScore += 0.1;
+
+    // Booking frequency decline (30% weight)
+    if (averageDaysBetweenBookings > 30) riskScore += 0.3;
+    else if (averageDaysBetweenBookings > 14) riskScore += 0.2;
+    else if (averageDaysBetweenBookings > 7) riskScore += 0.1;
+
+    // Engagement decline (30% weight)
+    if (engagementDecline > 50) riskScore += 0.3;
+    else if (engagementDecline > 30) riskScore += 0.2;
+    else if (engagementDecline > 10) riskScore += 0.1;
+
+    // Determine risk level and recommendation
+    let riskLevel: string;
+    let recommendation: string;
+
+    if (riskScore >= 0.7) {
+      riskLevel = 'high';
+      recommendation = 'Send re-engagement campaign with special offers.';
+    } else if (riskScore >= 0.4) {
+      riskLevel = 'medium';
+      recommendation = 'Consider personalized recommendations.';
+    } else {
+      riskLevel = 'low';
+      recommendation = 'User is engaged. Continue regular communication.';
+    }
+
+    const factors: string[] = [];
+    if (daysSinceLastBooking > 14) factors.push('Inactive for 2+ weeks');
+    if (averageDaysBetweenBookings > 14) factors.push('Booking frequency declining');
+    if (engagementDecline > 30) factors.push('Significant engagement decline');
+
+    res.json({
+      success: true,
+      data: {
+        userId: id,
+        riskScore: Math.round(riskScore * 100) / 100,
+        riskLevel,
+        factors,
+        lastBookingDate: lastBooking?.createdAt,
+        daysSinceLastBooking,
+        totalBookings,
+        recommendation
+      }
+    });
+  } catch (error) {
+    console.error('Churn Risk Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to calculate churn risk'
+    });
+  }
 });
 
 export default router;

@@ -1,3 +1,22 @@
+/**
+ * @deprecated This service is deprecated and will be removed in a future version.
+ * Please use AuthService from './AuthService' instead for all authentication operations.
+ *
+ * AuthService provides:
+ * - Automatic token refresh with interceptors
+ * - Better error handling
+ * - Security monitoring
+ * - Unified HTTP client methods
+ *
+ * Example migration:
+ *   // Before (deprecated)
+ *   import { authAPI } from './auth.api';
+ *   await authAPI.login(credentials);
+ *
+ *   // After (recommended)
+ *   import authService from './AuthService';
+ *   await authService.login(credentials);
+ */
 import type {
   User,
   CustomerProfile,
@@ -7,9 +26,16 @@ import type {
   RegisterCustomerData,
   RegisterProviderData
 } from '../stores/authStore';
+import type {
+  NotificationPreferences,
+  ExportUserData,
+  ReferralCode,
+  ReferralStats,
+  ReferralReward
+} from '../types/api';
 
 // API Response Types
-export interface ApiResponse<T = any> {
+export interface ApiResponse<T = unknown> {
   success: boolean;
   data: T;
   message?: string;
@@ -52,7 +78,7 @@ class AuthAPIService {
 
   private getStoredTokens(): AuthTokens | null {
     try {
-      const stored = localStorage.getItem('auth-storage');
+      const stored = sessionStorage.getItem('auth-storage');
       if (stored) {
         const parsed = JSON.parse(stored);
         return parsed.state?.tokens || null;
@@ -65,11 +91,11 @@ class AuthAPIService {
 
   private updateStoredTokens(tokens: AuthTokens): void {
     try {
-      const stored = localStorage.getItem('auth-storage');
+      const stored = sessionStorage.getItem('auth-storage');
       if (stored) {
         const parsed = JSON.parse(stored);
         parsed.state.tokens = tokens;
-        localStorage.setItem('auth-storage', JSON.stringify(parsed));
+        sessionStorage.setItem('auth-storage', JSON.stringify(parsed));
       }
     } catch (error) {
       console.error('Failed to update stored tokens:', error);
@@ -178,7 +204,7 @@ class AuthAPIService {
 
   private clearAuth(): void {
     try {
-      const stored = localStorage.getItem('auth-storage');
+      const stored = sessionStorage.getItem('auth-storage');
       if (stored) {
         const parsed = JSON.parse(stored);
         parsed.state = {
@@ -189,7 +215,7 @@ class AuthAPIService {
           tokens: null,
           isAuthenticated: false,
         };
-        localStorage.setItem('auth-storage', JSON.stringify(parsed));
+        sessionStorage.setItem('auth-storage', JSON.stringify(parsed));
       }
     } catch (error) {
       console.error('Failed to clear auth:', error);
@@ -197,7 +223,7 @@ class AuthAPIService {
   }
 
   // File upload helper
-  private createFormData(data: any, files?: FormData): FormData {
+  private createFormData(data: Record<string, unknown>, files?: FormData): FormData {
     const formData = files || new FormData();
     
     Object.entries(data).forEach(([key, value]) => {
@@ -348,6 +374,59 @@ class AuthAPIService {
       method: 'GET',
       skipAuth: true,
     });
+  }
+
+  // Profile Image Upload
+  async uploadProfileImage(file: File): Promise<ApiResponse<{ avatar: string }>> {
+    const formData = new FormData();
+    formData.append('avatar', file);
+
+    return this.request<{ avatar: string }>('/auth/profile-image', {
+      method: 'POST',
+      body: formData,
+      headers: {},
+    });
+  }
+
+  // Export User Data
+  async exportUserData(): Promise<ApiResponse<ExportUserData>> {
+    return this.request('/auth/export-data');
+  }
+
+  // Delete Account
+  async deleteAccount(password: string): Promise<ApiResponse<{ message: string }>> {
+    return this.request<{ message: string }>('/auth/account', {
+      method: 'DELETE',
+      body: JSON.stringify({ password }),
+    });
+  }
+
+  // Get Notification Preferences
+  async getNotificationPreferences(): Promise<ApiResponse<NotificationPreferences>> {
+    return this.request('/notifications/preferences');
+  }
+
+  // Update Notification Preferences
+  async updateNotificationPreferences(preferences: NotificationPreferences): Promise<ApiResponse<NotificationPreferences>> {
+    return this.request('/notifications/preferences', {
+      method: 'PATCH',
+      body: JSON.stringify(preferences),
+    });
+  }
+
+  // Get Referral Code
+  async getReferralCode(): Promise<ApiResponse<ReferralCode>> {
+    return this.request('/referrals/my-code');
+  }
+
+  // Get Referral Stats
+  async getReferralStats(): Promise<ApiResponse<ReferralStats>> {
+    return this.request('/referrals/stats');
+  }
+
+  // Get Referral Rewards
+  async getReferralRewards(): Promise<ApiResponse<ReferralReward[]>> {
+    return this.request('/referrals/rewards');
   }
 
   // Utility methods for token management

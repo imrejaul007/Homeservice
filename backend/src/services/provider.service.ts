@@ -135,7 +135,11 @@ export class ProviderService {
 
     // Get provider location for service
     const providerProfile = await ProviderProfile.findOne({ userId: providerId });
-    const coordinates = providerProfile?.locationInfo?.primaryAddress?.coordinates || { lat: 25.2048, lng: 55.2708 };
+    // Extract coordinates from GeoJSON format: { type: 'Point', coordinates: [lng, lat] }
+    let coordinatesArray: [number, number] = [55.2708, 25.2048]; // Default: Dubai [lng, lat]
+    if (providerProfile?.locationInfo?.primaryAddress?.coordinates?.coordinates) {
+      coordinatesArray = providerProfile.locationInfo.primaryAddress.coordinates.coordinates as [number, number];
+    }
 
     const service = new Service({
       providerId,
@@ -153,7 +157,7 @@ export class ProviderService {
       location: {
         coordinates: {
           type: 'Point',
-          coordinates: [coordinates.lng, coordinates.lat],
+          coordinates: coordinatesArray, // [longitude, latitude]
         },
       },
       tags: serviceData.tags || [],

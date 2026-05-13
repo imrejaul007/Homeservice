@@ -13,6 +13,12 @@ export {
   sendPasswordResetEmail,
   sendBookingRequestEmail,
   sendBookingConfirmationEmail,
+  sendBookingConfirmation,
+  sendBookingReminder,
+  sendBookingCancellation,
+  sendBookingRescheduled,
+  sendProviderApproval,
+  sendProviderRejection,
 } from './email.service';
 
 // Finance service exports

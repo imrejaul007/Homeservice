@@ -2,3 +2,7 @@
 export { default as ProfilePage } from './ProfilePage';
 export { default as FavoritesPage } from './FavoritesPage';
 export { default as RewardsPage } from './RewardsPage';
+export { default as AddressesPage } from './AddressesPage';
+export { default as PaymentMethodsPage } from './PaymentMethodsPage';
+export { default as NotificationsPage } from './NotificationsPage';
+export { default as ReviewsPage } from './ReviewsPage';

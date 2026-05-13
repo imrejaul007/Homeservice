@@ -1,7 +1,8 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, lazy, Suspense } from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from './stores/authStore';
 import { useBackButton } from './hooks/useBackButton';
+import { ToastProvider } from './components/common/Toast';
 
 // Scroll to top on route change
 function ScrollToTop() {
@@ -11,50 +12,75 @@ function ScrollToTop() {
   }, [pathname]);
   return null;
 }
-import { 
-  ProtectedRoute, 
-  CustomerRoute, 
-  ProviderRoute, 
-  AdminRoute, 
-  PublicRoute 
+
+// Lazy load all route components for code splitting
+const StatusDashboard = lazy(() => import('./components/StatusDashboard'));
+const CustomerRegistration = lazy(() => import('./components/auth/CustomerRegistration'));
+const ProviderRegistration = lazy(() => import('./components/auth/ProviderRegistration'));
+const LoginForm = lazy(() => import('./components/auth/LoginForm'));
+const ForgotPassword = lazy(() => import('./components/auth/ForgotPassword'));
+const ResetPassword = lazy(() => import('./components/auth/ResetPassword'));
+const EmailVerification = lazy(() => import('./components/auth/EmailVerification'));
+const EmailVerificationRequired = lazy(() => import('./components/auth/EmailVerificationRequired'));
+const CustomerDashboard = lazy(() => import('./components/dashboard/CustomerDashboard'));
+const StatsView = lazy(() => import('./components/dashboard/StatsView'));
+const ProviderDashboard = lazy(() => import('./components/dashboard/ProviderDashboard'));
+const AdminDashboard = lazy(() => import('./components/dashboard/AdminDashboard'));
+const AdminSettings = lazy(() => import('./components/dashboard/AdminSettings'));
+const AdminReports = lazy(() => import('./components/dashboard/AdminReports'));
+const AdminOffersManagement = lazy(() => import('./components/dashboard/AdminOffersManagement'));
+const AdminCategoryView = lazy(() => import('./pages/admin/AdminCategoryView'));
+const HomePage = lazy(() => import('./pages/HomePage'));
+const ExperiencesPage = lazy(() => import('./pages/ExperiencesPage'));
+const SearchPage = lazy(() => import('./pages/SearchPage'));
+const ServiceDetailPage = lazy(() => import('./pages/ServiceDetailPage'));
+const CategoryPage = lazy(() => import('./pages/CategoryPage'));
+const SubcategoryServicePage = lazy(() => import('./pages/SubcategoryServicePage'));
+const ProviderDetailPage = lazy(() => import('./pages/ProviderDetailPage'));
+const ServiceManagementPage = lazy(() => import('./pages/ServiceManagementPage'));
+const CustomerBookingsPage = lazy(() => import('./pages/booking/CustomerBookingsPage'));
+const ProviderBookingsPage = lazy(() => import('./pages/booking/ProviderBookingsPage'));
+const BookingDetailPage = lazy(() => import('./pages/booking/BookingDetailPage'));
+const ProviderAvailabilityPage = lazy(() => import('./pages/booking/ProviderAvailabilityPage'));
+const BookServicePage = lazy(() => import('./pages/booking/BookServicePage'));
+const ProviderBookingDetailPage = lazy(() => import('./pages/provider/BookingDetailPage'));
+const TrackBookingPage = lazy(() => import('./pages/booking/TrackBookingPage'));
+const CustomerStatsPage = lazy(() => import('./pages/customer/CustomerStatsPage'));
+const ProfilePage = lazy(() => import('./pages/customer/ProfilePage'));
+const FavoritesPage = lazy(() => import('./pages/customer/FavoritesPage'));
+const RewardsPage = lazy(() => import('./pages/customer/RewardsPage'));
+const AddressesPage = lazy(() => import('./pages/customer/AddressesPage'));
+const PaymentMethodsPage = lazy(() => import('./pages/customer/PaymentMethodsPage'));
+const NotificationsPage = lazy(() => import('./pages/customer/NotificationsPage'));
+const ReviewsPage = lazy(() => import('./pages/customer/ReviewsPage'));
+const MyClaimsPage = lazy(() => import('./pages/customer/MyClaimsPage'));
+const ProviderProfilePage = lazy(() => import('./pages/provider/ProviderProfilePage'));
+const ProviderPortfolioPage = lazy(() => import('./pages/provider/ProviderPortfolioPage'));
+const ProviderAnalyticsPage = lazy(() => import('./pages/provider/ProviderAnalyticsPage'));
+const ProviderEarningsPage = lazy(() => import('./pages/provider/ProviderEarningsPage'));
+const ProviderVerificationPage = lazy(() => import('./pages/provider/ProviderVerificationPage'));
+const AboutPage = lazy(() => import('./pages/AboutPage'));
+const OfferDetailPage = lazy(() => import('./pages/OfferDetailPage'));
+const PrivacyPage = lazy(() => import('./pages/PrivacyPage'));
+const TermsPage = lazy(() => import('./pages/TermsPage'));
+const FAQPage = lazy(() => import('./pages/FAQPage'));
+const ContactPage = lazy(() => import('./pages/ContactPage'));
+const HelpPage = lazy(() => import('./pages/HelpPage'));
+
+import {
+  ProtectedRoute,
+  CustomerRoute,
+  ProviderRoute,
+  AdminRoute,
+  PublicRoute
 } from './components/auth/ProtectedRoute';
 
-// Import components
-import StatusDashboard from './components/StatusDashboard';
-import CustomerRegistration from './components/auth/CustomerRegistration';
-import ProviderRegistration from './components/auth/ProviderRegistration';
-import LoginForm from './components/auth/LoginForm';
-import ForgotPassword from './components/auth/ForgotPassword';
-import ResetPassword from './components/auth/ResetPassword';
-import EmailVerification from './components/auth/EmailVerification';
-import EmailVerificationRequired from './components/auth/EmailVerificationRequired';
-import CustomerDashboard from './components/dashboard/CustomerDashboard';
-import StatsView from './components/dashboard/StatsView';
-import ProviderDashboard from './components/dashboard/ProviderDashboard';
-import AdminDashboard from './components/dashboard/AdminDashboard';
-import HomePage from './pages/HomePage';
-import SearchPage from './pages/SearchPage';
-import ServiceDetailPage from './pages/ServiceDetailPage';
-import CategoryPage from './pages/CategoryPage';
-import SubcategoryServicePage from './pages/SubcategoryServicePage';
-import ProviderDetailPage from './pages/ProviderDetailPage';
-import ServiceManagementPage from './pages/ServiceManagementPage';
-// Booking pages
-import {
-  CustomerBookingsPage,
-  ProviderBookingsPage,
-  BookingDetailPage,
-  ProviderAvailabilityPage,
-  BookServicePage
-} from './pages/booking';
-import TrackBookingPage from './pages/booking/TrackBookingPage';
-// Customer pages
-import CustomerStatsPage from './pages/customer/CustomerStatsPage';
-import {
-  ProfilePage,
-  FavoritesPage,
-  RewardsPage
-} from './pages/customer';
+// Loading spinner for Suspense fallback
+const LoadingSpinner = () => (
+  <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+    <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+  </div>
+);
 
 
 
@@ -96,9 +122,11 @@ function App() {
   }, [initialize, isInitialized]);
 
   return (
-    <div className="App">
-      <ScrollToTop />
-      <Routes>
+    <ToastProvider>
+      <div className="App">
+        <ScrollToTop />
+        <Suspense fallback={<LoadingSpinner />}>
+        <Routes>
         {/* Public Routes */}
         <Route 
           path="/login" 
@@ -157,14 +185,20 @@ function App() {
         />
 
         {/* Search Routes */}
-        <Route 
-          path="/search" 
-          element={<SearchPage />} 
+        <Route
+          path="/search"
+          element={<SearchPage />}
         />
-        
-        <Route 
-          path="/services" 
-          element={<SearchPage />} 
+
+        {/* Experiences Route */}
+        <Route
+          path="/experiences"
+          element={<ExperiencesPage />}
+        />
+
+        <Route
+          path="/services"
+          element={<SearchPage />}
         />
 
         {/* Service Detail Route */}
@@ -228,10 +262,20 @@ function App() {
           element={<AccountSuspended />} 
         />
         
-        <Route 
-          path="/provider/verification-pending" 
-          element={<ProviderVerificationPending />} 
+        <Route
+          path="/provider/verification-pending"
+          element={<ProviderVerificationPending />}
         />
+
+        {/* Static Pages */}
+        <Route path="/about" element={<AboutPage />} />
+
+        <Route path="/offer/:offerId" element={<OfferDetailPage />} />
+        <Route path="/privacy" element={<PrivacyPage />} />
+        <Route path="/terms" element={<TermsPage />} />
+        <Route path="/faq" element={<FAQPage />} />
+        <Route path="/contact" element={<ContactPage />} />
+        <Route path="/help" element={<HelpPage />} />
 
         {/* Protected Customer Routes */}
         <Route
@@ -288,6 +332,51 @@ function App() {
           }
         />
 
+        <Route
+          path="/customer/my-claims"
+          element={
+            <CustomerRoute>
+              <MyClaimsPage />
+            </CustomerRoute>
+          }
+        />
+
+        <Route
+          path="/customer/addresses"
+          element={
+            <CustomerRoute>
+              <AddressesPage />
+            </CustomerRoute>
+          }
+        />
+
+        <Route
+          path="/customer/payment-methods"
+          element={
+            <CustomerRoute>
+              <PaymentMethodsPage />
+            </CustomerRoute>
+          }
+        />
+
+        <Route
+          path="/customer/notifications"
+          element={
+            <CustomerRoute>
+              <NotificationsPage />
+            </CustomerRoute>
+          }
+        />
+
+        <Route
+          path="/customer/reviews"
+          element={
+            <CustomerRoute>
+              <ReviewsPage />
+            </CustomerRoute>
+          }
+        />
+
         {/* Protected Provider Routes */}
         <Route 
           path="/provider/dashboard" 
@@ -320,7 +409,7 @@ function App() {
           path="/provider/bookings/:bookingId"
           element={
             <ProviderRoute>
-              <BookingDetailPage />
+              <ProviderBookingDetailPage />
             </ProviderRoute>
           }
         />
@@ -334,14 +423,95 @@ function App() {
           }
         />
 
+        <Route
+          path="/provider/profile"
+          element={
+            <ProviderRoute>
+              <ProviderProfilePage />
+            </ProviderRoute>
+          }
+        />
+
+        <Route
+          path="/provider/portfolio"
+          element={
+            <ProviderRoute>
+              <ProviderPortfolioPage />
+            </ProviderRoute>
+          }
+        />
+
+        <Route
+          path="/provider/analytics"
+          element={
+            <ProviderRoute>
+              <ProviderAnalyticsPage />
+            </ProviderRoute>
+          }
+        />
+
+        <Route
+          path="/provider/earnings"
+          element={
+            <ProviderRoute>
+              <ProviderEarningsPage />
+            </ProviderRoute>
+          }
+        />
+
+        <Route
+          path="/provider/verification"
+          element={
+            <ProviderRoute>
+              <ProviderVerificationPage />
+            </ProviderRoute>
+          }
+        />
+
         {/* Protected Admin Routes */}
-        <Route 
-          path="/admin/dashboard" 
+        <Route
+          path="/admin/dashboard"
           element={
             <AdminRoute>
               <AdminDashboard />
             </AdminRoute>
-          } 
+          }
+        />
+
+        <Route
+          path="/admin/category/view"
+          element={
+            <AdminRoute>
+              <AdminCategoryView />
+            </AdminRoute>
+          }
+        />
+
+        <Route
+          path="/admin/settings"
+          element={
+            <AdminRoute>
+              <AdminSettings />
+            </AdminRoute>
+          }
+        />
+
+        <Route
+          path="/admin/reports"
+          element={
+            <AdminRoute>
+              <AdminReports />
+            </AdminRoute>
+          }
+        />
+
+        <Route
+          path="/admin/offers"
+          element={
+            <AdminRoute>
+              <AdminOffersManagement />
+            </AdminRoute>
+          }
         />
 
         {/* Default Route - Homepage */}
@@ -352,8 +522,10 @@ function App() {
 
         {/* 404 Route */}
         <Route path="*" element={<NotFound />} />
-      </Routes>
-    </div>
+        </Routes>
+        </Suspense>
+      </div>
+    </ToastProvider>
   );
 }
 

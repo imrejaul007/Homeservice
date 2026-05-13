@@ -12,6 +12,67 @@ const api = axios.create({
   timeout: 10000,
 });
 
+// Analytics API base - uses a different endpoint structure
+const analyticsApi = axios.create({
+  baseURL: `${API_BASE_URL}/provider`,
+  timeout: 10000,
+});
+
+// Types for analytics responses
+export interface ServiceStats {
+  total: number;
+  active: number;
+  draft: number;
+  inactive: number;
+}
+
+export interface PerformanceStats {
+  totalViews: number;
+  totalClicks: number;
+  totalBookings: number;
+  conversionRate: number;
+  bookingRate: number;
+}
+
+export interface RatingStats {
+  averageRating: number;
+  totalReviews: number;
+}
+
+export interface BookingStats {
+  newBookings: number;
+  pendingRequests: number;
+  todaySchedule: number;
+  completedThisMonth: number;
+}
+
+export interface TopService {
+  id: string;
+  name: string;
+  category: string;
+  views: number;
+  clicks: number;
+  bookings: number;
+  rating: number;
+  popularityScore: number;
+}
+
+export interface ProviderAnalytics {
+  serviceStats: ServiceStats;
+  performanceStats: PerformanceStats;
+  ratingStats: RatingStats;
+  bookingStats: BookingStats;
+  categories: string[];
+  topServices: TopService[];
+}
+
+export interface ProviderAnalyticsResponse {
+  success: boolean;
+  data: {
+    overview: ProviderAnalytics;
+  };
+}
+
 export interface GetProvidersOptions {
   page?: number;
   limit?: number;
@@ -62,6 +123,20 @@ export const providerApi = {
    */
   getFeaturedProviders: async (limit?: number): Promise<FeaturedProvidersResponse> => {
     const response = await api.get('/featured', { params: { limit } });
+    return response.data;
+  },
+};
+
+/**
+ * Provider analytics API - uses auth-protected /provider endpoints
+ */
+export const providerAnalyticsApi = {
+  /**
+   * Get provider overview analytics
+   * GET /api/provider/analytics
+   */
+  getProviderAnalytics: async (): Promise<ProviderAnalyticsResponse> => {
+    const response = await analyticsApi.get('/analytics');
     return response.data;
   },
 };

@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { immer } from 'zustand/middleware/immer';
 import type { AuthTokens, AuthUser, LoginCredentials, RegisterData } from '../services/AuthService';
+import type { BusinessInfo, LocationInfo, ServiceInput } from '../types/auth';
 
 // Re-export types for backward compatibility
 export type User = AuthUser;
@@ -14,10 +15,9 @@ export interface RegisterCustomerData extends RegisterData {
 
 export interface RegisterProviderData extends RegisterData {
   role: 'provider';
-  businessInfo?: any;
-  locationInfo?: any;
-  services?: any[];
-  [key: string]: any;
+  businessInfo?: BusinessInfo;
+  locationInfo?: LocationInfo;
+  services?: ServiceInput[];
 }
 
 export interface CustomerProfile {
@@ -94,7 +94,13 @@ export interface ProviderProfile {
     category: string;
     status: 'active' | 'inactive' | 'pending_review';
   }>;
-  // Add missing properties for provider
+  // Additional properties
+  bio?: string;
+  serviceCategories?: string[];
+  yearsExperience?: number;
+  serviceAreas?: string[];
+  isVerified?: boolean;
+  // Analytics & Earnings
   earnings?: {
     total: number;
     thisMonth: number;
@@ -114,6 +120,11 @@ export interface ProviderProfile {
     completionRate: number;
     profileViews: number;
     repeatCustomers: number;
+    // Historical data for trends
+    previousEarnings?: number;
+    previousBookings?: number;
+    previousViews?: number;
+    totalBookings?: number;
   };
 }
 
@@ -228,7 +239,7 @@ export const useAuthStore = create<AuthState>()(
           set((state) => {
             state.user = response.data.user;
             state.tokens = response.data.tokens;
-            state.customerProfile = response.data.customerProfile;
+            state.customerProfile = response.data.customerProfile ?? null;
             state.isAuthenticated = true;
             state.isLoading = false;
           });
@@ -294,7 +305,7 @@ export const useAuthStore = create<AuthState>()(
           set((state) => {
             state.user = response.data.user;
             state.tokens = response.data.tokens;
-            state.providerProfile = response.data.providerProfile;
+            state.providerProfile = response.data.providerProfile ?? null;
             state.isAuthenticated = true;
             state.isLoading = false;
           });
@@ -319,6 +330,9 @@ export const useAuthStore = create<AuthState>()(
           console.error('Logout error:', error);
           // Continue with local logout even if API fails
         } finally {
+          // Cleanup event listener before clearing state
+          store._cleanupTokenListener?.();
+
           set((state) => {
             state.user = null;
             state.customerProfile = null;
@@ -338,6 +352,9 @@ export const useAuthStore = create<AuthState>()(
         } catch (error) {
           console.error('Logout all error:', error);
         } finally {
+          // Cleanup event listener before clearing state
+          store._cleanupTokenListener?.();
+
           set((state) => {
             state.user = null;
             state.customerProfile = null;
@@ -350,6 +367,9 @@ export const useAuthStore = create<AuthState>()(
       },
 
       clearAuth: () => {
+        // Cleanup event listener before clearing state
+        store._cleanupTokenListener?.();
+
         set((state) => {
           state.user = null;
           state.customerProfile = null;
@@ -678,17 +698,33 @@ export const useAuthStore = create<AuthState>()(
         });
       },
 
+      // Token update handler reference for cleanup
+      _tokenUpdateHandler: null as ((event: CustomEvent) => void) | null,
+
       // Initialize event listener for token updates from API service
       _initTokenListener: () => {
         if (typeof window !== 'undefined') {
-          window.addEventListener('auth-tokens-updated', ((event: CustomEvent) => {
+          // Remove existing listener if any (prevents duplicates)
+          store._cleanupTokenListener?.();
+
+          store._tokenUpdateHandler = ((event: CustomEvent) => {
             const newTokens = event.detail;
             if (newTokens) {
               set((state) => {
                 state.tokens = newTokens;
               });
             }
-          }) as EventListener);
+          }) as (event: CustomEvent) => void;
+
+          window.addEventListener('auth-tokens-updated', store._tokenUpdateHandler as any);
+        }
+      },
+
+      // Cleanup event listener - call this on logout
+      _cleanupTokenListener: () => {
+        if (typeof window !== 'undefined' && store._tokenUpdateHandler) {
+          window.removeEventListener('auth-tokens-updated', store._tokenUpdateHandler as any);
+          store._tokenUpdateHandler = null;
         }
       },
       };
@@ -703,7 +739,10 @@ export const useAuthStore = create<AuthState>()(
     {
       name: 'auth-storage',
       version: 2,
-      storage: createJSONStorage(() => localStorage),
+      // Use sessionStorage for tokens to improve security
+      // Note: This loses cross-tab synchronization but prevents tokens from persisting
+      // in storage beyond the current browser session
+      storage: createJSONStorage(() => sessionStorage),
       partialize: (state) => ({
         user: state.user,
         customerProfile: state.customerProfile,

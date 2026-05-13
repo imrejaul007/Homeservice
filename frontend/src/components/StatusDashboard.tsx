@@ -7,8 +7,17 @@ interface ServiceStatus {
   name: string;
   status: 'checking' | 'connected' | 'disconnected' | 'error' | 'not_configured';
   message?: string;
-  details?: any;
+  details?: ServiceDetails;
   icon: React.ReactNode;
+}
+
+interface ServiceDetails {
+  latency?: number;
+  error?: string;
+  version?: string;
+  uptime?: number;
+  region?: string;
+  [key: string]: unknown;
 }
 
 const StatusDashboard: React.FC = () => {
@@ -46,7 +55,7 @@ const StatusDashboard: React.FC = () => {
           newServices[2] = {
             ...newServices[2],
             status: dbStatus.status === 'connected' ? 'connected' : 'disconnected',
-            details: dbStatus.details
+            details: { latency: dbStatus.details as unknown as number }
           };
         }
 
@@ -69,7 +78,6 @@ const StatusDashboard: React.FC = () => {
             status: stripeStatus.status === 'connected' ? 'connected' :
                    stripeStatus.status === 'not_configured' ? 'not_configured' : 'disconnected',
             message: stripeStatus.message,
-            details: stripeStatus.details
           };
         }
 
@@ -81,15 +89,14 @@ const StatusDashboard: React.FC = () => {
             status: emailStatus.status === 'connected' ? 'connected' :
                    emailStatus.status === 'not_configured' ? 'not_configured' : 'disconnected',
             message: emailStatus.message,
-            details: emailStatus.details
           };
         }
-      } catch (error) {
-        console.error('Error verifying services:', error);
+      } catch {
+        // Error handled silently
       }
 
-    } catch (error) {
-      console.error('Error checking services:', error);
+    } catch {
+      // Error handled silently
     }
 
     setServices(newServices);

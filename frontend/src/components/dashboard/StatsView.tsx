@@ -76,7 +76,7 @@ const StatsView: React.FC = () => {
       subtitle: 'All time',
       icon: Calendar,
       trend: { value: 2, isPositive: true },
-      color: 'bg-blue-500'
+      color: 'bg-nilin-coral'
     },
     {
       title: 'Loyalty Coins',
@@ -84,21 +84,21 @@ const StatsView: React.FC = () => {
       subtitle: `${user?.loyaltySystem?.tier || 'Bronze'} tier`,
       icon: Coins,
       trend: { value: 150, isPositive: true },
-      color: 'bg-yellow-500'
+      color: 'bg-nilin-gold'
     },
     {
       title: 'Saved Providers',
       value: customerProfile?.favoriteProviders?.length || 5,
       subtitle: 'In favorites',
       icon: Heart,
-      color: 'bg-red-500'
+      color: 'bg-nilin-rose'
     },
     {
       title: 'Avg Rating Given',
       value: '4.8',
       subtitle: 'Your reviews',
       icon: Star,
-      color: 'bg-green-500'
+      color: 'bg-nilin-sage'
     }
   ]);
 
@@ -215,20 +215,20 @@ const StatsView: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-nilin-cream">
       <NavigationHeader />
 
       {/* Main Content */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Welcome Section */}
         <div className="mb-8">
-          <div className="bg-gradient-to-r from-blue-500 to-purple-600 rounded-lg p-6 text-white">
+          <div className="bg-gradient-to-r from-nilin-rose to-nilin-coral rounded-lg p-6 text-white">
             <div className="flex items-center justify-between">
               <div>
                 <h2 className="text-2xl font-bold mb-2">
                   {getGreeting()}, {user?.firstName}! 👋
                 </h2>
-                <p className="text-blue-100 mb-4">
+                <p className="text-white/80 mb-4">
                   View your stats and activity overview
                 </p>
                 <div className="flex items-center space-x-6 text-sm">
@@ -406,7 +406,7 @@ const StatsView: React.FC = () => {
                           <Heart className="h-4 w-4 fill-current" />
                         </button>
                         <Link
-                          to={`/providers/${provider.id}`}
+                          to={`/provider/${provider.id}`}
                           className="text-blue-600 hover:text-blue-500 text-sm font-medium"
                         >
                           View

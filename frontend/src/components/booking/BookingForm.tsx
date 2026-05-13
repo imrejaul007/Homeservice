@@ -222,13 +222,6 @@ const BookingForm: React.FC<BookingFormProps> = ({
     }
 
     try {
-      // Debug logging for booking creation
-      console.log('Booking Creation Debug:', {
-        serviceId: service._id,
-        providerId,
-        serviceName: service.name
-      });
-
       const bookingData: CreateBookingData = {
         serviceId: service._id,
         providerId,

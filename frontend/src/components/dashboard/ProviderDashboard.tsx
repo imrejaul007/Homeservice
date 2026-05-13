@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
-import PageLayout from '../layout/PageLayout';
 import { bookingService } from '../../services/BookingService';
+import { providerAnalyticsApi, type ProviderAnalytics } from '../../services/providerApi';
+import { reviewsApi, type Review } from '../../services/reviewsApi';
 import {
   Building,
   DollarSign,
@@ -36,7 +37,7 @@ interface StatCard {
   trend?: {
     value: number;
     isPositive: boolean;
-  };
+  } | null;
   color: string;
 }
 
@@ -74,70 +75,109 @@ const ProviderDashboard: React.FC = () => {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [bookingRequests, setBookingRequests] = useState<BookingRequest[]>([]);
   const [loadingBookings, setLoadingBookings] = useState(true);
+
+  // Analytics state
+  const [analytics, setAnalytics] = useState<ProviderAnalytics | null>(null);
+  const [loadingAnalytics, setLoadingAnalytics] = useState(true);
+  const [analyticsError, setAnalyticsError] = useState<string | null>(null);
+
+  // Reviews state
+  const [recentReviews, setRecentReviews] = useState<RecentReview[]>([]);
+  const [loadingReviews, setLoadingReviews] = useState(true);
+  const [reviewsError, setReviewsError] = useState<string | null>(null);
+
   const { user, providerProfile, logout } = useAuthStore();
 
-  // Mock data - in real app, this would come from API
-  const [stats] = useState<StatCard[]>([
+  // Calculate trends from historical data if available
+  const calculateTrend = (current: number, previous: number | undefined): { value: number; isPositive: boolean } | undefined => {
+    if (!previous || previous === 0) return undefined;
+    const change = ((current - previous) / previous) * 100;
+    return {
+      value: Math.abs(Math.round(change)),
+      isPositive: change >= 0,
+    };
+  };
+
+  // Get trend values from provider profile analytics (historical data)
+  const earningsTrend = calculateTrend(
+    providerProfile?.earnings?.totalEarned || 0,
+    (providerProfile?.analytics as any)?.previousEarnings
+  );
+  const bookingsTrend = calculateTrend(
+    analytics?.bookingStats.completedThisMonth || 0,
+    (providerProfile?.analytics as any)?.previousBookings
+  );
+  const viewsTrend = calculateTrend(
+    analytics?.performanceStats.totalViews || (providerProfile?.analytics as any)?.profileViews || 0,
+    (providerProfile?.analytics as any)?.previousViews
+  );
+
+  // Derive stats from analytics data
+  const stats: StatCard[] = (analytics ? [
     {
       title: 'Monthly Earnings',
-      value: providerProfile?.earnings?.totalEarned || 2450,
+      value: providerProfile?.earnings?.totalEarned || 0,
       subtitle: 'This month',
       icon: DollarSign,
-      trend: { value: 12, isPositive: true },
+      trend: earningsTrend,
       color: 'bg-nilin-rose'
     },
     {
       title: 'Total Bookings',
-      value: 28,
+      value: analytics.bookingStats.completedThisMonth,
       subtitle: 'This month',
       icon: Calendar,
-      trend: { value: 5, isPositive: true },
+      trend: bookingsTrend,
       color: 'bg-nilin-coral'
     },
     {
       title: 'Average Rating',
-      value: providerProfile?.ratings?.average || 4.8,
-      subtitle: `${providerProfile?.ratings?.count || 45} reviews`,
+      value: analytics.ratingStats.averageRating || providerProfile?.ratings?.average || 0,
+      subtitle: `${analytics.ratingStats.totalReviews || providerProfile?.ratings?.count || 0} reviews`,
       icon: Star,
       color: 'bg-nilin-rose'
     },
     {
       title: 'Profile Views',
-      value: providerProfile?.analytics?.profileViews || 156,
+      value: analytics.performanceStats.totalViews || providerProfile?.analytics?.profileViews || 0,
       subtitle: 'This week',
       icon: Eye,
-      trend: { value: 23, isPositive: true },
+      trend: viewsTrend,
       color: 'bg-nilin-coral'
     }
-  ]);
-
-
-  const [recentReviews] = useState<RecentReview[]>([
+  ] : [
     {
-      id: '1',
-      customerName: 'Jessica Davis',
-      rating: 5,
-      comment: 'Amazing service! Very thorough and professional. Will definitely book again.',
-      serviceName: 'Deep Cleaning',
-      date: '2024-01-20'
+      title: 'Monthly Earnings',
+      value: providerProfile?.earnings?.totalEarned || 0,
+      subtitle: 'This month',
+      icon: DollarSign,
+      trend: earningsTrend,
+      color: 'bg-nilin-rose'
     },
     {
-      id: '2',
-      customerName: 'Robert Miller',
-      rating: 4,
-      comment: 'Good job overall, arrived on time and did quality work.',
-      serviceName: 'Regular Cleaning',
-      date: '2024-01-18'
+      title: 'Total Bookings',
+      value: (providerProfile?.analytics as any)?.totalBookings || 0,
+      subtitle: 'This month',
+      icon: Calendar,
+      trend: bookingsTrend,
+      color: 'bg-nilin-coral'
     },
     {
-      id: '3',
-      customerName: 'Amanda Taylor',
-      rating: 5,
-      comment: 'Exceeded expectations! House looks incredible. Highly recommend.',
-      serviceName: 'Move-out Cleaning',
-      date: '2024-01-15'
+      title: 'Average Rating',
+      value: providerProfile?.ratings?.average || 0,
+      subtitle: `${providerProfile?.ratings?.count || 0} reviews`,
+      icon: Star,
+      color: 'bg-nilin-rose'
+    },
+    {
+      title: 'Profile Views',
+      value: providerProfile?.analytics?.profileViews || 0,
+      subtitle: 'This week',
+      icon: Eye,
+      trend: viewsTrend,
+      color: 'bg-nilin-coral'
     }
-  ]);
+  ]) as StatCard[];
 
   // Fetch booking requests
   useEffect(() => {
@@ -174,8 +214,7 @@ const ProviderDashboard: React.FC = () => {
           });
           setBookingRequests(transformedBookings);
         }
-      } catch (error) {
-        console.error('Error fetching booking requests:', error);
+      } catch {
         setBookingRequests([]);
       } finally {
         setLoadingBookings(false);
@@ -184,6 +223,63 @@ const ProviderDashboard: React.FC = () => {
 
     fetchBookingRequests();
   }, []);
+
+  // Fetch analytics data
+  useEffect(() => {
+    const fetchAnalytics = async () => {
+      try {
+        setLoadingAnalytics(true);
+        setAnalyticsError(null);
+        const response = await providerAnalyticsApi.getProviderAnalytics();
+        if (response.success && response.data.overview) {
+          setAnalytics(response.data.overview);
+        }
+      } catch (error) {
+        console.error('Failed to fetch analytics:', error);
+        setAnalyticsError('Failed to load analytics');
+      } finally {
+        setLoadingAnalytics(false);
+      }
+    };
+
+    fetchAnalytics();
+  }, []);
+
+  // Fetch reviews data
+  useEffect(() => {
+    const fetchReviews = async () => {
+      try {
+        setLoadingReviews(true);
+        setReviewsError(null);
+        const providerId = providerProfile?._id || (user as any)?.id;
+        if (!providerId) return;
+
+        const response = await reviewsApi.getProviderReviews(providerId);
+        if (response.success && response.data.reviews) {
+          // Transform reviews to RecentReview format
+          const transformedReviews: RecentReview[] = response.data.reviews.slice(0, 5).map((review: Review) => ({
+            id: review.id,
+            customerName: review.customer
+              ? `${review.customer.firstName} ${review.customer.lastName}`
+              : 'Customer',
+            rating: review.rating,
+            comment: review.comment,
+            serviceName: 'Service',
+            date: review.createdAt
+          }));
+          setRecentReviews(transformedReviews);
+        }
+      } catch (error) {
+        console.error('Failed to fetch reviews:', error);
+        setReviewsError('Failed to load reviews');
+        setRecentReviews([]);
+      } finally {
+        setLoadingReviews(false);
+      }
+    };
+
+    fetchReviews();
+  }, [providerProfile?._id, (user as any)?.id]);
 
   const handleLogout = () => {
     logout();
@@ -201,13 +297,6 @@ const ProviderDashboard: React.FC = () => {
     const verificationStatus = providerProfile?.verificationStatus;
     const status = verificationStatus?.overall || (typeof verificationStatus === 'string' ? verificationStatus : 'pending');
 
-    // Debug logging
-    console.log('Provider Profile Debug:', {
-      hasProviderProfile: !!providerProfile,
-      verificationStatus: providerProfile?.verificationStatus,
-      overallStatus: providerProfile?.verificationStatus?.overall,
-      statusUsed: status
-    });
     const config = {
       pending: {
         color: 'text-amber-700 bg-amber-50 border border-amber-200',
@@ -602,7 +691,18 @@ const ProviderDashboard: React.FC = () => {
               </div>
             </div>
             <div className="p-6">
-              {recentReviews.length > 0 ? (
+              {loadingReviews ? (
+                <div className="flex items-center justify-center py-6">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-nilin-coral"></div>
+                  <span className="ml-3 text-nilin-warmGray font-sans text-sm">Loading reviews...</span>
+                </div>
+              ) : reviewsError ? (
+                <div className="text-center py-6">
+                  <AlertTriangle className="mx-auto h-12 w-12 text-nilin-warmGray" />
+                  <h3 className="mt-2 text-sm font-medium text-nilin-charcoal font-sans">Failed to load reviews</h3>
+                  <p className="mt-1 text-xs text-nilin-warmGray">{reviewsError}</p>
+                </div>
+              ) : recentReviews.length > 0 ? (
                 <div className="space-y-4">
                   {recentReviews.map((review) => (
                     <div key={review.id} className="border border-nilin-border/50 rounded-xl p-4 hover:border-glow transition-all">
@@ -695,20 +795,41 @@ const ProviderDashboard: React.FC = () => {
                 <Activity className="h-5 w-5 text-nilin-rose" />
               </div>
             </div>
-            <div className="space-y-3">
-              <div className="flex justify-between items-center">
-                <span className="text-sm text-nilin-warmGray font-sans">Booking Rate</span>
-                <span className="text-sm font-medium text-nilin-charcoal font-sans">78%</span>
+            {loadingAnalytics ? (
+              <div className="space-y-3">
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="flex justify-between items-center">
+                    <div className="h-4 w-24 bg-nilin-blush animate-pulse rounded"></div>
+                    <div className="h-4 w-12 bg-nilin-blush animate-pulse rounded"></div>
+                  </div>
+                ))}
               </div>
-              <div className="flex justify-between items-center">
-                <span className="text-sm text-nilin-warmGray font-sans">Response Time</span>
-                <span className="text-sm font-medium text-nilin-charcoal font-sans">2.5 hrs</span>
+            ) : analyticsError ? (
+              <div className="text-center py-2">
+                <p className="text-xs text-red-500">{analyticsError}</p>
               </div>
-              <div className="flex justify-between items-center">
-                <span className="text-sm text-nilin-warmGray font-sans">Completion Rate</span>
-                <span className="text-sm font-medium text-nilin-charcoal font-sans">95%</span>
+            ) : (
+              <div className="space-y-3">
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-nilin-warmGray font-sans">Booking Rate</span>
+                  <span className="text-sm font-medium text-nilin-charcoal font-sans">
+                    {analytics ? `${Math.round(analytics.performanceStats.bookingRate)}%` : 'N/A'}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-nilin-warmGray font-sans">Conversion Rate</span>
+                  <span className="text-sm font-medium text-nilin-charcoal font-sans">
+                    {analytics ? `${Math.round(analytics.performanceStats.conversionRate)}%` : 'N/A'}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-nilin-warmGray font-sans">Completed This Month</span>
+                  <span className="text-sm font-medium text-nilin-charcoal font-sans">
+                    {analytics ? analytics.bookingStats.completedThisMonth : 0}
+                  </span>
+                </div>
               </div>
-            </div>
+            )}
           </div>
 
           <div className="glass glass-blur rounded-2xl border border-nilin-border/50 p-6 card-3d">

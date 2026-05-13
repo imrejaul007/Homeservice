@@ -208,3 +208,14 @@ export const PROMO_BANNERS = [
     cta: 'See Bundles',
   },
 ] as const;
+
+// -----------------------------------------------------------------------------
+// Reference Images — Used in hero slides for floating image effects
+// -----------------------------------------------------------------------------
+
+export const REFERENCE_IMAGES = [
+  'https://images.unsplash.com/photo-1560066984-138dadb4c035?w=400&q=80&fit=crop',
+  'https://images.unsplash.com/photo-1522335789203-aabd1fc54bc9?w=400&q=80&fit=crop',
+  'https://images.unsplash.com/photo-1604654894610-df63bc536371?w=400&q=80&fit=crop',
+  'https://images.unsplash.com/photo-1544161515-4ab6ce6db874?w=400&q=80&fit=crop',
+];

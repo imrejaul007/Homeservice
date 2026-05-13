@@ -5,7 +5,7 @@ import NavigationHeader from '../components/layout/NavigationHeader';
 import Footer from '../components/layout/Footer';
 import { searchApi } from '../services/searchApi';
 import type { Service } from '../types/service';
-import { CATEGORY_IMAGES, SUBCATEGORY_IMAGES } from '../constants/images';
+import { CATEGORY_IMAGES, SUBCATEGORY_IMAGES, REFERENCE_IMAGES } from '../constants/images';
 import {
   CategoryCards,
   OfferBanner,
@@ -14,15 +14,7 @@ import {
   WhyNilin,
   ProviderCTA,
 } from '../components/home';
-
-// Reference images for beauty gallery
-const REFERENCE_IMAGES = [
-  '/images/references/BLONDIES 💈for @oligopro Photographer @jofortin Creative direction @hoxtiff Hair artist @paco_pu.jpg',
-  '/images/references/BLONDIES 💈for @oligopro Photographer @jofortin Creative direction @hoxtiff Hair artist @paco_pu (1).jpg',
-  '/images/references/BLONDIES 💈for @oligopro Photographer @jofortin Creative direction @hoxtiff Hair artist @paco_pu (2).jpg',
-  '/images/references/BLONDIES 💈for @oligopro Photographer @jofortin Creative direction @hoxtiff Hair artist @paco_pu (3).jpg',
-  '/images/references/BLONDIES 💈for @oligopro Photographer @jofortin Creative direction @hoxtiff Hair artist @paco_pu (4).jpg',
-];
+import ExperienceSection from '../components/experience/ExperienceSection';
 
 // UNIFIED HERO CAROUSEL - Merged with hero
 const HERO_SLIDES = [
@@ -324,41 +316,8 @@ const HomePage: React.FC = () => {
       {/* Category Spotlight */}
       <CategorySpotlight />
 
-      {/* NILIN Beauty Gallery */}
-      <section className="py-16 px-4 bg-gradient-to-br from-nilin-blush via-nilin-peach to-nilin-cream animate-nilin-in">
-        <div className="max-w-7xl mx-auto">
-          <div className="text-center mb-12">
-            <h2 className="text-3xl font-serif text-nilin-charcoal mb-3">The NILIN Experience</h2>
-            <p className="text-nilin-warmGray">Crafted for perfection</p>
-          </div>
-
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            {REFERENCE_IMAGES.slice(0, 4).map((img, i) => (
-              <div
-                key={i}
-                className={`relative overflow-hidden rounded-nilin shadow-nilin card-3d hover-lift ${i === 0 ? 'col-span-2 row-span-2' : ''}`}
-              >
-                <img src={img} alt={`NILIN ${i + 1}`} className="w-full h-full object-cover" />
-                <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent" />
-              </div>
-            ))}
-          </div>
-
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
-            {[
-              { icon: '✨', title: 'Premium Products' },
-              { icon: '🎯', title: 'Expert Stylists' },
-              { icon: '🕐', title: 'Flexible Booking' },
-              { icon: '💎', title: 'Luxury Experience' },
-            ].map((f, i) => (
-              <div key={i} className="glass-nilin rounded-nilin p-4 text-center gradient-3d hover-lift animate-nilin-in" style={{animationDelay: `${i * 0.1}s`}}>
-                <span className="text-2xl">{f.icon}</span>
-                <p className="text-sm font-medium text-nilin-charcoal mt-1">{f.title}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
+      {/* NILIN Experience Section */}
+      <ExperienceSection />
 
       {/* Curated Reels */}
       <CuratedReels />

@@ -1,6 +1,8 @@
-import React from 'react';
-import { Users, Loader2 } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Users, Loader2, Search, Star, MapPin } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import ProviderCard from './ProviderCard';
+import { providerApi } from '@/services/providerApi';
 
 interface Provider {
   id: string;
@@ -14,6 +16,31 @@ interface Provider {
   isVerified?: boolean;
   startingPrice?: number;
   maxPrice?: number;
+  location?: {
+    city?: string;
+    state?: string;
+  } | null;
+  tagline?: string;
+  servicesCount?: number;
+  specializations?: string[];
+}
+
+interface FeaturedProvider {
+  id: string;
+  firstName: string;
+  lastName: string;
+  businessName: string;
+  tagline: string;
+  profilePhoto: string;
+  isVerified: boolean;
+  location: {
+    city: string;
+    state: string;
+  } | null;
+  rating: number;
+  reviewCount: number;
+  specializations: string[];
+  servicesCount: number;
 }
 
 interface RecommendedProvidersProps {
@@ -48,31 +75,134 @@ const ProvidersSkeleton: React.FC = () => (
   </section>
 );
 
-// No providers available state
-const NoProvidersAvailable: React.FC = () => (
-  <section className="py-12 md:py-16 bg-white">
-    <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
-      <h2 className="text-2xl md:text-3xl font-serif font-medium text-gray-900 mb-2">
-        Recommended Professionals
-      </h2>
-      <p className="text-gray-500 mb-10">
-        Verified experts ready to serve you
-      </p>
+// No providers available state with fallback
+const NoProvidersAvailable: React.FC<{
+  fallbackProviders: Provider[];
+  fallbackLoading: boolean;
+  fallbackError: string | null;
+  onProviderClick: (provider: Provider) => void;
+  onViewProfile: (providerId: string) => void;
+}> = ({
+  fallbackProviders,
+  fallbackLoading,
+  fallbackError,
+  onProviderClick,
+  onViewProfile,
+}) => {
+  const navigate = useNavigate();
 
-      <div className="bg-gradient-to-br from-gray-50 to-white rounded-2xl p-10 md:p-14 text-center border-2 border-dashed border-gray-200">
-        <div className="w-20 h-20 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-5">
-          <Users className="w-10 h-10 text-gray-400" />
+  // Show fallback providers if available
+  if (!fallbackLoading && fallbackError === null && fallbackProviders.length > 0) {
+    return (
+      <section className="py-12 md:py-16 bg-white">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+          {/* Section Header */}
+          <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 mb-8 md:mb-10">
+            <div>
+              <h2 className="text-2xl md:text-3xl font-serif font-medium text-gray-900 mb-2">
+                Top Rated Professionals
+              </h2>
+              <div className="flex items-center gap-2 text-sm text-gray-500">
+                <MapPin className="w-4 h-4 text-indigo-500" />
+                <span>Top rated near you</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Provider Grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+            {fallbackProviders.slice(0, 6).map((provider) => (
+              <ProviderCard
+                key={provider.id}
+                provider={provider}
+                onClick={() => onProviderClick(provider)}
+                onViewProfile={() => onViewProfile(provider.id)}
+              />
+            ))}
+          </div>
         </div>
-        <h3 className="text-xl font-semibold text-gray-800 mb-2">
-          Coming Soon
-        </h3>
-        <p className="text-gray-500 max-w-md mx-auto">
-          We're onboarding verified professionals for this service. Check back soon or explore other categories.
+      </section>
+    );
+  }
+
+  // Show loading state for fallback
+  if (fallbackLoading) {
+    return (
+      <section className="py-12 md:py-16 bg-white">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="animate-pulse">
+            <div className="h-8 bg-gray-200 rounded-lg w-72 mb-2" />
+            <div className="h-4 bg-gray-100 rounded w-56 mb-10" />
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+                  <div className="h-52 bg-gradient-to-br from-gray-100 to-gray-200" />
+                  <div className="p-5 space-y-3">
+                    <div className="h-5 bg-gray-200 rounded w-3/4" />
+                    <div className="h-4 bg-gray-100 rounded w-1/2" />
+                    <div className="h-4 bg-gray-100 rounded w-1/3" />
+                    <div className="h-10 bg-gray-100 rounded-xl mt-4" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  // Show original empty state if no fallback providers
+  return (
+    <section className="py-12 md:py-16 bg-white">
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+        <h2 className="text-2xl md:text-3xl font-serif font-medium text-gray-900 mb-2">
+          Recommended Professionals
+        </h2>
+        <p className="text-gray-500 mb-10">
+          Verified experts ready to serve you
         </p>
+
+        <div className="bg-gradient-to-br from-gray-50 to-white rounded-2xl p-10 md:p-14 text-center border-2 border-dashed border-gray-200">
+          <div className="w-20 h-20 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-5">
+            <Users className="w-10 h-10 text-gray-400" />
+          </div>
+          <h3 className="text-xl font-semibold text-gray-800 mb-2">
+            No Providers Available Yet
+          </h3>
+          <p className="text-gray-500 max-w-md mx-auto mb-6">
+            We couldn't find any providers for this service in your area. Browse other categories to find what you need.
+          </p>
+          <button
+            onClick={() => navigate('/search')}
+            className="inline-flex items-center gap-2 px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl transition-colors"
+          >
+            <Search className="w-5 h-5" />
+            Browse More Services
+          </button>
+        </div>
       </div>
-    </div>
-  </section>
-);
+    </section>
+  );
+};
+
+// Transform featured provider to match Provider interface
+const transformFeaturedProvider = (provider: FeaturedProvider): Provider => ({
+  id: provider.id,
+  firstName: provider.firstName,
+  lastName: provider.lastName,
+  businessName: provider.businessName,
+  profilePhoto: provider.profilePhoto,
+  rating: provider.rating,
+  reviewCount: provider.reviewCount,
+  isVerified: provider.isVerified,
+  startingPrice: undefined,
+  maxPrice: undefined,
+  location: provider.location,
+  tagline: provider.tagline,
+  servicesCount: provider.servicesCount,
+  specializations: provider.specializations,
+});
 
 const RecommendedProviders: React.FC<RecommendedProvidersProps> = ({
   providers,
@@ -80,12 +210,47 @@ const RecommendedProviders: React.FC<RecommendedProvidersProps> = ({
   onProviderClick,
   onViewProfile,
 }) => {
+  const navigate = useNavigate();
+  const [fallbackProviders, setFallbackProviders] = useState<Provider[]>([]);
+  const [fallbackLoading, setFallbackLoading] = useState(false);
+  const [fallbackError, setFallbackError] = useState<string | null>(null);
+
+  const fetchFallbackProviders = useCallback(async () => {
+    setFallbackLoading(true);
+    setFallbackError(null);
+    try {
+      const response = await providerApi.getFeaturedProviders(6);
+      const transformed = response.data.providers.map(transformFeaturedProvider);
+      setFallbackProviders(transformed);
+    } catch (err) {
+      setFallbackError(err instanceof Error ? err.message : 'Failed to fetch featured providers');
+      setFallbackProviders([]);
+    } finally {
+      setFallbackLoading(false);
+    }
+  }, []);
+
+  // Fetch featured providers when no providers are found and not loading
+  useEffect(() => {
+    if (!isLoading && (!providers || providers.length === 0)) {
+      fetchFallbackProviders();
+    }
+  }, [isLoading, providers, fetchFallbackProviders]);
+
   if (isLoading) {
     return <ProvidersSkeleton />;
   }
 
   if (!providers || providers.length === 0) {
-    return <NoProvidersAvailable />;
+    return (
+      <NoProvidersAvailable
+        fallbackProviders={fallbackProviders}
+        fallbackLoading={fallbackLoading}
+        fallbackError={fallbackError}
+        onProviderClick={onProviderClick}
+        onViewProfile={onViewProfile}
+      />
+    );
   }
 
   return (
@@ -103,7 +268,10 @@ const RecommendedProviders: React.FC<RecommendedProvidersProps> = ({
           </div>
 
           {providers.length > 3 && (
-            <button className="text-indigo-600 font-semibold text-sm hover:text-indigo-700 transition-colors">
+            <button
+              onClick={() => navigate('/search')}
+              className="text-indigo-600 font-semibold text-sm hover:text-indigo-700 transition-colors"
+            >
               View all ({providers.length})
             </button>
           )}
@@ -124,13 +292,16 @@ const RecommendedProviders: React.FC<RecommendedProvidersProps> = ({
         {/* Show more indicator */}
         {providers.length > 6 && (
           <div className="mt-8 text-center">
-            <button className="
-              inline-flex items-center gap-2 px-6 py-3
-              bg-gray-50 hover:bg-gray-100
-              text-gray-700 font-semibold text-sm
-              rounded-xl border border-gray-200
-              transition-all duration-200
-            ">
+            <button
+              onClick={() => navigate('/search')}
+              className="
+                inline-flex items-center gap-2 px-6 py-3
+                bg-gray-50 hover:bg-gray-100
+                text-gray-700 font-semibold text-sm
+                rounded-xl border border-gray-200
+                transition-all duration-200
+              "
+            >
               <Loader2 className="w-4 h-4" />
               Load more professionals
             </button>

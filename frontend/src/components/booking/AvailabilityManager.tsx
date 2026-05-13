@@ -185,8 +185,8 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
     try {
       await updateWeeklySchedule(weeklySchedule);
       setHasChanges(false);
-    } catch (error) {
-      console.error('Failed to save schedule:', error);
+    } catch {
+      // Error handled by store
     }
   };
 
@@ -206,16 +206,16 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
         notes: ''
       });
       setShowOverrideForm(false);
-    } catch (error) {
-      console.error('Failed to add override:', error);
+    } catch {
+      // Error handled by store
     }
   };
 
   const handleRemoveOverride = async (date: string) => {
     try {
       await removeDateOverride(date);
-    } catch (error) {
-      console.error('Failed to remove override:', error);
+    } catch {
+      // Error handled by store
     }
   };
 

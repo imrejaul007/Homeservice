@@ -13,7 +13,7 @@ interface UseProviderState {
   error: string | null;
 }
 
-export function useProvider(id: string | undefined) {
+export function useProvider(id: string | undefined): UseProviderState & { refetch: () => Promise<void> } {
   const [state, setState] = useState<UseProviderState>({
     provider: null,
     isLoading: true,
@@ -82,7 +82,7 @@ interface UseProvidersByCategoryState {
 export function useProvidersByCategory(
   categorySlug: string | undefined,
   options?: GetProvidersOptions
-) {
+): UseProvidersByCategoryState & { refetch: () => Promise<void> } {
   const [state, setState] = useState<UseProvidersByCategoryState>({
     category: null,
     providers: [],
@@ -167,7 +167,7 @@ export function useProvidersBySubcategory(
   categorySlug: string | undefined,
   subcategorySlug: string | undefined,
   options?: GetProvidersOptions
-) {
+): UseProvidersBySubcategoryState & { refetch: () => Promise<void> } {
   const [state, setState] = useState<UseProvidersBySubcategoryState>({
     category: null,
     subcategory: null,
@@ -254,7 +254,7 @@ interface UseFeaturedProvidersState {
   error: string | null;
 }
 
-export function useFeaturedProviders(limit?: number) {
+export function useFeaturedProviders(limit?: number): UseFeaturedProvidersState & { refetch: () => Promise<void> } {
   const [state, setState] = useState<UseFeaturedProvidersState>({
     providers: [],
     isLoading: true,

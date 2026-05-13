@@ -17,7 +17,22 @@ import {
   getUserStats,
   getProvidersWithServices,
   batchServiceAction,
-  getProviderServices
+  getProviderServices,
+  // Bookings Management
+  getAllBookings,
+  getBookingDetails,
+  updateBookingStatus,
+  getBookingStats,
+  cancelBooking,
+  // Categories Management
+  getAllCategories,
+  getCategoryDetails,
+  createCategory,
+  updateCategory,
+  deleteCategory,
+  toggleCategoryFeatured,
+  addSubcategory,
+  getCategoryStats
 } from '../controllers/admin.controller';
 import { authenticate, requireRole } from '../middleware/auth.middleware';
 import Joi from 'joi';
@@ -112,5 +127,28 @@ router.delete('/users/:id', adminDeleteUser);
 router.get('/providers-with-services', getProvidersWithServices);
 router.get('/providers/:id/services', getProviderServices);
 router.post('/services/batch-action', batchServiceAction);
+
+// ========================================
+// Bookings Management Routes
+// ========================================
+
+router.get('/bookings', getAllBookings);
+router.get('/bookings/stats', getBookingStats);
+router.get('/bookings/:id', getBookingDetails);
+router.patch('/bookings/:id/status', updateBookingStatus);
+router.post('/bookings/:id/cancel', cancelBooking);
+
+// ========================================
+// Categories Management Routes
+// ========================================
+
+router.get('/categories', getAllCategories);
+router.get('/categories/stats', getCategoryStats);
+router.get('/categories/:id', getCategoryDetails);
+router.post('/categories', createCategory);
+router.patch('/categories/:id', updateCategory);
+router.delete('/categories/:id', deleteCategory);
+router.post('/categories/:id/featured', toggleCategoryFeatured);
+router.post('/categories/:id/subcategories', addSubcategory);
 
 export default router;

@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import Joi from 'joi';
-import { 
+import {
   customerRegistrationSchema,
   providerRegistrationSchema,
   loginSchema,
@@ -12,7 +12,7 @@ import {
   refreshTokenSchema,
   updateProfileSchema
 } from '../validation/auth.validation';
-import { ApiError } from '../utils/ApiError';
+import { ApiError, ERROR_CODES } from '../utils/ApiError';
 import multer from 'multer';
 
 // File upload configuration
@@ -146,6 +146,7 @@ const validate = (schema: Joi.ObjectSchema, options?: {
       return res.status(400).json({
         success: false,
         message: 'Validation error',
+        code: ERROR_CODES.VALIDATION_ERROR,
         errors: validationErrors
       });
     }
@@ -197,6 +198,7 @@ export const validateFiles = (requiredFiles: string[] = []) => {
       return res.status(400).json({
         success: false,
         message: 'File validation error',
+        code: ERROR_CODES.VALIDATION_ERROR,
         errors: errors.map(error => ({ field: 'files', message: error }))
       });
     }
@@ -281,7 +283,7 @@ export const validateProfileUpdateWithFiles = [
 export const handleFileUploadError = (err: any, _req: Request, res: Response, next: NextFunction): void | Response => {
   if (err instanceof multer.MulterError) {
     let message = 'File upload error';
-    
+
     switch (err.code) {
       case 'LIMIT_FILE_SIZE':
         message = 'File size too large. Maximum size is 10MB';
@@ -299,7 +301,7 @@ export const handleFileUploadError = (err: any, _req: Request, res: Response, ne
     return res.status(400).json({
       success: false,
       message,
-      error: 'FILE_UPLOAD_ERROR'
+      code: ERROR_CODES.FILE_UPLOAD_ERROR
     });
   }
 
@@ -322,12 +324,12 @@ export const validateProviderStatus = (requiredStatus?: string) => {
   return async (req: Request, res: Response, next: NextFunction): Promise<void | Response> => {
     try {
       const user = (req as any).user;
-      
+
       if (user.role !== 'provider') {
         return res.status(403).json({
           success: false,
           message: 'Only providers can access this endpoint',
-          error: 'INVALID_USER_ROLE'
+          code: ERROR_CODES.FORBIDDEN
         });
       }
 
@@ -336,7 +338,7 @@ export const validateProviderStatus = (requiredStatus?: string) => {
         return res.status(403).json({
           success: false,
           message: `Provider must be ${requiredStatus} to access this endpoint`,
-          error: 'INVALID_PROVIDER_STATUS'
+          code: ERROR_CODES.FORBIDDEN
         });
       }
 
@@ -350,23 +352,23 @@ export const validateProviderStatus = (requiredStatus?: string) => {
 // Provider role validation middleware
 export const validateProviderRole = (req: Request, res: Response, next: NextFunction): void | Response => {
   const user = (req as any).user;
-  
+
   if (!user) {
     return res.status(401).json({
       success: false,
       message: 'Authentication required',
-      error: 'AUTHENTICATION_REQUIRED'
+      code: ERROR_CODES.UNAUTHORIZED
     });
   }
-  
+
   if (user.role !== 'provider') {
     return res.status(403).json({
       success: false,
       message: 'Only providers can access this endpoint',
-      error: 'INVALID_USER_ROLE'
+      code: ERROR_CODES.FORBIDDEN
     });
   }
-  
+
   next();
 };
 

@@ -103,25 +103,61 @@ const PLATFORM_COUPON_ABSORPTION_RATE = 0.5; // Platform covers 50% of coupon di
 
 /**
  * Get the commission rate for a provider based on their plan
+ * Uses platform settings for default commission rate
  */
 async function getProviderCommissionRate(providerId: string | Types.ObjectId): Promise<CommissionConfig> {
   const pid = providerId instanceof Types.ObjectId ? providerId.toString() : providerId;
 
+  // Get platform settings for default commission rate
+  let platformDefaultRate = 15; // Default fallback
+  let platformMinPayout = 50;
+
+  try {
+    const { getSetting } = await import('./settings.service');
+    platformDefaultRate = await getSetting('commissionRate') || 15;
+    platformMinPayout = await getSetting('minimumWithdrawalAmount') || 50;
+  } catch (error) {
+    console.warn('Failed to get platform settings for commission rate, using defaults');
+  }
+
   // First check beauty plan
   const beautyPlan = await BeautyPlan.findOne({ providerId: pid });
   if (beautyPlan) {
-    return COMMISSION_TIERS[beautyPlan.plan as ProviderPlan] || COMMISSION_TIERS.beauty_free;
+    const tierConfig = COMMISSION_TIERS[beautyPlan.plan as ProviderPlan];
+    if (tierConfig) {
+      // Use tier-specific rate if set, otherwise use platform default
+      return {
+        ...tierConfig,
+        rate: tierConfig.rate > 0 ? tierConfig.rate : platformDefaultRate,
+        minPayout: tierConfig.minPayout > 0 ? tierConfig.minPayout : platformMinPayout
+      };
+    }
+    return {
+      rate: platformDefaultRate,
+      minPayout: platformMinPayout,
+      payoutFrequency: 'weekly'
+    };
   }
 
   // Then check subscription plan
   const subscription = await Subscription.findOne({ providerId: pid });
   if (subscription) {
-    const planKey = subscription.plan as ProviderPlan;
-    return COMMISSION_TIERS[planKey] || COMMISSION_TIERS.basic;
+    const tierConfig = COMMISSION_TIERS[subscription.plan as ProviderPlan];
+    if (tierConfig) {
+      return {
+        ...tierConfig,
+        rate: tierConfig.rate > 0 ? tierConfig.rate : platformDefaultRate,
+        minPayout: tierConfig.minPayout > 0 ? tierConfig.minPayout : platformMinPayout
+      };
+    }
   }
 
-  // Default to free plan
-  return COMMISSION_TIERS.beauty_free;
+  // Default to free plan with platform default rate
+  return {
+    rate: platformDefaultRate,
+    minPayout: platformMinPayout,
+    payoutFrequency: 'weekly'
+  };
 }
 
 /**

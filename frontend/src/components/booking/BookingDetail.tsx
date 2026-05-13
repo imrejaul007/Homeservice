@@ -23,6 +23,8 @@ import { useAuthStore } from '../../stores/authStore';
 import type { Booking } from '../../services/BookingService';
 import bookingService from '../../services/BookingService';
 import { cn, formatPrice } from '../../lib/utils';
+import ExperienceSubmissionForm from '../experience/ExperienceSubmissionForm';
+import { experienceApi } from '../../services/experienceApi';
 
 interface BookingDetailProps {
   userType: 'customer' | 'provider';
@@ -53,6 +55,9 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
   const [newMessage, setNewMessage] = useState('');
   const [showActionMenu, setShowActionMenu] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [showExperienceForm, setShowExperienceForm] = useState(false);
+  const [hasExperience, setHasExperience] = useState(false);
+  const [checkingExperience, setCheckingExperience] = useState(false);
 
   // Load booking details
   useEffect(() => {
@@ -60,6 +65,27 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
       getBooking(bookingId);
     }
   }, [bookingId, getBooking]);
+
+  // Check if user has submitted an experience for this booking
+  useEffect(() => {
+    if (bookingId && currentBooking?.status === 'completed' && userType === 'customer') {
+      checkExperienceSubmission();
+    }
+  }, [bookingId, currentBooking?.status, userType]);
+
+  const checkExperienceSubmission = async () => {
+    if (!bookingId) return;
+    setCheckingExperience(true);
+    try {
+      const response = await experienceApi.checkExperienceExists(bookingId);
+      setHasExperience(response.data.exists);
+    } catch (error) {
+      console.error('Error checking experience submission:', error);
+      setHasExperience(false);
+    } finally {
+      setCheckingExperience(false);
+    }
+  };
 
   // Mark messages as read when viewing messages tab
   useEffect(() => {
@@ -273,6 +299,26 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
                   </button>
                 );
               })}
+            </div>
+          )}
+
+          {/* Share Experience Button */}
+          {userType === 'customer' && currentBooking.status === 'completed' && !checkingExperience && (
+            <div className="flex items-center gap-2">
+              {hasExperience ? (
+                <div className="flex items-center gap-2 px-4 py-2 bg-nilin-success/10 text-nilin-success rounded-xl text-sm font-medium">
+                  <CheckCircle className="h-4 w-4" />
+                  Experience Shared
+                </div>
+              ) : (
+                <button
+                  onClick={() => setShowExperienceForm(true)}
+                  className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-nilin-rose to-nilin-coral text-white rounded-xl hover:shadow-nilin-warm transition-all text-sm font-medium btn-3d"
+                >
+                  <Star className="h-4 w-4" />
+                  Share Experience
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -675,6 +721,19 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
             </div>
           </form>
         </div>
+      )}
+
+      {/* Experience Submission Modal */}
+      {showExperienceForm && (
+        <ExperienceSubmissionForm
+          isOpen={showExperienceForm}
+          onClose={() => setShowExperienceForm(false)}
+          bookingId={currentBooking._id}
+          onSuccess={() => {
+            setHasExperience(true);
+            checkExperienceSubmission();
+          }}
+        />
       )}
     </div>
   );

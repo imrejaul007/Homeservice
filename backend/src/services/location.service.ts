@@ -10,6 +10,11 @@ interface Coordinates {
   lng: number;
 }
 
+interface GeoJSONPoint {
+  type: 'Point';
+  coordinates: [number, number]; // [longitude, latitude]
+}
+
 interface NearbyProvider {
   providerId: string;
   userId: string;
@@ -105,8 +110,17 @@ export const findNearbyProviders = async (options: GeoSearchOptions): Promise<Ne
       // Calculate distance and filter
       const providersWithDistance: NearbyProvider[] = services
         .map((s: any) => {
-          const providerLat = s.profile?.locationInfo?.primaryAddress?.coordinates?.lat || 0;
-          const providerLng = s.profile?.locationInfo?.primaryAddress?.coordinates?.lng || 0;
+          // Extract coordinates from GeoJSON format: { type: 'Point', coordinates: [lng, lat] }
+          let providerLng = 0;
+          let providerLat = 0;
+          const geoCoords = s.profile?.locationInfo?.primaryAddress?.coordinates;
+          if (geoCoords?.coordinates && Array.isArray(geoCoords.coordinates)) {
+            [providerLng, providerLat] = geoCoords.coordinates;
+          } else if (geoCoords?.lat !== undefined && geoCoords?.lng !== undefined) {
+            // Handle legacy format (for backwards compatibility during migration)
+            providerLat = geoCoords.lat;
+            providerLng = geoCoords.lng;
+          }
 
           const distance = calculateDistance(
             coordinates,
@@ -148,8 +162,18 @@ export const providerServesLocation = async (
       return provider?.locationInfo?.mobileService || false;
     }
 
-    const { lat, lng } = provider.locationInfo.primaryAddress.coordinates;
-    const distance = calculateDistance(customerLocation, { lat, lng });
+    // Extract coordinates from GeoJSON format: { type: 'Point', coordinates: [lng, lat] }
+    let providerLat = 0;
+    let providerLng = 0;
+    const geoCoords = provider.locationInfo.primaryAddress.coordinates as any;
+    if (geoCoords?.coordinates && Array.isArray(geoCoords.coordinates)) {
+      [providerLng, providerLat] = geoCoords.coordinates;
+    } else if (geoCoords?.lat !== undefined && geoCoords?.lng !== undefined) {
+      // Handle legacy format (for backwards compatibility during migration)
+      providerLat = geoCoords.lat;
+      providerLng = geoCoords.lng;
+    }
+    const distance = calculateDistance(customerLocation, { lat: providerLat, lng: providerLng });
 
     // Check if within service radius
     const radiusKm = provider.businessInfo?.serviceRadius || 50;
@@ -173,14 +197,24 @@ export const getProviderCoverage = async (providerId: string): Promise<{
       throw new Error('Provider location not found');
     }
 
-    const { lat, lng } = provider.locationInfo.primaryAddress.coordinates;
+    // Extract coordinates from GeoJSON format: { type: 'Point', coordinates: [lng, lat] }
+    let centerLat = 0;
+    let centerLng = 0;
+    const centerCoords = provider.locationInfo.primaryAddress.coordinates as any;
+    if (centerCoords?.coordinates && Array.isArray(centerCoords.coordinates)) {
+      [centerLng, centerLat] = centerCoords.coordinates;
+    } else if (centerCoords?.lat !== undefined && centerCoords?.lng !== undefined) {
+      // Handle legacy format (for backwards compatibility during migration)
+      centerLat = centerCoords.lat;
+      centerLng = centerCoords.lng;
+    }
     const radius = provider.businessInfo?.serviceRadius || 50;
 
     // Estimate customers in area (simplified)
     const estimatedCustomers = Math.floor(radius * 100);
 
     return {
-      center: { lat, lng },
+      center: { lat: centerLat, lng: centerLng },
       radius,
       estimatedCustomers,
     };

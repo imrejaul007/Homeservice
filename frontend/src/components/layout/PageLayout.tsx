@@ -25,10 +25,10 @@ const PageLayout: React.FC<PageLayoutProps> = ({
   headerActions
 }) => {
   return (
-    <div className={`min-h-screen bg-gray-50 ${className}`}>
+    <div className={`min-h-screen bg-nilin-cream ${className}`}>
       {/* Breadcrumb Navigation */}
       {showBreadcrumb && (
-        <div className="bg-white border-b border-gray-200">
+        <div className="bg-white border-b border-nilin-border">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3">
             <Breadcrumb items={breadcrumbItems} />
           </div>
@@ -37,17 +37,17 @@ const PageLayout: React.FC<PageLayoutProps> = ({
 
       {/* Page Header */}
       {(title || headerActions) && (
-        <div className="bg-white border-b border-gray-200">
+        <div className="bg-white border-b border-nilin-border">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
             <div className="flex items-center justify-between">
               <div>
                 {title && (
-                  <h1 className="text-2xl font-bold text-gray-900">
+                  <h1 className="text-2xl font-bold text-nilin-charcoal">
                     {title}
                   </h1>
                 )}
                 {subtitle && (
-                  <p className="mt-1 text-sm text-gray-600">
+                  <p className="mt-1 text-sm text-nilin-warmGray">
                     {subtitle}
                   </p>
                 )}

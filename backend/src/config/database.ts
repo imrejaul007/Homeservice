@@ -49,8 +49,15 @@ class Database {
       return;
     }
 
+    // Fail-fast: require MONGODB_URI in production
+    if (!process.env.MONGODB_URI) {
+      const error = new Error('MONGODB_URI environment variable is required');
+      logger.error('Database configuration error:', error.message);
+      throw error;
+    }
+
     const dbConfig: DatabaseConfig = {
-      uri: process.env.MONGODB_URI || 'mongodb://localhost:27017/home_service_marketplace',
+      uri: process.env.MONGODB_URI,
       options: {
         // Connection pool settings
         maxPoolSize: POOL_CONFIG.maxPoolSize,

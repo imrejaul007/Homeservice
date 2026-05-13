@@ -3,7 +3,7 @@ import User from '../../models/user.model';
 import Service from '../../models/service.model';
 import ServiceCategory from '../../models/serviceCategory.model';
 import logger from '../../utils/logger';
-import { cacheRedis } from '../../config/redis';
+import { cache } from '../../config/redis';
 
 interface DateRange {
   startDate: Date;
@@ -82,7 +82,7 @@ interface ServiceAnalytics {
     rating: number;
   }>;
   servicesByCategory: Array<{
-    category: string;
+    name: string; // FIX: Changed from 'category' to 'name' to match frontend expectations
     count: number;
     percentage: number;
   }>;
@@ -123,7 +123,7 @@ const getDateRange = (period: 'today' | 'week' | 'month' | 'quarter' | 'year' | 
 // Cache helper
 const getCached = async <T>(key: string, fetchFn: () => Promise<T>, ttl = 300): Promise<T> => {
   try {
-    const cached = await cacheRedis.get(key);
+    const cached = await cache.get(key);
     if (cached) {
       return JSON.parse(cached);
     }
@@ -134,7 +134,7 @@ const getCached = async <T>(key: string, fetchFn: () => Promise<T>, ttl = 300): 
   const data = await fetchFn();
 
   try {
-    await cacheRedis.setex(key, ttl, JSON.stringify(data));
+    await cache.set(key, JSON.stringify(data), ttl);
   } catch {
     // Cache write error - ignore
   }
@@ -513,7 +513,7 @@ export const getServiceAnalytics = async (): Promise<ServiceAnalytics> => {
         rating: s.rating?.average || 0,
       })),
       servicesByCategory: servicesByCategory.map((c: any) => ({
-        category: c.name,
+        name: c.name, // FIX: Changed from 'category' to 'name' to match frontend expectations
         count: c.count,
         percentage: totalServiceCount > 0 ? (c.count / totalServiceCount) * 100 : 0,
       })),
@@ -524,9 +524,9 @@ export const getServiceAnalytics = async (): Promise<ServiceAnalytics> => {
 // Clear analytics cache
 export const clearAnalyticsCache = async (): Promise<void> => {
   try {
-    const keys = await cacheRedis.keys('analytics:*');
+    const keys = await cache.keys('analytics:*');
     if (keys.length > 0) {
-      await cacheRedis.del(...keys);
+      await cache.del(...keys);
     }
     logger.info('Analytics cache cleared', {
       keysDeleted: keys.length,

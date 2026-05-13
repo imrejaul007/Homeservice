@@ -1,20 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Search, MapPin, User, LogOut, BarChart3, X, Calendar, Heart, ChevronDown, Package } from 'lucide-react';
+import { Search, MapPin, User, LogOut, BarChart3, X, Calendar, Heart, ChevronDown, Package, Gift } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
 import CategoryTabs from './CategoryTabs';
+import LocationDropdown from '../location/LocationDropdown';
 
 interface NavigationHeaderProps {
   showSearch?: boolean;
   onSearch?: (query: string) => void;
-  currentLocation?: string;
   showCategoryTabs?: boolean;
 }
 
 const NavigationHeader: React.FC<NavigationHeaderProps> = ({
   showSearch = true,
   onSearch,
-  currentLocation = 'Dubai',
   showCategoryTabs = true,
 }) => {
   const navigate = useNavigate();
@@ -91,10 +90,7 @@ const NavigationHeader: React.FC<NavigationHeaderProps> = ({
                 <Search className="h-5 w-5" />
               </button>
 
-              <button className="flex items-center gap-1 px-2 py-1 text-sm text-nilin-warmGray hover:text-nilin-charcoal transition-colors duration-200">
-                <MapPin className="h-4 w-4" />
-                <span className="text-xs font-medium">{currentLocation}</span>
-              </button>
+              <LocationDropdown variant="mobile" />
 
               {user ? (
                 <button
@@ -147,11 +143,7 @@ const NavigationHeader: React.FC<NavigationHeaderProps> = ({
               {/* Desktop Navigation */}
               <div className="flex items-center gap-3">
                 {/* Location Selector */}
-                <button className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-nilin-warmGray hover:text-nilin-charcoal hover:bg-nilin-blush/50 rounded-nilin transition-all duration-200 shadow-nilin-warm hover:shadow-lg">
-                  <MapPin className="h-4 w-4" />
-                  <span>{currentLocation}</span>
-                  <ChevronDown className="h-3 w-3" />
-                </button>
+                <LocationDropdown variant="desktop" />
 
                 {/* Track Order */}
                 <Link
@@ -203,6 +195,9 @@ const NavigationHeader: React.FC<NavigationHeaderProps> = ({
                               <Link to="/customer/favorites" className="flex items-center gap-3 px-4 py-3 text-sm text-nilin-charcoal hover:bg-nilin-blush/70 rounded-nilin transition-all duration-200" onClick={() => setShowUserMenu(false)}>
                                 <Heart className="h-4 w-4 text-nilin-warmGray" /> Favorites
                               </Link>
+                              <Link to="/customer/my-claims" className="flex items-center gap-3 px-4 py-3 text-sm text-nilin-charcoal hover:bg-nilin-blush/70 rounded-nilin transition-all duration-200" onClick={() => setShowUserMenu(false)}>
+                                <Gift className="h-4 w-4 text-nilin-warmGray" /> My Claims
+                              </Link>
                               <Link to="/customer/profile" className="flex items-center gap-3 px-4 py-3 text-sm text-nilin-charcoal hover:bg-nilin-blush/70 rounded-nilin transition-all duration-200" onClick={() => setShowUserMenu(false)}>
                                 <User className="h-4 w-4 text-nilin-warmGray" /> Profile
                               </Link>
@@ -221,9 +216,14 @@ const NavigationHeader: React.FC<NavigationHeaderProps> = ({
                           )}
 
                           {user.role === 'admin' && (
-                            <Link to="/admin/dashboard" className="flex items-center gap-3 px-4 py-3 text-sm text-nilin-charcoal hover:bg-nilin-blush/70 rounded-nilin transition-all duration-200" onClick={() => setShowUserMenu(false)}>
-                              <BarChart3 className="h-4 w-4 text-nilin-warmGray" /> Admin Dashboard
-                            </Link>
+                            <>
+                              <Link to="/admin/dashboard" className="flex items-center gap-3 px-4 py-3 text-sm text-nilin-charcoal hover:bg-nilin-blush/70 rounded-nilin transition-all duration-200" onClick={() => setShowUserMenu(false)}>
+                                <BarChart3 className="h-4 w-4 text-nilin-warmGray" /> Admin Dashboard
+                              </Link>
+                              <Link to="/admin/offers" className="flex items-center gap-3 px-4 py-3 text-sm text-nilin-charcoal hover:bg-nilin-blush/70 rounded-nilin transition-all duration-200" onClick={() => setShowUserMenu(false)}>
+                                <Gift className="h-4 w-4 text-nilin-warmGray" /> Offers Management
+                              </Link>
+                            </>
                           )}
 
                           <div className="border-t border-nilin-border mt-2 pt-2">
@@ -356,6 +356,9 @@ const NavigationHeader: React.FC<NavigationHeaderProps> = ({
                       <Link to="/customer/favorites" className="flex items-center gap-3 px-4 py-3 text-nilin-charcoal hover:bg-nilin-peach/30 rounded-nilin transition-all duration-200" onClick={closeMobileMenu}>
                         <Heart className="h-5 w-5 text-nilin-warmGray" /> Favorites
                       </Link>
+                      <Link to="/customer/my-claims" className="flex items-center gap-3 px-4 py-3 text-nilin-charcoal hover:bg-nilin-peach/30 rounded-nilin transition-all duration-200" onClick={closeMobileMenu}>
+                        <Gift className="h-5 w-5 text-nilin-warmGray" /> My Claims
+                      </Link>
                       <Link to="/customer/profile" className="flex items-center gap-3 px-4 py-3 text-nilin-charcoal hover:bg-nilin-peach/30 rounded-nilin transition-all duration-200" onClick={closeMobileMenu}>
                         <User className="h-5 w-5 text-nilin-warmGray" /> Profile
                       </Link>
@@ -374,9 +377,14 @@ const NavigationHeader: React.FC<NavigationHeaderProps> = ({
                   )}
 
                   {user?.role === 'admin' && (
-                    <Link to="/admin/dashboard" className="flex items-center gap-3 px-4 py-3 text-nilin-charcoal hover:bg-nilin-peach/30 rounded-nilin transition-all duration-200" onClick={closeMobileMenu}>
-                      <BarChart3 className="h-5 w-5 text-nilin-warmGray" /> Admin Dashboard
-                    </Link>
+                    <>
+                      <Link to="/admin/dashboard" className="flex items-center gap-3 px-4 py-3 text-nilin-charcoal hover:bg-nilin-peach/30 rounded-nilin transition-all duration-200" onClick={closeMobileMenu}>
+                        <BarChart3 className="h-5 w-5 text-nilin-warmGray" /> Admin Dashboard
+                      </Link>
+                      <Link to="/admin/offers" className="flex items-center gap-3 px-4 py-3 text-nilin-charcoal hover:bg-nilin-peach/30 rounded-nilin transition-all duration-200" onClick={closeMobileMenu}>
+                        <Gift className="h-5 w-5 text-nilin-warmGray" /> Offers Management
+                      </Link>
+                    </>
                   )}
                 </div>
               </nav>

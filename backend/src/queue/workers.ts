@@ -1,16 +1,47 @@
 import { Worker, Job } from 'bullmq';
-import { queueRedis } from '../config/redis';
-import { getMeiliClient, INDEXES, isMeiliSearchConfigured } from '../config/meilisearch';
 import logger from '../utils/logger';
 import emailService from '../services/email.service';
-import { QUEUE_NAMES } from './index';
+import { QUEUE_NAMES, areQueuesEnabled } from './index';
+import dotenv from 'dotenv';
+import path from 'path';
+
+// Load env first
+dotenv.config({ path: path.join(__dirname, '../../.env') });
+
+// Check if Redis is configured for workers
+const isRedisConfigured = (): boolean => {
+  return !!(process.env.REDIS_URL || (process.env.REDIS_HOST && process.env.REDIS_PORT));
+};
+
+// Parse REDIS_URL if provided
+const getRedisConfig = () => {
+  if (process.env.REDIS_URL) {
+    try {
+      const url = new URL(process.env.REDIS_URL);
+      return {
+        host: url.hostname,
+        port: parseInt(url.port || '12442'),
+        password: url.password || undefined,
+      };
+    } catch {
+      // Fall back to individual env vars
+    }
+  }
+  return {
+    host: process.env.REDIS_HOST,
+    port: parseInt(process.env.REDIS_PORT || '12442'),
+    password: process.env.REDIS_PASSWORD,
+  };
+};
+
+const redisConfig = getRedisConfig();
 
 // Common worker options with Redis connection - use URL for BullMQ v5
 const workerOptions = {
   connection: {
-    host: process.env.REDIS_HOST || 'redis-12442.c274.us-east-1-3.ec2.cloud.redislabs.com',
-    port: parseInt(process.env.REDIS_PORT || '12442'),
-    password: process.env.REDIS_PASSWORD || 'jwTUlq5fg7BD4D8KQcpUfmSoMh0Z6s5w',
+    host: redisConfig.host,
+    port: redisConfig.port,
+    password: redisConfig.password,
     maxRetriesPerRequest: null,
   },
 };
@@ -56,12 +87,12 @@ const emailProcessor = async (job: Job<EmailJobData>) => {
         await emailService.sendBookingCompletedEmail(to, firstName, bookingDetails);
         break;
 
-      case 'booking_request':
-        await emailService.sendBookingRequestEmail(to, firstName, bookingDetails);
-        break;
-
       case 'booking_reminder':
         await emailService.sendBookingReminderEmail(to, firstName, bookingDetails);
+        break;
+
+      case 'booking_request':
+        await emailService.sendBookingRequestEmail(to, firstName, bookingDetails);
         break;
 
       case 'password_reset':
@@ -69,15 +100,34 @@ const emailProcessor = async (job: Job<EmailJobData>) => {
         break;
 
       case 'welcome':
-        await emailService.sendWelcomeEmail(to, firstName, 'customer');
+        await emailService.sendWelcomeEmail(to, firstName);
         break;
 
       case 'verification':
         await emailService.sendVerificationEmail(to, firstName, metadata?.verificationToken as string);
         break;
 
+      case 'provider_approved':
+        await emailService.sendProviderApprovedEmail(to, firstName);
+        break;
+
+      case 'provider_rejected':
+        await emailService.sendProviderRejectedEmail(to, firstName, metadata?.rejectionReason as string);
+        break;
+
+      case 'payment_received':
+        await emailService.sendPaymentReceivedEmail(to, firstName, metadata?.amount as number);
+        break;
+
+      case 'payout_processed':
+        await emailService.sendPayoutProcessedEmail(to, firstName, metadata?.amount as number);
+        break;
+
       default:
-        logger.warn(`Unknown email type: ${type}`);
+        logger.warn(`Unknown email type: ${type}`, {
+          type,
+          action: 'UNKNOWN_EMAIL_TYPE',
+        });
     }
 
     logger.info(`Email job completed: ${job.id}`, {
@@ -86,36 +136,16 @@ const emailProcessor = async (job: Job<EmailJobData>) => {
       action: 'EMAIL_JOB_COMPLETED',
     });
 
-    return { success: true, type };
-  } catch (error: unknown) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
+    return { success: true };
+  } catch (error) {
     logger.error(`Email job failed: ${job.id}`, {
       jobId: job.id,
       type,
-      error: errorMessage,
+      error: (error as Error).message,
       action: 'EMAIL_JOB_FAILED',
     });
     throw error;
   }
-};
-
-const createEmailWorker = (): Worker => {
-  const worker = new Worker<EmailJobData>(
-    QUEUE_NAMES.EMAIL,
-    emailProcessor,
-    workerOptions
-  );
-
-  worker.on('completed', (job) => {
-    logger.info(`Email job ${job.id} completed successfully`);
-  });
-
-  worker.on('failed', (job, err) => {
-    logger.error(`Email job ${job?.id} failed: ${err.message}`);
-  });
-
-  logger.info('Email worker created', { queue: QUEUE_NAMES.EMAIL });
-  return worker;
 };
 
 // ============================================
@@ -135,460 +165,231 @@ const notificationProcessor = async (job: Job<NotificationJobData>) => {
 
   logger.info(`Processing notification job: ${job.id}`, {
     jobId: job.id,
-    userId,
     type,
+    userId,
     action: 'NOTIFICATION_JOB_STARTED',
   });
 
   try {
-    // Here you would integrate with your notification service
-    logger.info(`Notification sent to user ${userId}: ${title}`, {
-      jobId: job.id,
-      userId,
+    // Import notification service dynamically to avoid circular dependency
+    const { notificationService } = await import('../services/notification.service');
+
+    await notificationService.sendToUser(userId, {
       type,
-      action: 'NOTIFICATION_SENT',
+      title,
+      message,
+      data,
     });
 
     logger.info(`Notification job completed: ${job.id}`, {
       jobId: job.id,
-      userId,
       action: 'NOTIFICATION_JOB_COMPLETED',
     });
 
-    return { success: true, userId };
-  } catch (error: unknown) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
+    return { success: true };
+  } catch (error) {
     logger.error(`Notification job failed: ${job.id}`, {
       jobId: job.id,
-      userId,
-      error: errorMessage,
+      error: (error as Error).message,
       action: 'NOTIFICATION_JOB_FAILED',
     });
     throw error;
   }
 };
 
-const createNotificationWorker = (): Worker => {
-  const worker = new Worker<NotificationJobData>(
-    QUEUE_NAMES.NOTIFICATION,
-    notificationProcessor,
-    workerOptions
-  );
-
-  worker.on('completed', (job) => {
-    logger.info(`Notification job ${job.id} completed successfully`);
-  });
-
-  worker.on('failed', (job, err) => {
-    logger.error(`Notification job ${job?.id} failed: ${err.message}`);
-  });
-
-  logger.info('Notification worker created', { queue: QUEUE_NAMES.NOTIFICATION });
-  return worker;
-};
-
 // ============================================
-// Analytics Worker
+// Loyalty Worker
 // ============================================
 
-interface AnalyticsEventData {
-  eventType: string;
-  eventData: Record<string, unknown>;
-  timestamp: Date;
-  sessionId?: string;
-  userId?: string;
+interface LoyaltyJobData {
+  userId: string;
+  action: string;
+  metadata?: Record<string, unknown>;
 }
 
-const analyticsProcessor = async (job: Job<AnalyticsEventData>) => {
-  const { eventType, eventData, timestamp, sessionId, userId } = job.data;
+const loyaltyProcessor = async (job: Job<LoyaltyJobData>) => {
+  const { userId, action, metadata } = job.data;
 
-  logger.info(`Processing analytics event: ${job.id}`, {
-    jobId: job.id,
-    eventType,
-    action: 'ANALYTICS_JOB_STARTED',
-  });
-
-  try {
-    logger.info(`Analytics event processed: ${eventType}`, {
-      jobId: job.id,
-      eventType,
-      sessionId,
-      userId,
-      action: 'ANALYTICS_EVENT_PROCESSED',
-    });
-
-    return { success: true, eventType };
-  } catch (error: unknown) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    logger.error(`Analytics job failed: ${job.id}`, {
-      jobId: job.id,
-      eventType,
-      error: errorMessage,
-      action: 'ANALYTICS_JOB_FAILED',
-    });
-    throw error;
-  }
-};
-
-const createAnalyticsWorker = (): Worker => {
-  const worker = new Worker<AnalyticsEventData>(
-    QUEUE_NAMES.ANALYTICS,
-    analyticsProcessor,
-    workerOptions
-  );
-
-  worker.on('completed', (job) => {
-    logger.info(`Analytics job ${job.id} completed successfully`);
-  });
-
-  worker.on('failed', (job, err) => {
-    logger.error(`Analytics job ${job?.id} failed: ${err.message}`);
-  });
-
-  logger.info('Analytics worker created', { queue: QUEUE_NAMES.ANALYTICS });
-  return worker;
-};
-
-// ============================================
-// Search Index Worker
-// ============================================
-
-interface SearchIndexJobData {
-  action: 'index' | 'update' | 'delete';
-  entityType: 'service' | 'provider' | 'category';
-  entityId: string;
-  data?: Record<string, unknown>;
-}
-
-const searchIndexProcessor = async (job: Job<SearchIndexJobData>) => {
-  const { action, entityType, entityId, data } = job.data;
-
-  logger.info(`Processing search index job: ${job.id}`, {
+  logger.info(`Processing loyalty job: ${job.id}`, {
     jobId: job.id,
     action,
-    entityType,
-    entityId,
-    actionLabel: 'SEARCH_INDEX_JOB_STARTED',
+    userId,
+    action: 'LOYALTY_JOB_STARTED',
   });
 
-  if (!isMeiliSearchConfigured()) {
-    logger.warn('Search index job skipped - Meilisearch not configured', {
-      jobId: job.id,
-      entityType,
-      entityId,
-    });
-    return { success: false, reason: 'Meilisearch not configured' };
-  }
-
   try {
-    let indexName: string;
-
-    switch (entityType) {
-      case 'service':
-        indexName = INDEXES.SERVICES;
-        break;
-      case 'provider':
-        indexName = INDEXES.PROVIDERS;
-        break;
-      case 'category':
-        indexName = INDEXES.CATEGORIES;
-        break;
-      default:
-        throw new Error(`Unknown entity type: ${entityType}`);
-    }
-
-    const client = await getMeiliClient();
-    if (!client) {
-      throw new Error('Failed to get MeiliSearch client');
-    }
-
-    const index = client.index(indexName);
+    // Import loyalty service dynamically to avoid circular dependency
+    const { loyaltyService } = await import('../services/loyalty.service');
 
     switch (action) {
-      case 'index':
-      case 'update':
-        if (!data) {
-          throw new Error(`Data required for ${action} action`);
-        }
-        await index.addDocuments([data]);
+      case 'award_signup_bonus':
+        await loyaltyService.awardSignupBonus(userId);
         break;
 
-      case 'delete':
-        await index.deleteDocument(entityId);
+      case 'award_booking_points':
+        await loyaltyService.awardBookingPoints(
+          userId,
+          metadata?.bookingId as string,
+          metadata?.amount as number
+        );
         break;
 
-      default:
-        throw new Error(`Unknown action: ${action}`);
-    }
-
-    logger.info(`Search index job completed: ${job.id}`, {
-      jobId: job.id,
-      action,
-      entityType,
-      entityId,
-      actionLabel: 'SEARCH_INDEX_JOB_COMPLETED',
-    });
-
-    return { success: true, action, entityType, entityId };
-  } catch (error: unknown) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    logger.error(`Search index job failed: ${job.id}`, {
-      jobId: job.id,
-      action,
-      entityType,
-      entityId,
-      error: errorMessage,
-      actionLabel: 'SEARCH_INDEX_JOB_FAILED',
-    });
-    throw error;
-  }
-};
-
-const createSearchIndexWorker = (): Worker => {
-  const worker = new Worker<SearchIndexJobData>(
-    QUEUE_NAMES.SEARCH_INDEX,
-    searchIndexProcessor,
-    workerOptions
-  );
-
-  worker.on('completed', (job) => {
-    logger.info(`Search index job ${job.id} completed successfully`);
-  });
-
-  worker.on('failed', (job, err) => {
-    logger.error(`Search index job ${job?.id} failed: ${err.message}`);
-  });
-
-  logger.info('Search index worker created', { queue: QUEUE_NAMES.SEARCH_INDEX });
-  return worker;
-};
-
-// ============================================
-// Webhook Worker
-// ============================================
-
-interface WebhookJobData {
-  webhookId: string;
-  url: string;
-  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
-  headers?: Record<string, string>;
-  payload?: Record<string, unknown>;
-  signature?: string;
-  secret?: string;
-  maxRetries?: number;
-  retryCount?: number;
-}
-
-const webhookProcessor = async (job: Job<WebhookJobData>) => {
-  const { webhookId, url, method, headers, payload, signature, secret } = job.data;
-
-  logger.info(`Processing webhook job: ${job.id}`, {
-    jobId: job.id,
-    webhookId,
-    url,
-    method,
-    actionLabel: 'WEBHOOK_JOB_STARTED',
-  });
-
-  try {
-    // Build request options
-    const requestHeaders: Record<string, string> = {
-      'Content-Type': 'application/json',
-      'User-Agent': 'NILIN-Webhook/1.0',
-      ...headers,
-    };
-
-    // Add HMAC signature if secret is provided
-    if (secret && payload) {
-      const crypto = await import('crypto');
-      const hmac = crypto.createHmac('sha256', secret);
-      hmac.update(JSON.stringify(payload));
-      requestHeaders['X-Webhook-Signature'] = hmac.digest('hex');
-    }
-
-    const requestOptions: RequestInit = {
-      method,
-      headers: requestHeaders,
-    };
-
-    // Add body for non-GET requests
-    if (method !== 'GET' && payload) {
-      requestOptions.body = JSON.stringify(payload);
-    }
-
-    // Make the webhook request
-    const response = await fetch(url, requestOptions);
-
-    if (!response.ok) {
-      throw new Error(`Webhook failed with status: ${response.status}`);
-    }
-
-    logger.info(`Webhook job completed: ${job.id}`, {
-      jobId: job.id,
-      webhookId,
-      status: response.status,
-      actionLabel: 'WEBHOOK_JOB_COMPLETED',
-    });
-
-    return { success: true, webhookId, status: response.status };
-  } catch (error: unknown) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    logger.error(`Webhook job failed: ${job.id}`, {
-      jobId: job.id,
-      webhookId,
-      url,
-      error: errorMessage,
-      actionLabel: 'WEBHOOK_JOB_FAILED',
-    });
-    throw error;
-  }
-};
-
-const createWebhookWorker = (): Worker => {
-  const worker = new Worker<WebhookJobData>(
-    QUEUE_NAMES.WEBHOOK,
-    webhookProcessor,
-    workerOptions
-  );
-
-  worker.on('completed', (job) => {
-    logger.info(`Webhook job ${job.id} completed successfully`);
-  });
-
-  worker.on('failed', (job, err) => {
-    logger.error(`Webhook job ${job?.id} failed: ${err.message}`);
-  });
-
-  logger.info('Webhook worker created', { queue: QUEUE_NAMES.WEBHOOK });
-  return worker;
-};
-
-// ============================================
-// Cleanup Worker
-// ============================================
-
-interface CleanupJobData {
-  task: string;
-  options?: Record<string, unknown>;
-}
-
-const cleanupProcessor = async (job: Job<CleanupJobData>) => {
-  const { task } = job.data;
-
-  logger.info(`Processing cleanup job: ${job.id}`, {
-    jobId: job.id,
-    task,
-    action: 'CLEANUP_JOB_STARTED',
-  });
-
-  try {
-    let deletedCount = 0;
-
-    switch (task) {
-      case 'expired_tokens':
-        logger.info(`Cleanup task completed: ${task}`, {
-          jobId: job.id,
-          deletedCount,
-          action: 'CLEANUP_TASK_COMPLETED',
-        });
+      case 'award_review_bonus':
+        await loyaltyService.awardReviewBonus(userId, metadata?.reviewId as string);
         break;
 
-      case 'old_audit_logs':
-        logger.info(`Cleanup task completed: ${task}`, {
-          jobId: job.id,
-          deletedCount,
-          action: 'CLEANUP_TASK_COMPLETED',
-        });
-        break;
-
-      case 'orphaned_uploads':
-        logger.info(`Cleanup task completed: ${task}`, {
-          jobId: job.id,
-          deletedCount,
-          action: 'CLEANUP_TASK_COMPLETED',
-        });
-        break;
-
-      case 'expired_cache':
-        const { cacheRedis } = await import('../config/redis');
-        const cacheKeys = await cacheRedis.keys('nilin:cache:*');
-        deletedCount = cacheKeys.length;
-        logger.info(`Cleanup task completed: ${task}`, {
-          jobId: job.id,
-          deletedCount,
-          action: 'CLEANUP_TASK_COMPLETED',
-        });
+      case 'check_tier_upgrade':
+        await loyaltyService.checkAndUpgradeTier(userId);
         break;
 
       default:
-        logger.warn(`Unknown cleanup task: ${task}`);
+        logger.warn(`Unknown loyalty action: ${action}`);
     }
 
-    return { success: true, task, deletedCount };
-  } catch (error: unknown) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    logger.error(`Cleanup job failed: ${job.id}`, {
+    logger.info(`Loyalty job completed: ${job.id}`, {
       jobId: job.id,
-      task,
-      error: errorMessage,
-      action: 'CLEANUP_JOB_FAILED',
+      action,
+      action: 'LOYALTY_JOB_COMPLETED',
+    });
+
+    return { success: true };
+  } catch (error) {
+    logger.error(`Loyalty job failed: ${job.id}`, {
+      jobId: job.id,
+      action,
+      error: (error as Error).message,
+      action: 'LOYALTY_JOB_FAILED',
     });
     throw error;
   }
 };
 
-const createCleanupWorker = (): Worker => {
-  const worker = new Worker<CleanupJobData>(
-    QUEUE_NAMES.CLEANUP,
-    cleanupProcessor,
-    workerOptions
-  );
+// ============================================
+// Worker Registry
+// ============================================
 
-  worker.on('completed', (job) => {
-    logger.info(`Cleanup job ${job.id} completed successfully`);
+interface WorkerInstance {
+  worker: Worker;
+  name: string;
+}
+
+const workers: WorkerInstance[] = [];
+
+// Initialize all workers
+export const initializeWorkers = (): void => {
+  if (!isRedisConfigured()) {
+    logger.warn('Workers not initialized - Redis not configured', {
+      action: 'WORKERS_DISABLED',
+    });
+    return;
+  }
+
+  logger.info('Initializing queue workers...', {
+    action: 'WORKERS_INITIALIZING',
   });
 
-  worker.on('failed', (job, err) => {
-    logger.error(`Cleanup job ${job?.id} failed: ${err.message}`);
+  // Email Worker
+  const emailWorker = new Worker(QUEUE_NAMES.EMAIL, emailProcessor, {
+    ...workerOptions,
+    concurrency: 5,
   });
 
-  logger.info('Cleanup worker created', { queue: QUEUE_NAMES.CLEANUP });
-  return worker;
+  emailWorker.on('completed', (job) => {
+    logger.debug(`Email job ${job.id} completed`, {
+      jobId: job.id,
+      action: 'EMAIL_WORKER_JOB_COMPLETED',
+    });
+  });
+
+  emailWorker.on('failed', (job, err) => {
+    logger.error(`Email job ${job?.id} failed`, {
+      jobId: job?.id,
+      error: err.message,
+      action: 'EMAIL_WORKER_JOB_FAILED',
+    });
+  });
+
+  workers.push({ worker: emailWorker, name: QUEUE_NAMES.EMAIL });
+
+  // Notification Worker
+  const notificationWorker = new Worker(QUEUE_NAMES.NOTIFICATION, notificationProcessor, {
+    ...workerOptions,
+    concurrency: 10,
+  });
+
+  notificationWorker.on('completed', (job) => {
+    logger.debug(`Notification job ${job.id} completed`);
+  });
+
+  notificationWorker.on('failed', (job, err) => {
+    logger.error(`Notification job ${job?.id} failed`, {
+      error: err.message,
+    });
+  });
+
+  workers.push({ worker: notificationWorker, name: QUEUE_NAMES.NOTIFICATION });
+
+  // Loyalty Worker
+  const loyaltyWorker = new Worker(QUEUE_NAMES.LOYALTY, loyaltyProcessor, {
+    ...workerOptions,
+    concurrency: 5,
+  });
+
+  loyaltyWorker.on('completed', (job) => {
+    logger.debug(`Loyalty job ${job.id} completed`);
+  });
+
+  loyaltyWorker.on('failed', (job, err) => {
+    logger.error(`Loyalty job ${job?.id} failed`, {
+      error: err.message,
+    });
+  });
+
+  workers.push({ worker: loyaltyWorker, name: QUEUE_NAMES.LOYALTY });
+
+  logger.info('Queue workers initialized', {
+    count: workers.length,
+    action: 'WORKERS_INITIALIZED',
+  });
 };
 
-// ============================================
-// Worker Exports
-// ============================================
+// Graceful shutdown
+export const shutdownWorkers = async (): Promise<void> => {
+  logger.info('Shutting down queue workers...', {
+    action: 'WORKERS_SHUTTING_DOWN',
+  });
 
-export const emailWorker = createEmailWorker();
-export const notificationWorker = createNotificationWorker();
-export const analyticsWorker = createAnalyticsWorker();
-export const searchIndexWorker = createSearchIndexWorker();
-export const webhookWorker = createWebhookWorker();
-export const cleanupWorker = createCleanupWorker();
+  const shutdownPromises = workers.map(({ worker, name }) =>
+    worker.close().then(() => {
+      logger.info(`Worker closed: ${name}`, {
+        worker: name,
+        action: 'WORKER_CLOSED',
+      });
+    }).catch((error) => {
+      logger.error(`Failed to close worker ${name}`, {
+        worker: name,
+        error: error.message,
+      });
+    })
+  );
 
-// Close all workers
-export const closeAllWorkers = async (): Promise<void> => {
-  logger.info('Closing queue workers...');
+  await Promise.allSettled(shutdownPromises);
 
-  await Promise.all([
-    emailWorker.close(),
-    notificationWorker.close(),
-    analyticsWorker.close(),
-    searchIndexWorker.close(),
-    webhookWorker.close(),
-    cleanupWorker.close(),
-  ]);
+  logger.info('All queue workers shut down', {
+    action: 'WORKERS_SHUTDOWN_COMPLETE',
+  });
+};
 
-  logger.info('All queue workers closed');
+// Get worker status
+export const getWorkerStatus = (): Array<{ name: string; status: string }> => {
+  return workers.map(({ name, worker }) => ({
+    name,
+    status: worker.isRunning() ? 'running' : 'stopped',
+  }));
 };
 
 export default {
-  emailWorker,
-  notificationWorker,
-  analyticsWorker,
-  searchIndexWorker,
-  webhookWorker,
-  cleanupWorker,
-  closeAllWorkers,
+  initializeWorkers,
+  shutdownWorkers,
+  getWorkerStatus,
 };

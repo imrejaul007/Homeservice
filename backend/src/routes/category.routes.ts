@@ -2,6 +2,7 @@ import { Router } from 'express';
 import {
   getMasterCategories,
   getCategoryBySlug,
+  getCategoryById,
   getSubcategories,
   getCategoryServices,
   getCategoryStats,
@@ -21,6 +22,10 @@ router.get('/', getMasterCategories);
 
 // GET /api/categories/stats - Get categories with service counts
 router.get('/stats', getCategoryStats);
+
+// GET /api/categories/id/:id - Get category by ID (returns slug for redirect)
+// This must come BEFORE /:slug to avoid route conflicts
+router.get('/id/:id', getCategoryById);
 
 // GET /api/categories/search - Search categories and subcategories
 // Query params: q (search query)

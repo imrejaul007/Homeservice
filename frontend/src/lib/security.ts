@@ -139,6 +139,12 @@ export const generateSecureId = (length: number = 32): string => {
 /**
  * Secure token storage (uses sessionStorage as fallback)
  */
+declare global {
+  interface Window {
+    __secureStorage?: Record<string, string>;
+  }
+}
+
 export const secureStorage = {
   setItem: (key: string, value: string): void => {
     try {
@@ -146,8 +152,8 @@ export const secureStorage = {
       sessionStorage.setItem(key, value);
     } catch {
       // Fallback to memory storage
-      (window as any).__secureStorage = (window as any).__secureStorage || {};
-      (window as any).__secureStorage[key] = value;
+      window.__secureStorage = window.__secureStorage || {};
+      window.__secureStorage[key] = value;
     }
   },
 
@@ -155,7 +161,7 @@ export const secureStorage = {
     try {
       return sessionStorage.getItem(key);
     } catch {
-      const storage = (window as any).__secureStorage || {};
+      const storage = window.__secureStorage || {};
       return storage[key] || null;
     }
   },
@@ -164,7 +170,7 @@ export const secureStorage = {
     try {
       sessionStorage.removeItem(key);
     } catch {
-      const storage = (window as any).__secureStorage || {};
+      const storage = window.__secureStorage || {};
       delete storage[key];
     }
   },
@@ -173,7 +179,7 @@ export const secureStorage = {
     try {
       sessionStorage.clear();
     } catch {
-      (window as any).__secureStorage = {};
+      window.__secureStorage = {};
     }
   },
 };

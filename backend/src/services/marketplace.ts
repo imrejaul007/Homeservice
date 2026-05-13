@@ -560,7 +560,7 @@ export async function getHighDemandZones(
 
   // Count providers by zone
   for (const provider of providers) {
-    const coords = provider.locationInfo?.primaryAddress?.coordinates;
+    const coords = provider.locationInfo?.primaryAddress?.coordinates as any;
     if (coords) {
       const zone = getLocationZone({ lat: coords.lat, lng: coords.lng }).zone;
       providerCountByZone[zone] = (providerCountByZone[zone] || 0) + 1;

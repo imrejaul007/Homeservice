@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -24,6 +24,8 @@ import {
 import NavigationHeader from '../components/layout/NavigationHeader';
 import Footer from '../components/layout/Footer';
 import { useProvider } from '../hooks/useProvider';
+import { useAuthStore } from '../stores/authStore';
+import { favoritesApi } from '../services/favoritesApi';
 import { CATEGORY_IMAGES, SUBCATEGORY_IMAGES } from '../constants/images';
 import type { Provider, ProviderService, ProviderReview, PortfolioItem, Certification } from '../types/provider';
 
@@ -297,9 +299,44 @@ const ProviderDetailPage: React.FC = () => {
   const [selectedFilter, setSelectedFilter] = useState<string>('all');
   const [showAllServices, setShowAllServices] = useState(false);
   const [isFavorite, setIsFavorite] = useState(false);
+  const [isTogglingFavorite, setIsTogglingFavorite] = useState(false);
   const galleryRef = useRef<HTMLDivElement>(null);
 
   const { provider, isLoading, error } = useProvider(id);
+  const { isAuthenticated } = useAuthStore();
+
+  // Check if provider is favorited on mount
+  useEffect(() => {
+    if (id && isAuthenticated) {
+      favoritesApi.checkFavorite(id)
+        .then(res => setIsFavorite(res.data.isFavorited))
+        .catch(() => {});
+    }
+  }, [id, isAuthenticated]);
+
+  const handleToggleFavorite = async () => {
+    if (!isAuthenticated) {
+      navigate('/login', { state: { returnTo: `/provider/${id}` } });
+      return;
+    }
+
+    if (!id || isTogglingFavorite) return;
+
+    setIsTogglingFavorite(true);
+    try {
+      if (isFavorite) {
+        await favoritesApi.removeFavorite(id);
+        setIsFavorite(false);
+      } else {
+        await favoritesApi.addFavorite(id);
+        setIsFavorite(true);
+      }
+    } catch (err) {
+      console.error('Failed to toggle favorite:', err);
+    } finally {
+      setIsTogglingFavorite(false);
+    }
+  };
 
   if (isLoading) return <LoadingSkeleton />;
   if (error || !provider) {
@@ -385,10 +422,11 @@ const ProviderDetailPage: React.FC = () => {
         {/* Actions */}
         <div className="absolute top-4 right-4 flex items-center gap-2">
           <button
-            onClick={() => setIsFavorite(!isFavorite)}
+            onClick={handleToggleFavorite}
+            disabled={isTogglingFavorite}
             className={`p-2 rounded-full shadow-sm transition-colors ${
               isFavorite ? 'bg-red-500 text-white' : 'bg-white/90 backdrop-blur-sm text-gray-600 hover:bg-white'
-            }`}
+            } ${isTogglingFavorite ? 'opacity-50' : ''}`}
           >
             <Heart className={`w-4 h-4 ${isFavorite ? 'fill-current' : ''}`} />
           </button>

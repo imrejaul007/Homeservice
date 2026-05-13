@@ -2,7 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
 import authService from '../../services/AuthService';
+import { aiApi } from '../../services/aiApi';
 import PageLayout from '../layout/PageLayout';
+import AdminExperiencePanel from './AdminExperiencePanel';
+import type { AIInsightsData, AdminServiceData, AdminUserData, ProviderVerificationData } from '../../types/auth';
 import {
   Users,
   UserCheck,
@@ -30,7 +33,11 @@ import {
   RefreshCw,
   Download,
   Plus,
-  Pause
+  Pause,
+  Brain,
+  Sparkles,
+  TrendingDown,
+  Star
 } from 'lucide-react';
 
 // Types
@@ -405,6 +412,12 @@ const AdminDashboard: React.FC = () => {
   const [showProvidersServices, setShowProvidersServices] = useState(false);
   const [showServices, setShowServices] = useState(false);
   const [showUsers, setShowUsers] = useState(false);
+  const [showAIInsights, setShowAIInsights] = useState(true);
+  const [showExperiences, setShowExperiences] = useState(false);
+
+  // AI Insights State
+  const [aiInsights, setAIInsights] = useState<AIInsightsData | null>(null);
+  const [loadingAI, setLoadingAI] = useState(false);
 
   // Interactive States
   const [expandedProviders, setExpandedProviders] = useState<Set<string>>(new Set());
@@ -448,6 +461,24 @@ const AdminDashboard: React.FC = () => {
     }
   }, [showPendingServices]);
 
+  useEffect(() => {
+    if (showAIInsights) {
+      fetchAIInsights();
+    }
+  }, [showAIInsights]);
+
+  const fetchAIInsights = async () => {
+    setLoadingAI(true);
+    try {
+      const data = await aiApi.getInsights();
+      setAIInsights(data as unknown as AIInsightsData);
+    } catch (error) {
+      console.error('Error fetching AI insights:', error);
+    } finally {
+      setLoadingAI(false);
+    }
+  };
+
   const fetchAllData = async () => {
     setIsLoading(true);
     setError(null);
@@ -467,20 +498,25 @@ const AdminDashboard: React.FC = () => {
 
   const fetchDashboardStats = async () => {
     try {
-      const data = await authService.get<{success: boolean, data: any}>('/admin/providers/stats');
-      if (data.success) {
-        const stats = data.data.stats;
-        setStats({
-          totalUsers: stats.total || 0,
-          totalCustomers: Math.floor((stats.total || 0) * 0.7),
-          totalProviders: stats.total || 0,
-          pendingVerifications: stats.pending || 0,
-          activeBookings: Math.floor((stats.approved || 0) * 0.6),
-          totalRevenue: (stats.approved || 0) * 1200,
-          monthlyGrowth: stats.approvalRate || 0,
-          systemHealth: 'good' as const
-        });
-      }
+      // Fetch both provider stats and user stats
+      const [providerData, userData] = await Promise.all([
+        authService.get<{success: boolean, data: any}>('/admin/providers/stats'),
+        authService.get<{success: boolean, data: any}>('/admin/users/stats')
+      ]);
+
+      const providerStats = providerData.success ? providerData.data.stats : {};
+      const userStats = userData.success ? userData.data.stats : {};
+
+      setStats({
+        totalUsers: userStats.total || 0,
+        totalCustomers: userStats.customers || 0,
+        totalProviders: userStats.providers || 0,
+        pendingVerifications: providerStats.pending || 0,
+        activeBookings: providerStats.activeBookings || 0,
+        totalRevenue: providerStats.totalRevenue || 0,
+        monthlyGrowth: providerStats.monthlyGrowth || 0,
+        systemHealth: 'good' as const
+      });
     } catch (error) {
       console.error('Error fetching dashboard stats:', error);
     }
@@ -720,14 +756,14 @@ const AdminDashboard: React.FC = () => {
             {user?.firstName} {user?.lastName}
           </span>
           <button
-            onClick={() => alert('Settings coming soon')}
+            onClick={() => navigate('/admin/settings')}
             className="inline-flex items-center px-4 py-2 border border-nilin-border/50 rounded-xl shadow-sm text-sm font-medium text-nilin-charcoal glass hover:bg-nilin-blush/50 font-sans transition-colors glass-btn"
           >
             <Settings className="h-4 w-4 mr-2 text-nilin-coral" />
             Settings
           </button>
           <button
-            onClick={() => window.open('/admin/reports', '_blank')}
+            onClick={() => navigate('/admin/reports')}
             className="inline-flex items-center px-4 py-2 border border-transparent rounded-xl shadow-sm text-sm font-medium text-white bg-gradient-to-r from-nilin-rose to-nilin-coral hover:shadow-nilin-warm font-sans transition-all btn-3d"
           >
             <BarChart3 className="h-4 w-4 mr-2" />
@@ -823,6 +859,91 @@ const AdminDashboard: React.FC = () => {
         </div>
       </div>
 
+      {/* AI Insights Section */}
+      {showAIInsights && (
+        <div className="mb-8">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <Brain className="h-6 w-6 text-nilin-coral" />
+              <h2 className="text-xl font-serif text-nilin-charcoal">AI Insights</h2>
+            </div>
+            <button
+              onClick={() => setShowAIInsights(false)}
+              className="text-nilin-warmGray hover:text-nilin-charcoal transition-colors"
+            >
+              <ChevronUp className="h-5 w-5" />
+            </button>
+          </div>
+
+          {loadingAI ? (
+            <div className="glass rounded-2xl border border-nilin-border/50 p-6">
+              <div className="flex items-center justify-center h-32">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-nilin-coral"></div>
+              </div>
+            </div>
+          ) : aiInsights ? (
+            <div className="space-y-4">
+              {/* Insights Stats */}
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div className="glass rounded-xl border border-nilin-border/50 p-4 text-center">
+                  <p className="text-2xl font-bold text-nilin-coral">{aiInsights.stats?.completionRate || 0}%</p>
+                  <p className="text-sm text-nilin-warmGray">Completion Rate</p>
+                </div>
+                <div className="glass rounded-xl border border-nilin-border/50 p-4 text-center">
+                  <p className="text-2xl font-bold text-green-600">AED {(aiInsights.stats?.totalRevenue || 0).toLocaleString()}</p>
+                  <p className="text-sm text-nilin-warmGray">Total Revenue</p>
+                </div>
+                <div className="glass rounded-xl border border-nilin-border/50 p-4 text-center">
+                  <p className="text-2xl font-bold text-nilin-charcoal">{aiInsights.stats?.totalBookings || 0}</p>
+                  <p className="text-sm text-nilin-warmGray">Total Bookings</p>
+                </div>
+                <div className="glass rounded-xl border border-nilin-border/50 p-4 text-center">
+                  <p className="text-2xl font-bold text-amber-600">{aiInsights.topServices?.[0]?.service || 'N/A'}</p>
+                  <p className="text-sm text-nilin-warmGray">Top Service</p>
+                </div>
+              </div>
+
+              {/* AI Recommendations */}
+              {aiInsights.insights && aiInsights.insights.length > 0 && (
+                <div className="glass rounded-2xl border border-nilin-border/50 p-4">
+                  <h3 className="text-lg font-serif text-nilin-charcoal mb-3 flex items-center gap-2">
+                    <Sparkles className="h-5 w-5 text-nilin-coral" />
+                    Recommendations
+                  </h3>
+                  <div className="space-y-3">
+                    {aiInsights.insights.map((insight: any, index: number) => (
+                      <div
+                        key={index}
+                        className={`p-3 rounded-xl border ${
+                          insight.type === 'positive' ? 'bg-green-50 border-green-200' :
+                          insight.type === 'warning' ? 'bg-amber-50 border-amber-200' :
+                          'bg-blue-50 border-blue-200'
+                        }`}
+                      >
+                        <div className="flex items-start gap-3">
+                          {insight.type === 'positive' && <CheckCircle className="h-5 w-5 text-green-600 flex-shrink-0" />}
+                          {insight.type === 'warning' && <AlertTriangle className="h-5 w-5 text-amber-600 flex-shrink-0" />}
+                          {insight.type === 'info' && <Star className="h-5 w-5 text-blue-600 flex-shrink-0" />}
+                          <div>
+                            <p className="font-medium text-nilin-charcoal">{insight.title}</p>
+                            <p className="text-sm text-nilin-warmGray">{insight.description}</p>
+                            <p className="text-xs text-nilin-coral mt-1">{insight.recommendation}</p>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="glass rounded-2xl border border-nilin-border/50 p-6 text-center">
+              <p className="text-nilin-warmGray">Unable to load AI insights. Please try again later.</p>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* User Breakdown */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
         <div className="glass glass-blur overflow-hidden rounded-2xl border border-nilin-border/50 inner-glow card-3d">
@@ -872,7 +993,7 @@ const AdminDashboard: React.FC = () => {
       <div className="mb-8 glass rounded-2xl border border-nilin-border/50 inner-glow">
         <div className="px-4 py-5 sm:p-6">
           <h3 className="text-lg font-serif font-light text-nilin-charcoal mb-4">Quick Actions</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
             <button
               onClick={() => setShowUsers(!showUsers)}
               className="inline-flex items-center justify-center px-4 py-3 border border-nilin-border/50 rounded-xl shadow-sm glass glass-blur text-sm font-medium text-nilin-charcoal hover:bg-nilin-blush/50 font-sans transition-colors glass-btn"
@@ -885,7 +1006,7 @@ const AdminDashboard: React.FC = () => {
               className="inline-flex items-center justify-center px-4 py-3 border border-nilin-border/50 rounded-xl shadow-sm glass glass-blur text-sm font-medium text-nilin-charcoal hover:bg-nilin-blush/50 font-sans transition-colors glass-btn"
             >
               <BarChart3 className="h-5 w-5 mr-2 text-nilin-rose" />
-              Manage Services & Providers
+              Services & Providers
             </button>
             <button
               onClick={() => setShowPendingServices(!showPendingServices)}
@@ -895,7 +1016,14 @@ const AdminDashboard: React.FC = () => {
               Pending Approvals
             </button>
             <button
-              onClick={() => alert('System config coming soon')}
+              onClick={() => setShowExperiences(!showExperiences)}
+              className="inline-flex items-center justify-center px-4 py-3 border border-nilin-border/50 rounded-xl shadow-sm glass glass-blur text-sm font-medium text-nilin-charcoal hover:bg-nilin-blush/50 font-sans transition-colors glass-btn"
+            >
+              <Star className="h-5 w-5 mr-2 text-nilin-coral" />
+              Experiences
+            </button>
+            <button
+              onClick={() => navigate('/admin/settings?section=system')}
               className="inline-flex items-center justify-center px-4 py-3 border border-nilin-border/50 rounded-xl shadow-sm glass glass-blur text-sm font-medium text-nilin-charcoal hover:bg-nilin-blush/50 font-sans transition-colors glass-btn"
             >
               <Settings className="h-5 w-5 mr-2 text-nilin-warmGray" />
@@ -1188,6 +1316,22 @@ const AdminDashboard: React.FC = () => {
               ))}
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Experiences Management Section */}
+      {showExperiences && (
+        <div className="mb-8">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-serif font-light text-nilin-charcoal">Experience Submissions</h3>
+            <button
+              onClick={() => setShowExperiences(false)}
+              className="text-nilin-warmGray hover:text-nilin-charcoal transition-colors"
+            >
+              <ChevronUp className="h-5 w-5" />
+            </button>
+          </div>
+          <AdminExperiencePanel embedded onClose={() => setShowExperiences(false)} />
         </div>
       )}
 

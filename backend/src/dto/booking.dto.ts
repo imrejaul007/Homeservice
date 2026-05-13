@@ -55,6 +55,8 @@ export interface BookingInputDTO {
   selectedDuration?: number;
   professionalPreference?: 'no_preference' | 'specific' | 'any_experience';
   paymentMethod?: string;
+  // Coupon/Promo
+  couponCode?: string;
 }
 
 export interface GuestInfoDTO {
@@ -139,16 +141,39 @@ export interface PublicBookingTrackingDTO {
     name: string;
     category: string;
     subcategory?: string;
+    image?: string;
   };
   provider?: {
     name: string;
+  };
+  location?: {
+    type: string;
+    address: {
+      street: string;
+      city: string;
+      state: string;
+      zipCode: string;
+      country: string;
+    };
+    notes?: string;
   };
   scheduledDate: Date;
   scheduledTime: string;
   duration: number;
   pricing: {
+    basePrice?: number;
+    addOns?: Array<{ name: string; price: number }>;
+    discounts?: Array<{ type: string; amount: number; description: string }>;
+    subtotal?: number;
+    tax?: number;
     totalAmount: number;
     currency: string;
+  };
+  customerInfo?: {
+    firstName?: string;
+    lastName?: string;
+    email?: string;
+    phone?: string;
   };
   isGuestBooking: boolean;
   createdAt: Date;

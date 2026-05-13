@@ -15,7 +15,7 @@ interface UseCategoryState {
 }
 
 // Hook to fetch all categories
-export function useCategories(featured?: boolean, includeComingSoon?: boolean) {
+export function useCategories(featured?: boolean, includeComingSoon?: boolean): UseCategoriesState & { refetch: () => Promise<void> } {
   const [state, setState] = useState<UseCategoriesState>({
     categories: [],
     isLoading: true,
@@ -51,7 +51,7 @@ export function useCategories(featured?: boolean, includeComingSoon?: boolean) {
 }
 
 // Hook to fetch a single category by slug
-export function useCategory(slug: string | undefined) {
+export function useCategory(slug: string | undefined): UseCategoryState & { refetch: () => Promise<void> } {
   const [state, setState] = useState<UseCategoryState>({
     category: null,
     isLoading: true,
@@ -92,7 +92,13 @@ export function useCategory(slug: string | undefined) {
 }
 
 // Hook to fetch subcategories for a category
-export function useSubcategories(categorySlug: string | undefined) {
+export function useSubcategories(categorySlug: string | undefined): {
+  subcategories: Subcategory[];
+  categoryName: string;
+  isLoading: boolean;
+  error: string | null;
+  refetch: () => Promise<void>;
+} {
   const [state, setState] = useState<{
     subcategories: Subcategory[];
     categoryName: string;
@@ -141,7 +147,19 @@ export function useSubcategories(categorySlug: string | undefined) {
 }
 
 // Hook for category stats (with service counts)
-export function useCategoryStats() {
+export function useCategoryStats(): {
+  stats: Array<{
+    _id: string;
+    name: string;
+    slug: string;
+    icon: string;
+    color: string;
+    serviceCount: number;
+  }>;
+  isLoading: boolean;
+  error: string | null;
+  refetch: () => Promise<void>;
+} {
   const [state, setState] = useState<{
     stats: Array<{
       _id: string;

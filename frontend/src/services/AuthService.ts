@@ -1,6 +1,7 @@
 import axios from 'axios';
 // Use simplified types to avoid bundling issues
 import { useAuthStore } from '../stores/authStore';
+import type { CustomerProfile, ProviderProfile } from '../stores/authStore';
 
 // Authentication Types
 export interface AuthTokens {
@@ -11,6 +12,7 @@ export interface AuthTokens {
 
 export interface AuthUser {
   id: string;
+  _id?: string; // Alias for id (backward compatibility)
   firstName: string;
   lastName: string;
   email: string;
@@ -19,12 +21,18 @@ export interface AuthUser {
   role: 'customer' | 'provider' | 'admin';
   isEmailVerified: boolean;
   accountStatus: string;
+  avatar?: string;
+  gender?: 'male' | 'female' | 'other' | 'prefer_not_to_say';
+  dateOfBirth?: string;
+  bio?: string;
+  language?: string;
   loyaltySystem?: {
     points: number;
     tier: string;
     benefits: string[];
     totalCoins: number;
     currentStreak: number;
+    referralCode?: string;
   };
 }
 
@@ -44,10 +52,10 @@ export interface RegisterData {
   role: 'customer' | 'provider';
   agreeToTerms: boolean;
   agreeToPrivacy: boolean;
-  [key: string]: any; // For additional role-specific fields
+  [key: string]: unknown; // For additional role-specific fields
 }
 
-export interface AuthResponse<T = any> {
+export interface AuthResponse<T = unknown> {
   success: boolean;
   data: T;
   message?: string;
@@ -57,9 +65,8 @@ export interface AuthResponse<T = any> {
 export interface LoginResponse {
   user: AuthUser;
   tokens: AuthTokens;
-  profile?: any;
-  customerProfile?: any;
-  providerProfile?: any;
+  customerProfile?: CustomerProfile;
+  providerProfile?: ProviderProfile;
   redirectUrl?: string;
   requiresEmailVerification?: boolean;
 }
@@ -67,9 +74,8 @@ export interface LoginResponse {
 export interface RegisterResponse {
   user: AuthUser;
   tokens: AuthTokens;
-  profile?: any;
-  customerProfile?: any;
-  providerProfile?: any;
+  customerProfile?: CustomerProfile;
+  providerProfile?: ProviderProfile;
 }
 
 /**
@@ -123,8 +129,9 @@ class AuthService {
     // RESPONSE INTERCEPTOR - Handle auth errors and automatic refresh
     this.httpClient.interceptors.response.use(
       (response) => response,
-      async (error: any) => {
-        const originalRequest = error.config as any;
+      async (error: unknown) => {
+        const axiosError = error as { config?: Record<string, any>; response?: { status?: number; data?: unknown } };
+        const originalRequest = axiosError.config || {} as Record<string, any>;
 
         // Define public endpoints that should NEVER trigger token refresh
         const publicEndpoints = [
@@ -143,7 +150,7 @@ class AuthService {
 
         // Handle 401 Unauthorized with automatic token refresh
         // BUT ONLY for authenticated requests (not login, register, etc.)
-        if (error.response?.status === 401 &&
+        if (axiosError.response?.status === 401 &&
             !originalRequest._retry &&
             !this.isLoggingOut &&
             !isPublicEndpoint &&
@@ -154,14 +161,14 @@ class AuthService {
               originalRequest.url?.includes('/auth/logout')) {
             console.error('Refresh token failed, logging out user');
             this.handleAuthFailure();
-            return Promise.reject(error);
+            return Promise.reject(axiosError);
           }
 
           // Only attempt refresh if we actually have stored tokens
           const storedTokens = this.getStoredTokens();
           if (!storedTokens?.refreshToken) {
             console.log('No refresh token available, skipping token refresh');
-            return Promise.reject(error);
+            return Promise.reject(axiosError);
           }
 
           // Mark request as retried to prevent infinite loops
@@ -185,21 +192,22 @@ class AuthService {
         }
 
         // Handle other error responses
-        if (error.response?.status === 403) {
-          console.error('Access forbidden:', error.response.data);
+        if (axiosError.response?.status === 403) {
+          console.error('Access forbidden:', axiosError.response?.data);
         }
 
-        return Promise.reject(error);
+        return Promise.reject(axiosError);
       }
     );
   }
 
   /**
-   * Get stored authentication tokens from localStorage
+   * Get stored authentication tokens from sessionStorage
+   * Using sessionStorage for improved security - tokens don't persist beyond current tab
    */
   private getStoredTokens(): AuthTokens | null {
     try {
-      const stored = localStorage.getItem('auth-storage');
+      const stored = sessionStorage.getItem('auth-storage');
       if (stored) {
         const parsed = JSON.parse(stored);
         return parsed.state?.tokens || null;
@@ -311,8 +319,8 @@ class AuthService {
       const authStore = useAuthStore.getState();
       authStore.clearAuth();
 
-      // Clear any localStorage auth data directly as backup
-      localStorage.removeItem('auth-storage');
+      // Clear any sessionStorage auth data directly as backup
+      sessionStorage.removeItem('auth-storage');
 
       // Clear any cookies
       document.cookie = 'refreshToken=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
@@ -483,9 +491,9 @@ class AuthService {
   /**
    * Get current authenticated user
    */
-  async getCurrentUser(): Promise<AuthResponse<{ user: AuthUser; profile?: any; customerProfile?: any; providerProfile?: any }>> {
+  async getCurrentUser(): Promise<AuthResponse<{ user: AuthUser; customerProfile?: CustomerProfile; providerProfile?: ProviderProfile }>> {
     try {
-      const response = await this.httpClient.get<AuthResponse<{ user: AuthUser; profile?: any }>>('/auth/me');
+      const response = await this.httpClient.get<AuthResponse<{ user: AuthUser; customerProfile?: CustomerProfile; providerProfile?: ProviderProfile }>>('/auth/me');
       return response.data;
     } catch (error) {
       if (axios.isAxiosError(error) && error.response) {
@@ -683,6 +691,7 @@ class AuthService {
   /**
    * HTTP GET request with automatic auth handling
    */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async get<T>(url: string, config?: any): Promise<T> {
     try {
       const response = await this.httpClient.get<T>(url, config);
@@ -698,6 +707,7 @@ class AuthService {
   /**
    * HTTP POST request with automatic auth handling
    */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async post<T>(url: string, data?: any, config?: any): Promise<T> {
     try {
       const response = await this.httpClient.post<T>(url, data, config);
@@ -713,6 +723,7 @@ class AuthService {
   /**
    * HTTP PUT request with automatic auth handling
    */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async put<T>(url: string, data?: any, config?: any): Promise<T> {
     try {
       const response = await this.httpClient.put<T>(url, data, config);
@@ -728,6 +739,7 @@ class AuthService {
   /**
    * HTTP PATCH request with automatic auth handling
    */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async patch<T>(url: string, data?: any, config?: any): Promise<T> {
     try {
       const response = await this.httpClient.patch<T>(url, data, config);
@@ -743,6 +755,7 @@ class AuthService {
   /**
    * HTTP DELETE request with automatic auth handling
    */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async delete<T>(url: string, config?: any): Promise<T> {
     try {
       const response = await this.httpClient.delete<T>(url, config);
@@ -778,12 +791,12 @@ class AuthService {
       return response.data;
     } catch (error) {
       if (axios.isAxiosError(error) && error.response) {
-        const data = error.response.data;
+        const data = error.response.data as { message?: string; errors?: Array<{ field?: string; message: string }> } | undefined;
         const message = data?.message || `Upload to ${url} failed`;
         // Include detailed validation errors if available
         const detailedErrors = data?.errors;
         if (detailedErrors && Array.isArray(detailedErrors)) {
-          const details = detailedErrors.map((e: any) => `${e.field}: ${e.message}`).join('; ');
+          const details = detailedErrors.map((e) => `${e.field}: ${e.message}`).join('; ');
           throw new Error(`${message} — ${details}`);
         }
         throw new Error(message);

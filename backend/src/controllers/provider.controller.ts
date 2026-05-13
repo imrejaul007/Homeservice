@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import mongoose from 'mongoose';
 import Service from '../models/service.model';
 import ServiceCategory from '../models/serviceCategory.model';
 import Booking from '../models/booking.model';
@@ -249,35 +250,22 @@ export const createService = asyncHandler(async (req: Request, res: Response) =>
     console.log('✅ [createService] Category/subcategory validated:', { category, subcategory });
 
     // ✅ FIX: Extract coordinates properly from provider profile and convert to array format
-    let serviceCoordinates;
-    if (providerProfile.locationInfo.primaryAddress.coordinates) {
-      const coords = providerProfile.locationInfo.primaryAddress.coordinates;
+    // Now uses GeoJSON format: { type: 'Point', coordinates: [lng, lat] }
+    let serviceCoordinates: [number, number];
+    const coords = providerProfile.locationInfo.primaryAddress.coordinates;
 
-      // Check if coordinates are in lat/lng object format
-      if (coords.lat && coords.lng) {
-        // Convert lat/lng object to [lng, lat] array format
-        serviceCoordinates = [coords.lng, coords.lat];
-        console.log(`🔄 [createService] Converted lat/lng object to array: [${coords.lng}, ${coords.lat}]`);
-      }
-      // Check if coordinates are already in GeoJSON format
-      else if (coords.coordinates && Array.isArray(coords.coordinates)) {
-        serviceCoordinates = coords.coordinates;
-        console.log(`✅ [createService] Using existing GeoJSON coordinates: [${coords.coordinates}]`);
-      }
-      // Check if coordinates are directly an array
-      else if (Array.isArray(coords)) {
-        serviceCoordinates = coords;
-        console.log(`✅ [createService] Using direct array coordinates: [${coords}]`);
-      }
-      else {
-        // Fallback to Assam coordinates
-        console.log('⚠️ [createService] Unknown coordinate format, using Assam default');
-        serviceCoordinates = [92.9376, 26.2006]; // [lng, lat]
-      }
+    if (coords?.coordinates && Array.isArray(coords.coordinates) && coords.coordinates.length === 2) {
+      // New GeoJSON format: { type: 'Point', coordinates: [lng, lat] }
+      serviceCoordinates = coords.coordinates as [number, number];
+      console.log(`✅ [createService] Using GeoJSON coordinates: [${serviceCoordinates}]`);
+    } else if (coords?.lat !== undefined && coords?.lng !== undefined) {
+      // Legacy format: { lat, lng } - convert to array [lng, lat]
+      serviceCoordinates = [coords.lng, coords.lat];
+      console.log(`⚠️ [createService] Converted legacy lat/lng to array: [${serviceCoordinates}]`);
     } else {
-      // No coordinates - use Assam, India as default
-      console.log('⚠️ [createService] No coordinates found, using default for Assam');
-      serviceCoordinates = [92.9376, 26.2006]; // Assam, India coordinates [lng, lat]
+      // Fallback to Dubai coordinates (default for the platform)
+      console.log('⚠️ [createService] No coordinates found, using Dubai default');
+      serviceCoordinates = [55.2708, 25.2048]; // [lng, lat]
     }
 
     console.log('🔍 [createService] Using coordinates:', serviceCoordinates);
@@ -558,7 +546,7 @@ export const getOverviewAnalytics = asyncHandler(async (req: Request, res: Respo
       providerId
     }).lean();
 
-    // Calculate overview statistics
+    // Calculate overview statistics from services
     const totalServices = services.length;
     const activeServices = services.filter(s => s.isActive && s.status === 'active').length;
     const draftServices = services.filter(s => s.status === 'draft').length;
@@ -568,38 +556,100 @@ export const getOverviewAnalytics = asyncHandler(async (req: Request, res: Respo
     const totalClicks = services.reduce((sum, service) => sum + service.searchMetadata.clickCount, 0);
     const totalBookings = services.reduce((sum, service) => sum + service.searchMetadata.bookingCount, 0);
 
-    const averageRating = services.reduce((sum, service) => sum + service.rating.average, 0) / totalServices || 0;
+    const averageRating = totalServices > 0
+      ? services.reduce((sum, service) => sum + service.rating.average, 0) / totalServices
+      : 0;
     const totalReviews = services.reduce((sum, service) => sum + service.rating.count, 0);
 
-    // Get booking stats from Booking model
+    // Get booking stats using MongoDB aggregation (no N+1 queries)
     const now = new Date();
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const endOfToday = new Date(startOfToday.getTime() + 24 * 60 * 60 * 1000);
     const startOfWeek = new Date(startOfToday.getTime() - 7 * 24 * 60 * 60 * 1000);
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
-    const [
-      allBookings,
-      pendingBookings,
-      todayBookings,
-      completedThisMonth
-    ] = await Promise.all([
-      Booking.find({ providerId }),
-      Booking.countDocuments({ providerId, status: 'pending' }),
-      Booking.countDocuments({
-        providerId,
-        scheduledDate: { $gte: startOfToday, $lt: new Date(startOfToday.getTime() + 24 * 60 * 60 * 1000) }
-      }),
-      Booking.countDocuments({
-        providerId,
-        status: 'completed',
-        completedAt: { $gte: startOfMonth }
-      })
+    // Use aggregation to compute booking stats in a single query
+    const bookingStats = await Booking.aggregate([
+      { $match: { providerId: new mongoose.Types.ObjectId(providerId) } },
+      {
+        $facet: {
+          // Pending requests count
+          pendingCount: [
+            { $match: { status: 'pending' } },
+            { $count: 'count' }
+          ],
+          // Today's bookings
+          todayCount: [
+            {
+              $match: {
+                scheduledDate: { $gte: startOfToday, $lt: endOfToday }
+              }
+            },
+            { $count: 'count' }
+          ],
+          // Completed this month
+          completedThisMonth: [
+            {
+              $match: {
+                status: 'completed',
+                completedAt: { $gte: startOfMonth }
+              }
+            },
+            { $count: 'count' }
+          ],
+          // New bookings (last 7 days, excluding cancelled)
+          newBookingsCount: [
+            {
+              $match: {
+                createdAt: { $gte: startOfWeek },
+                status: { $ne: 'cancelled' }
+              }
+            },
+            { $count: 'count' }
+          ],
+          // Status breakdown with counts
+          statusBreakdown: [
+            {
+              $group: {
+                _id: '$status',
+                count: { $sum: 1 }
+              }
+            }
+          ],
+          // Monthly revenue aggregation
+          monthlyRevenue: [
+            {
+              $match: {
+                status: 'completed',
+                completedAt: { $gte: startOfMonth }
+              }
+            },
+            {
+              $group: {
+                _id: null,
+                totalRevenue: { $sum: '$pricing.totalAmount' },
+                avgBookingValue: { $avg: '$pricing.totalAmount' }
+              }
+            }
+          ]
+        }
+      }
     ]);
 
-    // Calculate new bookings (last 7 days)
-    const newBookings = allBookings.filter(b =>
-      new Date(b.createdAt) >= startOfWeek && b.status !== 'cancelled'
-    ).length;
+    // Extract counts from aggregation results
+    const stats = bookingStats[0] || {};
+    const pendingBookings = stats.pendingCount?.[0]?.count || 0;
+    const todayBookings = stats.todayCount?.[0]?.count || 0;
+    const completedThisMonth = stats.completedThisMonth?.[0]?.count || 0;
+    const newBookings = stats.newBookingsCount?.[0]?.count || 0;
+    const monthlyRevenue = stats.monthlyRevenue?.[0]?.totalRevenue || 0;
+    const avgBookingValue = stats.monthlyRevenue?.[0]?.avgBookingValue || 0;
+
+    // Create status map for easy lookup
+    const statusMap = new Map<string, number>();
+    (stats.statusBreakdown || []).forEach((item: any) => {
+      statusMap.set(item._id, item.count);
+    });
 
     // Top performing services
     const topServices = services
@@ -638,15 +688,27 @@ export const getOverviewAnalytics = asyncHandler(async (req: Request, res: Respo
         totalReviews
       },
       bookingStats: {
-        newBookings,        // Last 7 days
+        newBookings,
         pendingRequests: pendingBookings,
         todaySchedule: todayBookings,
         completedThisMonth
       },
+      revenueStats: {
+        monthlyRevenue,
+        avgBookingValue: Math.round(avgBookingValue * 100) / 100
+      },
+      statusBreakdown: {
+        pending: statusMap.get('pending') || 0,
+        confirmed: statusMap.get('confirmed') || 0,
+        in_progress: statusMap.get('in_progress') || 0,
+        completed: statusMap.get('completed') || 0,
+        cancelled: statusMap.get('cancelled') || 0,
+        no_show: statusMap.get('no_show') || 0
+      },
       categories,
       topServices
     };
-    
+
     res.json({
       success: true,
       data: { overview }

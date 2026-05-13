@@ -1,7 +1,9 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Star, Clock, MapPin, TrendingUp, ChevronRight } from 'lucide-react';
+import { Star, Clock, MapPin, TrendingUp, ChevronRight, Heart } from 'lucide-react';
 import type { Service } from '../../types/service';
+import { useAuthStore } from '../../stores/authStore';
+import { favoritesApi } from '../../services/favoritesApi';
 
 export type { Service };
 
@@ -9,20 +11,54 @@ interface ServiceCardProps {
   service: Service;
   variant?: 'default' | 'compact' | 'featured';
   onClick?: (service: Service) => void;
+  isFavorited?: boolean;
+  onFavoriteChange?: (isFavorited: boolean) => void;
 }
 
 const ServiceCard: React.FC<ServiceCardProps> = ({
   service,
   variant = 'default',
-  onClick
+  onClick,
+  isFavorited: initialFavorited = false,
+  onFavoriteChange
 }) => {
   const navigate = useNavigate();
+  const { isAuthenticated } = useAuthStore();
+  const [isFavorited, setIsFavorited] = useState(initialFavorited);
+  const [isToggling, setIsToggling] = useState(false);
 
   const handleClick = () => {
     if (onClick) {
       onClick(service);
     } else {
       navigate(`/services/${service._id}`);
+    }
+  };
+
+  const handleToggleFavorite = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!isAuthenticated) {
+      navigate('/login', { state: { returnTo: `/services/${service._id}` } });
+      return;
+    }
+
+    if (isToggling) return;
+    setIsToggling(true);
+
+    try {
+      if (isFavorited) {
+        await favoritesApi.removeFavorite(service._id);
+        setIsFavorited(false);
+        onFavoriteChange?.(false);
+      } else {
+        await favoritesApi.addFavorite(service._id);
+        setIsFavorited(true);
+        onFavoriteChange?.(true);
+      }
+    } catch (err) {
+      console.error('Failed to toggle favorite:', err);
+    } finally {
+      setIsToggling(false);
     }
   };
 
@@ -272,6 +308,18 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
             )}
           </div>
         )}
+
+        {/* Favorite Button */}
+        <button
+          onClick={handleToggleFavorite}
+          className={`absolute top-3 left-3 p-2 rounded-full shadow-sm transition-all ${
+            isFavorited
+              ? 'bg-red-500 text-white'
+              : 'bg-white/80 backdrop-blur-sm text-gray-600 hover:bg-white'
+          } ${isToggling ? 'opacity-50' : ''}`}
+        >
+          <Heart className={`h-4 w-4 ${isFavorited ? 'fill-current' : ''}`} />
+        </button>
       </div>
 
       {/* Content */}

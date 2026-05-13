@@ -208,7 +208,7 @@ export interface CustomerProfileData {
   addresses: any[];
   favoriteProvidersCount: number;
   preferences: any;
-  loyaltyData: any;
+  // NOTE: loyaltyData removed - loyalty is now in User model's loyaltySystem
   bookingHistory: any;
 }
 

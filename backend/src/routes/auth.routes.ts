@@ -12,7 +12,8 @@ import {
   validateRefreshToken,
   validateProviderRegistrationWithoutFiles,
   validateProfileUpdateWithFiles,
-  handleFileUploadError
+  handleFileUploadError,
+  uploadConfig
 } from '../middleware/validation.middleware';
 
 const router = express.Router();
@@ -97,11 +98,43 @@ router.post('/logout-all',
   authController.logoutAll
 );
 
+// Login History
+router.get('/login-history',
+  authMiddleware.authenticate,
+  authController.getLoginHistory
+);
+
+// Logout All Devices (keeps current session)
+router.post('/logout-all-devices',
+  authMiddleware.authenticate,
+  authController.logoutAllDevices
+);
+
 // Change Password
 router.post('/change-password',
   authMiddleware.authenticate,
   validateChangePassword,
   authController.changePassword
+);
+
+// Profile Image Upload
+router.post('/profile-image',
+  authMiddleware.authenticate,
+  uploadConfig.profileUpdate,
+  handleFileUploadError,
+  authController.uploadProfileImage
+);
+
+// Export User Data
+router.get('/export-data',
+  authMiddleware.authenticate,
+  authController.exportUserData
+);
+
+// Delete Account
+router.delete('/account',
+  authMiddleware.authenticate,
+  authController.deleteAccount
 );
 
 // ========================================
@@ -126,5 +159,33 @@ router.get('/health', (_req, res) => {
     environment: process.env.NODE_ENV || 'development'
   });
 });
+
+// ========================================
+// Two-Factor Authentication Routes
+// ========================================
+
+// Get 2FA status
+router.get('/2fa/status',
+  authMiddleware.authenticate,
+  authController.get2FAStatus
+);
+
+// Setup 2FA (get secret and QR code)
+router.post('/2fa/setup',
+  authMiddleware.authenticate,
+  authController.setup2FA
+);
+
+// Enable 2FA (verify code first)
+router.post('/2fa/enable',
+  authMiddleware.authenticate,
+  authController.enable2FA
+);
+
+// Disable 2FA
+router.post('/2fa/disable',
+  authMiddleware.authenticate,
+  authController.disable2FA
+);
 
 export default router;

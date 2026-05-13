@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowRight } from 'lucide-react';
+import { ArrowRight, Sparkles, Ticket, ShoppingBag, Clock, Check } from 'lucide-react';
 import { offerService } from '../../services/offerService';
 import type { Offer } from '../../types/offer';
 import { useAuthStore } from '../../stores/authStore';
@@ -12,52 +12,15 @@ const GRADIENT_MAP: Record<string, string> = {
   'from-nilin-blush to-nilin-rose': 'from-pink-200 via-rose-300 to-pink-400',
 };
 
-const DEFAULT_OFFERS: Partial<Offer>[] = [
-  {
-    _id: '1',
-    title: 'First Booking 20% Off',
-    description: 'Use code NILIN20 on your first service',
-    displayTitle: 'First Booking 20% Off',
-    displaySubtitle: 'Use code NILIN20 on your first service',
-    displayGradient: 'from-nilin-rose to-nilin-coral',
-    code: 'NILIN20',
-    type: 'percentage',
-    value: 20,
-    featured: true,
-  },
-  {
-    _id: '2',
-    title: 'Weekend Spa Special',
-    description: 'Swedish & Deep Tissue from AED 199',
-    displayTitle: 'Weekend Spa Special',
-    displaySubtitle: 'Swedish & Deep Tissue from AED 199',
-    displayGradient: 'from-nilin-charcoal to-gray-700',
-    code: 'SPAWEEKEND',
-    type: 'fixed',
-    value: 199,
-    featured: true,
-  },
-  {
-    _id: '3',
-    title: 'Bridal Glow Package',
-    description: 'Complete bridal beauty from AED 1,499',
-    displayTitle: 'Bridal Glow Package',
-    displaySubtitle: 'Complete bridal beauty from AED 1,499',
-    displayGradient: 'from-nilin-blush to-nilin-rose',
-    code: 'BRIDAL',
-    type: 'fixed',
-    value: 1499,
-    featured: true,
-  },
-];
-
 const OfferBanner: React.FC = () => {
   const navigate = useNavigate();
   const scrollRef = useRef<HTMLDivElement>(null);
   const { isAuthenticated } = useAuthStore();
-  const [offers, setOffers] = useState<(Offer & { claimed?: boolean })[]>(DEFAULT_OFFERS as any[]);
+  const [offers, setOffers] = useState<Offer[]>([]);
+  const [claimedOfferIds, setClaimedOfferIds] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [claimingId, setClaimingId] = useState<string | null>(null);
+  const [justClaimed, setJustClaimed] = useState<string | null>(null);
 
   useEffect(() => {
     loadOffers();
@@ -69,6 +32,14 @@ const OfferBanner: React.FC = () => {
       const data = await offerService.getActiveOffers();
       if (data && data.length > 0) {
         setOffers(data);
+
+        // If API returns isClaimed status, use it
+        const claimedFromApi = data
+          .filter((o: any) => o.isClaimed)
+          .map((o: any) => o._id);
+        if (claimedFromApi.length > 0) {
+          setClaimedOfferIds(claimedFromApi);
+        }
       }
     } catch (error) {
       console.error('Failed to load offers:', error);
@@ -78,7 +49,10 @@ const OfferBanner: React.FC = () => {
   };
 
   const handleClaim = async (offer: Offer, e: React.MouseEvent) => {
+    e.preventDefault();
     e.stopPropagation();
+    console.log('Claim clicked for:', offer.code, 'offerId:', offer._id);
+    console.log('isAuthenticated:', isAuthenticated);
 
     if (!isAuthenticated) {
       toast.error('Please sign in to claim offers');
@@ -90,17 +64,37 @@ const OfferBanner: React.FC = () => {
 
     try {
       const result = await offerService.claimOffer(offer._id);
+      console.log('Claim result:', result);
       if (result.success) {
-        toast.success(result.message || 'Offer claimed successfully!');
-        setOffers(prev => prev.map(o => o._id === offer._id ? { ...o, claimed: true } : o));
+        toast.success(result.message || 'Offer claimed! Redirecting to book...');
+        setJustClaimed(offer._id);
+
+        // Add to claimed list locally
+        setClaimedOfferIds(prev => [...prev, offer._id]);
+
+        // Redirect to services page after a brief delay
+        setTimeout(() => {
+          navigate('/search');
+        }, 1500);
       } else {
         toast.error(result.message || 'Failed to claim offer');
       }
-    } catch (error) {
+    } catch (error: any) {
+      console.error('Claim error:', error);
       toast.error('Failed to claim offer. Please try again.');
     } finally {
       setClaimingId(null);
     }
+  };
+
+  const handleOfferClick = (offer: Offer) => {
+    // Always go to offer detail page
+    navigate(`/offer/${offer._id}`);
+  };
+
+  const handleBrowseServices = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    navigate('/services');
   };
 
   const scroll = (direction: 'left' | 'right') => {
@@ -113,71 +107,116 @@ const OfferBanner: React.FC = () => {
     return GRADIENT_MAP[gradient || ''] || 'from-rose-400 via-pink-400 to-rose-300';
   };
 
+  const getDiscountText = (offer: Offer): string => {
+    if (offer.type === 'percentage') {
+      return `${offer.value}% OFF`;
+    } else if (offer.type === 'fixed') {
+      return `AED ${offer.value} OFF`;
+    } else if (offer.type === 'free_service') {
+      return 'FREE SERVICE';
+    }
+    return 'SPECIAL OFFER';
+  };
+
+  const hasServiceLinking = (offer: Offer): boolean => {
+    return (offer as any).applicableServices?.length > 0 || (offer as any).applicableCategories?.length > 0;
+  };
+
   const renderSkeleton = () => (
     <>
       {[1, 2, 3].map(i => (
-        <div key={i} className="flex-shrink-0 w-[320px] md:w-[380px] h-40 rounded-2xl bg-gray-200 animate-pulse" />
+        <div key={i} className="flex-shrink-0 w-[320px] md:w-[380px] h-48 rounded-2xl bg-gray-200 animate-pulse" />
       ))}
     </>
   );
 
-  const renderOffer = (offer: Offer & { claimed?: boolean }) => (
-    <div
-      key={offer._id}
-      className="flex-shrink-0 w-[320px] md:w-[380px] rounded-2xl overflow-hidden shadow-lg card-3d"
-    >
-      <div className={`h-40 bg-gradient-to-br ${getGradientClass(offer.displayGradient)} p-6 flex flex-col justify-between`}>
-        <div>
-          {offer.displayBadge && (
-            <span className="inline-block px-3 py-1 bg-white/20 backdrop-blur-sm rounded-full text-white text-xs font-medium mb-2">
-              {offer.displayBadge}
-            </span>
-          )}
-          <h3 className="text-xl font-serif text-white mb-1">
-            {offer.displayTitle || offer.title}
-          </h3>
-          <p className="text-sm text-white/80">
-            {offer.displaySubtitle || offer.description}
-          </p>
-        </div>
+  const renderOffer = (offer: Offer) => {
+    const isClaiming = claimingId === offer._id;
+    const isJustClaimed = justClaimed === offer._id;
+    const isAlreadyClaimed = claimedOfferIds.includes(offer._id);
 
-        <div className="flex items-center justify-between">
-          <span className="text-xs text-white/70">
-            Code: <strong className="font-mono">{offer.code}</strong>
-          </span>
-
-          <button
-            onClick={(e) => !offer.claimed && handleClaim(offer, e)}
-            disabled={claimingId === offer._id || offer.claimed}
-            className={`inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-all ${
-              offer.claimed
-                ? 'bg-green-500/30 text-white/80 cursor-not-allowed'
-                : 'bg-white/20 backdrop-blur-sm text-white hover:bg-white/30'
-            }`}
-          >
-            {claimingId === offer._id ? (
-              <>
-                <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                Claiming...
-              </>
-            ) : offer.claimed ? (
-              <>
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                </svg>
-                Claimed
-              </>
-            ) : (
-              <>
-                Claim Offer
-                <ArrowRight className="w-4 h-4" />
-              </>
+    return (
+      <div
+        key={offer._id}
+        onClick={() => handleOfferClick(offer)}
+        className={`flex-shrink-0 w-[320px] md:w-[380px] rounded-2xl overflow-hidden shadow-lg card-3d cursor-pointer transition-all duration-300 ${
+          isJustClaimed ? 'ring-4 ring-green-400 scale-[1.02]' : 'hover:scale-[1.02]'
+        }`}
+      >
+        <div className={`min-h-[200px] bg-gradient-to-br ${getGradientClass(offer.displayGradient)} p-6 flex flex-col justify-between relative`}>
+          {/* Discount Badge */}
+          <div className="flex justify-between items-start">
+            {offer.displayBadge && (
+              <span className="inline-block px-3 py-1 bg-white/20 backdrop-blur-sm rounded-full text-white text-xs font-medium">
+                {offer.displayBadge}
+              </span>
             )}
-          </button>
+            <span className="inline-flex items-center gap-1 px-3 py-1 bg-white/25 backdrop-blur-sm rounded-full text-white text-sm font-bold">
+              <Sparkles className="w-4 h-4" />
+              {getDiscountText(offer)}
+            </span>
+          </div>
+
+          <div className="my-3">
+            <h3 className="text-xl font-serif text-white mb-1">
+              {offer.displayTitle || offer.title}
+            </h3>
+            <p className="text-sm text-white/80">
+              {offer.displaySubtitle || offer.description}
+            </p>
+            {hasServiceLinking(offer) && (
+              <div className="flex items-center gap-1 mt-2">
+                <span className="text-xs text-white/70 bg-white/10 px-2 py-1 rounded-full">
+                  Limited to specific services
+                </span>
+              </div>
+            )}
+          </div>
+
+          {/* Bottom section - Always visible */}
+          <div className="mt-auto pt-2 flex items-center justify-between z-10 relative">
+            <span className="px-2 py-1 bg-white/20 rounded font-mono text-sm text-white font-bold">
+              {offer.code}
+            </span>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (!isAlreadyClaimed && !isClaiming) {
+                  handleClaim(offer, e);
+                }
+              }}
+              disabled={isClaiming || isAlreadyClaimed}
+              className={`inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-all cursor-pointer z-20 ${
+                isAlreadyClaimed
+                  ? 'bg-green-500 text-white cursor-not-allowed'
+                  : isClaiming
+                  ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                  : 'bg-white text-gray-900 hover:bg-gray-100 shadow-lg'
+              }`}
+            >
+              {isAlreadyClaimed ? (
+                <>
+                  <Check className="w-4 h-4" />
+                  Claimed
+                </>
+              ) : isClaiming ? (
+                <>
+                  <span className="w-4 h-4 border-2 border-gray-400 border-t-gray-600 rounded-full animate-spin" />
+                  Claiming...
+                </>
+              ) : (
+                <>
+                  <Ticket className="w-4 h-4" />
+                  Claim Offer
+                </>
+              )}
+            </button>
+          </div>
         </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   return (
     <section className="py-8 px-4">
@@ -185,7 +224,7 @@ const OfferBanner: React.FC = () => {
         <div className="flex items-center justify-between mb-6">
           <div>
             <h2 className="text-xl md:text-2xl font-serif text-nilin-charcoal">Special Offers</h2>
-            <p className="text-sm text-nilin-warmGray">Limited time deals</p>
+            <p className="text-sm text-nilin-warmGray">Claim and save on your next booking</p>
           </div>
           <div className="flex gap-2">
             <button
@@ -212,7 +251,13 @@ const OfferBanner: React.FC = () => {
           className="flex gap-5 overflow-x-auto pb-4 scrollbar-hide"
           style={{ scrollbarWidth: 'none' }}
         >
-          {isLoading ? renderSkeleton() : offers.map(renderOffer)}
+          {isLoading ? renderSkeleton() : offers.length > 0 ? offers.map(renderOffer) : (
+            <div className="w-full text-center py-12 text-nilin-warmGray">
+              <Ticket className="w-12 h-12 mx-auto mb-4 opacity-50" />
+              <p className="text-lg font-medium">No offers available right now</p>
+              <p className="text-sm">Check back soon for exciting deals!</p>
+            </div>
+          )}
         </div>
       </div>
     </section>

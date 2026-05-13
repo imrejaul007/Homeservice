@@ -1,9 +1,11 @@
-import React from 'react';
+import React, { useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Grid3X3, List, ChevronLeft, ChevronRight, Loader2, AlertCircle } from 'lucide-react';
 import { useSearchStore, searchSelectors } from '@/store/searchStore';
 import ServiceCard from './ServiceCard';
 import { cn } from '@/lib/utils';
+import { favoritesApi } from '@/services/favoritesApi';
+import { useToastActions } from '@/components/common/Toast';
 
 interface SearchResultsProps {
   className?: string;
@@ -19,6 +21,10 @@ const SearchResults: React.FC<SearchResultsProps> = ({
   showLayoutToggle = true,
 }) => {
   const navigate = useNavigate();
+  const toast = useToastActions();
+  const [favorites, setFavorites] = useState<Record<string, boolean>>({});
+  const [favoritesLoading, setFavoritesLoading] = useState<Record<string, boolean>>({});
+
   const {
     services,
     totalCount,
@@ -47,26 +53,63 @@ const SearchResults: React.FC<SearchResultsProps> = ({
   };
 
   const handleProviderClick = (providerId: string) => {
-    console.log('Provider clicked:', providerId);
-    // TODO: Implement navigation to provider profile
+    navigate(`/provider/${providerId}`);
   };
 
-  const handleFavorite = (serviceId: string) => {
-    console.log('Favorite toggled:', serviceId);
-    // TODO: Implement favorite functionality
-  };
+  const handleFavorite = useCallback(async (serviceId: string) => {
+    // Get the provider ID from the service
+    const service = services.find(s => s._id === serviceId);
+    if (!service?.providerId) return;
+
+    // Set loading state for this specific service
+    setFavoritesLoading(prev => ({ ...prev, [serviceId]: true }));
+
+    try {
+      // Check current favorite status
+      const isCurrentlyFavorited = favorites[serviceId];
+
+      // Optimistic update
+      setFavorites(prev => ({ ...prev, [serviceId]: !isCurrentlyFavorited }));
+
+      // Make API call
+      if (isCurrentlyFavorited) {
+        await favoritesApi.removeFavorite(service.providerId);
+        toast.success('Removed from favorites');
+      } else {
+        await favoritesApi.addFavorite(service.providerId);
+        toast.success('Added to favorites');
+      }
+    } catch (error) {
+      // Revert on error
+      setFavorites(prev => ({ ...prev, [serviceId]: favorites[serviceId] }));
+      toast.error('Failed to update favorites');
+      console.error('Favorite toggle error:', error);
+    } finally {
+      setFavoritesLoading(prev => ({ ...prev, [serviceId]: false }));
+    }
+  }, [favorites, services, toast]);
 
   const handleShare = (service: any) => {
+    const shareUrl = `${window.location.origin}/services/${service._id}`;
+
     if (navigator.share) {
       navigator.share({
         title: service.name,
         text: service.shortDescription || service.description,
-        url: window.location.href,
+        url: shareUrl,
+      }).then(() => {
+        toast.success('Shared successfully');
+      }).catch((error) => {
+        // User cancelled share, no need to show error
+        console.log('Share cancelled');
       });
     } else {
       // Fallback to copying to clipboard
-      navigator.clipboard.writeText(window.location.href);
-      // TODO: Show toast notification
+      navigator.clipboard.writeText(shareUrl).then(() => {
+        toast.success('Link copied to clipboard');
+      }).catch(() => {
+        toast.error('Failed to copy link');
+      });
     }
   };
 
@@ -286,6 +329,7 @@ const SearchResults: React.FC<SearchResultsProps> = ({
                   onProviderClick={handleProviderClick}
                   onFavorite={handleFavorite}
                   onShare={handleShare}
+                  isFavorited={favorites[service._id] || false}
                   className={cn(
                     layout === 'list' ? 'flex-row' : '',
                     // NILIN: shadow-nilin for result cards
