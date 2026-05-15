@@ -164,7 +164,7 @@ const AvailabilitySchema = new Schema<IAvailability>({
 
   timezone: {
     type: String,
-    default: 'Asia/Kolkata'
+    default: 'Asia/Dubai'
   },
 
   bufferTime: {
@@ -195,6 +195,9 @@ const AvailabilitySchema = new Schema<IAvailability>({
   timestamps: true,
   collection: 'availabilities'
 });
+
+// Indexes for query optimization
+AvailabilitySchema.index({ providerId: 1 }, { unique: true });
 
 // Create and export the model
 const Availability: Model<IAvailability> = mongoose.model<IAvailability>('Availability', AvailabilitySchema);

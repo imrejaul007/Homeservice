@@ -132,18 +132,6 @@ app.use(compression({
   windowBits: 15,
 }));
 
-// HTTP/2 Support hints (note: requires spdy or http2 module, handled at server level)
-// Add hints for HTTP/2 push preload headers
-app.use((_req, res, next) => {
-  // Add preload hints for critical resources
-  res.setHeader('Link', '</static/js/main.js>; rel=preload; as=script');
-
-  // HTTP/2 Server Push can be configured at the reverse proxy (nginx/haproxy) level
-  // These hints help the server understand what resources should be pushed
-
-  next();
-});
-
 // Connection keep-alive optimizations
 app.use((_req, res, next) => {
   // Enable keep-alive for persistent connections
@@ -202,8 +190,45 @@ app.use('/api', globalLimiter);
 // Per-user rate limiting (stricter for authenticated users)
 app.use('/api', perUserRateLimiter);
 
-// Health check endpoint (with strict rate limiting)
-app.get('/health', strictRateLimiter, (_req: Request, res: Response) => {
+// Public health check endpoint (no rate limiting, no auth required)
+// Use this for load balancers, orchestrators, and health checks that need to work under load
+app.get('/health', async (_req: Request, res: Response) => {
+  try {
+    const mongoose = (await import('mongoose')).default;
+    const dbState = mongoose.connection.readyState;
+    const isConnected = dbState === 1;
+
+    if (!isConnected) {
+      res.status(503).json({
+        status: 'unhealthy',
+        timestamp: new Date().toISOString(),
+        checks: { database: 'disconnected' },
+      });
+      return;
+    }
+
+    // Ping the database to verify connection
+    await mongoose.connection.db?.admin().ping();
+
+    res.json({
+      status: 'healthy',
+      service: APP_CONSTANTS.APP_NAME,
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+      environment: process.env.NODE_ENV,
+      version: APP_CONSTANTS.API_VERSION,
+    });
+  } catch {
+    res.status(503).json({
+      status: 'unhealthy',
+      timestamp: new Date().toISOString(),
+      error: 'Health check failed',
+    });
+  }
+});
+
+// Health check endpoint (with strict rate limiting for detailed checks)
+app.get('/api/health', strictRateLimiter, (_req: Request, res: Response) => {
   res.status(APP_CONSTANTS.HTTP_STATUS.OK).json({
     status: 'healthy',
     service: APP_CONSTANTS.APP_NAME,

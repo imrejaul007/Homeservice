@@ -340,59 +340,127 @@ export class OfferService {
   }
 
   // Apply discount (mark claim as used)
+  // Uses atomic findOneAndUpdate to prevent race conditions (double-use)
   async applyDiscount(claimId: string, bookingId: string): Promise<boolean> {
     const claim = await OfferClaim.findById(claimId);
-    if (!claim) return false;
+    if (!claim) {
+      console.warn(`[Coupon] Claim not found for applyDiscount: ${claimId}`);
+      return false;
+    }
 
-    claim.status = 'applied';
-    claim.usedAt = new Date();
-    claim.usedInBookingId = new mongoose.Types.ObjectId(bookingId);
-    await claim.save();
+    const bookingObjectId = new mongoose.Types.ObjectId(bookingId);
+    const userObjectId = claim.userId;
 
-    // Increment coupon usage
-    await Coupon.findByIdAndUpdate(claim.offerId, {
-      $inc: { currentUses: 1 },
-      $push: {
-        usedBy: {
-          userId: claim.userId,
-          usedAt: new Date(),
-          orderId: bookingId,
+    // Get the coupon to check current/max uses
+    const coupon = await Coupon.findById(claim.offerId).select('_id maxUses currentUses');
+    if (!coupon) {
+      console.warn(`[Coupon] Coupon not found for applyDiscount: ${claim.offerId}`);
+      return false;
+    }
+
+    // Atomically check and increment coupon usage
+    const result = await Coupon.findOneAndUpdate(
+      {
+        _id: coupon._id,
+        currentUses: { $lt: coupon.maxUses },
+      },
+      {
+        $inc: { currentUses: 1 },
+        $push: {
+          usedBy: {
+            userId: userObjectId,
+            usedAt: new Date(),
+            bookingId: bookingObjectId,
+          },
         },
       },
+      { new: true }
+    );
+
+    if (!result) {
+      console.warn(`[Coupon] Coupon exhausted during applyDiscount: ${coupon._id}`);
+      return false;
+    }
+
+    // Update the claim status
+    await OfferClaim.findByIdAndUpdate(claimId, {
+      status: 'applied',
+      usedAt: new Date(),
+      usedInBookingId: bookingObjectId,
     });
 
+    console.log(`[Coupon] applyDiscount successful: claimId=${claimId}, couponId=${coupon._id}, new currentUses=${result.currentUses}`);
     return true;
   }
 
   // Mark coupon as used by code and user
+  // Uses atomic findOneAndUpdate to prevent race conditions (double-use)
   async markCouponAsUsed(couponCode: string, userId: string, bookingId: string): Promise<boolean> {
-    const coupon = await Coupon.findOne({ code: couponCode.toUpperCase() });
-    if (!coupon) return false;
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const bookingObjectId = new mongoose.Types.ObjectId(bookingId);
+    const normalizedCode = couponCode.toUpperCase();
 
-    const claim = await OfferClaim.findOne({
-      userId: new mongoose.Types.ObjectId(userId),
-      offerId: coupon._id,
-      status: 'claimed'
-    });
+    const coupon = await Coupon.findOne({ code: normalizedCode }).select('_id maxUses currentUses');
+    if (!coupon) {
+      console.warn(`[Coupon] Coupon not found: ${normalizedCode}`);
+      return false;
+    }
 
-    if (!claim) return false;
-
-    claim.status = 'applied';
-    claim.usedAt = new Date();
-    claim.usedInBookingId = new mongoose.Types.ObjectId(bookingId);
-    await claim.save();
-
-    // Increment coupon usage
-    await Coupon.findByIdAndUpdate(coupon._id, {
-      $inc: { currentUses: 1 },
-      $push: {
-        usedBy: {
-          userId: new mongoose.Types.ObjectId(userId),
-          usedAt: new Date(),
-          orderId: bookingId,
+    // First, atomically check and mark the coupon usage in a single operation
+    // This prevents race conditions where two concurrent requests could both pass the check
+    const result = await Coupon.findOneAndUpdate(
+      {
+        _id: coupon._id,
+        currentUses: { $lt: coupon.maxUses }, // Atomic condition check
+      },
+      {
+        $inc: { currentUses: 1 },
+        $push: {
+          usedBy: {
+            userId: userObjectId,
+            usedAt: new Date(),
+            bookingId: bookingObjectId,
+          },
         },
       },
-    });
+      { new: true }
+    );
+
+    if (!result) {
+      // Coupon exhausted (currentUses >= maxUses) or not found
+      console.warn(`[Coupon] Coupon exhausted or concurrent use detected: ${normalizedCode}, currentUses: ${coupon.currentUses}, maxUses: ${coupon.maxUses}`);
+      return false;
+    }
+
+    console.log(`[Coupon] Atomically marked as used: ${normalizedCode}, new currentUses: ${result.currentUses}`);
+
+    // Now update the claim - this is safe because we've already atomically reserved the coupon usage
+    const claimUpdateResult = await OfferClaim.findOneAndUpdate(
+      {
+        userId: userObjectId,
+        offerId: coupon._id,
+        status: 'claimed',
+      },
+      {
+        $set: {
+          status: 'applied',
+          usedAt: new Date(),
+          usedInBookingId: bookingObjectId,
+        },
+      }
+    );
+
+    if (!claimUpdateResult) {
+      // Claim not found in 'claimed' status - rollback the coupon usage
+      console.warn(`[Coupon] Claim not found for user ${userId}, rolling back coupon usage`);
+      await Coupon.findByIdAndUpdate(coupon._id, {
+        $inc: { currentUses: -1 },
+        $pull: {
+          usedBy: { userId: userObjectId },
+        },
+      });
+      return false;
+    }
 
     return true;
   }

@@ -1,6 +1,20 @@
+import * as fs from 'fs';
+import * as path from 'path';
+
+// Read version from package.json at runtime
+let APP_VERSION = '1.0.0';
+try {
+  const packageJsonPath = path.resolve(__dirname, '../../package.json');
+  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+  APP_VERSION = packageJson.version || '1.0.0';
+} catch (error) {
+  console.warn('Could not read version from package.json, using default');
+}
+
 export const APP_CONSTANTS = {
   APP_NAME: 'Home Service Marketplace',
   API_VERSION: process.env.API_VERSION || 'v1',
+  APP_VERSION, // Dynamic version from package.json
   DEFAULT_PAGE_SIZE: 20,
   MAX_PAGE_SIZE: 100,
   

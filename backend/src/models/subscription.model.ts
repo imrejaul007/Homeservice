@@ -248,6 +248,20 @@ subscriptionSchema.pre('save', function(next) {
   next();
 });
 
+// Indexes for query optimization
+subscriptionSchema.index({ providerId: 1, status: 1 });
+subscriptionSchema.index({ status: 1, nextBillingDate: 1 });
+subscriptionSchema.index({ status: 1, currentPeriodEnd: 1 });
+subscriptionSchema.index({ stripeSubscriptionId: 1 }, { sparse: true });
+subscriptionSchema.index({ 'usage.bookingsThisPeriod': 1 });
+
+// Compound index for finding subscriptions needing renewal
+subscriptionSchema.index({
+  status: 1,
+  autoRenew: 1,
+  nextBillingDate: 1
+});
+
 const Subscription = mongoose.model<ISubscription>('Subscription', subscriptionSchema);
 
 export default Subscription;

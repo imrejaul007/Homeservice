@@ -1,3 +1,4 @@
+import mongoose, { ClientSession } from 'mongoose';
 import ProviderProfile from '../models/providerProfile.model';
 import Booking from '../models/booking.model';
 
@@ -6,6 +7,7 @@ interface ValidateSlotParams {
   scheduledDate: string | Date;
   scheduledTime: string;
   serviceDurationMinutes: number;
+  session?: ClientSession; // Optional session for transaction support
 }
 
 interface ValidateSlotResult {
@@ -26,7 +28,8 @@ export async function validateProviderSlotAvailability({
   providerId,
   scheduledDate,
   scheduledTime,
-  serviceDurationMinutes
+  serviceDurationMinutes,
+  session
 }: ValidateSlotParams): Promise<ValidateSlotResult> {
   const providerProfile = await ProviderProfile.findOne({ userId: providerId });
 
@@ -117,11 +120,16 @@ export async function validateProviderSlotAvailability({
   const endOfDay = new Date(requestedDate);
   endOfDay.setHours(23, 59, 59, 999);
 
-  const existingBookings = await Booking.find({
+  // Use session if provided (for transaction support) to ensure read-your-writes consistency
+  const bookingQuery: any = {
     providerId,
     scheduledDate: { $gte: startOfDay, $lte: endOfDay },
     status: { $in: ['pending', 'confirmed', 'in_progress'] }
-  });
+  };
+
+  const existingBookings = session
+    ? await Booking.find(bookingQuery).session(session)
+    : await Booking.find(bookingQuery);
 
   const conflict = existingBookings.find(booking => {
     const bookingStart = timeToMinutes(booking.scheduledTime);

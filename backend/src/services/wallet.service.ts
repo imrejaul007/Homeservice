@@ -91,42 +91,76 @@ export const creditWallet = async (data: TransactionData): Promise<TransactionRe
   }
 };
 
-// Deduct from wallet
+// Deduct from wallet (atomic operation to prevent race conditions)
 export const debitWallet = async (data: TransactionData): Promise<TransactionResult> => {
   try {
-    const wallet = await getOrCreateWallet(data.userId);
-
-    if (wallet.balance < data.amount) {
-      return {
-        success: false,
-        newBalance: wallet.balance,
-        error: 'Insufficient balance',
-      };
-    }
-
+    const transactionId = `txn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const transaction = {
-      id: `txn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      id: transactionId,
       type: 'debit' as const,
       amount: data.amount,
       description: data.description,
       reference: data.reference,
       referenceType: data.referenceType,
       status: 'completed' as const,
-      balanceAfter: wallet.balance - data.amount,
       metadata: data.metadata,
       createdAt: new Date(),
     };
 
-    wallet.transactions.push(transaction);
-    wallet.balance -= data.amount;
-    wallet.totalSpent += data.amount;
+    // Use atomic findOneAndUpdate with balance check to prevent race conditions
+    const wallet = await Wallet.findOneAndUpdate(
+      {
+        userId: data.userId,
+        balance: { $gte: data.amount } // Atomic condition check
+      },
+      {
+        $inc: {
+          balance: -data.amount,
+          totalSpent: data.amount
+        },
+        $push: {
+          transactions: transaction
+        }
+      },
+      { new: true }
+    );
 
-    await wallet.save();
+    if (!wallet) {
+      // Either wallet doesn't exist or insufficient balance
+      const currentWallet = await Wallet.findOne({ userId: data.userId });
+      const balance = currentWallet?.balance ?? 0;
 
-    logger.info('Wallet debited', {
+      logger.warn('Wallet debit failed - insufficient balance', {
+        userId: data.userId,
+        requestedAmount: data.amount,
+        availableBalance: balance,
+        reference: data.reference,
+        action: 'WALLET_INSUFFICIENT_BALANCE',
+      });
+
+      return {
+        success: false,
+        newBalance: balance,
+        error: 'Insufficient balance',
+      };
+    }
+
+    // Update balanceAfter in the transaction now that we have the new balance
+    await Wallet.updateOne(
+      {
+        userId: data.userId,
+        'transactions.id': transactionId
+      },
+      {
+        $set: { 'transactions.$.balanceAfter': wallet.balance }
+      }
+    );
+
+    logger.info('Wallet debited (atomic)', {
       userId: data.userId,
       amount: data.amount,
       newBalance: wallet.balance,
+      transactionId: transactionId,
       reference: data.reference,
       action: 'WALLET_DEBITED',
     });
@@ -134,7 +168,7 @@ export const debitWallet = async (data: TransactionData): Promise<TransactionRes
     return {
       success: true,
       newBalance: wallet.balance,
-      transactionId: transaction.id,
+      transactionId: transactionId,
     };
   } catch (error: any) {
     logger.error('Failed to debit wallet', {

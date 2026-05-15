@@ -6,10 +6,12 @@ const logger = winston.createLogger({
 });
 
 // Connection pool configuration
+// Optimal pool size: 20-30 for most deployments
+// Higher values increase memory usage but improve throughput under load
 const POOL_CONFIG = {
-  maxPoolSize: parseInt(process.env.MONGODB_POOL_SIZE || '10'),
-  minPoolSize: parseInt(process.env.MONGODB_MIN_POOL_SIZE || '2'),
-  maxPoolSizeInFlight: parseInt(process.env.MONGODB_MAX_POOL_SIZE_IN_FLIGHT || '50'),
+  maxPoolSize: parseInt(process.env.MONGODB_POOL_SIZE || '25'), // Reduced from 10 to 25 for better concurrency
+  minPoolSize: parseInt(process.env.MONGODB_MIN_POOL_SIZE || '5'), // Increased from 2 to maintain warm connections
+  maxPoolSizeInFlight: parseInt(process.env.MONGODB_MAX_POOL_SIZE_IN_FLIGHT || '30'), // Reduced from 50 to 30 to prevent connection exhaustion
   socketTimeoutMS: parseInt(process.env.MONGODB_SOCKET_TIMEOUT_MS || '45000'),
   serverSelectionTimeoutMS: parseInt(process.env.MONGODB_SERVER_SELECTION_TIMEOUT_MS || '5000'),
   connectTimeoutMS: parseInt(process.env.MONGODB_CONNECT_TIMEOUT_MS || '10000'),

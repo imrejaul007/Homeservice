@@ -4,23 +4,58 @@ import { APP_CONSTANTS } from '../config/constants';
 import { ApiError, ERROR_CODES } from '../utils/ApiError';
 
 // Map Mongoose error types to application error codes
-const getMongooseErrorCode = (err: Error): string => {
+const getMongooseErrorInfo = (err: Error): { code: string; statusCode: number; message?: string; errors?: any[] } => {
   if (err.name === 'CastError') {
-    return ERROR_CODES.INVALID_INPUT;
+    return {
+      code: ERROR_CODES.INVALID_INPUT,
+      statusCode: APP_CONSTANTS.HTTP_STATUS.BAD_REQUEST,
+      message: 'Invalid resource ID'
+    };
   }
   if ((err as any).code === 11000) {
-    return ERROR_CODES.DUPLICATE_ENTRY;
+    const field = Object.keys((err as any).keyValue)[0];
+    return {
+      code: ERROR_CODES.DUPLICATE_ENTRY,
+      statusCode: APP_CONSTANTS.HTTP_STATUS.CONFLICT,
+      message: `${field} already exists`
+    };
   }
   if (err.name === 'ValidationError') {
-    return ERROR_CODES.VALIDATION_ERROR;
+    const errors = Object.values((err as any).errors).map((e: any) => ({
+      field: e.path,
+      message: e.message
+    }));
+    return {
+      code: ERROR_CODES.VALIDATION_ERROR,
+      statusCode: APP_CONSTANTS.HTTP_STATUS.BAD_REQUEST,
+      message: APP_CONSTANTS.ERROR_MESSAGES.VALIDATION_ERROR,
+      errors
+    };
   }
   if (err.name === 'JsonWebTokenError') {
-    return ERROR_CODES.TOKEN_INVALID;
+    return {
+      code: ERROR_CODES.TOKEN_INVALID,
+      statusCode: APP_CONSTANTS.HTTP_STATUS.UNAUTHORIZED,
+      message: APP_CONSTANTS.ERROR_MESSAGES.INVALID_TOKEN
+    };
   }
   if (err.name === 'TokenExpiredError') {
-    return ERROR_CODES.TOKEN_EXPIRED;
+    return {
+      code: ERROR_CODES.TOKEN_EXPIRED,
+      statusCode: APP_CONSTANTS.HTTP_STATUS.UNAUTHORIZED,
+      message: APP_CONSTANTS.ERROR_MESSAGES.TOKEN_EXPIRED
+    };
   }
-  return ERROR_CODES.INTERNAL_ERROR;
+  return {
+    code: ERROR_CODES.INTERNAL_ERROR,
+    statusCode: APP_CONSTANTS.HTTP_STATUS.INTERNAL_SERVER_ERROR,
+    message: APP_CONSTANTS.ERROR_MESSAGES.INTERNAL_ERROR
+  };
+};
+
+// Get correlation ID from request if available
+const getCorrelationId = (req: Request): string | undefined => {
+  return (req as any).correlationId || req.headers['x-correlation-id'] as string;
 };
 
 export const errorHandler = (
@@ -30,78 +65,63 @@ export const errorHandler = (
   _next: NextFunction
 ) => {
   let error: ApiError;
-  let errorCode: string = ERROR_CODES.INTERNAL_ERROR;
+  let errorCode: string;
+  let statusCode: number;
+  let errorMessage: string;
+  let errors: any[] = [];
+  const correlationId = getCorrelationId(req);
 
   // Handle ApiError instances directly
   if (err instanceof ApiError) {
     error = err;
     errorCode = err.code || ERROR_CODES.INTERNAL_ERROR;
+    statusCode = err.statusCode;
+    errorMessage = err.message;
+    errors = err.errors || [];
   } else {
-    // Handle other Error types by wrapping them
-    errorCode = getMongooseErrorCode(err);
-    error = new ApiError(
-      500,
-      err.message || APP_CONSTANTS.ERROR_MESSAGES.INTERNAL_ERROR,
-      [],
-      errorCode
-    );
+    // Handle other Error types by extracting info
+    const errorInfo = getMongooseErrorInfo(err);
+    errorCode = errorInfo.code;
+    statusCode = errorInfo.statusCode;
+    errorMessage = errorInfo.message || err.message || APP_CONSTANTS.ERROR_MESSAGES.INTERNAL_ERROR;
+    errors = errorInfo.errors || [];
+    error = new ApiError(statusCode, errorMessage, errors, errorCode);
   }
 
-  // Log error
+  // Log error with correlation ID for tracing
   logger.error({
-    message: error.message,
-    statusCode: error.statusCode,
+    message: errorMessage,
+    statusCode,
     code: errorCode,
+    correlationId,
     stack: err.stack,
     url: req.originalUrl,
     method: req.method,
-    ip: req.ip
+    ip: req.ip,
+    userAgent: req.get('user-agent')
   });
 
-  // Mongoose bad ObjectId
-  if (err.name === 'CastError') {
-    const message = 'Invalid resource ID';
-    error = new ApiError(APP_CONSTANTS.HTTP_STATUS.BAD_REQUEST, message, [], ERROR_CODES.INVALID_INPUT);
-    errorCode = ERROR_CODES.INVALID_INPUT;
-  }
-
-  // Mongoose duplicate key
-  if ((err as any).code === 11000) {
-    const field = Object.keys((err as any).keyValue)[0];
-    const message = `${field} already exists`;
-    error = new ApiError(APP_CONSTANTS.HTTP_STATUS.CONFLICT, message, [], ERROR_CODES.DUPLICATE_ENTRY);
-    errorCode = ERROR_CODES.DUPLICATE_ENTRY;
-  }
-
-  // Mongoose validation error
-  if (err.name === 'ValidationError') {
-    const errors = Object.values((err as any).errors).map((e: any) => ({
-      field: e.path,
-      message: e.message
-    }));
-    const message = APP_CONSTANTS.ERROR_MESSAGES.VALIDATION_ERROR;
-    error = new ApiError(APP_CONSTANTS.HTTP_STATUS.BAD_REQUEST, message, errors, ERROR_CODES.VALIDATION_ERROR);
-    errorCode = ERROR_CODES.VALIDATION_ERROR;
-  }
-
-  // JWT errors
-  if (err.name === 'JsonWebTokenError') {
-    const message = APP_CONSTANTS.ERROR_MESSAGES.INVALID_TOKEN;
-    error = new ApiError(APP_CONSTANTS.HTTP_STATUS.UNAUTHORIZED, message, [], ERROR_CODES.TOKEN_INVALID);
-    errorCode = ERROR_CODES.TOKEN_INVALID;
-  }
-
-  if (err.name === 'TokenExpiredError') {
-    const message = APP_CONSTANTS.ERROR_MESSAGES.TOKEN_EXPIRED;
-    error = new ApiError(APP_CONSTANTS.HTTP_STATUS.UNAUTHORIZED, message, [], ERROR_CODES.TOKEN_EXPIRED);
-    errorCode = ERROR_CODES.TOKEN_EXPIRED;
-  }
-
-  res.status(error.statusCode || APP_CONSTANTS.HTTP_STATUS.INTERNAL_SERVER_ERROR).json({
+  // Build standardized error response
+  const response: Record<string, any> = {
     success: false,
-    message: error.message,
-    code: errorCode,
-    ...(error.errors && error.errors.length > 0 && { errors: error.errors }),
-    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
-  });
+    message: errorMessage,
+    code: errorCode
+  };
+
+  // Add correlation ID for client reference
+  if (correlationId) {
+    response.correlationId = correlationId;
+  }
+
+  // Add field errors if present
+  if (errors.length > 0) {
+    response.errors = errors;
+  }
+
+  // Add stack trace in development only
+  if (process.env.NODE_ENV === 'development') {
+    response.stack = err.stack;
+  }
+
+  res.status(statusCode).json(response);
 };

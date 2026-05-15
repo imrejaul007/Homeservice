@@ -8,6 +8,7 @@ import {
 import { asyncHandler } from '../utils/asyncHandler';
 import { ApiError } from '../utils/ApiError';
 import logger from '../utils/logger';
+import express from 'express';
 
 const router = Router();
 
@@ -97,51 +98,60 @@ router.post('/refund/:bookingId', authenticate, asyncHandler(async (req: Request
  * @route   POST /api/payments/webhook
  * @desc    Stripe webhook handler
  * @access  Public (but signature verified)
+ *
+ * NOTE: Stripe requires raw body Buffer for signature verification.
+ * This route uses express.raw() middleware to get the unparsed body.
  */
-router.post('/webhook', async (req: Request, res: Response) => {
-  const signature = req.headers['stripe-signature'] as string;
+router.post(
+  '/webhook',
+  express.raw({ type: 'application/json' }), // Raw body Buffer for Stripe signature verification
+  async (req: Request, res: Response) => {
+    const signature = req.headers['stripe-signature'] as string;
 
-  if (!signature) {
-    logger.warn('Webhook received without signature', {
-      action: 'WEBHOOK_NO_SIGNATURE',
-    });
-    throw new ApiError(400, 'No signature provided');
+    if (!signature) {
+      logger.warn('Webhook received without signature', {
+        action: 'WEBHOOK_NO_SIGNATURE',
+      });
+      res.status(400).json({ error: 'No signature provided' });
+      return;
+    }
+
+    let event;
+
+    try {
+      // Import verifyWebhookSignature
+      const { verifyWebhookSignature } = await import('../services/payment.service');
+      event = verifyWebhookSignature(req.body, signature);
+    } catch (err: any) {
+      logger.error('Webhook signature verification failed', {
+        error: err.message,
+        action: 'WEBHOOK_VERIFICATION_FAILED',
+      });
+      res.status(400).json({ error: `Webhook Error: ${err.message}` });
+      return;
+    }
+
+    // Handle the event
+    try {
+      const { handleWebhookEvent } = await import('../services/payment.service');
+      const result = await handleWebhookEvent(event);
+
+      logger.info('Webhook event processed', {
+        eventType: event.type,
+        handled: result.handled,
+        action: 'WEBHOOK_PROCESSED',
+      });
+
+      res.json({ received: true, message: result.message });
+    } catch (err: any) {
+      logger.error('Webhook event handling failed', {
+        eventType: event.type,
+        error: err.message,
+        action: 'WEBHOOK_HANDLING_FAILED',
+      });
+      res.status(500).json({ error: `Webhook handling error: ${err.message}` });
+    }
   }
-
-  let event;
-
-  try {
-    // Import verifyWebhookSignature
-    const { verifyWebhookSignature } = await import('../services/payment.service');
-    event = verifyWebhookSignature(req.body, signature);
-  } catch (err: any) {
-    logger.error('Webhook signature verification failed', {
-      error: err.message,
-      action: 'WEBHOOK_VERIFICATION_FAILED',
-    });
-    throw new ApiError(400, `Webhook Error: ${err.message}`);
-  }
-
-  // Handle the event
-  try {
-    const { handleWebhookEvent } = await import('../services/payment.service');
-    const result = await handleWebhookEvent(event);
-
-    logger.info('Webhook event processed', {
-      eventType: event.type,
-      handled: result.handled,
-      action: 'WEBHOOK_PROCESSED',
-    });
-
-    res.json({ received: true, message: result.message });
-  } catch (err: any) {
-    logger.error('Webhook event handling failed', {
-      eventType: event.type,
-      error: err.message,
-      action: 'WEBHOOK_HANDLING_FAILED',
-    });
-    throw new ApiError(500, `Webhook handling error: ${err.message}`);
-  }
-});
+);
 
 export default router;

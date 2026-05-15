@@ -100,7 +100,7 @@ const emailProcessor = async (job: Job<EmailJobData>) => {
         break;
 
       case 'welcome':
-        await emailService.sendWelcomeEmail(to, firstName);
+        await emailService.sendWelcomeEmail(to, firstName, 'user');
         break;
 
       case 'verification':
@@ -108,19 +108,29 @@ const emailProcessor = async (job: Job<EmailJobData>) => {
         break;
 
       case 'provider_approved':
-        await emailService.sendProviderApprovedEmail(to, firstName);
+        await emailService.sendProviderApproval({
+          email: to,
+          firstName,
+          businessName: (metadata?.businessName as string) || 'Your Business'
+        });
         break;
 
       case 'provider_rejected':
-        await emailService.sendProviderRejectedEmail(to, firstName, metadata?.rejectionReason as string);
+        await emailService.sendProviderRejection({
+          email: to,
+          firstName,
+          businessName: (metadata?.businessName as string) || 'Your Business'
+        }, (metadata?.rejectionReason as string) || 'Not meeting requirements');
         break;
 
       case 'payment_received':
-        await emailService.sendPaymentReceivedEmail(to, firstName, metadata?.amount as number);
+        // Payment received notification - log for now, can add email template later
+        logger.info(`Payment received notification for ${to}: ${metadata?.amount}`);
         break;
 
       case 'payout_processed':
-        await emailService.sendPayoutProcessedEmail(to, firstName, metadata?.amount as number);
+        // Payout processed notification - log for now, can add email template later
+        logger.info(`Payout processed notification for ${to}: ${metadata?.amount}`);
         break;
 
       default:
@@ -174,11 +184,18 @@ const notificationProcessor = async (job: Job<NotificationJobData>) => {
     // Import notification service dynamically to avoid circular dependency
     const { notificationService } = await import('../services/notification.service');
 
-    await notificationService.sendToUser(userId, {
-      type,
+    // Cast type to NotificationType - validation should happen at job creation
+    const validTypes = ['booking_request', 'booking_confirmed', 'booking_cancelled', 'booking_rejected',
+                        'booking_started', 'booking_completed', 'booking_reminder', 'message_received',
+                        'review_received', 'promotion', 'loyalty_update'];
+    const notificationType = validTypes.includes(type) ? type as any : 'promotion';
+
+    await notificationService.createNotification({
+      recipientId: userId,
+      type: notificationType,
       title,
       message,
-      data,
+      metadata: data,
     });
 
     logger.info(`Notification job completed: ${job.id}`, {
@@ -207,6 +224,43 @@ interface LoyaltyJobData {
   metadata?: Record<string, unknown>;
 }
 
+// Tier thresholds
+type LoyaltyTier = 'bronze' | 'silver' | 'gold' | 'platinum';
+
+const TIER_THRESHOLDS = {
+  bronze: { min: 0, max: 999 },
+  silver: { min: 1000, max: 4999 },
+  gold: { min: 5000, max: 9999 },
+  platinum: { min: 10000, max: Infinity },
+};
+
+// Helper to determine tier based on total earned
+const calculateTier = (totalEarned: number): LoyaltyTier => {
+  if (totalEarned >= TIER_THRESHOLDS.platinum.min) return 'platinum';
+  if (totalEarned >= TIER_THRESHOLDS.gold.min) return 'gold';
+  if (totalEarned >= TIER_THRESHOLDS.silver.min) return 'silver';
+  return 'bronze';
+};
+
+// Helper to check and upgrade tier
+const checkAndUpgradeTier = async (userId: string): Promise<void> => {
+  const User = (await import('../models/user.model')).default;
+  const user = await User.findById(userId);
+  if (!user) return;
+
+  const currentTier = user.loyaltySystem?.tier || 'bronze';
+  const totalEarned = user.loyaltySystem?.totalEarned || 0;
+  const newTier = calculateTier(totalEarned);
+
+  // Only upgrade, never downgrade
+  const tierOrder = ['bronze', 'silver', 'gold', 'platinum'];
+  if (tierOrder.indexOf(newTier) > tierOrder.indexOf(currentTier)) {
+    user.loyaltySystem = user.loyaltySystem || {};
+    user.loyaltySystem.tier = newTier;
+    await user.save();
+  }
+};
+
 const loyaltyProcessor = async (job: Job<LoyaltyJobData>) => {
   const { userId, action, metadata } = job.data;
 
@@ -214,42 +268,63 @@ const loyaltyProcessor = async (job: Job<LoyaltyJobData>) => {
     jobId: job.id,
     action,
     userId,
-    action: 'LOYALTY_JOB_STARTED',
+    stage: 'LOYALTY_JOB_STARTED',
   });
 
   try {
-    // Import loyalty service dynamically to avoid circular dependency
-    const { loyaltyService } = await import('../services/loyalty.service');
+    const User = (await import('../models/user.model')).default;
+    const user = await User.findById(userId);
+    if (!user) {
+      throw new Error(`User not found: ${userId}`);
+    }
 
     switch (action) {
-      case 'award_signup_bonus':
-        await loyaltyService.awardSignupBonus(userId);
+      case 'award_signup_bonus': {
+        const SIGNUP_BONUS = 100;
+        user.loyaltySystem = user.loyaltySystem || { coins: 0, totalEarned: 0, tier: 'bronze', points: 0, benefits: [] };
+        user.loyaltySystem.coins += SIGNUP_BONUS;
+        user.loyaltySystem.totalEarned += SIGNUP_BONUS;
+        user.loyaltySystem.tier = calculateTier(user.loyaltySystem.totalEarned);
+        await user.save();
         break;
+      }
 
-      case 'award_booking_points':
-        await loyaltyService.awardBookingPoints(
-          userId,
-          metadata?.bookingId as string,
-          metadata?.amount as number
-        );
+      case 'award_booking_points': {
+        const amount = (metadata?.amount as number) || 0;
+        const POINTS_PER_AED = 0.1; // 1 point per 10 AED
+        const points = Math.floor(amount * POINTS_PER_AED);
+        user.loyaltySystem = user.loyaltySystem || { coins: 0, totalEarned: 0, tier: 'bronze', points: 0, benefits: [] };
+        user.loyaltySystem.coins += points;
+        user.loyaltySystem.totalEarned += points;
+        user.loyaltySystem.tier = calculateTier(user.loyaltySystem.totalEarned);
+        await user.save();
+        await checkAndUpgradeTier(userId);
         break;
+      }
 
-      case 'award_review_bonus':
-        await loyaltyService.awardReviewBonus(userId, metadata?.reviewId as string);
+      case 'award_review_bonus': {
+        const REVIEW_BONUS = 50;
+        user.loyaltySystem = user.loyaltySystem || { coins: 0, totalEarned: 0, tier: 'bronze', points: 0, benefits: [] };
+        user.loyaltySystem.coins += REVIEW_BONUS;
+        user.loyaltySystem.totalEarned += REVIEW_BONUS;
+        user.loyaltySystem.tier = calculateTier(user.loyaltySystem.totalEarned);
+        await user.save();
+        await checkAndUpgradeTier(userId);
         break;
+      }
 
       case 'check_tier_upgrade':
-        await loyaltyService.checkAndUpgradeTier(userId);
+        await checkAndUpgradeTier(userId);
         break;
 
       default:
-        logger.warn(`Unknown loyalty action: ${action}`);
+        logger.warn(`Unknown loyalty action: ${action}`, { jobId: job.id });
     }
 
     logger.info(`Loyalty job completed: ${job.id}`, {
       jobId: job.id,
       action,
-      action: 'LOYALTY_JOB_COMPLETED',
+      stage: 'LOYALTY_JOB_COMPLETED',
     });
 
     return { success: true };
@@ -258,7 +333,7 @@ const loyaltyProcessor = async (job: Job<LoyaltyJobData>) => {
       jobId: job.id,
       action,
       error: (error as Error).message,
-      action: 'LOYALTY_JOB_FAILED',
+      stage: 'LOYALTY_JOB_FAILED',
     });
     throw error;
   }

@@ -70,6 +70,11 @@ router.post('/refresh-token',
   authController.refreshToken
 );
 
+// CSRF Token - Get a new CSRF token for form submissions
+router.get('/csrf-token',
+  authMiddleware.provideCsrfToken
+);
+
 // ========================================
 // Protected Routes (Authentication Required)
 // ========================================

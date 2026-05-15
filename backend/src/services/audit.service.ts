@@ -4,12 +4,15 @@ import logger from '../utils/logger';
 interface AuditLogData {
   userId: string;
   action: string;
-  resource: string;
+  resource?: string;
   resourceId?: string;
+  targetId?: string;
+  targetType?: string;
+  metadata?: Record<string, unknown>;
   details?: Record<string, unknown>;
   ipAddress?: string;
   userAgent?: string;
-  status: 'success' | 'failure';
+  status?: 'success' | 'failure';
   errorMessage?: string;
 }
 
@@ -42,6 +45,13 @@ export const createAuditLog = async (data: AuditLogData): Promise<void> => {
       data,
     });
   }
+};
+
+/**
+ * Alias for createAuditLog for backward compatibility
+ */
+export const logAction = async (data: AuditLogData): Promise<void> => {
+  return createAuditLog(data);
 };
 
 /**
@@ -139,6 +149,7 @@ export const getUserActivitySummary = async (userId: string, days: number = 30) 
 
 export default {
   createAuditLog,
+  logAction,
   getAuditLogs,
   getResourceAuditLogs,
   getUserActivitySummary,

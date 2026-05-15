@@ -8,6 +8,7 @@ import logger from './utils/logger';
 import { initializeSocketServer } from './socket';
 import { initializeEventSubscriptions } from './event-bus';
 import { initializeIndexes } from './services/search.service';
+import { initializeScheduledJobs } from './jobs/scheduler';
 
 // Create HTTP server
 const server = http.createServer(app);
@@ -106,6 +107,15 @@ const startServer = async () => {
     } catch (error) {
       logger.warn('Search indexes initialization failed:', error);
     }
+
+
+    // Initialize scheduled jobs
+    try {
+      initializeScheduledJobs();
+    } catch (error) {
+      logger.warn('Scheduled jobs initialization failed:', error);
+    }
+
 
     // Start listening
     server.listen(PORT, () => {

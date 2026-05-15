@@ -3,6 +3,8 @@ import Booking from '../models/booking.model';
 import { ApiError } from '../utils/ApiError';
 import { eventBus, EVENT_TYPES } from '../event-bus';
 import logger from '../utils/logger';
+import { scheduleWebhookRetry } from './webhookQueue';
+import { cache } from '../config/redis';
 
 // Use the Stripe API version from the package
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '');
@@ -129,8 +131,20 @@ export const confirmPayment = async (paymentIntentId: string): Promise<{ success
 
 /**
  * Handle Stripe webhook events
+ * Includes idempotency check and automatic retry on failure
  */
 export const handleWebhookEvent = async (event: Stripe.Event): Promise<{ handled: boolean; message: string }> => {
+  // Idempotency check: skip if event already processed
+  const eventKey = `webhook:processed:${event.id}`;
+  const alreadyProcessed = await cache.get(eventKey);
+  if (alreadyProcessed) {
+    logger.info('Webhook event already processed, skipping', {
+      eventId: event.id,
+      eventType: event.type,
+    });
+    return { handled: true, message: 'Already processed' };
+  }
+
   try {
     switch (event.type) {
       case 'payment_intent.succeeded': {
@@ -147,6 +161,8 @@ export const handleWebhookEvent = async (event: Stripe.Event): Promise<{ handled
             paymentIntentId: paymentIntent.id,
           });
         }
+        // Mark event as processed (24 hour TTL)
+        await cache.set(eventKey, JSON.stringify({ processed: true, timestamp: Date.now() }), 86400);
         return { handled: true, message: 'Payment succeeded handled' };
       }
 
@@ -177,6 +193,8 @@ export const handleWebhookEvent = async (event: Stripe.Event): Promise<{ handled
             error: paymentIntent.last_payment_error?.message,
           });
         }
+        // Mark event as processed (24 hour TTL)
+        await cache.set(eventKey, JSON.stringify({ processed: true, timestamp: Date.now() }), 86400);
         return { handled: true, message: 'Payment failed handled' };
       }
 
@@ -185,16 +203,31 @@ export const handleWebhookEvent = async (event: Stripe.Event): Promise<{ handled
         const booking = await Booking.findOne({ 'payment.transactionId': charge.payment_intent });
 
         if (booking) {
-          booking.payment.status = 'refunded';
+          // Initialize totalRefunded if not present
+          if (!booking.payment.totalRefunded) {
+            booking.payment.totalRefunded = 0;
+          }
+
+          // Track the refunded amount
+          const refundedAmount = charge.amount_refunded / 100;
+          booking.payment.totalRefunded += refundedAmount;
+
+          // Update status based on total refunded vs total amount
+          if (booking.payment.totalRefunded >= booking.pricing.totalAmount) {
+            booking.payment.status = 'refunded';
+          }
           booking.payment.refundedAt = new Date();
           await booking.save();
 
           logger.info('Webhook: Refund processed', {
             bookingId: booking._id,
             chargeId: charge.id,
-            refundedAmount: charge.amount_refunded / 100,
+            refundedAmount,
+            totalRefunded: booking.payment.totalRefunded,
           });
         }
+        // Mark event as processed (24 hour TTL)
+        await cache.set(eventKey, JSON.stringify({ processed: true, timestamp: Date.now() }), 86400);
         return { handled: true, message: 'Refund handled' };
       }
 
@@ -205,8 +238,15 @@ export const handleWebhookEvent = async (event: Stripe.Event): Promise<{ handled
     logger.error('Webhook handler error', {
       eventType: event.type,
       error: error.message,
+      stack: error.stack,
     });
-    throw new ApiError(500, `Webhook handler error: ${error.message}`);
+
+    // Schedule retry for Stripe to retry webhook
+    await scheduleWebhookRetry(event.id, event.type, event);
+
+    // Return error to trigger Stripe retry (HTTP 500)
+    // This ensures Stripe will retry the webhook delivery
+    throw new ApiError(500, `Webhook processing failed: ${error.message}`);
   }
 };
 
@@ -232,12 +272,33 @@ export const createRefund = async (
       throw new ApiError(400, 'Booking is not paid');
     }
 
+    // Initialize totalRefunded if not present (for backwards compatibility)
+    const currentTotalRefunded = booking.payment.totalRefunded || 0;
+
+    // Calculate maximum refundable amount
+    const maxRefundable = booking.pricing.totalAmount - currentTotalRefunded;
+    if (maxRefundable <= 0) {
+      throw new ApiError(400, `Full refund already processed. Total refunded: ${currentTotalRefunded}`);
+    }
+
     // Calculate refund amount
     let refundAmount: number;
-    if (amount) {
-      refundAmount = Math.min(amount, booking.pricing.totalAmount);
+    if (amount !== undefined && amount !== null) {
+      // Validate requested amount doesn't exceed remaining refundable amount
+      if (amount > maxRefundable) {
+        throw new ApiError(
+          400,
+          `Refund amount ${amount} exceeds maximum refundable amount ${maxRefundable.toFixed(2)}. ` +
+          `Already refunded: ${currentTotalRefunded.toFixed(2)}, Total paid: ${booking.pricing.totalAmount.toFixed(2)}`
+        );
+      }
+      if (amount <= 0) {
+        throw new ApiError(400, 'Refund amount must be positive');
+      }
+      refundAmount = amount;
     } else {
-      refundAmount = booking.pricing.totalAmount;
+      // Full refund of remaining amount
+      refundAmount = maxRefundable;
     }
 
     const refund = await stripe.refunds.create({
@@ -245,8 +306,13 @@ export const createRefund = async (
       amount: Math.round(refundAmount * 100), // Convert to cents
     });
 
-    // Update booking
-    booking.payment.status = 'refunded';
+    // Update booking with new total refunded
+    booking.payment.totalRefunded = currentTotalRefunded + refundAmount;
+
+    // Update status based on total refunded vs total amount
+    if (booking.payment.totalRefunded >= booking.pricing.totalAmount) {
+      booking.payment.status = 'refunded';
+    }
     booking.payment.refundedAt = new Date();
     await booking.save();
 
@@ -254,13 +320,15 @@ export const createRefund = async (
       bookingId,
       refundId: refund.id,
       amount: refundAmount,
+      totalRefunded: booking.payment.totalRefunded,
+      maxRefundable: booking.pricing.totalAmount,
     });
 
     return {
       success: true,
       refundId: refund.id,
       amount: refundAmount,
-      message: `Refund of ${refundAmount} processed successfully`,
+      message: `Refund of ${refundAmount.toFixed(2)} processed successfully. Total refunded: ${booking.payment.totalRefunded.toFixed(2)}`,
     };
   } catch (error: any) {
     logger.error('Failed to create refund', {

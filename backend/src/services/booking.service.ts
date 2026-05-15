@@ -56,24 +56,7 @@ export class BookingService {
       throw new ApiError(404, 'Provider not found');
     }
 
-    // Validate availability
-    const availabilityResult = await validateProviderSlotAvailability({
-      providerId: data.providerId,
-      scheduledDate: data.scheduledDate,
-      scheduledTime: data.scheduledTime,
-      serviceDurationMinutes: service.duration,
-    });
-
-    if (!availabilityResult.isValid) {
-      const error: any = new ApiError(
-        availabilityResult.errorCode === 'CONFLICT' ? 409 : 400,
-        availabilityResult.errorMessage!
-      );
-      error.availableSlots = availabilityResult.availableSlots;
-      throw error;
-    }
-
-    // Calculate pricing
+    // Calculate pricing (done outside transaction - read-only operation)
     const pricing = this.calculatePricing(service, data.addOns, data.selectedDuration);
 
     // Apply coupon discount if provided
@@ -107,8 +90,8 @@ export class BookingService {
     // Generate booking number
     const bookingNumber = this.generateBookingNumber();
 
-    // Create booking
-    const booking = new Booking({
+    // Create booking object (will be saved within transaction)
+    const bookingData = {
       bookingNumber,
       customerId,
       providerId: data.providerId,
@@ -155,10 +138,64 @@ export class BookingService {
         sessionId: data.metadata?.sessionId,
       },
       status: 'pending',
-    });
+    };
 
-    await booking.save();
+    // Use transaction to prevent race condition (TOCTOU vulnerability fix)
+    // The partial unique index on (providerId, scheduledDate, scheduledTime, status)
+    // will reject duplicate bookings at the database level
+    const session = await mongoose.startSession();
+    let booking: any;
 
+    try {
+      session.startTransaction({
+        readConcern: { level: 'snapshot' },
+        writeConcern: { w: 'majority' }
+      });
+
+      // Re-validate availability within transaction to ensure consistency
+      const availabilityResult = await validateProviderSlotAvailability({
+        providerId: data.providerId,
+        scheduledDate: data.scheduledDate,
+        scheduledTime: data.scheduledTime,
+        serviceDurationMinutes: service.duration,
+        session,
+      });
+
+      if (!availabilityResult.isValid) {
+        await session.abortTransaction();
+        const error: any = new ApiError(
+          availabilityResult.errorCode === 'CONFLICT' ? 409 : 400,
+          availabilityResult.errorMessage!
+        );
+        error.availableSlots = availabilityResult.availableSlots;
+        throw error;
+      }
+
+      // Create and save booking within transaction
+      booking = new Booking(bookingData);
+      await booking.save({ session });
+
+      await session.commitTransaction();
+      console.log(`Booking ${booking.bookingNumber} created successfully within transaction`);
+    } catch (error: any) {
+      // Abort transaction if still active
+      if (session.inTransaction()) {
+        await session.abortTransaction();
+      }
+
+      // Handle duplicate key error from partial unique index
+      if (error.code === 11000) {
+        console.warn(`Double-booking attempt prevented for provider ${data.providerId} at ${data.scheduledDate} ${data.scheduledTime}`);
+        throw new ApiError(409, 'This time slot has already been booked. Please select a different time.');
+      }
+
+      // Re-throw other errors
+      throw error;
+    } finally {
+      session.endSession();
+    }
+
+    // Post-booking operations (outside transaction - these are idempotent)
     // Mark coupon as used if applicable
     if (couponCode && couponDiscount > 0) {
       try {
@@ -225,24 +262,7 @@ export class BookingService {
       throw new ApiError(404, 'Provider not found');
     }
 
-    // Validate availability
-    const availabilityResult = await validateProviderSlotAvailability({
-      providerId: data.providerId,
-      scheduledDate: data.scheduledDate,
-      scheduledTime: data.scheduledTime,
-      serviceDurationMinutes: service.duration,
-    });
-
-    if (!availabilityResult.isValid) {
-      const error: any = new ApiError(
-        availabilityResult.errorCode === 'CONFLICT' ? 409 : 400,
-        availabilityResult.errorMessage!
-      );
-      error.availableSlots = availabilityResult.availableSlots;
-      throw error;
-    }
-
-    // Calculate pricing
+    // Calculate pricing (done outside transaction - read-only operation)
     const pricing = this.calculatePricing(service, data.addOns, data.selectedDuration);
 
     // Apply coupon discount if provided (for guest bookings too)
@@ -277,8 +297,8 @@ export class BookingService {
     // Generate booking number
     const bookingNumber = this.generateBookingNumber();
 
-    // Create guest booking
-    const booking = new Booking({
+    // Create guest booking object (will be saved within transaction)
+    const bookingData = {
       bookingNumber,
       customerId: null,
       isGuestBooking: true,
@@ -329,10 +349,64 @@ export class BookingService {
         deviceType: 'desktop',
       },
       status: 'pending',
-    });
+    };
 
-    await booking.save();
+    // Use transaction to prevent race condition (TOCTOU vulnerability fix)
+    // The partial unique index on (providerId, scheduledDate, scheduledTime, status)
+    // will reject duplicate bookings at the database level
+    const session = await mongoose.startSession();
+    let booking: any;
 
+    try {
+      session.startTransaction({
+        readConcern: { level: 'snapshot' },
+        writeConcern: { w: 'majority' }
+      });
+
+      // Re-validate availability within transaction to ensure consistency
+      const availabilityResult = await validateProviderSlotAvailability({
+        providerId: data.providerId,
+        scheduledDate: data.scheduledDate,
+        scheduledTime: data.scheduledTime,
+        serviceDurationMinutes: service.duration,
+        session,
+      });
+
+      if (!availabilityResult.isValid) {
+        await session.abortTransaction();
+        const error: any = new ApiError(
+          availabilityResult.errorCode === 'CONFLICT' ? 409 : 400,
+          availabilityResult.errorMessage!
+        );
+        error.availableSlots = availabilityResult.availableSlots;
+        throw error;
+      }
+
+      // Create and save booking within transaction
+      booking = new Booking(bookingData);
+      await booking.save({ session });
+
+      await session.commitTransaction();
+      console.log(`Guest booking ${booking.bookingNumber} created successfully within transaction`);
+    } catch (error: any) {
+      // Abort transaction if still active
+      if (session.inTransaction()) {
+        await session.abortTransaction();
+      }
+
+      // Handle duplicate key error from partial unique index
+      if (error.code === 11000) {
+        console.warn(`Double-booking attempt prevented (guest) for provider ${data.providerId} at ${data.scheduledDate} ${data.scheduledTime}`);
+        throw new ApiError(409, 'This time slot has already been booked. Please select a different time.');
+      }
+
+      // Re-throw other errors
+      throw error;
+    } finally {
+      session.endSession();
+    }
+
+    // Post-booking operations (outside transaction - these are idempotent)
     // Send email to guest
     await this.sendGuestBookingEmail(booking, service, provider);
 
@@ -357,7 +431,7 @@ export class BookingService {
   }
 
   // ========================================
-  // Get Customer Bookings
+  // Get Customer Bookings (Cursor-based pagination)
   // ========================================
 
   async getCustomerBookings(customerId: string, filters: BookingFiltersDTO): Promise<PaginatedBookingsResult> {
@@ -373,33 +447,57 @@ export class BookingService {
       if (filters.endDate) query.scheduledDate.$lte = new Date(filters.endDate);
     }
 
-    const page = filters.page || 1;
     const limit = Math.min(filters.limit || 20, 100);
-    const skip = (page - 1) * limit;
 
-    const [bookings, total] = await Promise.all([
-      Booking.find(query)
-        .populate('provider', 'firstName lastName businessInfo rating')
-        .populate('service', 'name category price duration images')
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit),
-      Booking.countDocuments(query),
-    ]);
+    // Cursor-based pagination using createdAt + _id for stable ordering
+    if (filters.cursor) {
+      try {
+        const cursor = JSON.parse(Buffer.from(filters.cursor, 'base64').toString('utf-8'));
+        if (cursor.createdAt && cursor._id) {
+          query.$or = [
+            { createdAt: { $lt: new Date(cursor.createdAt) } },
+            { createdAt: cursor.createdAt, _id: { $lt: cursor._id } },
+          ];
+        }
+      } catch {
+        // Invalid cursor, ignore and fetch from beginning
+      }
+    }
+
+    const bookings = await Booking.find(query)
+      .populate('provider', 'firstName lastName businessInfo rating')
+      .populate('service', 'name category price duration images')
+      .sort({ createdAt: -1, _id: -1 })
+      .limit(limit + 1); // Fetch one extra to determine if there are more
+
+    const hasMore = bookings.length > limit;
+    if (hasMore) {
+      bookings.pop(); // Remove the extra item
+    }
+
+    // Generate next cursor from last item
+    let nextCursor: string | undefined;
+    if (hasMore && bookings.length > 0) {
+      const lastBooking = bookings[bookings.length - 1];
+      const cursorData = {
+        createdAt: lastBooking.createdAt.toISOString(),
+        _id: lastBooking._id.toString(),
+      };
+      nextCursor = Buffer.from(JSON.stringify(cursorData)).toString('base64');
+    }
 
     return {
       bookings: bookings as any,
       pagination: {
-        page,
         limit,
-        total,
-        pages: Math.ceil(total / limit),
+        hasMore,
+        nextCursor,
       },
     };
   }
 
   // ========================================
-  // Get Provider Bookings
+  // Get Provider Bookings (Cursor-based pagination)
   // ========================================
 
   async getProviderBookings(providerId: string, filters: BookingFiltersDTO): Promise<PaginatedBookingsResult> {
@@ -415,27 +513,51 @@ export class BookingService {
       if (filters.endDate) query.scheduledDate.$lte = new Date(filters.endDate);
     }
 
-    const page = filters.page || 1;
     const limit = Math.min(filters.limit || 20, 100);
-    const skip = (page - 1) * limit;
 
-    const [bookings, total] = await Promise.all([
-      Booking.find(query)
-        .populate('customer', 'firstName lastName email avatar loyaltySystem')
-        .populate('service', 'name category price duration')
-        .sort({ scheduledDate: 1 })
-        .skip(skip)
-        .limit(limit),
-      Booking.countDocuments(query),
-    ]);
+    // Cursor-based pagination using scheduledDate + _id for stable ordering
+    if (filters.cursor) {
+      try {
+        const cursor = JSON.parse(Buffer.from(filters.cursor, 'base64').toString('utf-8'));
+        if (cursor.scheduledDate && cursor._id) {
+          query.$or = [
+            { scheduledDate: { $gt: new Date(cursor.scheduledDate) } },
+            { scheduledDate: new Date(cursor.scheduledDate), _id: { $gt: cursor._id } },
+          ];
+        }
+      } catch {
+        // Invalid cursor, ignore and fetch from beginning
+      }
+    }
+
+    const bookings = await Booking.find(query)
+      .populate('customer', 'firstName lastName email avatar loyaltySystem')
+      .populate('service', 'name category price duration')
+      .sort({ scheduledDate: 1, _id: 1 })
+      .limit(limit + 1); // Fetch one extra to determine if there are more
+
+    const hasMore = bookings.length > limit;
+    if (hasMore) {
+      bookings.pop(); // Remove the extra item
+    }
+
+    // Generate next cursor from last item
+    let nextCursor: string | undefined;
+    if (hasMore && bookings.length > 0) {
+      const lastBooking = bookings[bookings.length - 1];
+      const cursorData = {
+        scheduledDate: lastBooking.scheduledDate.toISOString(),
+        _id: lastBooking._id.toString(),
+      };
+      nextCursor = Buffer.from(JSON.stringify(cursorData)).toString('base64');
+    }
 
     return {
       bookings: bookings as any,
       pagination: {
-        page,
         limit,
-        total,
-        pages: Math.ceil(total / limit),
+        hasMore,
+        nextCursor,
       },
     };
   }

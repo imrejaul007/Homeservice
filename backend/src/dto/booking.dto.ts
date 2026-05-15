@@ -53,7 +53,7 @@ export interface BookingInputDTO {
   // New booking flow fields
   locationType?: 'at_home' | 'at_provider' | 'at_hotel';
   selectedDuration?: number;
-  professionalPreference?: 'no_preference' | 'specific' | 'any_experience';
+  professionalPreference?: 'male' | 'female' | 'no_preference';
   paymentMethod?: string;
   // Coupon/Promo
   couponCode?: string;
@@ -79,6 +79,7 @@ export interface BookingFiltersDTO {
   limit?: number;
   startDate?: string | Date;
   endDate?: string | Date;
+  cursor?: string;
 }
 
 export interface PaginationDTO {
@@ -86,6 +87,12 @@ export interface PaginationDTO {
   limit: number;
   total: number;
   pages: number;
+}
+
+export interface CursorPaginationDTO {
+  limit: number;
+  hasMore: boolean;
+  nextCursor?: string;
 }
 
 // ============================================
@@ -242,5 +249,5 @@ export interface GuestBookingResult {
 
 export interface PaginatedBookingsResult {
   bookings: BookingResponse[];
-  pagination: PaginationDTO;
+  pagination: CursorPaginationDTO;
 }

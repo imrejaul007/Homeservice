@@ -226,6 +226,10 @@ export interface IUser extends Document {
     readAt?: Date;
   }>;
 
+  // Demo Account Fields
+  isDemoAccount?: boolean;
+  demoExpiresAt?: Date;
+
   // Audit
   createdAt: Date;
   updatedAt: Date;
@@ -239,7 +243,7 @@ export interface IUser extends Document {
   // Methods
   comparePassword(candidatePassword: string): Promise<boolean>;
   generateAuthToken(): string;
-  generateRefreshToken(): string;
+  generateRefreshToken(rememberMe?: boolean): string;
   generateResetToken(): string;
   generateVerificationToken(): string;
   isLocked(): boolean;
@@ -598,6 +602,10 @@ const userSchema = new Schema<IUser>(
       readAt: Date,
     }],
 
+    // Demo Account Fields
+    isDemoAccount: { type: Boolean, default: false },
+    demoExpiresAt: { type: Date },
+
     // Audit
     createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
     updatedBy: { type: Schema.Types.ObjectId, ref: 'User' }
@@ -823,13 +831,17 @@ userSchema.methods.resetLoginAttempts = async function() {
 };
 
 userSchema.methods.updateLastLogin = async function(ip?: string) {
-  const updateData: any = { 
+  const updateData: any = {
     lastLogin: new Date(),
     'socialProfiles.lastActiveAt': new Date()
   };
   if (ip) updateData.lastLoginIP = ip;
-  
-  return this.updateOne(updateData);
+
+  // Use a simple update without touching address to avoid geo index issues
+  return User.updateOne(
+    { _id: this._id },
+    { $set: updateData }
+  );
 };
 
 userSchema.methods.generateReferralCode = function(): string {

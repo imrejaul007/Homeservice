@@ -21,10 +21,37 @@ class JWTService {
   private refreshTokenExpiry: string;
 
   constructor() {
-    this.accessTokenSecret = process.env.JWT_ACCESS_SECRET || 'fallback_access_secret_change_in_production';
-    this.refreshTokenSecret = process.env.JWT_REFRESH_SECRET || 'fallback_refresh_secret_change_in_production';
+    const env = process.env.NODE_ENV || 'development';
+    const accessSecret = process.env.JWT_ACCESS_SECRET;
+    const refreshSecret = process.env.JWT_REFRESH_SECRET;
+
+    // In production, require secrets to be set
+    if (env === 'production') {
+      if (!accessSecret || !refreshSecret) {
+        throw new Error(
+          'FATAL: JWT_ACCESS_SECRET and JWT_REFRESH_SECRET environment variables are required in production'
+        );
+      }
+      this.accessTokenSecret = accessSecret;
+      this.refreshTokenSecret = refreshSecret;
+    } else {
+      // In development, use fallbacks with warnings
+      if (!accessSecret) {
+        console.warn('⚠️ WARNING: Using insecure fallback JWT access secret. Set JWT_ACCESS_SECRET in production!');
+        this.accessTokenSecret = 'dev_access_secret_do_not_use_in_prod';
+      } else {
+        this.accessTokenSecret = accessSecret;
+      }
+      if (!refreshSecret) {
+        console.warn('⚠️ WARNING: Using insecure fallback JWT refresh secret. Set JWT_REFRESH_SECRET in production!');
+        this.refreshTokenSecret = 'dev_refresh_secret_do_not_use_in_prod';
+      } else {
+        this.refreshTokenSecret = refreshSecret;
+      }
+    }
+
     this.accessTokenExpiry = process.env.JWT_ACCESS_EXPIRY || '15m';
-    this.refreshTokenExpiry = process.env.JWT_REFRESH_EXPIRY || '30d'; // ✅ Changed from 7d to 30d
+    this.refreshTokenExpiry = process.env.JWT_REFRESH_EXPIRY || '30d';
   }
 
   generateAccessToken(payload: TokenPayload): string {

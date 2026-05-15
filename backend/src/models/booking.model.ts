@@ -126,6 +126,7 @@ export interface IBooking extends Document {
     transactionId?: string;
     paidAt?: Date;
     refundedAt?: Date;
+    totalRefunded?: number;
   };
 
   // Metadata & Analytics
@@ -241,7 +242,7 @@ const bookingSchema = new Schema<IBooking>(
     // New Booking Flow Fields
     locationType: {
       type: String,
-      enum: ['at_home', 'hotel'],
+      enum: ['at_home', 'at_provider', 'at_hotel'],
       default: 'at_home'
     },
 
@@ -267,7 +268,7 @@ const bookingSchema = new Schema<IBooking>(
     location: {
       type: {
         type: String,
-        enum: ['customer_address', 'provider_location', 'online'],
+        enum: ['customer_address', 'provider_location', 'hotel'],
         required: [true, 'Location type is required']
       },
       address: {
@@ -361,6 +362,11 @@ const bookingSchema = new Schema<IBooking>(
         amount: { type: Number, required: true },
         description: { type: String, required: true }
       }],
+      couponDiscount: {
+        type: Number,
+        default: 0,
+        min: [0, 'Coupon discount cannot be negative']
+      },
       subtotal: {
         type: Number,
         required: [true, 'Subtotal is required'],
@@ -501,7 +507,12 @@ const bookingSchema = new Schema<IBooking>(
       method: String,
       transactionId: String,
       paidAt: Date,
-      refundedAt: Date
+      refundedAt: Date,
+      totalRefunded: {
+        type: Number,
+        default: 0,
+        min: [0, 'Total refunded cannot be negative']
+      }
     },
 
     // Metadata & Analytics
@@ -552,6 +563,25 @@ bookingSchema.index({ customerId: 1, status: 1 });
 bookingSchema.index({ providerId: 1, scheduledDate: 1 });
 bookingSchema.index({ status: 1, scheduledDate: 1 });
 
+// ===================================
+// ANTI-DOUBLE-BOOKING INDEX
+// ===================================
+// Partial unique index to prevent double-booking of the same time slot.
+// Only applies to active (non-terminal) booking statuses.
+// This acts as a database-level constraint to prevent race conditions.
+// Index fields: providerId + scheduledDate + scheduledTime + status
+// The partial filter ensures completed/cancelled/no_show bookings don't conflict
+bookingSchema.index(
+  { providerId: 1, scheduledDate: 1, scheduledTime: 1, status: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      status: { $in: ['pending', 'confirmed', 'in_progress'] }
+    },
+    name: 'provider_slot_booking_unique'
+  }
+);
+
 // Location-based queries
 bookingSchema.index({ 'location.address.coordinates': '2dsphere' });
 
@@ -588,6 +618,30 @@ bookingSchema.index({ customerId: 1, status: 1, createdAt: -1 });
 // Provider revenue: get revenue data for provider analytics
 // Supports queries like: calculate total revenue for provider X this month
 bookingSchema.index({ providerId: 1, 'pricing.totalAmount': 1, status: 1 });
+
+// ===================================
+// AVAILABILITY QUERY INDEXES (GAP AUDIT FIX)
+// ===================================
+
+// Compound index for provider availability queries
+// Supports: find available slots for provider on specific date
+bookingSchema.index({
+  providerId: 1,
+  scheduledDate: 1,
+  scheduledTime: 1,
+  status: 1
+});
+
+// Customer lookup index for user's bookings sorted by creation date
+// Supports: find all bookings for a customer, newest first
+bookingSchema.index({
+  customerId: 1,
+  createdAt: -1
+});
+
+// Delta sync support index - efficiently find recently updated bookings for a user
+// Supports: delta sync queries for mobile app offline support
+bookingSchema.index({ updatedAt: -1 });
 
 // ===================================
 // VIRTUAL PROPERTIES

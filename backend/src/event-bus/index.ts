@@ -32,6 +32,62 @@ export const EVENT_TYPES = {
   // Analytics events
   PAGE_VIEW: 'analytics.page_view',
   SEARCH: 'analytics.search',
+
+  // Dispute events
+  DISPUTE_CREATED: 'dispute.created',
+  DISPUTE_EVIDENCE_ADDED: 'dispute.evidence_added',
+  DISPUTE_MESSAGE_ADDED: 'dispute.message_added',
+  DISPUTE_ASSIGNED: 'dispute.assigned',
+  DISPUTE_ESCALATED: 'dispute.escalated',
+  DISPUTE_STATUS_CHANGED: 'dispute.status_changed',
+  DISPUTE_RESOLVED: 'dispute.resolved',
+  DISPUTE_CLOSED: 'dispute.closed',
+
+  // Refund events
+  REFUND_CREATED: 'refund.created',
+  REFUND_TRIGGERED: 'refund.triggered',
+  REFUND_PROCESSED: 'refund.processed',
+  REFUND_COMPLETED: 'refund.completed',
+  REFUND_FAILED: 'refund.failed',
+  REFUND_CANCELLED: 'refund.cancelled',
+  CHARGEBACK_CREATED: 'chargeback.created',
+
+  // Anomaly Detection events
+  ANOMALY_DETECTED: 'anomaly.detected',
+  ANOMALY_STATUS_CHANGED: 'anomaly.status_changed',
+  ANOMALY_RESOLVED: 'anomaly.resolved',
+
+  // Support Ticket events
+  TICKET_CREATED: 'support.ticket_created',
+  TICKET_ASSIGNED: 'support.ticket_assigned',
+  TICKET_STATUS_CHANGED: 'support.ticket_status_changed',
+  TICKET_MESSAGE_ADDED: 'support.ticket_message_added',
+
+  // Membership events
+  MEMBERSHIP_CREATED: 'membership.created',
+  MEMBERSHIP_UPDATED: 'membership.updated',
+  MEMBERSHIP_UPGRADE_SUGGESTED: 'membership.upgrade_suggested',
+  FEATURED_LISTING_ADDED: 'membership.featured_listing_added',
+  FEATURED_LISTING_CANCELLED: 'membership.featured_listing_cancelled',
+  BOOKING_PRIORITY_ADDED: 'membership.booking_priority_added',
+  CASHBACK_CREDITED: 'membership.cashback_credited',
+  DISCOUNT_APPLIED: 'membership.discount_applied',
+  REFERRAL_COMPLETED: 'membership.referral_completed',
+  CONCIERGE_REQUEST: 'membership.concierge_request',
+
+  // Payout events
+  PAYOUT_COMPLETED: 'payout.completed',
+  PAYOUT_FAILED: 'payout.failed',
+
+  // Subscription events
+  SUBSCRIPTION_CREATED: 'subscription.created',
+  SUBSCRIPTION_UPDATED: 'subscription.updated',
+  SUBSCRIPTION_CANCELLED: 'subscription.cancelled',
+  SUBSCRIPTION_RENEWED: 'subscription.renewed',
+  SUBSCRIPTION_EXPIRED: 'subscription.expired',
+
+  // Stream/Analytics events
+  STREAM_EVENT: 'stream.event',
 } as const;
 
 export type EventType = typeof EVENT_TYPES[keyof typeof EVENT_TYPES];

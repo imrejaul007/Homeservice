@@ -13,6 +13,7 @@ import {
   isValidTokenFormat,
   isValidRecoveryCodeFormat,
 } from '../services/auth/2fa.service';
+import { provideCsrfToken } from './csrf.middleware';
 
 // Extend Express Request interface to include user
 declare global {
@@ -118,7 +119,7 @@ export const optionalAuth = asyncHandler(async (req: Request, _res: Response, ne
     }
 
     if (token) {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as JWTPayload;
+      const decoded = jwt.verify(token, process.env.JWT_ACCESS_SECRET as string) as JWTPayload;
       const user = await User.findById(decoded.id);
       
       if (user && user.isActive && !user.isDeleted && user.accountStatus !== 'suspended') {
@@ -302,35 +303,43 @@ export const checkSuspiciousActivity = asyncHandler(async (req: Request, res: Re
 });
 
 // CSRF protection for state-changing operations
-// SECURITY FIX: Added TODO comment - CSRF protection requires session management setup
-// TODO(security): Implement CSRF protection properly when session management is added
-// Current implementation checks for session.csrfToken but sessions are not configured.
-// To fix this properly:
-// 1. Add session middleware (express-session with secure cookie settings)
-// 2. Generate and store CSRF tokens server-side on session
-// 3. Return CSRF token to client on initial page load
-// 4. Client must send CSRF token in headers/body for state-changing requests
-export const csrfProtection = asyncHandler(async (req: Request, _res: Response, next: NextFunction) => {
-  // SECURITY: CSRF protection disabled until session management is implemented
-  // Uncomment and configure when session middleware is added:
-  /*
-  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
-    const csrfToken = req.headers['x-csrf-token'] || req.body.csrfToken;
-
-    if (!csrfToken) {
-      throw new ApiError(403, 'CSRF token is required');
-    }
-
-    // Verify CSRF token matches server-side session token
-    const expectedToken = (req as any).session?.csrfToken;
-    if (csrfToken !== expectedToken) {
-      throw new ApiError(403, 'Invalid CSRF token');
-    }
+// Uses the dedicated csrf.middleware.ts implementation
+// Alias for backward compatibility
+export const csrfProtection = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+  // Skip for safe HTTP methods
+  if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
+    return next();
   }
-  */
 
-  next();
+  // Skip for API endpoints using JWT authentication
+  const authHeader = req.headers.authorization;
+  if (authHeader?.startsWith('Bearer ')) {
+    return next();
+  }
+
+  // Skip for webhook endpoints (they use their own signature verification)
+  if (req.path.includes('/webhook')) {
+    return next();
+  }
+
+  // Skip for internal service-to-service calls
+  if (req.headers['x-internal-service']) {
+    return next();
+  }
+
+  // Use the dedicated CSRF middleware
+  const { validateCsrfToken } = await import('./csrf.middleware');
+  return validateCsrfToken(req, res, next);
 });
+
+// Deprecated: Use provideCsrfToken from csrf.middleware instead
+export const getCsrfToken = (_req: Request, res: Response) => {
+  res.status(410).json({
+    success: false,
+    message: 'Use GET /api/auth/csrf-token to obtain CSRF token',
+    code: 'DEPRECATED',
+  });
+};
 
 // Audit logging middleware
 export const auditLog = (action: string) => {
@@ -648,6 +657,7 @@ export default {
   strictRateLimit,
   checkSuspiciousActivity,
   csrfProtection,
+  provideCsrfToken,
   auditLog,
   trackDevice,
   require2FA,

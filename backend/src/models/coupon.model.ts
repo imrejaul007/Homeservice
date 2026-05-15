@@ -236,6 +236,29 @@ couponSchema.methods.calculateDiscount = function(orderValue: number): number {
   return Math.round(discount * 100) / 100;
 };
 
+// Indexes for query optimization
+couponSchema.index({ isActive: 1, validUntil: 1 });
+couponSchema.index({ isActive: 1, featured: 1 });
+couponSchema.index({ targetType: 1, isActive: 1 });
+couponSchema.index({ validFrom: 1, validUntil: 1 });
+couponSchema.index({ currentUses: 1, maxUses: 1 });
+couponSchema.index({ createdAt: -1 });
+
+// Compound index for finding valid coupons
+couponSchema.index({
+  isActive: 1,
+  validFrom: 1,
+  validUntil: 1,
+  currentUses: 1,
+  maxUses: 1
+});
+
+// Partial index for active non-expired coupons (MongoDB 3.2+)
+couponSchema.index(
+  { code: 1 },
+  { partialFilterExpression: { isActive: true } }
+);
+
 const Coupon = mongoose.model<ICoupon>('Coupon', couponSchema);
 
 export default Coupon;

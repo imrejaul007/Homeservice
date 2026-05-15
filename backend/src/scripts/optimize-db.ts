@@ -11,6 +11,8 @@ import ProviderProfile from '../models/providerProfile.model';
 import CustomerProfile from '../models/customerProfile.model';
 import Availability from '../models/availability.model';
 import AuditLog from '../models/auditLog.model';
+import Coupon from '../models/coupon.model';
+import Subscription from '../models/subscription.model';
 
 interface IndexInfo {
   collection: string;
@@ -40,6 +42,10 @@ const ANALYZED_COLLECTIONS = [
   'availabilities',
   'bookingnotifications',
   'auditlogs',
+  'coupons',
+  'subscriptions',
+  'experiences',
+  'settings',
 ];
 
 const analyzeIndexes = async (): Promise<IndexInfo[]> => {
@@ -238,6 +244,52 @@ const createOptimizedIndexes = async (): Promise<string[]> => {
     created.push('auditlogs.resource_action_date');
   } catch (error) {
     console.warn('AuditLog indexes already exist or error:', error);
+  }
+
+  // Coupon indexes
+  try {
+    await Coupon.collection.createIndex(
+      { isActive: 1, validUntil: 1 },
+      { background: true }
+    );
+    created.push('coupons.active_validUntil');
+
+    await Coupon.collection.createIndex(
+      { isActive: 1, featured: 1 },
+      { background: true }
+    );
+    created.push('coupons.active_featured');
+
+    await Coupon.collection.createIndex(
+      { targetType: 1, isActive: 1 },
+      { background: true }
+    );
+    created.push('coupons.targetType_active');
+  } catch (error) {
+    console.warn('Coupon indexes already exist or error:', error);
+  }
+
+  // Subscription indexes
+  try {
+    await Subscription.collection.createIndex(
+      { providerId: 1, status: 1 },
+      { background: true }
+    );
+    created.push('subscriptions.provider_status');
+
+    await Subscription.collection.createIndex(
+      { status: 1, nextBillingDate: 1 },
+      { background: true }
+    );
+    created.push('subscriptions.status_billingDate');
+
+    await Subscription.collection.createIndex(
+      { stripeSubscriptionId: 1 },
+      { sparse: true, background: true }
+    );
+    created.push('subscriptions.stripeSubscriptionId_sparse');
+  } catch (error) {
+    console.warn('Subscription indexes already exist or error:', error);
   }
 
   return created;

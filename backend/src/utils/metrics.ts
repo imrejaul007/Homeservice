@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import mongoose from 'mongoose';
 import logger from '../utils/logger';
+import { getCircuitBreakerHealth, getAllBreakerMetrics } from '../services/circuitBreaker';
 
 /**
  * Metrics endpoint for monitoring and alerting systems
@@ -66,6 +67,12 @@ export const getMetrics = async (_req: Request, res: Response) => {
         node_env: process.env.NODE_ENV,
         port: process.env.PORT,
         log_level: process.env.LOG_LEVEL,
+      },
+
+      // Circuit breaker health
+      circuitBreakers: {
+        ...getCircuitBreakerHealth(),
+        metrics: getAllBreakerMetrics(),
       },
     };
 
