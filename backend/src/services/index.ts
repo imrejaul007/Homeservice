@@ -185,6 +185,8 @@ export {
 export {
   churnService,
   ChurnService,
+} from './churn.service';
+export type {
   ChurnRiskReport,
   ChurnFilters,
   DateRange,

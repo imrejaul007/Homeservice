@@ -368,6 +368,13 @@ export const createService = asyncHandler(async (req: Request, res: Response) =>
     const service = new Service(serviceData);
     await service.save();
 
+    // Notify admins about new service pending review
+    const socketServer = getSocketServer();
+    if (socketServer) {
+      const providerId = (req.user as any)._id.toString();
+      socketServer.emitNewServicePending(service._id.toString(), providerId, service.name);
+    }
+
     logger.info('Service created successfully', {
       context: 'ProviderController',
       action: 'SERVICE_CREATED',

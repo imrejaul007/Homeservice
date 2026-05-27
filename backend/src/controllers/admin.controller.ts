@@ -424,6 +424,22 @@ export const rejectProvider = asyncHandler(async (req: Request, res: Response) =
     await User.findByIdAndUpdate(provider.userId, {
       accountStatus: 'suspended'
     });
+
+    // Invalidate all tokens for the suspended user
+    const userToSuspend = await User.findById(provider.userId);
+    if (userToSuspend) {
+      await userToSuspend.invalidateAllTokens();
+    }
+
+    // Emit socket event to notify provider of suspension
+    const socketServer = getSocketServer();
+    if (socketServer) {
+      socketServer.emitProviderSuspended(
+        (provider.userId as any)?._id || provider.userId.toString(),
+        reason,
+        undefined
+      );
+    }
   }
 
   // Audit logging for provider rejection
@@ -911,7 +927,8 @@ export const updateServiceStatus = asyncHandler(async (req: Request, res: Respon
     const socketServer = getSocketServer();
     if (socketServer) {
       if (status === 'active') {
-        socketServer.emitServiceApproved(service._id.toString(), providerUserId);
+        // FIX: Correct parameter order - providerId first, serviceId second
+        socketServer.emitServiceApproved(providerUserId, service._id.toString());
       } else if (reason) {
         socketServer.emitServiceRejected(service._id.toString(), providerUserId, reason);
       }
@@ -2346,6 +2363,894 @@ export const getCategoryStats = asyncHandler(async (_req: Request, res: Response
     }
   });
 });
+
+// ========================================
+// Admin Review Moderation
+// ========================================
+
+import Review from '../models/review.model';
+
+/**
+ * Get reviews pending moderation
+ * GET /api/admin/reviews/pending
+ */
+export const getPendingReviews = asyncHandler(async (req: Request, res: Response) => {
+  // Extract tenant context
+  const tenantContext: TenantContext = getTenantContext(req);
+
+  // Enforce hard limits on pagination params
+  const page = Math.max(1, parseInt(req.query.page as string) || 1);
+  const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
+
+  const { search } = req.query;
+
+  // Build query for pending reviews or high report count
+  const query: any = {
+    $or: [
+      { moderationStatus: 'pending' },
+      { reportCount: { $gte: 3 } }
+    ]
+  };
+
+  if (search && typeof search === 'string') {
+    query.$or.push(
+      { comment: { $regex: search, $options: 'i' } },
+      { title: { $regex: search, $options: 'i' } }
+    );
+  }
+
+  const reviews = await Review.find(query)
+    .populate('reviewerId', 'firstName lastName email avatar')
+    .populate('revieweeId', 'firstName lastName email businessInfo.businessName')
+    .populate('bookingId', 'bookingNumber scheduledDate serviceId')
+    .sort({ reportCount: -1, createdAt: -1 })
+    .skip((Number(page) - 1) * Number(limit))
+    .limit(Number(limit));
+
+  const total = await Review.countDocuments(query);
+
+  res.json({
+    success: true,
+    data: {
+      reviews,
+      pagination: {
+        page: Number(page),
+        limit: Number(limit),
+        total,
+        pages: Math.ceil(total / Number(limit)),
+        hasNext: Number(page) * Number(limit) < total,
+        hasPrev: Number(page) > 1
+      }
+    }
+  });
+});
+
+/**
+ * Get reviews with reports/flags
+ * GET /api/admin/reviews/flagged
+ */
+export const getFlaggedReviews = asyncHandler(async (req: Request, res: Response) => {
+  // Extract tenant context
+  const tenantContext: TenantContext = getTenantContext(req);
+
+  // Enforce hard limits on pagination params
+  const page = Math.max(1, parseInt(req.query.page as string) || 1);
+  const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
+
+  const { minReports, search } = req.query;
+
+  // Build query for flagged reviews
+  const query: any = {
+    reportCount: { $gt: 0 }
+  };
+
+  if (minReports) {
+    query.reportCount = { $gte: parseInt(minReports as string) };
+  }
+
+  if (search && typeof search === 'string') {
+    query.$or = [
+      { comment: { $regex: search, $options: 'i' } },
+      { title: { $regex: search, $options: 'i' } }
+    ];
+  }
+
+  const reviews = await Review.find(query)
+    .populate('reviewerId', 'firstName lastName email avatar')
+    .populate('revieweeId', 'firstName lastName email businessInfo.businessName')
+    .sort({ reportCount: -1, createdAt: -1 })
+    .skip((Number(page) - 1) * Number(limit))
+    .limit(Number(limit));
+
+  const total = await Review.countDocuments(query);
+
+  // Get report breakdown stats
+  const stats = await Review.aggregate([
+    { $match: { reportCount: { $gt: 0 } } },
+    {
+      $group: {
+        _id: null,
+        totalFlagged: { $sum: 1 },
+        totalReports: { $sum: '$reportCount' },
+        avgReports: { $avg: '$reportCount' },
+        highPriority: { $sum: { $cond: [{ $gte: ['$reportCount', 5] }, 1, 0] } }
+      }
+    }
+  ]);
+
+  res.json({
+    success: true,
+    data: {
+      reviews,
+      stats: stats[0] || { totalFlagged: 0, totalReports: 0, avgReports: 0, highPriority: 0 },
+      pagination: {
+        page: Number(page),
+        limit: Number(limit),
+        total,
+        pages: Math.ceil(total / Number(limit)),
+        hasNext: Number(page) * Number(limit) < total,
+        hasPrev: Number(page) > 1
+      }
+    }
+  });
+});
+
+/**
+ * Moderate a review (approve/reject/hide/delete)
+ * PATCH /api/admin/reviews/:id/moderate
+ */
+export const moderateReview = asyncHandler(async (req: Request, res: Response) => {
+  // Extract tenant context
+  const tenantContext: TenantContext = getTenantContext(req);
+  const { id } = req.params;
+  const { action, reason } = req.body;
+  const adminUser = req.user as any;
+
+  // Validate action
+  const validActions = ['approve', 'reject', 'hide', 'delete'];
+  if (!validActions.includes(action)) {
+    throw new ApiError(400, `Invalid action. Must be one of: ${validActions.join(', ')}`);
+  }
+
+  // Build query
+  const query: any = { _id: id };
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    query.tenantId = tenantContext.tenantId;
+  }
+
+  const review = await Review.findOne(query)
+    .populate('reviewerId', 'firstName lastName email')
+    .populate('revieweeId', 'firstName lastName email businessInfo.businessName');
+
+  if (!review) {
+    throw new ApiError(404, 'Review not found');
+  }
+
+  // Store previous state for logging
+  const previousStatus = review.moderationStatus;
+  const previousHidden = review.isHidden;
+
+  // Apply moderation action
+  switch (action) {
+    case 'approve':
+      review.moderationStatus = 'approved';
+      review.isHidden = false;
+      review.moderationReason = reason || null;
+      break;
+
+    case 'reject':
+      review.moderationStatus = 'rejected';
+      review.isHidden = true;
+      review.moderationReason = reason || 'Rejected by admin';
+      break;
+
+    case 'hide':
+      review.moderationStatus = 'hidden';
+      review.isHidden = true;
+      review.moderationReason = reason || 'Hidden by admin';
+      break;
+
+    case 'delete':
+      await Review.findByIdAndDelete(id);
+
+      logger.info('ADMIN_AUDIT: Review deleted', {
+        action: 'REVIEW_DELETED',
+        adminId: adminUser._id,
+        adminEmail: adminUser.email,
+        reviewId: id,
+        reviewerId: (review.reviewerId as any)?._id,
+        revieweeId: (review.revieweeId as any)?._id,
+        previousStatus,
+        reason: reason || 'No reason provided',
+        timestamp: new Date().toISOString()
+      });
+
+      res.json({
+        success: true,
+        message: 'Review deleted successfully'
+      });
+      return;
+  }
+
+  // Update moderation metadata
+  review.moderatedAt = new Date();
+  review.moderatedBy = adminUser._id;
+
+  await review.save();
+
+  // Audit logging
+  logger.info('ADMIN_AUDIT: Review moderated', {
+    action: 'REVIEW_MODERATED',
+    adminId: adminUser._id,
+    adminEmail: adminUser.email,
+    reviewId: id,
+    reviewerId: (review.reviewerId as any)?._id,
+    revieweeId: (review.revieweeId as any)?._id,
+    moderationAction: action,
+    previousStatus,
+    previousHidden,
+    newStatus: review.moderationStatus,
+    newHidden: review.isHidden,
+    reason: reason || 'No reason provided',
+    timestamp: new Date().toISOString()
+  });
+
+  // Notify provider if rejected (for visibility issues)
+  if (action === 'reject' || action === 'hide') {
+    const revieweeId = (review.revieweeId as any)?._id;
+    if (revieweeId) {
+      try {
+        const notificationService = new NotificationService();
+        await notificationService.createNotification({
+          recipientId: revieweeId.toString(),
+          type: 'system' as any, // review_moderation mapped to system type
+          title: 'Review Moderation Notice',
+          message: action === 'reject'
+            ? 'One of your reviews has been rejected due to policy violations.'
+            : 'One of your received reviews has been hidden by our moderation team.',
+          actionText: 'View Details',
+          actionUrl: `/provider/reviews`,
+          metadata: { reviewId: id, action }
+        });
+      } catch (notifError) {
+        logger.error('Failed to create moderation notification', {
+          reviewId: id,
+          error: notifError instanceof Error ? notifError.message : String(notifError)
+        });
+      }
+    }
+  }
+
+  res.json({
+    success: true,
+    message: `Review ${action}d successfully`,
+    data: { review }
+  });
+});
+
+// ============================================
+// Withdrawal Management
+// ============================================
+
+/**
+ * Get all pending withdrawals for admin review
+ * GET /api/admin/withdrawals
+ */
+export const getPendingWithdrawals = asyncHandler(async (req: Request, res: Response) => {
+  const tenantContext: TenantContext = getTenantContext(req);
+  const { page = '1', limit = '20', status, providerId, search } = req.query;
+
+  // Enforce pagination limits
+  const pageNum = Math.max(1, parseInt(page as string, 10));
+  const limitNum = Math.min(100, Math.max(1, parseInt(limit as string, 10)));
+
+  // Build query for pending withdrawals
+  const query: Record<string, unknown> = {};
+
+  // Add tenant filter
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    query.tenantId = tenantContext.tenantId;
+  }
+
+  // Filter by status
+  if (status && typeof status === 'string') {
+    query['transactions.referenceType'] = 'payout';
+    query['transactions.status'] = status;
+  } else {
+    // Default: show pending withdrawals
+    query['transactions.referenceType'] = 'payout';
+    query['transactions.status'] = 'pending';
+  }
+
+  // Filter by provider
+  if (providerId && typeof providerId === 'string') {
+    query.userId = providerId;
+  }
+
+  // Search by provider name/email
+  if (search && typeof search === 'string') {
+    const providers = await User.find({
+      $or: [
+        { firstName: { $regex: search, $options: 'i' } },
+        { lastName: { $regex: search, $options: 'i' } },
+        { email: { $regex: search, $options: 'i' } },
+      ],
+    }).select('_id');
+
+    query.userId = { $in: providers.map(p => p._id) };
+  }
+
+  // Get withdrawals with pagination
+  const Wallet = require('../models/wallet.model').default;
+
+  // Use aggregation to find wallets with pending payout transactions
+  const wallets = await Wallet.aggregate([
+    { $match: query },
+    { $unwind: '$transactions' },
+    {
+      $match: {
+        'transactions.referenceType': 'payout',
+        'transactions.status': status ? status : 'pending',
+      },
+    },
+    {
+      $lookup: {
+        from: 'users',
+        localField: 'userId',
+        foreignField: '_id',
+        as: 'user',
+      },
+    },
+    { $unwind: '$user' },
+    {
+      $project: {
+        _id: 1,
+        balance: 1,
+        currency: 1,
+        pendingBalance: 1,
+        transaction: '$transactions',
+        userId: '$user._id',
+        userEmail: '$user.email',
+        userFirstName: '$user.firstName',
+        userLastName: '$user.lastName',
+        createdAt: 1,
+      },
+    },
+    { $sort: { 'transaction.createdAt': -1 } },
+    {
+      $facet: {
+        data: [
+          { $skip: (pageNum - 1) * limitNum },
+          { $limit: limitNum },
+        ],
+        count: [{ $count: 'total' }],
+      },
+    },
+  ]);
+
+  const withdrawals = wallets[0]?.data || [];
+  const total = wallets[0]?.count[0]?.total || 0;
+
+  res.json({
+    success: true,
+    data: {
+      withdrawals,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        pages: Math.ceil(total / limitNum),
+        hasNext: pageNum * limitNum < total,
+        hasPrev: pageNum > 1,
+      },
+    },
+  });
+});
+
+/**
+ * Get withdrawal statistics for admin dashboard
+ * GET /api/admin/withdrawals/stats
+ */
+export const getWithdrawalStats = asyncHandler(async (req: Request, res: Response) => {
+  const tenantContext: TenantContext = getTenantContext(req);
+
+  const matchStage: Record<string, unknown> = {
+    'transactions.referenceType': 'payout',
+  };
+
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    matchStage.tenantId = tenantContext.tenantId;
+  }
+
+  const Wallet = require('../models/wallet.model').default;
+
+  const stats = await Wallet.aggregate([
+    { $match: matchStage },
+    { $unwind: '$transactions' },
+    { $match: { 'transactions.referenceType': 'payout' } },
+    {
+      $group: {
+        _id: '$transactions.status',
+        count: { $sum: 1 },
+        totalAmount: { $sum: '$transactions.amount' },
+      },
+    },
+  ]);
+
+  const result: {
+    pending: { count: number; totalAmount: number };
+    processing: { count: number; totalAmount: number };
+    completed: { count: number; totalAmount: number };
+    failed: { count: number; totalAmount: number };
+    rejected: { count: number; totalAmount: number };
+    totalPendingAmount: number;
+    totalProcessedAmount: number;
+  } = {
+    pending: { count: 0, totalAmount: 0 },
+    processing: { count: 0, totalAmount: 0 },
+    completed: { count: 0, totalAmount: 0 },
+    failed: { count: 0, totalAmount: 0 },
+    rejected: { count: 0, totalAmount: 0 },
+    totalPendingAmount: 0,
+    totalProcessedAmount: 0,
+  };
+
+  for (const stat of stats) {
+    const status = stat._id as keyof typeof result;
+    if (status in result) {
+      (result as any)[status] = {
+        count: stat.count,
+        totalAmount: stat.totalAmount,
+      };
+    }
+    if (status === 'completed' || status === 'processing') {
+      result.totalProcessedAmount += stat.totalAmount;
+    }
+    if (status === 'pending' || status === 'processing') {
+      result.totalPendingAmount += stat.totalAmount;
+    }
+  }
+
+  res.json({
+    success: true,
+    data: result,
+  });
+});
+
+/**
+ * Approve a withdrawal request
+ * POST /api/admin/withdrawals/:id/approve
+ */
+export const approveWithdrawal = asyncHandler(async (req: Request, res: Response) => {
+  const tenantContext: TenantContext = getTenantContext(req);
+  const { id } = req.params;
+  const adminUser = req.user as any;
+
+  // Parse the withdrawal reference from the ID (format: walletId:transactionId)
+  const [walletId, transactionId] = id.split(':');
+
+  if (!walletId || !transactionId) {
+    throw new ApiError(400, 'Invalid withdrawal ID format');
+  }
+
+  const Wallet = require('../models/wallet.model').default;
+
+  // Build query with tenant isolation
+  const walletQuery: Record<string, unknown> = { _id: walletId };
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    walletQuery.tenantId = tenantContext.tenantId;
+  }
+
+  const wallet = await Wallet.findOne(walletQuery);
+
+  if (!wallet) {
+    throw new ApiError(404, 'Wallet not found');
+  }
+
+  // Find the pending withdrawal transaction
+  const transaction = wallet.transactions.find(
+    (t: any) => t.id === transactionId && t.referenceType === 'payout'
+  );
+
+  if (!transaction) {
+    throw new ApiError(404, 'Withdrawal transaction not found');
+  }
+
+  if (transaction.status !== 'pending') {
+    throw new ApiError(400, `Cannot approve withdrawal with status: ${transaction.status}`);
+  }
+
+  // Start a MongoDB session for atomic operation
+  const mongoose = require('mongoose');
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    // Update transaction status to processing
+    await Wallet.updateOne(
+      { _id: walletId, 'transactions.id': transactionId },
+      {
+        $set: {
+          'transactions.$.status': 'processing',
+          'transactions.$.updatedAt': new Date(),
+        },
+      },
+      { session }
+    );
+
+    // Deduct the amount from wallet balance (funds are now being transferred)
+    await Wallet.updateOne(
+      { _id: walletId },
+      {
+        $inc: {
+          balance: -transaction.amount,
+          pendingBalance: -transaction.amount,
+        },
+      },
+      { session }
+    );
+
+    await session.commitTransaction();
+
+    // Get user info for notifications
+    const user = await User.findById(wallet.userId);
+
+    // Process Stripe payout (simulated for now)
+    logger.info('Processing withdrawal approval', {
+      withdrawalId: id,
+      walletId,
+      transactionId,
+      amount: transaction.amount,
+      providerId: wallet.userId.toString(),
+      action: 'WITHDRAWAL_APPROVED',
+    });
+
+    // Emit socket event to provider
+    const socketServer = getSocketServer();
+    if (socketServer && user) {
+      socketServer.emitToUser(wallet.userId.toString(), 'notification:new', {
+        id: `wd-approve-${Date.now()}`,
+        type: 'system' as const,
+        title: 'Withdrawal Approved',
+        message: `Your withdrawal request for ${transaction.amount} ${wallet.currency} has been approved and is being processed.`,
+        timestamp: new Date(),
+        read: false,
+      });
+
+      // Emit withdrawal specific event
+      (socketServer as any).emitToUser?.(wallet.userId.toString(), 'withdrawal:approved', {
+        withdrawalId: id,
+        amount: transaction.amount,
+        currency: wallet.currency,
+        status: 'processing',
+        processedAt: new Date().toISOString(),
+      });
+    }
+
+    // Create notification via NotificationService
+    try {
+      const notificationService = new NotificationService();
+      await notificationService.createNotification({
+        recipientId: wallet.userId.toString(),
+        type: 'withdrawal',
+        title: 'Withdrawal Approved',
+        message: `Your withdrawal request for ${transaction.amount} ${wallet.currency} has been approved. Funds will be transferred to your bank account within 2-3 business days.`,
+        actionText: 'View Wallet',
+        actionUrl: '/provider/wallet',
+        metadata: {
+          withdrawalId: id,
+          amount: transaction.amount,
+          currency: wallet.currency,
+          status: 'approved',
+        },
+      });
+    } catch (notifError) {
+      logger.error('Failed to create withdrawal approval notification', {
+        withdrawalId: id,
+        error: notifError instanceof Error ? notifError.message : String(notifError),
+      });
+    }
+
+    // Publish event for analytics
+    const { eventBus, EVENT_TYPES } = require('../event-bus');
+    await eventBus.publish(EVENT_TYPES.WITHDRAWAL_APPROVED, {
+      withdrawalId: id,
+      walletId,
+      transactionId,
+      providerId: wallet.userId.toString(),
+      amount: transaction.amount,
+      currency: wallet.currency,
+      approvedBy: adminUser._id.toString(),
+      approvedAt: new Date().toISOString(),
+    });
+
+    // Log audit trail
+    logger.info('Withdrawal approved by admin', {
+      withdrawalId: id,
+      walletId,
+      transactionId,
+      providerId: wallet.userId.toString(),
+      providerEmail: user?.email,
+      amount: transaction.amount,
+      currency: wallet.currency,
+      approvedBy: adminUser._id.toString(),
+      adminEmail: adminUser.email,
+      action: 'ADMIN_WITHDRAWAL_APPROVED',
+    });
+
+    res.json({
+      success: true,
+      message: 'Withdrawal approved successfully',
+      data: {
+        withdrawalId: id,
+        status: 'processing',
+        amount: transaction.amount,
+        currency: wallet.currency,
+        newBalance: wallet.balance - transaction.amount,
+        estimatedCompletion: '2-3 business days',
+      },
+    });
+  } catch (error: any) {
+    await session.abortTransaction();
+    throw new ApiError(500, `Failed to approve withdrawal: ${error.message}`);
+  } finally {
+    session.endSession();
+  }
+});
+
+/**
+ * Reject a withdrawal request
+ * POST /api/admin/withdrawals/:id/reject
+ */
+export const rejectWithdrawal = asyncHandler(async (req: Request, res: Response) => {
+  const tenantContext: TenantContext = getTenantContext(req);
+  const { id } = req.params;
+  const { reason } = req.body;
+  const adminUser = req.user as any;
+
+  // Validate rejection reason
+  if (!reason || typeof reason !== 'string' || reason.trim().length === 0) {
+    throw new ApiError(400, 'Rejection reason is required');
+  }
+
+  // Parse the withdrawal reference from the ID (format: walletId:transactionId)
+  const [walletId, transactionId] = id.split(':');
+
+  if (!walletId || !transactionId) {
+    throw new ApiError(400, 'Invalid withdrawal ID format');
+  }
+
+  const Wallet = require('../models/wallet.model').default;
+
+  // Build query with tenant isolation
+  const walletQuery: Record<string, unknown> = { _id: walletId };
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    walletQuery.tenantId = tenantContext.tenantId;
+  }
+
+  const wallet = await Wallet.findOne(walletQuery);
+
+  if (!wallet) {
+    throw new ApiError(404, 'Wallet not found');
+  }
+
+  // Find the pending withdrawal transaction
+  const transaction = wallet.transactions.find(
+    (t: any) => t.id === transactionId && t.referenceType === 'payout'
+  );
+
+  if (!transaction) {
+    throw new ApiError(404, 'Withdrawal transaction not found');
+  }
+
+  if (transaction.status !== 'pending') {
+    throw new ApiError(400, `Cannot reject withdrawal with status: ${transaction.status}`);
+  }
+
+  // Start a MongoDB session for atomic operation
+  const mongoose = require('mongoose');
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    // Update transaction status to rejected
+    await Wallet.updateOne(
+      { _id: walletId, 'transactions.id': transactionId },
+      {
+        $set: {
+          'transactions.$.status': 'reversed',
+          'transactions.$.updatedAt': new Date(),
+          'transactions.$.metadata.rejectionReason': reason,
+          'transactions.$.metadata.rejectedAt': new Date(),
+          'transactions.$.metadata.rejectedBy': adminUser._id.toString(),
+        },
+      },
+      { session }
+    );
+
+    // Release funds back to available balance (remove from pendingBalance only)
+    await Wallet.updateOne(
+      { _id: walletId },
+      {
+        $inc: {
+          pendingBalance: -transaction.amount,
+        },
+      },
+      { session }
+    );
+
+    await session.commitTransaction();
+
+    // Get user info for notifications
+    const user = await User.findById(wallet.userId);
+
+    // Emit socket event to provider
+    const socketServer = getSocketServer();
+    if (socketServer && user) {
+      socketServer.emitToUser(wallet.userId.toString(), 'notification:new', {
+        id: `wd-reject-${Date.now()}`,
+        type: 'system' as const,
+        title: 'Withdrawal Rejected',
+        message: `Your withdrawal request for ${transaction.amount} ${wallet.currency} has been rejected. Reason: ${reason}`,
+        timestamp: new Date(),
+        read: false,
+      });
+
+      // Emit withdrawal specific event
+      (socketServer as any).emitToUser?.(wallet.userId.toString(), 'withdrawal:rejected', {
+        withdrawalId: id,
+        amount: transaction.amount,
+        currency: wallet.currency,
+        status: 'rejected',
+        reason: reason,
+        rejectedAt: new Date().toISOString(),
+      });
+    }
+
+    // Create notification via NotificationService
+    try {
+      const notificationService = new NotificationService();
+      await notificationService.createNotification({
+        recipientId: wallet.userId.toString(),
+        type: 'withdrawal',
+        title: 'Withdrawal Rejected',
+        message: `Your withdrawal request for ${transaction.amount} ${wallet.currency} has been rejected. Reason: ${reason}`,
+        actionText: 'Contact Support',
+        actionUrl: '/support',
+        metadata: {
+          withdrawalId: id,
+          amount: transaction.amount,
+          currency: wallet.currency,
+          status: 'rejected',
+          rejectionReason: reason,
+        },
+      });
+    } catch (notifError) {
+      logger.error('Failed to create withdrawal rejection notification', {
+        withdrawalId: id,
+        error: notifError instanceof Error ? notifError.message : String(notifError),
+      });
+    }
+
+    // Publish event for analytics
+    const { eventBus, EVENT_TYPES } = require('../event-bus');
+    await eventBus.publish(EVENT_TYPES.WITHDRAWAL_REJECTED, {
+      withdrawalId: id,
+      walletId,
+      transactionId,
+      providerId: wallet.userId.toString(),
+      amount: transaction.amount,
+      currency: wallet.currency,
+      reason: reason,
+      rejectedBy: adminUser._id.toString(),
+      rejectedAt: new Date().toISOString(),
+    });
+
+    // Log audit trail
+    logger.info('Withdrawal rejected by admin', {
+      withdrawalId: id,
+      walletId,
+      transactionId,
+      providerId: wallet.userId.toString(),
+      providerEmail: user?.email,
+      amount: transaction.amount,
+      currency: wallet.currency,
+      reason: reason,
+      rejectedBy: adminUser._id.toString(),
+      adminEmail: adminUser.email,
+      action: 'ADMIN_WITHDRAWAL_REJECTED',
+    });
+
+    res.json({
+      success: true,
+      message: 'Withdrawal rejected. Funds have been released back to the provider\'s available balance.',
+      data: {
+        withdrawalId: id,
+        status: 'rejected',
+        amount: transaction.amount,
+        currency: wallet.currency,
+        reason: reason,
+        availableBalance: wallet.balance,
+      },
+    });
+  } catch (error: any) {
+    await session.abortTransaction();
+    throw new ApiError(500, `Failed to reject withdrawal: ${error.message}`);
+  } finally {
+    session.endSession();
+  }
+});
+
+/**
+ * Get withdrawal details
+ * GET /api/admin/withdrawals/:id
+ */
+export const getWithdrawalDetails = asyncHandler(async (req: Request, res: Response) => {
+  const tenantContext: TenantContext = getTenantContext(req);
+  const { id } = req.params;
+
+  // Parse the withdrawal reference from the ID (format: walletId:transactionId)
+  const [walletId, transactionId] = id.split(':');
+
+  if (!walletId || !transactionId) {
+    throw new ApiError(400, 'Invalid withdrawal ID format');
+  }
+
+  const Wallet = require('../models/wallet.model').default;
+
+  // Build query with tenant isolation
+  const walletQuery: Record<string, unknown> = { _id: walletId };
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    walletQuery.tenantId = tenantContext.tenantId;
+  }
+
+  const wallet = await Wallet.findOne(walletQuery).populate('userId', 'email firstName lastName phone');
+
+  if (!wallet) {
+    throw new ApiError(404, 'Wallet not found');
+  }
+
+  // Find the withdrawal transaction
+  const transaction = wallet.transactions.find(
+    (t: any) => t.id === transactionId && t.referenceType === 'payout'
+  );
+
+  if (!transaction) {
+    throw new ApiError(404, 'Withdrawal transaction not found');
+  }
+
+  res.json({
+    success: true,
+    data: {
+      withdrawalId: id,
+      walletId: wallet._id,
+      transaction: {
+        id: transaction.id,
+        amount: transaction.amount,
+        currency: wallet.currency,
+        status: transaction.status,
+        description: transaction.description,
+        reference: transaction.reference,
+        createdAt: transaction.createdAt,
+        updatedAt: transaction.updatedAt,
+        metadata: transaction.metadata,
+      },
+      provider: {
+        id: (wallet.userId as any)._id,
+        email: (wallet.userId as any).email,
+        firstName: (wallet.userId as any).firstName,
+        lastName: (wallet.userId as any).lastName,
+        phone: (wallet.userId as any).phone,
+      },
+      wallet: {
+        balance: wallet.balance,
+        pendingBalance: wallet.pendingBalance,
+        availableBalance: wallet.balance - wallet.pendingBalance + (transaction.status === 'pending' ? transaction.amount : 0),
+      },
+    },
+  });
+});
+
 // Default export
 export default {
   // Provider Management
@@ -2383,4 +3288,14 @@ export default {
   toggleCategoryFeatured,
   addSubcategory,
   getCategoryStats,
+  // Review Moderation
+  getPendingReviews,
+  getFlaggedReviews,
+  moderateReview,
+  // Withdrawal Management
+  getPendingWithdrawals,
+  getWithdrawalStats,
+  getWithdrawalDetails,
+  approveWithdrawal,
+  rejectWithdrawal,
 };

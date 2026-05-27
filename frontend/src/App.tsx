@@ -36,6 +36,7 @@ const ReviewModeration = lazy(() => import('./pages/admin/ReviewModeration'));
 const CouponManagement = lazy(() => import('./pages/admin/CouponManagement'));
 const ApiKeyManagement = lazy(() => import('./pages/admin/ApiKeyManagement'));
 const MaintenanceMode = lazy(() => import('./pages/admin/MaintenanceMode'));
+const PayoutManagement = lazy(() => import('./pages/admin/PayoutManagement'));
 const ChurnReport = lazy(() => import('./pages/admin/ChurnReport'));
 const HomePage = lazy(() => import('./pages/HomePage'));
 const ExperiencesPage = lazy(() => import('./pages/ExperiencesPage'));
@@ -666,6 +667,15 @@ function App() {
           element={
             <AdminRoute>
               <ChurnReport />
+            </AdminRoute>
+          }
+        />
+
+        <Route
+          path="/admin/payouts"
+          element={
+            <AdminRoute>
+              <PayoutManagement />
             </AdminRoute>
           }
         />

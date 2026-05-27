@@ -84,6 +84,10 @@ export const EVENT_TYPES = {
   // Payout events
   PAYOUT_COMPLETED: 'payout.completed',
   PAYOUT_FAILED: 'payout.failed',
+  PAYOUT_APPROVED: 'payout.approved',
+  PAYOUT_REJECTED: 'payout.rejected',
+  WITHDRAWAL_APPROVED: 'withdrawal.approved',
+  WITHDRAWAL_REJECTED: 'withdrawal.rejected',
 
   // Subscription events
   SUBSCRIPTION_CREATED: 'subscription.created',
@@ -612,6 +616,18 @@ async function getSocketEmitter() {
       const socket = socketModule.getSocketServer();
       if (socket) {
         socket.emitNotification(data as Parameters<typeof socket.emitNotification>[0]);
+      }
+    },
+    emitDisputeNew: (disputeId: string, bookingId: string, disputeNumber: string, category: string, priority: string) => {
+      const socket = socketModule.getSocketServer();
+      if (socket) {
+        socket.emitDisputeNew(disputeId, bookingId, disputeNumber, category, priority);
+      }
+    },
+    emitDisputeResolved: (customerId: string, providerId: string, disputeId: string, resolution: string, resolutionType: string) => {
+      const socket = socketModule.getSocketServer();
+      if (socket) {
+        socket.emitDisputeResolved(customerId, providerId, disputeId, resolution, resolutionType);
       }
     },
   };
@@ -1235,6 +1251,88 @@ export const initializeEventSubscriptions = async (): Promise<void> => {
       }
     } catch (error) {
       logger.error('Socket: Failed to emit notification', {
+        eventId: event.eventId,
+        error: error instanceof Error ? error.message : String(error),
+        action: 'SOCKET_EMISSION_FAILED',
+      });
+    }
+  }, 15); // Higher priority - immediate real-time delivery
+
+  // ============================================
+  // Dispute Socket Events
+  // ============================================
+
+  // Socket: Emit new dispute to admins
+  eventBus.subscribe('dispute.created', async (event) => {
+    try {
+      const data = event.data as {
+        disputeId?: string;
+        disputeNumber?: string;
+        bookingId?: string;
+        category?: string;
+        priority?: string;
+      };
+
+      if (data.disputeId && data.bookingId) {
+        socketEmitter.emitDisputeNew(
+          data.disputeId,
+          data.bookingId,
+          data.disputeNumber || '',
+          data.category || '',
+          data.priority || 'medium'
+        );
+        logger.debug('Socket: Emitted new dispute to admins', {
+          disputeId: data.disputeId,
+          disputeNumber: data.disputeNumber,
+          action: 'SOCKET_DISPUTE_CREATED',
+        });
+      }
+    } catch (error) {
+      logger.error('Socket: Failed to emit dispute:new', {
+        eventId: event.eventId,
+        error: error instanceof Error ? error.message : String(error),
+        action: 'SOCKET_EMISSION_FAILED',
+      });
+    }
+  }, 15); // Higher priority - immediate real-time delivery
+
+  // Socket: Emit dispute resolved to customer and provider
+  eventBus.subscribe('dispute.resolved', async (event) => {
+    try {
+      const data = event.data as {
+        disputeId?: string;
+        disputeNumber?: string;
+        resolutionType?: string;
+        bookingId?: string;
+        customerId?: string;
+        providerId?: string;
+        reason?: string;
+      };
+
+      if (data.disputeId) {
+        // Get dispute to find customer and provider IDs
+        const dispute = await import('../models/dispute.model').then(m => m.default?.findById(data.disputeId).populate('bookingId'));
+        const booking = dispute?.bookingId as { customerId?: string; providerId?: string } | undefined;
+
+        const customerId = booking?.customerId?.toString() || data.customerId || '';
+        const providerId = booking?.providerId?.toString() || data.providerId || '';
+        const resolution = data.reason || 'Dispute has been resolved';
+
+        socketEmitter.emitDisputeResolved(
+          customerId,
+          providerId,
+          data.disputeId,
+          resolution,
+          data.resolutionType || 'unknown'
+        );
+        logger.debug('Socket: Emitted dispute resolved to parties', {
+          disputeId: data.disputeId,
+          disputeNumber: data.disputeNumber,
+          action: 'SOCKET_DISPUTE_RESOLVED',
+        });
+      }
+    } catch (error) {
+      logger.error('Socket: Failed to emit dispute:resolved', {
         eventId: event.eventId,
         error: error instanceof Error ? error.message : String(error),
         action: 'SOCKET_EMISSION_FAILED',

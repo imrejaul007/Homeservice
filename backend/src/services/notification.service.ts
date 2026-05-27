@@ -194,7 +194,12 @@ export type NotificationType =
   | 'service_approved'
   | 'service_rejected'
   | 'new_provider_submission'
-  | 'new_service_pending';
+  | 'new_service_pending'
+  | 'dispute_created'
+  | 'dispute_resolved'
+  | 'withdrawal'
+  | 'withdrawal_approved'
+  | 'withdrawal_rejected';
 
 export type NotificationChannel = 'in_app' | 'email' | 'sms' | 'push';
 
@@ -430,6 +435,56 @@ const NOTIFICATION_TEMPLATES: Record<NotificationType, { customer: { title: stri
     provider: {
       title: 'Review Removed',
       message: 'A review has been removed for violating our guidelines.',
+    },
+  },
+  dispute_created: {
+    customer: {
+      title: 'Dispute Filed',
+      message: 'A dispute has been filed for your booking. Our team will review it shortly.',
+    },
+    provider: {
+      title: 'New Dispute',
+      message: 'A new dispute has been filed against your booking. Please check the details.',
+    },
+  },
+  dispute_resolved: {
+    customer: {
+      title: 'Dispute Resolved',
+      message: 'Your dispute has been resolved. Check the resolution details.',
+    },
+    provider: {
+      title: 'Dispute Resolved',
+      message: 'A dispute has been resolved. Check the resolution details.',
+    },
+  },
+  withdrawal: {
+    customer: {
+      title: 'Withdrawal Processed',
+      message: 'Your withdrawal request has been processed.',
+    },
+    provider: {
+      title: 'Withdrawal Processed',
+      message: 'Your withdrawal request is being processed.',
+    },
+  },
+  withdrawal_approved: {
+    customer: {
+      title: 'Withdrawal Approved',
+      message: 'Your withdrawal has been approved and is being processed.',
+    },
+    provider: {
+      title: 'Withdrawal Approved',
+      message: 'Your withdrawal request has been approved. Funds will be transferred within 2-3 business days.',
+    },
+  },
+  withdrawal_rejected: {
+    customer: {
+      title: 'Withdrawal Rejected',
+      message: 'Your withdrawal request has been rejected.',
+    },
+    provider: {
+      title: 'Withdrawal Rejected',
+      message: 'Your withdrawal request has been rejected. Please contact support for more details.',
     },
   },
 };
@@ -1182,6 +1237,11 @@ export class NotificationService {
       service_rejected: prefs.push?.bookingUpdates ?? true,
       new_provider_submission: prefs.push?.bookingUpdates ?? true,
       new_service_pending: prefs.push?.bookingUpdates ?? true,
+      dispute_created: prefs.push?.bookingUpdates ?? true,
+      dispute_resolved: prefs.push?.bookingUpdates ?? true,
+      withdrawal: prefs.push?.bookingUpdates ?? true,
+      withdrawal_approved: prefs.push?.bookingUpdates ?? true,
+      withdrawal_rejected: prefs.push?.bookingUpdates ?? true,
     };
   }
 

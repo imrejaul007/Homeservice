@@ -141,6 +141,86 @@ export interface SettlementSummary {
   paidCount: number;
 }
 
+// Admin Withdrawal Management Types
+export interface AdminWithdrawal {
+  _id: string;
+  walletId: string;
+  transaction: {
+    id: string;
+    amount: number;
+    currency: string;
+    status: 'pending' | 'processing' | 'completed' | 'failed' | 'reversed';
+    description: string;
+    reference: string;
+    createdAt: string;
+    updatedAt?: string;
+    metadata?: {
+      bankAccount?: {
+        bankName: string;
+        accountNumber: string;
+        iban: string;
+        accountHolder: string;
+      };
+      rejectionReason?: string;
+      rejectedAt?: string;
+      rejectedBy?: string;
+    };
+  };
+  userId: string;
+  userEmail: string;
+  userFirstName: string;
+  userLastName: string;
+  balance: number;
+  pendingBalance: number;
+  createdAt: string;
+}
+
+export interface WithdrawalStats {
+  pending: { count: number; totalAmount: number };
+  processing: { count: number; totalAmount: number };
+  completed: { count: number; totalAmount: number };
+  failed: { count: number; totalAmount: number };
+  rejected: { count: number; totalAmount: number };
+  totalPendingAmount: number;
+  totalProcessedAmount: number;
+}
+
+export interface WithdrawalDetails {
+  withdrawalId: string;
+  walletId: string;
+  transaction: {
+    id: string;
+    amount: number;
+    currency: string;
+    status: string;
+    description: string;
+    reference: string;
+    createdAt: string;
+    updatedAt?: string;
+    metadata?: Record<string, unknown>;
+  };
+  provider: {
+    id: string;
+    email: string;
+    firstName: string;
+    lastName: string;
+    phone?: string;
+  };
+  wallet: {
+    balance: number;
+    pendingBalance: number;
+    availableBalance: number;
+  };
+}
+
+export interface WithdrawalFilters {
+  status?: string;
+  providerId?: string;
+  search?: string;
+  page?: number;
+  limit?: number;
+}
+
 export interface Pagination {
   page: number;
   limit: number;
@@ -312,6 +392,94 @@ class PayoutApiService {
    */
   async updatePayoutConfig(config: Partial<PayoutConfig>): Promise<ApiResponse<PayoutConfig>> {
     const response = await api.put('/payout/config', config);
+    return response.data;
+  }
+
+  // ============================================
+  // Admin Withdrawal Management
+  // ============================================
+
+  /**
+   * Get all withdrawals with filters (Admin)
+   */
+  async getAdminWithdrawals(filters?: WithdrawalFilters): Promise<{
+    success: boolean;
+    data: {
+      withdrawals: AdminWithdrawal[];
+      pagination: Pagination;
+    };
+  }> {
+    const params = new URLSearchParams();
+    if (filters?.status) params.append('status', filters.status);
+    if (filters?.providerId) params.append('providerId', filters.providerId);
+    if (filters?.search) params.append('search', filters.search);
+    if (filters?.page) params.append('page', filters.page.toString());
+    if (filters?.limit) params.append('limit', filters.limit.toString());
+
+    const queryString = params.toString();
+    const url = queryString ? `/admin/withdrawals?${queryString}` : '/admin/withdrawals';
+
+    const response = await api.get(url);
+    return response.data;
+  }
+
+  /**
+   * Get withdrawal statistics (Admin)
+   */
+  async getAdminWithdrawalStats(): Promise<{
+    success: boolean;
+    data: WithdrawalStats;
+  }> {
+    const response = await api.get('/admin/withdrawals/stats');
+    return response.data;
+  }
+
+  /**
+   * Get withdrawal details (Admin)
+   */
+  async getAdminWithdrawalDetails(withdrawalId: string): Promise<{
+    success: boolean;
+    data: WithdrawalDetails;
+  }> {
+    const response = await api.get(`/admin/withdrawals/${withdrawalId}`);
+    return response.data;
+  }
+
+  /**
+   * Approve a withdrawal (Admin)
+   */
+  async approveWithdrawal(withdrawalId: string): Promise<{
+    success: boolean;
+    message: string;
+    data: {
+      withdrawalId: string;
+      status: string;
+      amount: number;
+      currency: string;
+      newBalance: number;
+      estimatedCompletion: string;
+    };
+  }> {
+    const response = await api.post(`/admin/withdrawals/${withdrawalId}/approve`);
+    return response.data;
+  }
+
+  /**
+   * Reject a withdrawal (Admin)
+   */
+  async rejectWithdrawal(withdrawalId: string, reason: string): Promise<{
+    success: boolean;
+    message: string;
+    data: {
+      withdrawalId: string;
+      status: string;
+      amount: number;
+      currency: string;
+      reason: string;
+      availableBalance: number;
+    };
+  }> {
+    const response = await api.post(`/admin/withdrawals/${withdrawalId}/reject`, { reason });
     return response.data;
   }
 }

@@ -33,7 +33,17 @@ import {
   deleteCategory,
   toggleCategoryFeatured,
   addSubcategory,
-  getCategoryStats
+  getCategoryStats,
+  // Review Moderation
+  getPendingReviews,
+  getFlaggedReviews,
+  moderateReview,
+  // Withdrawal Management
+  getPendingWithdrawals,
+  getWithdrawalStats,
+  getWithdrawalDetails,
+  approveWithdrawal,
+  rejectWithdrawal
 } from '../controllers/admin.controller';
 import { authenticate, requireRole } from '../middleware/auth.middleware';
 import { adminLimiter } from '../middleware/rateLimiter';
@@ -234,5 +244,57 @@ router.put('/maintenance', asyncHandler(async (req: Request, res: Response) => {
     },
   });
 }));
+
+// ========================================
+// Review Moderation Routes
+// ========================================
+
+router.get('/reviews/pending', getPendingReviews);
+router.get('/reviews/flagged', getFlaggedReviews);
+router.patch('/reviews/:id/moderate', moderateReview);
+
+// ========================================
+// Withdrawal Management Routes
+// ========================================
+
+// Validation schemas for withdrawal operations
+const rejectWithdrawalSchema = Joi.object({
+  reason: Joi.string().required().min(10).max(500).messages({
+    'string.min': 'Rejection reason must be at least 10 characters',
+    'string.max': 'Rejection reason cannot exceed 500 characters',
+    'any.required': 'Rejection reason is required'
+  })
+});
+
+// Validation middleware for withdrawal rejection
+const validateWithdrawalRejection = (req: any, res: any, next: any) => {
+  const { error } = rejectWithdrawalSchema.validate(req.body);
+  if (error) {
+    return res.status(400).json({
+      success: false,
+      error: 'Validation Error',
+      details: error.details.map(detail => ({
+        field: detail.path.join('.'),
+        message: detail.message
+      }))
+    });
+  }
+  next();
+};
+
+// GET /api/admin/withdrawals - List all withdrawals with filters
+router.get('/withdrawals', getPendingWithdrawals);
+
+// GET /api/admin/withdrawals/stats - Get withdrawal statistics
+router.get('/withdrawals/stats', getWithdrawalStats);
+
+// GET /api/admin/withdrawals/:id - Get withdrawal details
+router.get('/withdrawals/:id', getWithdrawalDetails);
+
+// POST /api/admin/withdrawals/:id/approve - Approve a withdrawal
+router.post('/withdrawals/:id/approve', approveWithdrawal);
+
+// POST /api/admin/withdrawals/:id/reject - Reject a withdrawal
+router.post('/withdrawals/:id/reject', validateWithdrawalRejection, rejectWithdrawal);
 
 export default router;

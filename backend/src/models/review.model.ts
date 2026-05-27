@@ -26,6 +26,12 @@ export interface IReview extends Document {
   reportCount: number;
   isHidden: boolean;
 
+  // Moderation
+  moderationStatus: 'pending' | 'approved' | 'rejected' | 'hidden';
+  moderationReason?: string;
+  moderatedAt?: Date;
+  moderatedBy?: mongoose.Types.ObjectId;
+
   // Response from reviewee
   response?: {
     content: string;
@@ -119,6 +125,27 @@ const reviewSchema = new Schema<IReview>(
       index: true,
     },
 
+    moderationStatus: {
+      type: String,
+      enum: ['pending', 'approved', 'rejected', 'hidden'],
+      default: 'pending',
+      index: true,
+    },
+
+    moderationReason: {
+      type: String,
+      maxlength: [500, 'Moderation reason cannot exceed 500 characters'],
+    },
+
+    moderatedAt: {
+      type: Date,
+    },
+
+    moderatedBy: {
+      type: Schema.Types.ObjectId,
+      ref: 'User',
+    },
+
     response: {
       content: {
         type: String,
@@ -164,6 +191,24 @@ reviewSchema.index(
   {
     partialFilterExpression: { isHidden: false },
     name: 'visible_reviews_by_reviewee'
+  }
+);
+
+// Index for pending moderation
+reviewSchema.index(
+  { moderationStatus: 1, createdAt: -1 },
+  {
+    partialFilterExpression: { moderationStatus: 'pending' },
+    name: 'pending_moderation'
+  }
+);
+
+// Index for flagged reviews (high report count)
+reviewSchema.index(
+  { reportCount: -1, createdAt: -1 },
+  {
+    partialFilterExpression: { reportCount: { $gt: 0 } },
+    name: 'flagged_reviews'
   }
 );
 

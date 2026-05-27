@@ -64,6 +64,18 @@ export interface ServerToClientEvents {
   // Admin notification events (Provider → Admin)
   'admin:new_provider_submission': (data: { providerId: string; providerName: string; submittedAt: Date }) => void;
   'admin:new_service_pending': (data: { serviceId: string; providerId: string; serviceName: string }) => void;
+
+  // Dispute events
+  'dispute:new': (data: { disputeId: string; bookingId: string; disputeNumber: string; category: string; priority: string }) => void;
+  'dispute:resolved': (data: { disputeId: string; resolution: string; resolutionType: string }) => void;
+
+  // Withdrawal events (Admin → Provider)
+  'withdrawal:approved': (data: { withdrawalId: string; amount: number; currency: string; status: string; processedAt: string }) => void;
+  'withdrawal:rejected': (data: { withdrawalId: string; amount: number; currency: string; status: string; reason: string; rejectedAt: string }) => void;
+  'withdrawal:pending': (data: { withdrawalId: string; amount: number; currency: string; status: string }) => void;
+
+  // Admin notification events for withdrawals (Provider → Admin)
+  'admin:new_withdrawal_request': (data: { withdrawalId: string; providerId: string; providerName: string; amount: number; currency: string; requestedAt: Date }) => void;
 }
 
 export interface ClientToServerEvents {
@@ -1022,6 +1034,119 @@ class SocketServer {
     }
     if (emitted) {
       logger.info('Emitted new service pending to admins', { serviceId, providerId, serviceName, action: 'EMIT_NEW_SERVICE_PENDING' });
+    }
+    return emitted;
+  }
+
+  // =============================================================================
+  // Dispute Events
+  // =============================================================================
+
+  // Emit new dispute to admins
+  emitDisputeNew(disputeId: string, bookingId: string, disputeNumber: string, category: string, priority: string): boolean {
+    let emitted = false;
+    for (const socket of this.io.sockets.sockets.values()) {
+      const authSocket = socket as AuthenticatedSocket;
+      if (authSocket.userRole === 'admin') {
+        authSocket.emit('dispute:new', {
+          disputeId,
+          bookingId,
+          disputeNumber,
+          category,
+          priority,
+        });
+        emitted = true;
+      }
+    }
+    if (emitted) {
+      logger.info('Emitted new dispute to admins', { disputeId, disputeNumber, action: 'EMIT_DISPUTE_NEW' });
+    }
+    return emitted;
+  }
+
+  // Emit dispute resolved to customer and provider
+  emitDisputeResolved(customerId: string, providerId: string, disputeId: string, resolution: string, resolutionType: string): { customerEmitted: boolean; providerEmitted: boolean } {
+    const eventData = {
+      disputeId,
+      resolution,
+      resolutionType,
+    };
+
+    let customerEmitted = false;
+    let providerEmitted = false;
+
+    if (customerId) {
+      customerEmitted = this.emitToUser(customerId, 'dispute:resolved', eventData);
+    }
+
+    if (providerId) {
+      providerEmitted = this.emitToUser(providerId, 'dispute:resolved', eventData);
+    }
+
+    logger.info('Emitted dispute resolved event', {
+      disputeId,
+      customerEmitted,
+      providerEmitted,
+      action: 'EMIT_DISPUTE_RESOLVED',
+    });
+
+    return { customerEmitted, providerEmitted };
+  }
+
+  // =============================================================================
+  // Withdrawal Events
+  // =============================================================================
+
+  // Emit withdrawal approved event to provider
+  emitWithdrawalApproved(providerId: string, withdrawalId: string, amount: number, currency: string): boolean {
+    const emitted = this.emitToUser(providerId, 'withdrawal:approved', {
+      withdrawalId,
+      amount,
+      currency,
+      status: 'processing',
+      processedAt: new Date().toISOString(),
+    });
+    if (emitted) {
+      logger.info('Emitted withdrawal approved event', { providerId, withdrawalId, amount, action: 'EMIT_WITHDRAWAL_APPROVED' });
+    }
+    return emitted;
+  }
+
+  // Emit withdrawal rejected event to provider
+  emitWithdrawalRejected(providerId: string, withdrawalId: string, amount: number, currency: string, reason: string): boolean {
+    const emitted = this.emitToUser(providerId, 'withdrawal:rejected', {
+      withdrawalId,
+      amount,
+      currency,
+      status: 'rejected',
+      reason,
+      rejectedAt: new Date().toISOString(),
+    });
+    if (emitted) {
+      logger.info('Emitted withdrawal rejected event', { providerId, withdrawalId, amount, reason, action: 'EMIT_WITHDRAWAL_REJECTED' });
+    }
+    return emitted;
+  }
+
+  // Emit new withdrawal request to admins
+  emitNewWithdrawalRequest(withdrawalId: string, providerId: string, providerName: string, amount: number, currency: string): boolean {
+    let emitted = false;
+    for (const socket of this.io.sockets.sockets.values()) {
+      const authSocket = socket as AuthenticatedSocket;
+      if (authSocket.userRole === 'admin') {
+        authSocket.emit('admin:new_withdrawal_request', {
+          withdrawalId,
+          providerId,
+          providerName,
+          amount,
+          currency,
+          requestedAt: new Date(),
+        });
+        emitted = true;
+      }
+    }
+    if (emitted) {
+      logger.info('Emitted new withdrawal request to admins', { withdrawalId, providerId, providerName, amount, action: 'EMIT_NEW_WITHDRAWAL_REQUEST' });
     }
     return emitted;
   }
