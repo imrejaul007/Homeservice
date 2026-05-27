@@ -1,4 +1,4 @@
-import { Queue, Worker, Job } from 'bullmq';
+import { Queue, Worker, Job, ConnectionOptions } from 'bullmq';
 import Stripe from 'stripe';
 import { queueRedis, isRedisAvailable } from '../config/redis';
 import logger, { paymentLogger } from '../utils/logger';
@@ -28,6 +28,18 @@ const isQueueAvailable = (): boolean => {
 };
 
 /**
+ * Get Redis connection options for BullMQ
+ * Handles version mismatch between ioredis packages
+ */
+const getRedisConnection = (): ConnectionOptions | null => {
+  if (!isQueueAvailable() || !queueRedis) {
+    return null;
+  }
+  // Cast to any to handle ioredis version mismatch between packages
+  return queueRedis as unknown as ConnectionOptions;
+};
+
+/**
  * Create the webhook retry queue
  * Uses the existing queueRedis connection from config
  */
@@ -39,8 +51,13 @@ const getWebhookRetryQueue = (): Queue<WebhookRetryJob> | null => {
   }
 
   if (!webhookRetryQueue) {
+    const connection = getRedisConnection();
+    if (!connection) {
+      return null;
+    }
+
     webhookRetryQueue = new Queue<WebhookRetryJob>(WEBHOOK_RETRY_QUEUE, {
-      connection: queueRedis!,
+      connection,
       defaultJobOptions: {
         attempts: 5,
         backoff: {
@@ -86,6 +103,11 @@ export const startWebhookWorker = (): Worker<WebhookRetryJob> | null => {
     return webhookWorker;
   }
 
+  const connection = getRedisConnection();
+  if (!connection) {
+    return null;
+  }
+
   webhookWorker = new Worker<WebhookRetryJob>(
     WEBHOOK_RETRY_QUEUE,
     async (job: Job<WebhookRetryJob>) => {
@@ -124,7 +146,7 @@ export const startWebhookWorker = (): Worker<WebhookRetryJob> | null => {
       }
     },
     {
-      connection: queueRedis!,
+      connection,
       concurrency: 5, // Process up to 5 webhooks concurrently
       limiter: {
         max: 100, // Max 100 jobs per second
