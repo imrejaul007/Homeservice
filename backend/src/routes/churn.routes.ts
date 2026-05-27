@@ -1,17 +1,183 @@
 import { Router, Request, Response } from 'express';
-import { authenticate } from '../middleware/auth.middleware';
+import { authenticate, requireRole } from '../middleware/auth.middleware';
 import { asyncHandler } from '../utils/asyncHandler';
 import { ApiError } from '../utils/ApiError';
+import { churnService, ChurnFilters, DateRange } from '../services/churn.service';
 import { churnPredictionService, ChurnRisk, CustomerSegment, RetentionCampaign, RetentionAction } from '../services/churnPrediction.service';
+import { ChurnRiskReport } from '../services/churn.service';
 
 const router = Router();
+
+/**
+ * @route   GET /api/admin/churn/stats
+ * @desc    Get comprehensive churn statistics
+ * @access  Admin
+ */
+router.get('/admin/churn/stats', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
+  const { startDate, endDate } = req.query;
+
+  // Default to last 30 days
+  const end = endDate ? new Date(endDate as string) : new Date();
+  const start = startDate
+    ? new Date(startDate as string)
+    : new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+  if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+    throw new ApiError(400, 'Invalid date format');
+  }
+
+  const stats = await churnService.getChurnStats({ startDate: start, endDate: end });
+
+  res.json({
+    success: true,
+    data: stats,
+  });
+}));
+
+/**
+ * @route   GET /api/admin/churn/at-risk
+ * @desc    Get at-risk customers list
+ * @access  Admin
+ */
+router.get('/admin/churn/at-risk', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
+  const {
+    minRiskLevel,
+    minDaysInactive,
+    maxDaysInactive,
+    limit = '100',
+    offset = '0',
+  } = req.query;
+
+  // Validate risk level
+  const validLevels = ['low', 'medium', 'high', 'critical'];
+  if (minRiskLevel && !validLevels.includes(minRiskLevel as string)) {
+    throw new ApiError(400, `Invalid risk level. Must be one of: ${validLevels.join(', ')}`);
+  }
+
+  const filters: ChurnFilters = {
+    limit: parseInt(limit as string, 10),
+    offset: parseInt(offset as string, 10),
+  };
+
+  if (minRiskLevel) {
+    filters.minRiskLevel = minRiskLevel as 'low' | 'medium' | 'high' | 'critical';
+  }
+
+  if (minDaysInactive) {
+    const minDays = parseInt(minDaysInactive as string, 10);
+    if (isNaN(minDays) || minDays < 0) {
+      throw new ApiError(400, 'minDaysInactive must be a non-negative number');
+    }
+    filters.minDaysInactive = minDays;
+  }
+
+  if (maxDaysInactive) {
+    const maxDays = parseInt(maxDaysInactive as string, 10);
+    if (isNaN(maxDays) || maxDays < 0) {
+      throw new ApiError(400, 'maxDaysInactive must be a non-negative number');
+    }
+    filters.maxDaysInactive = maxDays;
+  }
+
+  const atRiskCustomers = await churnService.getAtRiskCustomers(filters);
+
+  res.json({
+    success: true,
+    data: {
+      customers: atRiskCustomers,
+      total: atRiskCustomers.length,
+      pagination: {
+        limit: filters.limit,
+        offset: filters.offset,
+      },
+    },
+  });
+}));
+
+/**
+ * @route   GET /api/admin/churn/customers/:id/risk
+ * @desc    Get churn risk for specific customer
+ * @access  Admin
+ */
+router.get('/admin/churn/customers/:id/risk', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+
+  if (!id) {
+    throw new ApiError(400, 'Customer ID is required');
+  }
+
+  const risk = await churnService.calculateChurnRisk(id);
+
+  res.json({
+    success: true,
+    data: risk,
+  });
+}));
+
+/**
+ * @route   GET /api/admin/churn/overview
+ * @desc    Get churn overview for dashboard widgets
+ * @access  Admin
+ */
+router.get('/admin/churn/overview', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
+  const now = new Date();
+  const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+  const stats = await churnService.getChurnStats({
+    startDate: thirtyDaysAgo,
+    endDate: now,
+  });
+
+  const atRiskCustomers = await churnService.getAtRiskCustomers({
+    minRiskLevel: 'medium',
+    limit: 5,
+  });
+
+  res.json({
+    success: true,
+    data: {
+      totalAtRisk: stats.atRiskCustomers,
+      churnRate: stats.churnRate,
+      byRiskLevel: stats.byRiskLevel,
+      averageRiskScore: stats.averageRiskScore,
+      totalLifetimeValueAtRisk: stats.totalLifetimeValueAtRisk,
+      topRiskFactors: stats.topRiskFactors.slice(0, 3),
+      recentAlerts: atRiskCustomers.map(c => ({
+        customerId: c.customerId,
+        customerName: c.customerName,
+        riskLevel: c.riskLevel,
+        riskScore: c.riskScore,
+        daysSinceLastBooking: c.daysSinceLastBooking,
+        recommendedAction: c.recommendedActions[0] || 'Monitor',
+      })),
+    },
+  });
+}));
+
+/**
+ * @route   POST /api/admin/churn/refresh
+ * @desc    Force refresh churn data cache
+ * @access  Admin
+ */
+router.post('/admin/churn/refresh', authenticate, requireRole('admin'), asyncHandler(async (_req: Request, res: Response) => {
+  await churnService.clearCache();
+
+  res.json({
+    success: true,
+    message: 'Churn data cache refreshed',
+  });
+}));
+
+// =============================================================================
+// Existing churn prediction routes (for backward compatibility)
+// =============================================================================
 
 /**
  * @route   GET /api/churn/predict/:userId
  * @desc    Get churn risk prediction for a specific user
  * @access  Admin
  */
-router.get('/predict/:userId', authenticate, asyncHandler(async (req: Request, res: Response) => {
+router.get('/churn/predict/:userId', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
   const { userId } = req.params;
 
   if (!userId) {
@@ -31,7 +197,7 @@ router.get('/predict/:userId', authenticate, asyncHandler(async (req: Request, r
  * @desc    Get all at-risk customers
  * @access  Admin
  */
-router.get('/at-risk', authenticate, asyncHandler(async (req: Request, res: Response) => {
+router.get('/churn/at-risk', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
   const { minRiskLevel = 'medium', limit = '100', offset = '0' } = req.query;
 
   const validLevels = ['medium', 'high', 'critical'];
@@ -75,7 +241,7 @@ router.get('/at-risk', authenticate, asyncHandler(async (req: Request, res: Resp
  * @desc    Get customer segments for targeted marketing
  * @access  Admin
  */
-router.get('/segments', authenticate, asyncHandler(async (_req: Request, res: Response) => {
+router.get('/churn/segments', authenticate, requireRole('admin'), asyncHandler(async (_req: Request, res: Response) => {
   const segments: CustomerSegment[] = await churnPredictionService.getCustomerSegments();
 
   res.json({
@@ -89,7 +255,7 @@ router.get('/segments', authenticate, asyncHandler(async (_req: Request, res: Re
  * @desc    Create a retention campaign
  * @access  Admin
  */
-router.post('/campaigns', authenticate, asyncHandler(async (req: Request, res: Response) => {
+router.post('/churn/campaigns', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
   const { riskLevels, minDaysInactive, maxDaysInactive, minBookings, maxBookings, loyaltyTiers, categories } = req.body;
 
   const campaign: RetentionCampaign = await churnPredictionService.createRetentionCampaign({
@@ -113,7 +279,7 @@ router.post('/campaigns', authenticate, asyncHandler(async (req: Request, res: R
  * @desc    Execute retention action for a user
  * @access  Admin
  */
-router.post('/execute/:userId', authenticate, asyncHandler(async (req: Request, res: Response) => {
+router.post('/churn/execute/:userId', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
   const { userId } = req.params;
   const { action } = req.body as { action: RetentionAction };
 
@@ -134,7 +300,7 @@ router.post('/execute/:userId', authenticate, asyncHandler(async (req: Request, 
  * @desc    Get churn statistics
  * @access  Admin
  */
-router.get('/stats', authenticate, asyncHandler(async (_req: Request, res: Response) => {
+router.get('/churn/stats', authenticate, requireRole('admin'), asyncHandler(async (_req: Request, res: Response) => {
   // Get at-risk customers to calculate stats
   const { customers } = await churnPredictionService.getAtRiskCustomers({ limit: 1000 });
 
@@ -164,7 +330,7 @@ router.get('/stats', authenticate, asyncHandler(async (_req: Request, res: Respo
  * @desc    Get churn overview for dashboard
  * @access  Admin
  */
-router.get('/overview', authenticate, asyncHandler(async (_req: Request, res: Response) => {
+router.get('/churn/overview', authenticate, requireRole('admin'), asyncHandler(async (_req: Request, res: Response) => {
   const { customers } = await churnPredictionService.getAtRiskCustomers({ minRiskLevel: 'medium', limit: 100 });
   const segments = await churnPredictionService.getCustomerSegments();
 

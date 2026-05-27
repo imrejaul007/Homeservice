@@ -175,7 +175,31 @@ export {
   DashboardMetrics,
   TimePeriod,
   ComparisonPeriods,
+  FunnelMetrics,
+  GeographicAnalytics,
+  getBookingFunnel,
+  getGeographicAnalytics,
 } from './analytics.service';
+
+// Churn service exports
+export {
+  churnService,
+  ChurnService,
+  ChurnRiskReport,
+  ChurnFilters,
+  DateRange,
+  ChurnStats,
+  AtRiskCustomer,
+} from './churn.service';
+
+// Report service exports
+export {
+  reportService,
+  ReportService,
+  ReportConfig,
+  ScheduledReport,
+  ReportData,
+} from './report.service';
 
 // Business Intelligence service exports
 export {

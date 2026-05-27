@@ -709,7 +709,93 @@ export const analyticsApi = {
     const response = await api.post('/analytics/refresh');
     return response.data;
   },
+
+  // Booking Funnel Analytics
+  getBookingFunnel: async (startDate?: string, endDate?: string): Promise<FunnelMetrics> => {
+    const response = await api.get('/analytics/funnel', {
+      params: { startDate, endDate },
+    });
+    return response.data.data;
+  },
+
+  // Geographic Analytics
+  getGeographicAnalytics: async (startDate?: string, endDate?: string): Promise<GeographicAnalytics> => {
+    const response = await api.get('/analytics/geographic', {
+      params: { startDate, endDate },
+    });
+    return response.data.data;
+  },
 };
+
+// ============================================
+// Funnel Analytics Types
+// ============================================
+
+export interface FunnelMetrics {
+  views: number;
+  search: number;
+  service_view: number;
+  booking_request: number;
+  booking_confirmed: number;
+  booking_completed: number;
+  conversionRates: {
+    viewToSearch: number;
+    searchToServiceView: number;
+    serviceViewToRequest: number;
+    requestToConfirmed: number;
+    confirmedToCompleted: number;
+    overall: number;
+  };
+  dropoffPoints: Array<{
+    stage: string;
+    dropoffCount: number;
+    dropoffRate: number;
+  }>;
+  dailyFunnel: Array<{
+    date: string;
+    views: number;
+    search: number;
+    service_view: number;
+    booking_request: number;
+    booking_confirmed: number;
+    booking_completed: number;
+  }>;
+}
+
+export interface GeographicAnalytics {
+  byCity: Array<{
+    city: string;
+    bookings: number;
+    revenue: number;
+    customers: number;
+    averageBookingValue: number;
+    percentage: number;
+  }>;
+  byRegion: Array<{
+    region: string;
+    bookings: number;
+    revenue: number;
+    customers: number;
+    averageBookingValue: number;
+    percentage: number;
+  }>;
+  heatmapData: Array<{
+    coordinates: {
+      lat: number;
+      lng: number;
+    };
+    intensity: number;
+    bookings: number;
+    revenue: number;
+  }>;
+  summary: {
+    totalBookings: number;
+    totalRevenue: number;
+    totalCustomers: number;
+    topCity: string;
+    topRegion: string;
+  };
+}
 
 // ============================================
 // Business Intelligence API Service
@@ -947,6 +1033,250 @@ export const churnApi = {
     const response = await api.post(`/churn/execute/${userId}`, { action });
     return response.data.data;
   },
+
+  // Get churn statistics (admin endpoint)
+  getChurnStatsAdmin: async (startDate?: string, endDate?: string): Promise<ChurnStatsAdmin> => {
+    const response = await api.get('/admin/churn/stats', { params: { startDate, endDate } });
+    return response.data.data;
+  },
+
+  // Get at-risk customers (admin endpoint)
+  getAtRiskCustomersAdmin: async (options: {
+    minRiskLevel?: 'low' | 'medium' | 'high' | 'critical';
+    minDaysInactive?: number;
+    maxDaysInactive?: number;
+    limit?: number;
+    offset?: number;
+  } = {}): Promise<{ customers: AtRiskCustomer[]; total: number }> => {
+    const response = await api.get('/admin/churn/at-risk', { params: options });
+    return response.data.data;
+  },
+
+  // Get churn risk for specific customer (admin endpoint)
+  getChurnRiskAdmin: async (customerId: string): Promise<ChurnRiskAdmin> => {
+    const response = await api.get(`/admin/churn/customers/${customerId}/risk`);
+    return response.data.data;
+  },
+
+  // Get churn overview for dashboard (admin endpoint)
+  getChurnOverviewAdmin: async (): Promise<ChurnOverviewAdmin> => {
+    const response = await api.get('/admin/churn/overview');
+    return response.data.data;
+  },
+
+  // Refresh churn cache
+  refreshChurnCache: async (): Promise<{ success: boolean; message: string }> => {
+    const response = await api.post('/admin/churn/refresh');
+    return response.data;
+  },
+};
+
+// ============================================
+// Admin Churn Types
+// ============================================
+
+export interface ChurnStatsAdmin {
+  totalCustomers: number;
+  activeCustomers: number;
+  atRiskCustomers: number;
+  churnRate: number;
+  byRiskLevel: {
+    critical: number;
+    high: number;
+    medium: number;
+    low: number;
+  };
+  averageRiskScore: number;
+  totalLifetimeValueAtRisk: number;
+  churnTrend: Array<{
+    date: string;
+    churnRate: number;
+    atRiskCount: number;
+  }>;
+  topRiskFactors: Array<{
+    factor: string;
+    count: number;
+    percentage: number;
+  }>;
+}
+
+export interface AtRiskCustomer {
+  customerId: string;
+  customerName: string;
+  email: string;
+  phone?: string;
+  riskScore: number;
+  riskLevel: 'low' | 'medium' | 'high' | 'critical';
+  riskFactors: string[];
+  daysSinceLastBooking: number;
+  totalBookings: number;
+  totalSpent: number;
+  lastBookingDate?: string;
+  predictedChurnDate?: string;
+  recommendedActions: string[];
+}
+
+export interface ChurnRiskAdmin {
+  userId: string;
+  userName: string;
+  email: string;
+  riskScore: number;
+  riskLevel: 'low' | 'medium' | 'high' | 'critical';
+  riskFactors: string[];
+  lastBookingDate?: string;
+  daysSinceLastBooking: number;
+  totalBookings: number;
+  lifetimeValue: number;
+  recommendedAction: string;
+}
+
+export interface ChurnOverviewAdmin {
+  totalAtRisk: number;
+  churnRate: number;
+  byRiskLevel: {
+    critical: number;
+    high: number;
+    medium: number;
+    low: number;
+  };
+  averageRiskScore: number;
+  totalLifetimeValueAtRisk: number;
+  topRiskFactors: Array<{
+    factor: string;
+    count: number;
+    percentage: number;
+  }>;
+  recentAlerts: Array<{
+    customerId: string;
+    customerName: string;
+    riskLevel: 'low' | 'medium' | 'high' | 'critical';
+    riskScore: number;
+    daysSinceLastBooking: number;
+    recommendedAction: string;
+  }>;
+}
+
+// ============================================
+// Scheduled Reports API Service
+// ============================================
+
+export interface ScheduledReportConfig {
+  name: string;
+  type: 'churn' | 'revenue' | 'booking' | 'customer' | 'provider' | 'performance' | 'custom';
+  frequency: 'daily' | 'weekly' | 'monthly' | 'quarterly';
+  format: 'json' | 'csv' | 'pdf';
+  recipients: string[];
+  filters?: {
+    startDate?: string;
+    endDate?: string;
+    categories?: string[];
+    providers?: string[];
+    regions?: string[];
+  };
+  enabled: boolean;
+}
+
+export interface ScheduledReport {
+  _id: string;
+  name: string;
+  type: 'churn' | 'revenue' | 'booking' | 'customer' | 'provider' | 'performance' | 'custom';
+  frequency: 'daily' | 'weekly' | 'monthly' | 'quarterly';
+  format: 'json' | 'csv' | 'pdf';
+  recipients: string[];
+  filters?: {
+    startDate?: string;
+    endDate?: string;
+    categories?: string[];
+    providers?: string[];
+    regions?: string[];
+  };
+  enabled: boolean;
+  lastRunDate?: string;
+  lastRunStatus?: 'success' | 'failed';
+  lastRunError?: string;
+  nextRunDate: string;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export const reportsApi = {
+  // Create scheduled report
+  createReport: async (config: ScheduledReportConfig): Promise<ScheduledReport> => {
+    const response = await api.post('/admin/reports', config);
+    return response.data.data;
+  },
+
+  // List scheduled reports
+  listReports: async (options: {
+    enabled?: boolean;
+    type?: string;
+    page?: number;
+    limit?: number;
+  } = {}): Promise<{
+    reports: ScheduledReport[];
+    total: number;
+    page: number;
+    limit: number;
+  }> => {
+    const response = await api.get('/admin/reports', { params: options });
+    return response.data.data;
+  },
+
+  // Get single report
+  getReport: async (reportId: string): Promise<ScheduledReport> => {
+    const response = await api.get(`/admin/reports/${reportId}`);
+    return response.data.data;
+  },
+
+  // Update scheduled report
+  updateReport: async (reportId: string, updates: Partial<ScheduledReportConfig>): Promise<ScheduledReport> => {
+    const response = await api.patch(`/admin/reports/${reportId}`, updates);
+    return response.data.data;
+  },
+
+  // Delete scheduled report
+  deleteReport: async (reportId: string): Promise<{ success: boolean; message: string }> => {
+    const response = await api.delete(`/admin/reports/${reportId}`);
+    return response.data;
+  },
+
+  // Toggle report enabled status
+  toggleReport: async (reportId: string, enabled: boolean): Promise<ScheduledReport> => {
+    const response = await api.post(`/admin/reports/${reportId}/toggle`, { enabled });
+    return response.data.data;
+  },
+
+  // Trigger report generation
+  triggerReport: async (reportId: string): Promise<{
+    success: boolean;
+    reportId: string;
+    data?: any;
+    error?: string;
+  }> => {
+    const response = await api.post(`/admin/reports/${reportId}/trigger`);
+    return response.data;
+  },
+
+  // Get due reports
+  getDueReports: async (): Promise<{
+    count: number;
+    reports: ScheduledReport[];
+  }> => {
+    const response = await api.get('/admin/reports/due');
+    return response.data.data;
+  },
+
+  // Run all due reports
+  runDueReports: async (): Promise<{
+    processed: number;
+    succeeded: number;
+    failed: number;
+    results: Array<{ reportId: string; success: boolean; error?: string }>;
+  }> => {
+    const response = await api.post('/admin/reports/run-due');
+    return response.data.data;
+  },
 };
 
 // ============================================
@@ -1086,4 +1416,5 @@ export default {
   churnApi,
   fraudApi,
   slaApi,
+  reportsApi,
 };

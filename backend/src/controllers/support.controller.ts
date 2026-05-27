@@ -145,7 +145,7 @@ export const getTicketStats = asyncHandler(async (_req: AuthenticatedRequest, re
   const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
 
   // Get status counts
-  const statusStats = await (SupportTicket as unknown as ISupportTicketModel).getStats();
+  const statusStats = await (SupportTicket as any).getStats();
 
   // Get resolved today
   const resolvedToday = await SupportTicket.countDocuments({

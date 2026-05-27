@@ -10,6 +10,8 @@ export interface IPlatformSettings extends Document {
   maintenanceMode: boolean;
   maintenanceMessage: string;
   maintenanceEstimatedDuration?: string;
+  maintenanceUpdatedAt?: Date;
+  maintenanceUpdatedBy?: mongoose.Types.ObjectId;
 
   // Fee & Commission
   commissionRate: number;

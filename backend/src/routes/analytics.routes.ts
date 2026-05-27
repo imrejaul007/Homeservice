@@ -13,7 +13,13 @@ import {
   getServiceAnalytics,
   clearAnalyticsCache,
 } from '../services/analytics/analytics.service';
-import { getProviderAnalyticsData } from '../services/analytics.service';
+import {
+  getProviderAnalyticsData,
+  getBookingFunnel,
+  getGeographicAnalytics,
+  FunnelMetrics,
+  GeographicAnalytics,
+} from '../services/analytics.service';
 
 const router = Router();
 
@@ -391,6 +397,110 @@ router.get('/export/:type', authenticate, asyncHandler(async (req: Request, res:
   return res.status(400).json({
     success: false,
     error: 'Invalid export type'
+  });
+}));
+
+/**
+ * @route   GET /api/admin/analytics/funnel
+ * @desc    Get booking funnel metrics
+ * @access  Admin
+ */
+router.get('/admin/analytics/funnel', authenticate, asyncHandler(async (req: Request, res: Response) => {
+  const { startDate, endDate } = req.query;
+
+  // Default to last 30 days
+  const end = endDate ? new Date(endDate as string) : new Date();
+  const start = startDate
+    ? new Date(startDate as string)
+    : new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+  if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+    throw new ApiError(400, 'Invalid date format');
+  }
+
+  const funnel: FunnelMetrics = await getBookingFunnel(start, end);
+
+  res.json({
+    success: true,
+    data: funnel,
+  });
+}));
+
+/**
+ * @route   GET /api/admin/analytics/geographic
+ * @desc    Get geographic analytics
+ * @access  Admin
+ */
+router.get('/admin/analytics/geographic', authenticate, asyncHandler(async (req: Request, res: Response) => {
+  const { startDate, endDate } = req.query;
+
+  // Default to last 30 days
+  const end = endDate ? new Date(endDate as string) : new Date();
+  const start = startDate
+    ? new Date(startDate as string)
+    : new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+  if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+    throw new ApiError(400, 'Invalid date format');
+  }
+
+  const geographic: GeographicAnalytics = await getGeographicAnalytics(start, end);
+
+  res.json({
+    success: true,
+    data: geographic,
+  });
+}));
+
+/**
+ * @route   GET /api/analytics/funnel
+ * @desc    Get booking funnel metrics
+ * @access  Admin
+ */
+router.get('/analytics/funnel', authenticate, asyncHandler(async (req: Request, res: Response) => {
+  const { startDate, endDate } = req.query;
+
+  // Default to last 30 days
+  const end = endDate ? new Date(endDate as string) : new Date();
+  const start = startDate
+    ? new Date(startDate as string)
+    : new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+  if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+    throw new ApiError(400, 'Invalid date format');
+  }
+
+  const funnel: FunnelMetrics = await getBookingFunnel(start, end);
+
+  res.json({
+    success: true,
+    data: funnel,
+  });
+}));
+
+/**
+ * @route   GET /api/analytics/geographic
+ * @desc    Get geographic analytics
+ * @access  Admin
+ */
+router.get('/analytics/geographic', authenticate, asyncHandler(async (req: Request, res: Response) => {
+  const { startDate, endDate } = req.query;
+
+  // Default to last 30 days
+  const end = endDate ? new Date(endDate as string) : new Date();
+  const start = startDate
+    ? new Date(startDate as string)
+    : new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+  if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+    throw new ApiError(400, 'Invalid date format');
+  }
+
+  const geographic: GeographicAnalytics = await getGeographicAnalytics(start, end);
+
+  res.json({
+    success: true,
+    data: geographic,
   });
 }));
 

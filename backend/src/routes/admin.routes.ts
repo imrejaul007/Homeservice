@@ -37,7 +37,11 @@ import {
 } from '../controllers/admin.controller';
 import { authenticate, requireRole } from '../middleware/auth.middleware';
 import { adminLimiter } from '../middleware/rateLimiter';
+import PlatformSettings from '../models/settings.model';
 import Joi from 'joi';
+import { asyncHandler } from '../utils/asyncHandler';
+import { ApiError, ERROR_CODES } from '../utils/ApiError';
+import logger from '../utils/logger';
 
 const router = express.Router();
 
@@ -156,5 +160,79 @@ router.patch('/categories/:id', updateCategory);
 router.delete('/categories/:id', deleteCategory);
 router.post('/categories/:id/featured', toggleCategoryFeatured);
 router.post('/categories/:id/subcategories', addSubcategory);
+
+// ========================================
+// Maintenance Mode Routes
+// ========================================
+
+const maintenanceSchema = Joi.object({
+  enabled: Joi.boolean().required(),
+  message: Joi.string().max(500).optional(),
+  estimatedDuration: Joi.string().max(100).optional(),
+});
+
+// GET /api/admin/maintenance - Get current maintenance mode status
+router.get('/maintenance', asyncHandler(async (req: Request, res: Response) => {
+  const settings = await PlatformSettings.getSettings();
+
+  res.json({
+    success: true,
+    data: {
+      maintenanceMode: settings.maintenanceMode || false,
+      message: settings.maintenanceMessage || 'The platform is currently under maintenance.',
+      estimatedDuration: settings.maintenanceEstimatedDuration || null,
+      updatedAt: settings.maintenanceUpdatedAt || null,
+      updatedBy: settings.maintenanceUpdatedBy || null,
+    },
+  });
+}));
+
+// PUT /api/admin/maintenance - Toggle maintenance mode
+router.put('/maintenance', asyncHandler(async (req: Request, res: Response) => {
+  const { error, value } = maintenanceSchema.validate(req.body);
+
+  if (error) {
+    throw ApiError.badRequest(
+      error.details[0].message,
+      error.details.map(d => ({ field: d.path.join('.'), message: d.message })),
+      ERROR_CODES.VALIDATION_ERROR
+    );
+  }
+
+  const settings = await PlatformSettings.findOne();
+
+  if (!settings) {
+    throw ApiError.notFound('Settings not found', ERROR_CODES.NOT_FOUND);
+  }
+
+  const adminUser = (req as any).user;
+
+  settings.maintenanceMode = value.enabled;
+  settings.maintenanceMessage = value.message || 'The platform is currently under maintenance. Please try again later.';
+  settings.maintenanceEstimatedDuration = value.estimatedDuration || null;
+  settings.maintenanceUpdatedAt = new Date();
+  settings.maintenanceUpdatedBy = adminUser._id;
+
+  await settings.save();
+
+  logger.info('Maintenance mode updated', {
+    action: 'MAINTENANCE_MODE_UPDATED',
+    enabled: value.enabled,
+    message: value.message,
+    updatedBy: adminUser._id,
+    email: adminUser.email,
+  });
+
+  res.json({
+    success: true,
+    message: `Maintenance mode ${value.enabled ? 'enabled' : 'disabled'} successfully`,
+    data: {
+      maintenanceMode: settings.maintenanceMode,
+      message: settings.maintenanceMessage,
+      estimatedDuration: settings.maintenanceEstimatedDuration,
+      updatedAt: settings.maintenanceUpdatedAt,
+    },
+  });
+}));
 
 export default router;

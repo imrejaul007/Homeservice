@@ -19,6 +19,9 @@ import fraudRoutes from './fraud.routes';
 import slaRoutes from './sla.routes';
 import offerRoutes from './offer.routes';
 import notificationRoutes from './notification.routes';
+import notificationAdminRoutes from './notificationAdmin.routes';
+import couponRoutes from './coupon.routes';
+import apiKeyAdminRoutes from './apiKeyAdmin.routes';
 import referralRoutes from './referral.routes';
 import favoritesRoutes from './favorites.routes';
 import loyaltyRoutes from './loyalty.routes';
@@ -54,6 +57,7 @@ import apiKeyRoutes from './apiKey.routes';
 import auditRoutes from './audit.routes';
 import providerAdRoutes from './providerAd.routes';
 import managedContractRoutes from './managedContract.routes';
+import reportRoutes from './report.routes';
 
 const router = Router();
 
@@ -161,6 +165,15 @@ router.use('/sla', slaRoutes);
 // Notification preferences routes
 router.use('/notifications', notificationRoutes);
 
+// Admin notification broadcast routes
+router.use('/admin/notifications', notificationAdminRoutes);
+
+// Admin coupon management routes
+router.use('/admin/coupons', couponRoutes);
+
+// Admin API key management routes
+router.use('/admin/api-keys', apiKeyAdminRoutes);
+
 // Referral routes
 router.use('/referrals', referralRoutes);
 
@@ -263,5 +276,8 @@ router.use('/provider/ads', providerAdRoutes);
 
 // Managed Contract routes
 router.use('/provider/managed-contracts', managedContractRoutes);
+
+// Scheduled Report routes (admin)
+router.use('/admin', reportRoutes);
 
 export default router;

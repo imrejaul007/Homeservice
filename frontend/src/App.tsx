@@ -33,6 +33,10 @@ const AdminOffersManagement = lazy(() => import('./components/dashboard/AdminOff
 const AdminCategoryView = lazy(() => import('./pages/admin/AdminCategoryView'));
 const CategoryManagement = lazy(() => import('./pages/admin/CategoryManagement'));
 const ReviewModeration = lazy(() => import('./pages/admin/ReviewModeration'));
+const CouponManagement = lazy(() => import('./pages/admin/CouponManagement'));
+const ApiKeyManagement = lazy(() => import('./pages/admin/ApiKeyManagement'));
+const MaintenanceMode = lazy(() => import('./pages/admin/MaintenanceMode'));
+const ChurnReport = lazy(() => import('./pages/admin/ChurnReport'));
 const HomePage = lazy(() => import('./pages/HomePage'));
 const ExperiencesPage = lazy(() => import('./pages/ExperiencesPage'));
 const SearchPage = lazy(() => import('./pages/SearchPage'));
@@ -626,6 +630,42 @@ function App() {
           element={
             <AdminRoute>
               <ReviewModeration />
+            </AdminRoute>
+          }
+        />
+
+        <Route
+          path="/admin/coupons"
+          element={
+            <AdminRoute>
+              <CouponManagement />
+            </AdminRoute>
+          }
+        />
+
+        <Route
+          path="/admin/api-keys"
+          element={
+            <AdminRoute>
+              <ApiKeyManagement />
+            </AdminRoute>
+          }
+        />
+
+        <Route
+          path="/admin/maintenance"
+          element={
+            <AdminRoute>
+              <MaintenanceMode />
+            </AdminRoute>
+          }
+        />
+
+        <Route
+          path="/admin/churn"
+          element={
+            <AdminRoute>
+              <ChurnReport />
             </AdminRoute>
           }
         />
