@@ -288,12 +288,15 @@ export const useAuthStore = create<AuthState>()(
             }
 
             // Use file upload method
-            const response = await authService.uploadFile('/auth/register/provider', formData);
+            const response = await authService.uploadFile<{ user: AuthUser; tokens: AuthTokens; providerProfile: ProviderProfile | null }>(
+              '/auth/register/provider',
+              formData
+            );
 
             set((state) => {
-              state.user = (response as any).data.user;
-              state.tokens = (response as any).data.tokens;
-              state.providerProfile = (response as any).data.providerProfile;
+              state.user = response.user;
+              state.tokens = response.tokens;
+              state.providerProfile = response.providerProfile ?? null;
               state.isAuthenticated = true;
               state.isLoading = false;
             });
@@ -424,13 +427,13 @@ export const useAuthStore = create<AuthState>()(
               formData.append(key, file);
             }
 
-            response = await authService.uploadFile('/auth/me', formData);
+            response = await authService.uploadFile<{ user: AuthUser }>('/auth/me', formData);
           } else {
             response = await authService.updateProfile(data);
           }
 
           set((state) => {
-            state.user = (response as any).data.user;
+            state.user = (response as { user: AuthUser }).user;
             state.isLoading = false;
           });
         } catch (error) {
@@ -634,11 +637,11 @@ export const useAuthStore = create<AuthState>()(
             if (error?.response?.status === 401 && tokens?.refreshToken) {
               try {
                 const authService = (await import('../services/AuthService')).default;
-                const response = await authService.post('/auth/refresh-token', {
+                const response = await authService.post<{ tokens: AuthTokens }>('/auth/refresh-token', {
                   refreshToken: tokens.refreshToken
                 });
 
-                const newTokens = (response as any).data.tokens;
+                const newTokens = response.data.tokens;
                 set((state) => {
                   state.tokens = newTokens;
                 });
@@ -757,3 +760,6 @@ export const useAuthStore = create<AuthState>()(
 // Remove the old authenticatedFetch and authAPI exports
 // These are now handled by the AuthService
 export { useAuthStore as default };
+
+// Selector exports for optimized re-renders
+export const useAuthStoreUser = () => useAuthStore((state) => state.user);

@@ -126,15 +126,24 @@ export const CustomerRoute: React.FC<Omit<ProtectedRouteProps, 'allowedRoles'>> 
   <ProtectedRoute {...props} allowedRoles={['customer']} />
 );
 
-export const ProviderRoute: React.FC<Omit<ProtectedRouteProps, 'allowedRoles'> & { requireVerification?: boolean }> = ({ 
-  requireVerification = false, 
-  ...props 
+export const ProviderRoute: React.FC<Omit<ProtectedRouteProps, 'allowedRoles'> & { requireVerification?: boolean }> = ({
+  requireVerification = false,
+  ...props
 }) => {
-  const { user, providerProfile } = useAuthStore();
-  
-  // Check provider verification status
+  const { user, providerProfile, isLoading, isInitialized } = useAuthStore();
+
+  // Show loading while auth is initializing
+  if (!isInitialized || isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+      </div>
+    );
+  }
+
+  // Check provider verification status - with null safety check
   if (requireVerification && user?.role === 'provider' && providerProfile) {
-    if (providerProfile.verificationStatus.overall === 'pending') {
+    if (providerProfile.verificationStatus?.overall === 'pending') {
       return (
         <Navigate
           to="/provider/verification-pending"
@@ -143,7 +152,7 @@ export const ProviderRoute: React.FC<Omit<ProtectedRouteProps, 'allowedRoles'> &
       );
     }
 
-    if (providerProfile.verificationStatus.overall === 'rejected') {
+    if (providerProfile.verificationStatus?.overall === 'rejected') {
       return (
         <Navigate
           to="/provider/verification-rejected"
@@ -152,7 +161,7 @@ export const ProviderRoute: React.FC<Omit<ProtectedRouteProps, 'allowedRoles'> &
       );
     }
 
-    if (providerProfile.verificationStatus.overall === 'suspended') {
+    if (providerProfile.verificationStatus?.overall === 'suspended') {
       return (
         <Navigate
           to="/provider/suspended"
@@ -161,11 +170,11 @@ export const ProviderRoute: React.FC<Omit<ProtectedRouteProps, 'allowedRoles'> &
       );
     }
   }
-  
+
   return (
-    <ProtectedRoute 
-      {...props} 
-      allowedRoles={['provider']} 
+    <ProtectedRoute
+      {...props}
+      allowedRoles={['provider']}
       requireEmailVerified={false}
     />
   );

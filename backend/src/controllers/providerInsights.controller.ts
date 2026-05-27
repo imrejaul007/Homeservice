@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
+import Booking from '../models/booking.model';
 import {
   getProviderInsights,
   getProviderPerformanceMetrics,
@@ -301,12 +302,28 @@ export const getScheduleEfficiency = asyncHandler(async (req: Request, res: Resp
 /**
  * Get customer cancellation profile
  * GET /api/provider/cancellations/customer/:customerId
+ * Requires provider to have a booking with this customer for authorization
  */
 export const getCancellationProfile = asyncHandler(async (req: Request, res: Response) => {
   const { customerId } = req.params;
+  const providerId = (req.user as any)?._id?.toString();
 
   if (!customerId) {
     throw new ApiError(400, 'Customer ID is required');
+  }
+
+  if (!providerId) {
+    throw new ApiError(401, 'Authentication required');
+  }
+
+  // Verify provider has a booking with this customer (authorization check)
+  const booking = await Booking.findOne({
+    customerId: customerId,
+    providerId: providerId
+  }).lean();
+
+  if (!booking) {
+    throw new ApiError(403, 'Access denied. You can only view profiles for your own customers.');
   }
 
   const profile = await getCustomerCancellationProfile(customerId);
@@ -320,12 +337,28 @@ export const getCancellationProfile = asyncHandler(async (req: Request, res: Res
 /**
  * Predict booking cancellation
  * GET /api/provider/cancellations/predict/:bookingId
+ * Requires booking to belong to this provider for authorization
  */
 export const predictCancellation = asyncHandler(async (req: Request, res: Response) => {
   const { bookingId } = req.params;
+  const providerId = (req.user as any)?._id?.toString();
 
   if (!bookingId) {
     throw new ApiError(400, 'Booking ID is required');
+  }
+
+  if (!providerId) {
+    throw new ApiError(401, 'Authentication required');
+  }
+
+  // Verify booking belongs to this provider (authorization check)
+  const booking = await Booking.findOne({
+    _id: bookingId,
+    providerId: providerId
+  }).lean();
+
+  if (!booking) {
+    throw new ApiError(403, 'Access denied. You can only predict cancellations for your own bookings.');
   }
 
   const prediction = await predictBookingCancellation(bookingId);

@@ -16,12 +16,46 @@ import {
   Star,
   Award,
   Clock,
+  ArrowLeft,
 } from 'lucide-react';
 import NavigationHeader from '../../components/layout/NavigationHeader';
 import Footer from '../../components/layout/Footer';
 import Breadcrumb from '../../components/common/Breadcrumb';
 import { useAuthStore } from '../../stores/authStore';
 import { api } from '../../services/api';
+import {
+  serviceAreasToStrings,
+  getPrimaryServiceLocationLabel,
+  mergeProviderProfile,
+  type ServiceLocationValue,
+} from '../../utils/providerProfile';
+import ServiceAreaLocationPicker from '../../components/provider/ServiceAreaLocationPicker';
+
+function buildProfileFormData(
+  user: ReturnType<typeof useAuthStore.getState>['user'],
+  providerProfile: ReturnType<typeof useAuthStore.getState>['providerProfile']
+) {
+  const pp = providerProfile as Record<string, unknown> | null;
+  return {
+    firstName: user?.firstName || '',
+    lastName: user?.lastName || '',
+    email: user?.email || '',
+    phone: user?.phone || '',
+    bio:
+      (pp?.instagramStyleProfile as { bio?: string } | undefined)?.bio ||
+      (pp?.bio as string) ||
+      '',
+    serviceCategories: (pp?.serviceCategories as string[]) || [],
+    yearsExperience:
+      (pp?.businessInfo as { yearsExperience?: number } | undefined)?.yearsExperience ??
+      (pp?.yearsExperience as number) ??
+      0,
+    serviceAreas: serviceAreasToStrings(
+      (pp?.locationInfo as { serviceAreas?: unknown } | undefined)?.serviceAreas ??
+        pp?.serviceAreas
+    ),
+  };
+}
 
 const ProviderProfilePage: React.FC = () => {
   const navigate = useNavigate();
@@ -35,45 +69,97 @@ const ProviderProfilePage: React.FC = () => {
   }, [user, navigate]);
 
   // Profile state
-  const [profileData, setProfileData] = useState({
-    firstName: user?.firstName || '',
-    lastName: user?.lastName || '',
-    email: user?.email || '',
-    phone: user?.phone || '',
-    bio: (providerProfile as any)?.bio || '',
-    serviceCategories: (providerProfile as any)?.serviceCategories || [],
-    yearsExperience: (providerProfile as any)?.yearsExperience || 0,
-    serviceAreas: (providerProfile as any)?.serviceAreas || [],
-  });
+  const [profileData, setProfileData] = useState(() => buildProfileFormData(user, providerProfile));
+
+  const [serviceLocation, setServiceLocation] = useState<ServiceLocationValue | null>(null);
+  const [serviceAreaDisplay, setServiceAreaDisplay] = useState(() =>
+    getPrimaryServiceLocationLabel(providerProfile)
+  );
 
   // UI state
   const [isEditing, setIsEditing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
   const [profileImage, setProfileImage] = useState<string | null>(user?.avatar || null);
   const [isUploading, setIsUploading] = useState(false);
+  const [isTogglingStatus, setIsTogglingStatus] = useState(false);
 
-  // Update profile data when user changes
+  // Stats state
+  const [stats, setStats] = useState({
+    totalBookings: 0,
+    completedJobs: 0,
+    rating: 0,
+    responseTime: 'N/A',
+    yearsExperience: 0,
+    isActive: true,
+  });
+
+  // Sync form from store when not actively editing (avoids wiping in-progress edits on save)
   useEffect(() => {
-    if (user) {
-      setProfileData({
-        firstName: user.firstName || '',
-        lastName: user.lastName || '',
-        email: user.email || '',
-        phone: user.phone || '',
-        bio: providerProfile?.bio || '',
-        serviceCategories: providerProfile?.serviceCategories || [],
-        yearsExperience: providerProfile?.yearsExperience || 0,
-        serviceAreas: providerProfile?.serviceAreas || [],
-      });
+    if (user && !isEditing) {
+      setProfileData(buildProfileFormData(user, providerProfile));
+      setServiceAreaDisplay(getPrimaryServiceLocationLabel(providerProfile));
+      setServiceLocation(null);
       if (user.avatar) {
         setProfileImage(user.avatar);
       }
     }
-  }, [user, providerProfile]);
+  }, [user, providerProfile, isEditing]);
+
+  // Fetch stats from analytics API
+  useEffect(() => {
+    const fetchStats = async () => {
+      try {
+        const response = await api.get('/provider/analytics');
+        if (response.data?.success && response.data?.data) {
+          // Backend returns: { data: { overview: { bookingStats, ratingStats, ... } } }
+          const { statusBreakdown, ratingStats } = response.data.data.overview || {};
+          const totalBookings =
+            (statusBreakdown?.pending || 0) +
+            (statusBreakdown?.confirmed || 0) +
+            (statusBreakdown?.in_progress || 0) +
+            (statusBreakdown?.completed || 0) +
+            (statusBreakdown?.cancelled || 0) +
+            (statusBreakdown?.no_show || 0);
+          setStats((prev) => ({
+            ...prev,
+            totalBookings,
+            completedJobs: statusBreakdown?.completed || 0,
+            rating: ratingStats?.averageRating || ratingStats?.average || 0,
+            responseTime: (providerProfile as any)?.analytics?.performanceMetrics?.responseTime
+              ? `${Math.round((providerProfile as any).analytics.performanceMetrics.responseTime)} mins`
+              : 'N/A',
+            yearsExperience: profileData.yearsExperience || (providerProfile as any)?.businessInfo?.yearsExperience || 0,
+            isActive: (providerProfile as any)?.isActive ?? true,
+          }));
+        }
+      } catch (error) {
+        console.error('Failed to fetch analytics:', error);
+        // Fallback to providerProfile data
+        setStats((prev) => ({
+          ...prev,
+          totalBookings: (providerProfile as any)?.analytics?.bookingStats?.totalBookings || 0,
+          completedJobs: (providerProfile as any)?.analytics?.bookingStats?.completedBookings || 0,
+          rating: (providerProfile as any)?.reviewsData?.averageRating || 0,
+          yearsExperience: profileData.yearsExperience || (providerProfile as any)?.businessInfo?.yearsExperience || 0,
+          isActive: (providerProfile as any)?.isActive ?? true,
+        }));
+      }
+    };
+
+    if (user?.role === 'provider') {
+      fetchStats();
+    }
+  }, [user, providerProfile, profileData.yearsExperience]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
+    if (name === 'yearsExperience') {
+      const parsed = value === '' ? 0 : Number(value);
+      setProfileData((prev) => ({ ...prev, yearsExperience: Number.isNaN(parsed) ? 0 : parsed }));
+      return;
+    }
     setProfileData((prev) => ({ ...prev, [name]: value }));
   };
 
@@ -94,17 +180,44 @@ const ProviderProfilePage: React.FC = () => {
     formData.append('avatar', file);
 
     try {
-      const response = await api.post('/auth/profile-image', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
+      // Get token from sessionStorage - SSR safe
+      const accessToken = typeof window !== 'undefined'
+        ? (() => {
+            const stored = sessionStorage.getItem('auth-storage');
+            if (!stored) return null;
+            try {
+              const tokens = JSON.parse(stored);
+              return tokens?.state?.tokens?.accessToken || null;
+            } catch {
+              return null;
+            }
+          })()
+        : null;
+
+      if (!accessToken) {
+        throw new Error('Authentication required');
+      }
+
+      const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+      const response = await fetch(`${API_URL}/auth/profile-image`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+        },
+        body: formData,
       });
 
-      if (response.data.success) {
+      const data = await response.json();
+
+      if (data.success) {
         setSaveMessage('Profile image updated!');
         setTimeout(() => setSaveMessage(''), 3000);
+      } else {
+        throw new Error(data.message || 'Upload failed');
       }
     } catch (error: any) {
       setProfileImage(user?.avatar || null);
-      setErrorMessage(error.response?.data?.message || 'Failed to upload image');
+      setErrorMessage(error.message || 'Failed to upload image');
       setTimeout(() => setErrorMessage(''), 3000);
     } finally {
       setIsUploading(false);
@@ -112,24 +225,61 @@ const ProviderProfilePage: React.FC = () => {
   };
 
   const handleSaveProfile = async () => {
+    setIsSaving(true);
+    setErrorMessage('');
+
+    const areaNames =
+      serviceLocation?.label
+        ? [serviceLocation.label]
+        : profileData.serviceAreas.length > 0
+          ? profileData.serviceAreas
+          : serviceAreaDisplay.trim()
+            ? serviceAreaDisplay.split(',').map((s) => s.trim()).filter(Boolean)
+            : [];
+
     try {
-      const response = await api.patch('/auth/me', {
+      const payload: Record<string, unknown> = {
         firstName: profileData.firstName,
         lastName: profileData.lastName,
         phone: profileData.phone || undefined,
-        bio: profileData.bio || undefined,
-        yearsExperience: profileData.yearsExperience || undefined,
-      });
+        bio: profileData.bio,
+        yearsExperience: profileData.yearsExperience ?? undefined,
+      };
+
+      if (areaNames.length > 0) {
+        payload.serviceAreas = areaNames;
+      }
+
+      if (serviceLocation) {
+        payload.serviceLocation = serviceLocation;
+      }
+
+      const response = await api.patch('/auth/me', payload);
 
       if (response.data.success) {
-        useAuthStore.setState({
-          user: {
-            ...user!,
-            firstName: profileData.firstName,
-            lastName: profileData.lastName,
-            phone: profileData.phone,
-          } as any,
-        });
+        const updatedUser = response.data.data?.user ?? response.data.user;
+        const updatedProviderProfile =
+          response.data.data?.providerProfile ?? response.data.providerProfile;
+
+        useAuthStore.setState((state) => ({
+          user: updatedUser
+            ? updatedUser
+            : {
+                ...state.user!,
+                firstName: profileData.firstName,
+                lastName: profileData.lastName,
+                phone: profileData.phone,
+              },
+          providerProfile: mergeProviderProfile(
+            state.providerProfile as Record<string, unknown> | null,
+            (updatedProviderProfile as Record<string, unknown>) ?? null
+          ) as typeof state.providerProfile,
+        }));
+
+        const merged = useAuthStore.getState().providerProfile;
+        setProfileData(buildProfileFormData(useAuthStore.getState().user, merged));
+        setServiceAreaDisplay(getPrimaryServiceLocationLabel(merged));
+        setServiceLocation(null);
 
         setSaveMessage('Profile updated successfully!');
         setIsEditing(false);
@@ -137,30 +287,45 @@ const ProviderProfilePage: React.FC = () => {
       }
     } catch (error: any) {
       setErrorMessage(error.response?.data?.message || 'Failed to update profile');
-      setTimeout(() => setErrorMessage(''), 3000);
+      setTimeout(() => setErrorMessage(''), 5000);
+    } finally {
+      setIsSaving(false);
     }
   };
 
   const handleCancel = () => {
     setIsEditing(false);
-    setProfileData({
-      firstName: user?.firstName || '',
-      lastName: user?.lastName || '',
-      email: user?.email || '',
-      phone: user?.phone || '',
-      bio: providerProfile?.bio || '',
-      serviceCategories: providerProfile?.serviceCategories || [],
-      yearsExperience: providerProfile?.yearsExperience || 0,
-      serviceAreas: providerProfile?.serviceAreas || [],
-    });
+    setProfileData(buildProfileFormData(user, providerProfile));
+    setServiceAreaDisplay(getPrimaryServiceLocationLabel(providerProfile));
+    setServiceLocation(null);
   };
 
-  // Mock stats for demonstration
-  const stats = {
-    totalBookings: 156,
-    completedJobs: 142,
-    rating: 4.8,
-    responseTime: '~2 hours',
+  const handleServiceAreaChange = (display: string, location: ServiceLocationValue | null) => {
+    setServiceAreaDisplay(display);
+    setServiceLocation(location);
+    setProfileData((prev) => ({
+      ...prev,
+      serviceAreas: location?.label
+        ? [location.label]
+        : display.split(',').map((s) => s.trim()).filter(Boolean),
+    }));
+  };
+
+  const handleToggleActiveStatus = async () => {
+    setIsTogglingStatus(true);
+    try {
+      const response = await api.patch('/provider/status');
+      if (response.data.success) {
+        setStats((prev) => ({ ...prev, isActive: response.data.data.isActive }));
+        setSaveMessage(response.data.message || 'Status updated!');
+        setTimeout(() => setSaveMessage(''), 3000);
+      }
+    } catch (error: any) {
+      setErrorMessage(error.response?.data?.message || 'Failed to update status');
+      setTimeout(() => setErrorMessage(''), 3000);
+    } finally {
+      setIsTogglingStatus(false);
+    }
   };
 
   return (
@@ -175,6 +340,14 @@ const ProviderProfilePage: React.FC = () => {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
           {/* Header */}
           <div className="mb-8">
+            <button
+              type="button"
+              onClick={() => navigate('/provider/dashboard')}
+              className="flex items-center text-nilin-warmGray hover:text-nilin-charcoal mb-4 transition-colors font-sans text-sm"
+            >
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              Back to Dashboard
+            </button>
             <h1 className="text-3xl font-serif text-nilin-charcoal mb-2">My Provider Profile</h1>
             <p className="text-nilin-warmGray">Manage your professional profile and service information</p>
           </div>
@@ -231,7 +404,9 @@ const ProviderProfilePage: React.FC = () => {
                   <p className="text-sm text-nilin-warmGray mb-3">{user?.email}</p>
                   <div className="inline-flex items-center gap-2 px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm font-medium">
                     <Award className="h-3 w-3" />
-                    {providerProfile?.isVerified ? 'Verified Provider' : 'Pending Verification'}
+                    {providerProfile?.verificationStatus?.overall === 'approved' || providerProfile?.isVerified
+                      ? 'Verified Provider'
+                      : 'Pending Verification'}
                   </div>
                 </div>
 
@@ -259,7 +434,7 @@ const ProviderProfilePage: React.FC = () => {
                         <Calendar className="h-4 w-4" />
                         Years Experience
                       </span>
-                      <span className="text-sm font-medium text-nilin-charcoal">{stats.totalBookings}+</span>
+                      <span className="text-sm font-medium text-nilin-charcoal">{stats.yearsExperience} years</span>
                     </div>
                     <div className="flex items-center justify-between">
                       <span className="text-sm text-nilin-warmGray flex items-center gap-2">
@@ -273,6 +448,32 @@ const ProviderProfilePage: React.FC = () => {
                       <span className="text-sm font-medium text-green-600 capitalize">{user?.accountStatus || 'active'}</span>
                     </div>
                   </div>
+                </div>
+
+                {/* Profile Visibility Toggle */}
+                <div className="mt-6 pt-6 border-t border-nilin-border">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Shield className="h-4 w-4 text-nilin-warmGray" />
+                      <span className="text-sm text-nilin-warmGray">Profile Visibility</span>
+                    </div>
+                    <button
+                      onClick={handleToggleActiveStatus}
+                      disabled={isTogglingStatus}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-nilin-coral focus:ring-offset-2 ${
+                        stats.isActive ? 'bg-green-600' : 'bg-gray-300'
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform ${
+                          stats.isActive ? 'translate-x-6' : 'translate-x-1'
+                        }`}
+                      />
+                    </button>
+                  </div>
+                  <p className={`text-xs mt-2 ${stats.isActive ? 'text-green-600' : 'text-gray-500'}`}>
+                    {stats.isActive ? 'Your profile is visible to customers' : 'Your profile is hidden'}
+                  </p>
                 </div>
               </div>
             </div>
@@ -385,22 +586,16 @@ const ProviderProfilePage: React.FC = () => {
                     </div>
 
                     <div>
-                      <label className="block text-sm font-medium text-nilin-charcoal mb-2">Service Areas</label>
-                      <div className="relative">
-                        <MapPin className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-nilin-warmGray" />
-                        <input
-                          type="text"
-                          name="serviceAreas"
-                          value={profileData.serviceAreas.join(', ')}
-                          onChange={(e) => setProfileData((prev) => ({
-                            ...prev,
-                            serviceAreas: e.target.value.split(',').map((s) => s.trim()).filter(Boolean)
-                          }))}
-                          disabled={!isEditing}
-                          placeholder="Dubai Marina, JBR, Palm Jumeirah..."
-                          className="w-full pl-12 pr-4 py-3 rounded-nilin bg-white border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none disabled:bg-nilin-muted text-nilin-charcoal transition-all"
-                        />
-                      </div>
+                      <label className="block text-sm font-medium text-nilin-charcoal mb-2">
+                        Service Area / Location
+                      </label>
+                      <ServiceAreaLocationPicker
+                        value={serviceAreaDisplay}
+                        location={serviceLocation}
+                        onChange={handleServiceAreaChange}
+                        disabled={!isEditing}
+                        placeholder="Search your service area (e.g. Dubai Marina)"
+                      />
                     </div>
                   </div>
 
@@ -408,10 +603,11 @@ const ProviderProfilePage: React.FC = () => {
                     <div className="flex gap-3 pt-4">
                       <button
                         onClick={handleSaveProfile}
-                        className="flex-1 btn-nilin flex items-center justify-center gap-2"
+                        disabled={isSaving}
+                        className="flex-1 btn-nilin flex items-center justify-center gap-2 disabled:opacity-60"
                       >
                         <Save className="h-4 w-4" />
-                        Save Changes
+                        {isSaving ? 'Saving...' : 'Save Changes'}
                       </button>
                       <button
                         onClick={handleCancel}

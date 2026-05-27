@@ -22,6 +22,7 @@ const ForgotPassword = lazy(() => import('./components/auth/ForgotPassword'));
 const ResetPassword = lazy(() => import('./components/auth/ResetPassword'));
 const EmailVerification = lazy(() => import('./components/auth/EmailVerification'));
 const EmailVerificationRequired = lazy(() => import('./components/auth/EmailVerificationRequired'));
+const ChangePassword = lazy(() => import('./components/auth/ChangePassword'));
 const CustomerDashboard = lazy(() => import('./components/dashboard/CustomerDashboard'));
 const StatsView = lazy(() => import('./components/dashboard/StatsView'));
 const ProviderDashboard = lazy(() => import('./components/dashboard/ProviderDashboard'));
@@ -30,6 +31,7 @@ const AdminSettings = lazy(() => import('./components/dashboard/AdminSettings'))
 const AdminReports = lazy(() => import('./components/dashboard/AdminReports'));
 const AdminOffersManagement = lazy(() => import('./components/dashboard/AdminOffersManagement'));
 const AdminCategoryView = lazy(() => import('./pages/admin/AdminCategoryView'));
+const CategoryManagement = lazy(() => import('./pages/admin/CategoryManagement'));
 const HomePage = lazy(() => import('./pages/HomePage'));
 const ExperiencesPage = lazy(() => import('./pages/ExperiencesPage'));
 const SearchPage = lazy(() => import('./pages/SearchPage'));
@@ -59,6 +61,11 @@ const ProviderPortfolioPage = lazy(() => import('./pages/provider/ProviderPortfo
 const ProviderAnalyticsPage = lazy(() => import('./pages/provider/ProviderAnalyticsPage'));
 const ProviderEarningsPage = lazy(() => import('./pages/provider/ProviderEarningsPage'));
 const ProviderVerificationPage = lazy(() => import('./pages/provider/ProviderVerificationPage'));
+const ProviderReviewsPage = lazy(() => import('./pages/provider/ProviderReviewsPage'));
+const AdsPage = lazy(() => import('./pages/provider/AdsPage'));
+const ProviderSettingsPage = lazy(() => import('./pages/provider/ProviderSettingsPage'));
+
+const ManagedServicesPage = lazy(() => import('./pages/provider/ManagedServicesPage'));
 const AboutPage = lazy(() => import('./pages/AboutPage'));
 const OfferDetailPage = lazy(() => import('./pages/OfferDetailPage'));
 const PrivacyPage = lazy(() => import('./pages/PrivacyPage'));
@@ -98,6 +105,36 @@ const ProviderVerificationPending = () => (
     <div className="max-w-md w-full bg-white rounded-lg shadow-md p-8">
       <h1 className="text-2xl font-bold text-center mb-6">Verification Pending</h1>
       <p className="text-gray-600 text-center">Your provider account is under review. We'll notify you once it's approved.</p>
+    </div>
+  </div>
+);
+
+const ProviderVerificationRejected = () => (
+  <div className="flex items-center justify-center min-h-screen bg-gray-50">
+    <div className="max-w-md w-full bg-white rounded-lg shadow-md p-8">
+      <h1 className="text-2xl font-bold text-center mb-6 text-red-600">Verification Rejected</h1>
+      <p className="text-gray-600 text-center mb-4">Your provider application has been rejected.</p>
+      <p className="text-gray-500 text-center text-sm">Please contact support for more information or to resubmit your application.</p>
+    </div>
+  </div>
+);
+
+const ProviderSuspended = () => (
+  <div className="flex items-center justify-center min-h-screen bg-gray-50">
+    <div className="max-w-md w-full bg-white rounded-lg shadow-md p-8">
+      <h1 className="text-2xl font-bold text-center mb-6 text-orange-600">Account Suspended</h1>
+      <p className="text-gray-600 text-center mb-4">Your provider account has been suspended.</p>
+      <p className="text-gray-500 text-center text-sm">Please contact support to resolve this issue.</p>
+    </div>
+  </div>
+);
+
+const AccountDeactivated = () => (
+  <div className="flex items-center justify-center min-h-screen bg-gray-50">
+    <div className="max-w-md w-full bg-white rounded-lg shadow-md p-8">
+      <h1 className="text-2xl font-bold text-center mb-6 text-gray-600">Account Deactivated</h1>
+      <p className="text-gray-600 text-center mb-4">Your account has been deactivated.</p>
+      <p className="text-gray-500 text-center text-sm">Please contact support to reactivate your account.</p>
     </div>
   </div>
 );
@@ -165,13 +202,22 @@ function App() {
           } 
         />
         
-        <Route 
-          path="/reset-password/:token" 
+        <Route
+          path="/reset-password/:token"
           element={
             <PublicRoute redirectAuthenticated={false}>
               <ResetPassword />
             </PublicRoute>
-          } 
+          }
+        />
+
+        <Route
+          path="/change-password"
+          element={
+            <ProtectedRoute requireAuth={true}>
+              <ChangePassword />
+            </ProtectedRoute>
+          }
         />
 
         {/* Email Verification Routes */}
@@ -265,6 +311,21 @@ function App() {
         <Route
           path="/provider/verification-pending"
           element={<ProviderVerificationPending />}
+        />
+
+        <Route
+          path="/provider/verification-rejected"
+          element={<ProviderVerificationRejected />}
+        />
+
+        <Route
+          path="/provider/suspended"
+          element={<ProviderSuspended />}
+        />
+
+        <Route
+          path="/account-deactivated"
+          element={<AccountDeactivated />}
         />
 
         {/* Static Pages */}
@@ -468,6 +529,42 @@ function App() {
           }
         />
 
+        <Route
+          path="/provider/reviews"
+          element={
+            <ProviderRoute>
+              <ProviderReviewsPage />
+            </ProviderRoute>
+          }
+        />
+
+        <Route
+          path="/provider/ads"
+          element={
+            <ProviderRoute>
+              <AdsPage />
+            </ProviderRoute>
+          }
+        />
+
+        <Route
+          path="/provider/settings"
+          element={
+            <ProviderRoute>
+              <ProviderSettingsPage />
+            </ProviderRoute>
+          }
+        />
+
+        <Route
+          path="/provider/managed-services"
+          element={
+            <ProviderRoute>
+              <ManagedServicesPage />
+            </ProviderRoute>
+          }
+        />
+
         {/* Protected Admin Routes */}
         <Route
           path="/admin/dashboard"
@@ -483,6 +580,15 @@ function App() {
           element={
             <AdminRoute>
               <AdminCategoryView />
+            </AdminRoute>
+          }
+        />
+
+        <Route
+          path="/admin/categories"
+          element={
+            <AdminRoute>
+              <CategoryManagement />
             </AdminRoute>
           }
         />

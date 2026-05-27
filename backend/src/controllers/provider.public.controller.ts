@@ -6,6 +6,10 @@ import Booking from '../models/booking.model';
 import ServiceCategory from '../models/serviceCategory.model';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
+import logger from '../utils/logger';
+
+// Helper to escape regex special characters (prevents ReDoS attacks)
+const escapeRegex = (str: string): string => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // ===================================
 // PUBLIC PROVIDER ENDPOINTS
@@ -214,7 +218,11 @@ export const getProviderById = asyncHandler(async (req: Request, res: Response):
     });
   } catch (error: any) {
     if (error instanceof ApiError) throw error;
-    console.error('Error getting provider by ID:', error);
+    logger.error('Error getting provider by ID', {
+      context: 'ProviderPublicController',
+      action: 'GET_PROVIDER_ERROR',
+      error: error.message,
+    });
     throw new ApiError(500, 'Failed to get provider details', error.message);
   }
 });
@@ -243,9 +251,9 @@ export const getProvidersByCategory = asyncHandler(async (req: Request, res: Res
       throw new ApiError(404, 'Category not found');
     }
 
-    // Find services in this category to get provider IDs
+    // Find services in this category to get provider IDs (escaped to prevent ReDoS)
     const servicesInCategory = await Service.find({
-      category: { $regex: new RegExp(`^${category.name}$`, 'i') },
+      category: { $regex: new RegExp(`^${escapeRegex(category.name)}$`, 'i') },
       isActive: true,
       status: 'active'
     }).lean();
@@ -324,14 +332,22 @@ export const getProvidersByCategory = asyncHandler(async (req: Request, res: Res
     const users = await User.find({ _id: { $in: userIds } }).lean();
     const userMap = new Map(users.map((u: any) => [u._id.toString(), u]));
 
+    // Pre-group services by provider ID to avoid N+1 filtering
+    const servicesByProvider = new Map<string, typeof servicesInCategory>();
+    servicesInCategory.forEach((s: any) => {
+      const pid = s.providerId.toString();
+      if (!servicesByProvider.has(pid)) {
+        servicesByProvider.set(pid, []);
+      }
+      servicesByProvider.get(pid)!.push(s);
+    });
+
     // Format providers for frontend (simplified card view)
     const formattedProviders = providers.map((provider: any) => {
       const user = userMap.get(provider.userId.toString());
 
-      // Get services for this category from this provider
-      const categoryServices = servicesInCategory.filter(
-        (s: any) => s.providerId.toString() === provider.userId.toString()
-      );
+      // Get services for this category from this provider (O(1) lookup instead of O(n))
+      const categoryServices = servicesByProvider.get(provider.userId.toString()) || [];
 
       return {
         id: provider.userId,
@@ -387,7 +403,11 @@ export const getProvidersByCategory = asyncHandler(async (req: Request, res: Res
     });
   } catch (error: any) {
     if (error instanceof ApiError) throw error;
-    console.error('Error getting providers by category:', error);
+    logger.error('Error getting providers by category', {
+      context: 'ProviderPublicController',
+      action: 'GET_BY_CATEGORY_ERROR',
+      error: error.message,
+    });
     throw new ApiError(500, 'Failed to get providers by category', error.message);
   }
 });
@@ -424,10 +444,10 @@ export const getProvidersBySubcategory = asyncHandler(async (req: Request, res: 
       throw new ApiError(404, 'Subcategory not found');
     }
 
-    // Find services in this subcategory
+    // Find services in this subcategory (escaped to prevent ReDoS)
     const servicesInSubcategory = await Service.find({
-      category: { $regex: new RegExp(`^${category.name}$`, 'i') },
-      subcategory: { $regex: new RegExp(`^${subcategory.name}$`, 'i') },
+      category: { $regex: new RegExp(`^${escapeRegex(category.name)}$`, 'i') },
+      subcategory: { $regex: new RegExp(`^${escapeRegex(subcategory.name)}$`, 'i') },
       isActive: true,
       status: 'active'
     }).lean();
@@ -502,14 +522,22 @@ export const getProvidersBySubcategory = asyncHandler(async (req: Request, res: 
     const users = await User.find({ _id: { $in: userIds } }).lean();
     const userMap = new Map(users.map((u: any) => [u._id.toString(), u]));
 
+    // Pre-group services by provider ID to avoid N+1 filtering
+    const servicesByProvider = new Map<string, typeof servicesInSubcategory>();
+    servicesInSubcategory.forEach((s: any) => {
+      const pid = s.providerId.toString();
+      if (!servicesByProvider.has(pid)) {
+        servicesByProvider.set(pid, []);
+      }
+      servicesByProvider.get(pid)!.push(s);
+    });
+
     // Format providers
     const formattedProviders = providers.map((provider: any) => {
       const user = userMap.get(provider.userId.toString());
 
-      // Get services for this subcategory from this provider
-      const subcategoryServices = servicesInSubcategory.filter(
-        (s: any) => s.providerId.toString() === provider.userId.toString()
-      );
+      // Get services for this subcategory from this provider (O(1) lookup instead of O(n))
+      const subcategoryServices = servicesByProvider.get(provider.userId.toString()) || [];
 
       return {
         id: provider.userId,
@@ -571,7 +599,11 @@ export const getProvidersBySubcategory = asyncHandler(async (req: Request, res: 
     });
   } catch (error: any) {
     if (error instanceof ApiError) throw error;
-    console.error('Error getting providers by subcategory:', error);
+    logger.error('Error getting providers by subcategory', {
+      context: 'ProviderPublicController',
+      action: 'GET_BY_SUBCATEGORY_ERROR',
+      error: error.message,
+    });
     throw new ApiError(500, 'Failed to get providers by subcategory', error.message);
   }
 });
@@ -649,7 +681,11 @@ export const getFeaturedProviders = asyncHandler(async (req: Request, res: Respo
       data: { providers: formattedProviders }
     });
   } catch (error: any) {
-    console.error('Error getting featured providers:', error);
+    logger.error('Error getting featured providers', {
+      context: 'ProviderPublicController',
+      action: 'GET_FEATURED_ERROR',
+      error: error.message,
+    });
     throw new ApiError(500, 'Failed to get featured providers', error.message);
   }
 });

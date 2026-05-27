@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -16,12 +16,14 @@ import {
   MapPin,
   BadgeCheck,
   XCircle,
+  Loader2,
 } from 'lucide-react';
 import NavigationHeader from '../../components/layout/NavigationHeader';
 import Footer from '../../components/layout/Footer';
 import Breadcrumb from '../../components/common/Breadcrumb';
 import { useAuthStore } from '../../stores/authStore';
 import { api } from '../../services/api';
+import { useToast } from '../../components/common/Toast/ToastContext';
 
 interface VerificationDocument {
   id: string;
@@ -45,6 +47,7 @@ interface VerificationStep {
 const ProviderVerificationPage: React.FC = () => {
   const navigate = useNavigate();
   const { user, providerProfile } = useAuthStore();
+  const toast = useToast ? useToast() : null;
 
   // Redirect if not a provider
   useEffect(() => {
@@ -119,24 +122,53 @@ const ProviderVerificationPage: React.FC = () => {
   const overallProgress = (completedSteps / verificationSteps.length) * 100;
 
   const handleFileUpload = async (stepId: string, documentId: string, file: File) => {
+    // Validate file
+    if (!file || file.size === 0) {
+      toast?.error('Please select a valid file');
+      return;
+    }
+
     setUploadProgress({ ...uploadProgress, [documentId]: 0 });
 
-    // Simulate upload progress
-    const progressInterval = setInterval(() => {
-      setUploadProgress((prev) => {
-        const current = prev[documentId] || 0;
-        if (current >= 90) {
-          clearInterval(progressInterval);
-          return prev;
-        }
-        return { ...prev, [documentId]: current + 10 };
-      });
-    }, 200);
+    try {
+      // Create form data for file upload
+      const formData = new FormData();
+      formData.append('file', file);
 
-    // Simulate API call
-    setTimeout(() => {
-      clearInterval(progressInterval);
-      setUploadProgress({ ...uploadProgress, [documentId]: 100 });
+      // Get token safely - SSR check
+      const accessToken = typeof window !== 'undefined'
+        ? sessionStorage.getItem('accessToken')
+        : null;
+
+      if (!accessToken) {
+        throw new Error('Authentication required');
+      }
+
+      // Upload to Cloudinary or your file storage
+      const uploadResponse = await fetch('/api/upload', {
+        method: 'POST',
+        body: formData,
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      });
+
+      if (!uploadResponse.ok) {
+        throw new Error('Upload failed');
+      }
+
+      const uploadData = await uploadResponse.json();
+      const fileUrl = uploadData.url;
+
+      setUploadProgress((prev) => ({ ...prev, [documentId]: 50 }));
+
+      // Save document reference to backend
+      await api.post('/provider/verification/documents', {
+        documentType: documentId,
+        documentUrl: fileUrl,
+      });
+
+      setUploadProgress((prev) => ({ ...prev, [documentId]: 100 }));
 
       // Update document status
       setVerificationSteps((steps) =>
@@ -151,27 +183,43 @@ const ProviderVerificationPage: React.FC = () => {
                 ...doc,
                 status: 'pending',
                 uploadedAt: new Date(),
-                fileUrl: URL.createObjectURL(file),
+                fileUrl: fileUrl,
               };
             }),
           };
         })
       );
 
-      setTimeout(() => {
-        setUploadProgress({});
-      }, 500);
-    }, 2000);
+      toast?.success('Document uploaded successfully');
+
+    } catch (error) {
+      console.error('Upload failed:', error);
+      setUploadProgress({});
+      toast?.error(error instanceof Error ? error.message : 'Failed to upload document');
+    }
   };
 
   const handleSubmitForReview = async () => {
     setIsSubmitting(true);
 
-    // Simulate API call
-    setTimeout(() => {
+    try {
+      const response = await api.post('/provider/verification/submit');
+      if (response.data.success) {
+        // Update step statuses to submitted
+        setVerificationSteps((steps) =>
+          steps.map((step) => ({
+            ...step,
+            status: 'submitted' as const,
+          }))
+        );
+        toast?.success('Your verification documents have been submitted for review. You will be notified once the review is complete.');
+      }
+    } catch (error: any) {
+      console.error('Submit failed:', error);
+      toast?.error(error.response?.data?.message || 'Failed to submit verification. Please try again.');
+    } finally {
       setIsSubmitting(false);
-      alert('Your verification documents have been submitted for review. You will be notified once the review is complete.');
-    }, 1500);
+    }
   };
 
   const getStepStatus = (status: VerificationStep['status']) => {
