@@ -416,7 +416,92 @@ function logAdminBookingAction(
 // BookingService Class
 // ============================================
 
+interface TimeSlotConflictResult {
+  hasConflict: boolean;
+  conflictingBookingId?: string;
+  conflictingBookingNumber?: string;
+  conflictType?: 'exact' | 'overlap';
+}
+
 export class BookingService {
+
+  // ========================================
+  // Time Slot Conflict Detection
+  // ========================================
+
+  /**
+   * Check for time slot conflicts before accepting a booking
+   * SECURITY: Prevents accepting bookings that conflict with existing confirmed bookings
+   *
+   * @param providerId - The provider's ID
+   * @param excludeBookingId - Booking ID to exclude from conflict check (the one being accepted)
+   * @param scheduledDate - The date to check
+   * @param scheduledTime - The start time to check
+   * @param duration - The duration in minutes
+   * @returns TimeSlotConflictResult indicating if a conflict exists
+   */
+  async checkForTimeSlotConflicts(
+    providerId: string,
+    excludeBookingId: string,
+    scheduledDate: Date | string,
+    scheduledTime: string,
+    duration: number
+  ): Promise<TimeSlotConflictResult> {
+    const requestedDate = scheduledDate instanceof Date
+      ? scheduledDate
+      : new Date(scheduledDate);
+
+    // Get provider profile for buffer time
+    const providerProfile = await ProviderProfile.findOne({ userId: providerId });
+    const bufferTime = providerProfile?.availability?.bufferTime || 0;
+
+    const [hours, minutes] = scheduledTime.split(':').map(Number);
+    const requestedStartMinutes = hours * 60 + minutes;
+    const requestedEndMinutes = requestedStartMinutes + duration + bufferTime;
+
+    const startOfDay = new Date(requestedDate);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(requestedDate);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    // Find all active bookings for this provider on this date, excluding the one being accepted
+    const activeBookings = await Booking.find({
+      providerId: new mongoose.Types.ObjectId(providerId),
+      _id: { $ne: new mongoose.Types.ObjectId(excludeBookingId) },
+      scheduledDate: { $gte: startOfDay, $lte: endOfDay },
+      status: { $in: ['pending', 'confirmed', 'in_progress'] }
+    }).select('bookingNumber scheduledTime duration').lean();
+
+    // Check for conflicts
+    for (const booking of activeBookings) {
+      const bookingStartMinutes = (() => {
+        const [h, m] = booking.scheduledTime.split(':').map(Number);
+        return h * 60 + m;
+      })();
+      const bookingEndMinutes = bookingStartMinutes + booking.duration + bufferTime;
+
+      // Check if time ranges overlap
+      // Two ranges overlap if: start1 < end2 AND start2 < end1
+      const overlaps = requestedStartMinutes < bookingEndMinutes && bookingStartMinutes < requestedEndMinutes;
+
+      if (overlaps) {
+        // Determine conflict type
+        const isExactConflict = (
+          requestedStartMinutes === bookingStartMinutes &&
+          requestedEndMinutes === bookingEndMinutes
+        );
+
+        return {
+          hasConflict: true,
+          conflictingBookingId: booking._id.toString(),
+          conflictingBookingNumber: booking.bookingNumber,
+          conflictType: isExactConflict ? 'exact' : 'overlap'
+        };
+      }
+    }
+
+    return { hasConflict: false };
+  }
   // ========================================
   // Create Customer Booking (with Slot Locking & Saga)
   // ========================================

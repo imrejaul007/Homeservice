@@ -27,7 +27,8 @@ import {
   Camera,
   Award,
   Activity,
-  Building2
+  Building2,
+  Shield
 } from 'lucide-react';
 
 interface StatCard {
@@ -572,15 +573,6 @@ const ProviderDashboard: React.FC = () => {
                   </div>
                 </div>
               </div>
-              <div className="hidden md:block">
-                <Link
-                  to="/provider/services"
-                  className="glass text-nilin-charcoal px-6 py-3 rounded-xl font-medium hover:bg-nilin-cream transition-colors inline-flex items-center shadow-nilin btn-3d"
-                >
-                  <Plus className="mr-2 h-4 w-4" />
-                  Add Service
-                </Link>
-              </div>
             </div>
           </div>
         </div>
@@ -610,113 +602,122 @@ const ProviderDashboard: React.FC = () => {
           </div>
         )}
 
-        {/* Quick Actions */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-          <Link
-            to="/provider/services"
-            className="group glass glass-blur p-6 rounded-2xl border border-nilin-border/50 hover:shadow-nilin-lg transition-all duration-300 card-3d"
-          >
-            <div className="flex items-center">
-              <div className="p-3 bg-nilin-blush/50 rounded-xl group-hover:bg-nilin-blush transition-colors">
-                <Settings className="h-6 w-6 text-nilin-rose" />
-              </div>
-              <div className="ml-4">
-                <h3 className="text-sm font-medium text-nilin-charcoal font-sans">Manage Services</h3>
-                <p className="text-xs text-nilin-warmGray">Create & edit services</p>
-              </div>
-            </div>
-          </Link>
+	        {/* Quick Actions - Compact Grid */}
+	        <div className="mb-8">
+	          <div className="flex items-center justify-between mb-4">
+	            <h3 className="text-lg font-semibold text-nilin-charcoal">Quick Actions</h3>
+	          </div>
+	          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8 gap-2">
+	            {/* Add Service - Primary */}
+	            <Link
+	              to="/provider/services"
+	              className="flex flex-col items-center justify-center p-3 bg-gradient-to-br from-nilin-coral to-nilin-rose rounded-xl text-white hover:shadow-lg transition-all duration-300"
+	            >
+	              <Plus className="h-5 w-5 mb-1" />
+	              <span className="text-xs font-medium text-center">Add Service</span>
+	            </Link>
 
-          <Link
-            to="/provider/bookings"
-            className="group glass glass-blur p-6 rounded-2xl border border-nilin-border/50 hover:shadow-nilin-lg transition-all duration-300 card-3d"
-          >
-            <div className="flex items-center">
-              <div className="p-3 bg-nilin-blush/50 rounded-xl group-hover:bg-nilin-blush transition-colors">
-                <Calendar className="h-6 w-6 text-nilin-coral" />
-              </div>
-              <div className="ml-4">
-                <h3 className="text-sm font-medium text-nilin-charcoal font-sans">View Bookings</h3>
-                <p className="text-xs text-nilin-warmGray">Manage appointments</p>
-              </div>
-            </div>
-          </Link>
+	            {/* Bookings */}
+	            <Link
+	              to="/provider/bookings"
+	              className="flex flex-col items-center justify-center p-3 bg-white/60 backdrop-blur rounded-xl border border-nilin-border/30 hover:border-nilin-coral/50 hover:shadow-md transition-all duration-300"
+	            >
+	              <Calendar className="h-5 w-5 text-nilin-coral mb-1" />
+	              <span className="text-xs font-medium text-nilin-charcoal text-center">Bookings</span>
+	            </Link>
 
-          <Link
-            to="/provider/analytics"
-            className="group glass glass-blur p-6 rounded-2xl border border-nilin-border/50 hover:shadow-nilin-lg transition-all duration-300 card-3d"
-          >
-            <div className="flex items-center">
-              <div className="p-3 bg-nilin-blush/50 rounded-xl group-hover:bg-nilin-blush transition-colors">
-                <BarChart className="h-6 w-6 text-nilin-rose" />
-              </div>
-              <div className="ml-4">
-                <h3 className="text-sm font-medium text-nilin-charcoal font-sans">Analytics</h3>
-                <p className="text-xs text-nilin-warmGray">Performance insights</p>
-              </div>
-            </div>
-          </Link>
+	            {/* Services */}
+	            <Link
+	              to="/provider/services"
+	              className="flex flex-col items-center justify-center p-3 bg-white/60 backdrop-blur rounded-xl border border-nilin-border/30 hover:border-nilin-coral/50 hover:shadow-md transition-all duration-300"
+	            >
+	              <Settings className="h-5 w-5 text-nilin-rose mb-1" />
+	              <span className="text-xs font-medium text-nilin-charcoal text-center">Services</span>
+	            </Link>
 
-          <Link
-            to="/provider/ads"
-            className="group glass glass-blur p-6 rounded-2xl border border-nilin-border/50 hover:shadow-nilin-lg transition-all duration-300 card-3d"
-          >
-            <div className="flex items-center">
-              <div className="p-3 bg-nilin-blush/50 rounded-xl group-hover:bg-nilin-blush transition-colors">
-                <Activity className="h-6 w-6 text-nilin-coral" />
-              </div>
-              <div className="ml-4">
-                <h3 className="text-sm font-medium text-nilin-charcoal font-sans">Ads</h3>
-                <p className="text-xs text-nilin-warmGray">Advertising campaigns</p>
-              </div>
-            </div>
-          </Link>
+	            {/* Analytics */}
+	            <Link
+	              to="/provider/analytics"
+	              className="flex flex-col items-center justify-center p-3 bg-white/60 backdrop-blur rounded-xl border border-nilin-border/30 hover:border-nilin-coral/50 hover:shadow-md transition-all duration-300"
+	            >
+	              <BarChart className="h-5 w-5 text-nilin-rose mb-1" />
+	              <span className="text-xs font-medium text-nilin-charcoal text-center">Analytics</span>
+	            </Link>
 
-          <Link
-            to="/provider/profile"
-            className="group glass glass-blur p-6 rounded-2xl border border-nilin-border/50 hover:shadow-nilin-lg transition-all duration-300 card-3d"
-          >
-            <div className="flex items-center">
-              <div className="p-3 bg-nilin-blush/50 rounded-xl group-hover:bg-nilin-blush transition-colors">
-                <Award className="h-6 w-6 text-nilin-coral" />
-              </div>
-              <div className="ml-4">
-                <h3 className="text-sm font-medium text-nilin-charcoal font-sans">Business Profile</h3>
-                <p className="text-xs text-nilin-warmGray">Update business info</p>
-              </div>
-            </div>
-          </Link>
+	            {/* Earnings */}
+	            <Link
+	              to="/provider/earnings"
+	              className="flex flex-col items-center justify-center p-3 bg-white/60 backdrop-blur rounded-xl border border-nilin-border/30 hover:border-nilin-coral/50 hover:shadow-md transition-all duration-300"
+	            >
+	              <DollarSign className="h-5 w-5 text-green-600 mb-1" />
+	              <span className="text-xs font-medium text-nilin-charcoal text-center">Earnings</span>
+	            </Link>
 
-          <Link
-            to="/provider/availability"
-            className="group glass glass-blur p-6 rounded-2xl border border-nilin-border/50 hover:shadow-nilin-lg transition-all duration-300 card-3d"
-          >
-            <div className="flex items-center">
-              <div className="p-3 bg-nilin-blush/50 rounded-xl group-hover:bg-nilin-blush transition-colors">
-                <Clock className="h-6 w-6 text-nilin-rose" />
-              </div>
-              <div className="ml-4">
-                <h3 className="text-sm font-medium text-nilin-charcoal font-sans">Availability</h3>
-                <p className="text-xs text-nilin-warmGray">Manage your schedule</p>
-              </div>
-            </div>
-          </Link>
+	            {/* Ads */}
+	            <Link
+	              to="/provider/ads"
+	              className="flex flex-col items-center justify-center p-3 bg-white/60 backdrop-blur rounded-xl border border-nilin-border/30 hover:border-nilin-coral/50 hover:shadow-md transition-all duration-300"
+	            >
+	              <Activity className="h-5 w-5 text-nilin-coral mb-1" />
+	              <span className="text-xs font-medium text-nilin-charcoal text-center">Ads</span>
+	            </Link>
 
-          <Link
-            to="/provider/managed-services"
-            className="group glass glass-blur p-6 rounded-2xl border border-nilin-border/50 hover:shadow-nilin-lg transition-all duration-300 card-3d"
-          >
-            <div className="flex items-center">
-              <div className="p-3 bg-nilin-blush/50 rounded-xl group-hover:bg-nilin-blush transition-colors">
-                <Building2 className="h-6 w-6 text-nilin-coral" />
-              </div>
-              <div className="ml-4">
-                <h3 className="text-sm font-medium text-nilin-charcoal font-sans">Managed Services</h3>
-                <p className="text-xs text-nilin-warmGray">Corporate contracts</p>
-              </div>
-            </div>
-          </Link>
-        </div>
+	            {/* Reviews */}
+	            <Link
+	              to="/provider/reviews"
+	              className="flex flex-col items-center justify-center p-3 bg-white/60 backdrop-blur rounded-xl border border-nilin-border/30 hover:border-nilin-coral/50 hover:shadow-md transition-all duration-300"
+	            >
+	              <Star className="h-5 w-5 text-yellow-500 mb-1" />
+	              <span className="text-xs font-medium text-nilin-charcoal text-center">Reviews</span>
+	            </Link>
+
+	            {/* Availability */}
+	            <Link
+	              to="/provider/availability"
+	              className="flex flex-col items-center justify-center p-3 bg-white/60 backdrop-blur rounded-xl border border-nilin-border/30 hover:border-nilin-coral/50 hover:shadow-md transition-all duration-300"
+	            >
+	              <Clock className="h-5 w-5 text-nilin-rose mb-1" />
+	              <span className="text-xs font-medium text-nilin-charcoal text-center">Availability</span>
+	            </Link>
+
+	            {/* Profile */}
+	            <Link
+	              to="/provider/profile"
+	              className="flex flex-col items-center justify-center p-3 bg-white/60 backdrop-blur rounded-xl border border-nilin-border/30 hover:border-nilin-coral/50 hover:shadow-md transition-all duration-300"
+	            >
+	              <Award className="h-5 w-5 text-nilin-coral mb-1" />
+	              <span className="text-xs font-medium text-nilin-charcoal text-center">Profile</span>
+	            </Link>
+
+	            {/* Portfolio */}
+	            <Link
+	              to="/provider/portfolio"
+	              className="flex flex-col items-center justify-center p-3 bg-white/60 backdrop-blur rounded-xl border border-nilin-border/30 hover:border-nilin-coral/50 hover:shadow-md transition-all duration-300"
+	            >
+	              <Camera className="h-5 w-5 text-nilin-rose mb-1" />
+	              <span className="text-xs font-medium text-nilin-charcoal text-center">Portfolio</span>
+	            </Link>
+
+	            {/* Settings */}
+	            <Link
+	              to="/provider/settings"
+	              className="flex flex-col items-center justify-center p-3 bg-white/60 backdrop-blur rounded-xl border border-nilin-border/30 hover:border-nilin-coral/50 hover:shadow-md transition-all duration-300"
+	            >
+	              <Shield className="h-5 w-5 text-nilin-warmGray mb-1" />
+	              <span className="text-xs font-medium text-nilin-charcoal text-center">Settings</span>
+	            </Link>
+
+	            {/* Managed Services */}
+	            <Link
+	              to="/provider/managed-services"
+	              className="flex flex-col items-center justify-center p-3 bg-white/60 backdrop-blur rounded-xl border border-nilin-border/30 hover:border-nilin-coral/50 hover:shadow-md transition-all duration-300"
+	            >
+	              <Building2 className="h-5 w-5 text-nilin-coral mb-1" />
+	              <span className="text-xs font-medium text-nilin-charcoal text-center">Managed</span>
+	            </Link>
+	          </div>
+	        </div>
+
 
         {/* Statistics Cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">

@@ -224,12 +224,12 @@ export const providerAnalyticsApi = {
 
   /**
    * Get provider insights analytics page data
-   * GET /api/provider/analytics/insights?period=7d|30d|90d
+   * GET /api/provider/insights?period=7d|30d|90d
    */
   getProviderInsights: async (
     period: '7d' | '30d' | '90d' = '30d',
   ): Promise<{ success: boolean; data: ProviderInsightsAnalytics }> => {
-    const response = await analyticsApi.get('/analytics/insights', {
+    const response = await analyticsApi.get('/insights', {
       params: { period },
     });
     return response.data;

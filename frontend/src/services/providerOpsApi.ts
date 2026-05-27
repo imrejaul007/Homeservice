@@ -326,21 +326,11 @@ export const providerOpsApiService = {
   // ========================================
 
   /**
-   * Get provider's own verification details (uses provider endpoint)
+   * Get provider's own verification details
    */
   getVerification: async (providerId: string): Promise<{ success: boolean; data: { verification: ProviderVerification } }> => {
-    // Try provider-specific endpoint first, fall back to admin endpoint
-    try {
-      const response = await api.get(`/provider/verification`, {
-        params: { providerId }
-      });
-      return response.data;
-    } catch (primaryError) {
-      console.warn('Provider verification endpoint failed, trying admin endpoint:', primaryError);
-      // Fall back to admin endpoint
-      const response = await api.get(`/provider-ops/verification/${providerId}`);
-      return response.data;
-    }
+    const response = await api.get(`/provider-ops/verification/${providerId}`);
+    return response.data;
   },
 
   /**

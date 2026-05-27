@@ -42,6 +42,7 @@ import type {
   AnomalyFilters,
   AnomalyStats,
 } from '../../services/anomalyApi';
+import { useAuthStore } from '../../stores/authStore';
 
 // ============================================
 // Severity Badge Component
@@ -376,6 +377,14 @@ interface AnomalyDashboardProps {}
 const AnomalyDashboard: React.FC<AnomalyDashboardProps> = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
+  const { user } = useAuthStore();
+
+  // Auth check
+  useEffect(() => {
+    if (!user || user.role !== 'admin') {
+      navigate('/unauthorized');
+    }
+  }, [user, navigate]);
 
   // State
   const [anomalies, setAnomalies] = useState<Anomaly[]>([]);

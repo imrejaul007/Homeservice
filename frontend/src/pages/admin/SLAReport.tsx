@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { slaApi } from '../../services/analyticsApi';
 import type { SLAMetrics, SLAReport, SLAOverview, SLAThresholds, SLATrend, SLAComplianceByProvider, SLAComplianceByCategory } from '../../services/analyticsApi';
 import PageLayout from '../../components/layout/PageLayout';
+import { useAuthStore } from '../../stores/authStore';
 import {
   CheckCircle,
   XCircle,
@@ -52,6 +54,16 @@ const ComplianceBadge: React.FC<ComplianceBadgeProps> = ({ rate, size = 'md' }) 
 // ============================================
 
 const SLAReport: React.FC = () => {
+  const navigate = useNavigate();
+  const { user } = useAuthStore();
+
+  // Auth check
+  useEffect(() => {
+    if (!user || user.role !== 'admin') {
+      navigate('/unauthorized');
+    }
+  }, [user, navigate]);
+
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState<'overview' | 'report' | 'providers' | 'categories' | 'thresholds'>('overview');
@@ -107,12 +119,13 @@ const SLAReport: React.FC = () => {
 
   useEffect(() => {
     fetchData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchData]);
 
   const formatCurrency = (value: number) => {
-    if (value >= 1000000) return `$${(value / 1000000).toFixed(1)}M`;
-    if (value >= 1000) return `$${(value / 1000).toFixed(1)}K`;
-    return `$${value.toFixed(0)}`;
+    if (value >= 1000000) return `AED ${(value / 1000000).toFixed(1)}M`;
+    if (value >= 1000) return `AED ${(value / 1000).toFixed(1)}K`;
+    return `AED ${value.toFixed(0)}`;
   };
 
   const formatTime = (minutes: number) => {

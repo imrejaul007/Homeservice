@@ -294,11 +294,11 @@ const ExecutiveDashboard: React.FC = () => {
     fetchDashboardData();
   }, [fetchDashboardData]);
 
-  // Format currency
+  // Format currency (AED)
   const formatCurrency = (value: number): string => {
-    if (value >= 1000000) return `$${(value / 1000000).toFixed(2)}M`;
-    if (value >= 1000) return `$${(value / 1000).toFixed(1)}K`;
-    return `$${value.toFixed(2)}`;
+    if (value >= 1000000) return `AED ${(value / 1000000).toFixed(2)}M`;
+    if (value >= 1000) return `AED ${(value / 1000).toFixed(1)}K`;
+    return `AED ${value.toFixed(2)}`;
   };
 
   if (loading) {

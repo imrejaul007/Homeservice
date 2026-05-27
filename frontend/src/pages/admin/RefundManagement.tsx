@@ -29,11 +29,20 @@ import type {
   RefundFilters,
   RefundStats,
 } from '../../services/disputeApi';
+import { useAuthStore } from '../../stores/authStore';
 
 interface RefundManagementProps {}
 
 const RefundManagement: React.FC<RefundManagementProps> = () => {
   const navigate = useNavigate();
+  const { user } = useAuthStore();
+
+  // Auth check
+  useEffect(() => {
+    if (!user || user.role !== 'admin') {
+      navigate('/unauthorized');
+    }
+  }, [user, navigate]);
 
   // State
   const [refunds, setRefunds] = useState<RefundRequest[]>([]);

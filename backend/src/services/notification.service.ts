@@ -184,7 +184,16 @@ export type NotificationType =
   | 'message_received'
   | 'review_received'
   | 'promotion'
-  | 'loyalty_update';
+  | 'loyalty_update'
+  | 'provider_approved'
+  | 'provider_rejected'
+  | 'provider_suspended'
+  | 'provider_document_verified'
+  | 'provider_document_rejected'
+  | 'service_approved'
+  | 'service_rejected'
+  | 'new_provider_submission'
+  | 'new_service_pending';
 
 export type NotificationChannel = 'in_app' | 'email' | 'sms' | 'push';
 
@@ -319,6 +328,97 @@ const NOTIFICATION_TEMPLATES: Record<NotificationType, { customer: { title: stri
     provider: {
       title: 'Loyalty Update',
       message: 'Your provider loyalty status has been updated.',
+    },
+  },
+  // Provider operation notifications
+  provider_approved: {
+    customer: {
+      title: 'Provider Account Approved',
+      message: 'Your provider account has been approved. You can now start accepting bookings.',
+    },
+    provider: {
+      title: 'Congratulations! Account Approved',
+      message: 'Your account has been approved. You can now start accepting bookings and providing services.',
+    },
+  },
+  provider_rejected: {
+    customer: {
+      title: 'Provider Application Rejected',
+      message: 'Unfortunately, your provider application has been rejected.',
+    },
+    provider: {
+      title: 'Application Rejected',
+      message: 'Your provider application has been rejected. Please review the feedback and submit again.',
+    },
+  },
+  provider_suspended: {
+    customer: {
+      title: 'Provider Account Suspended',
+      message: 'This provider\'s account is currently suspended.',
+    },
+    provider: {
+      title: 'Account Suspended',
+      message: 'Your provider account has been suspended. Please contact support for more information.',
+    },
+  },
+  provider_document_verified: {
+    customer: {
+      title: 'Document Verified',
+      message: 'Your submitted document has been verified.',
+    },
+    provider: {
+      title: 'Document Verified',
+      message: 'Your submitted document has been successfully verified.',
+    },
+  },
+  provider_document_rejected: {
+    customer: {
+      title: 'Document Rejected',
+      message: 'Unfortunately, your submitted document has been rejected.',
+    },
+    provider: {
+      title: 'Document Rejected',
+      message: 'Your submitted document has been rejected. Please upload a valid document.',
+    },
+  },
+  service_approved: {
+    customer: {
+      title: 'Service Now Available',
+      message: 'A new service is now available from your favorite provider.',
+    },
+    provider: {
+      title: 'Service Approved',
+      message: 'Your service has been approved and is now live.',
+    },
+  },
+  service_rejected: {
+    customer: {
+      title: 'Service Update',
+      message: 'A service update has been made.',
+    },
+    provider: {
+      title: 'Service Rejected',
+      message: 'Your service has been rejected. Please review the feedback and make necessary changes.',
+    },
+  },
+  new_provider_submission: {
+    customer: {
+      title: 'Submission Received',
+      message: 'Your submission has been received.',
+    },
+    provider: {
+      title: 'Submission Received',
+      message: 'Your verification submission has been received and is under review.',
+    },
+  },
+  new_service_pending: {
+    customer: {
+      title: 'Service Submitted',
+      message: 'Your service has been submitted for review.',
+    },
+    provider: {
+      title: 'Service Under Review',
+      message: 'Your new service has been submitted and is pending review.',
     },
   },
 };
@@ -1061,6 +1161,15 @@ export class NotificationService {
       review_received: prefs.email?.bookingUpdates ?? true,
       promotion: prefs.email?.promotions ?? false,
       loyalty_update: true,
+      provider_approved: prefs.push?.bookingUpdates ?? true,
+      provider_rejected: prefs.push?.bookingUpdates ?? true,
+      provider_suspended: prefs.push?.bookingUpdates ?? true,
+      provider_document_verified: prefs.push?.bookingUpdates ?? true,
+      provider_document_rejected: prefs.push?.bookingUpdates ?? true,
+      service_approved: prefs.push?.bookingUpdates ?? true,
+      service_rejected: prefs.push?.bookingUpdates ?? true,
+      new_provider_submission: prefs.push?.bookingUpdates ?? true,
+      new_service_pending: prefs.push?.bookingUpdates ?? true,
     };
   }
 

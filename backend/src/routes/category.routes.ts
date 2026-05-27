@@ -6,8 +6,11 @@ import {
   getSubcategories,
   getCategoryServices,
   getCategoryStats,
-  searchCategories
+  searchCategories,
+  updateSubcategory,
+  deleteSubcategory
 } from '../controllers/category.controller';
+import { authenticate, requireRole } from '../middleware/auth.middleware';
 
 const router = Router();
 
@@ -40,5 +43,9 @@ router.get('/:slug/subcategories', getSubcategories);
 // GET /api/categories/:slug/services - Get services under a category
 // Query params: subcategory, page, limit, sortBy
 router.get('/:slug/services', getCategoryServices);
+
+// Subcategory management routes (require authentication)
+router.put('/:slug/subcategories/:subSlug', authenticate, requireRole('admin'), updateSubcategory);
+router.delete('/:slug/subcategories/:subSlug', authenticate, requireRole('admin'), deleteSubcategory);
 
 export default router;

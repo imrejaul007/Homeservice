@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Search,
   Filter,
@@ -38,6 +39,7 @@ import {
   getTrustScoreBgColor,
   formatFlagType,
 } from '../../services/customerOpsApi';
+import { useAuthStore } from '../../stores/authStore';
 import type {
   CustomerListItem,
   CustomerMetrics,
@@ -929,6 +931,16 @@ const CustomerDetailModal: React.FC<{
 // ============================================
 
 const CustomerManagement: React.FC = () => {
+  const navigate = useNavigate();
+  const { user } = useAuthStore();
+
+  // Auth check
+  useEffect(() => {
+    if (!user || user.role !== 'admin') {
+      navigate('/unauthorized');
+    }
+  }, [user, navigate]);
+
   const [customers, setCustomers] = useState<CustomerListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState<DashboardStats | null>(null);

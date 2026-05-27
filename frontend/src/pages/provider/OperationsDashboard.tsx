@@ -1,7 +1,8 @@
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { TrendingUp, AlertCircle, RefreshCw } from 'lucide-react';
 import { ErrorBoundary } from '../../components/common/ErrorBoundary';
+import { providerOpsApiService } from '../../services/providerOpsApi';
 
 interface ProviderOpsStats {
   totalEarnings: number;
@@ -28,27 +29,39 @@ export function ProviderOperationsDashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetchStats();
-  }, []);
-
-  const fetchStats = async () => {
+  const fetchStats = useCallback(async () => {
     setError(null);
     setLoading(true);
     try {
-      const res = await fetch('/api/provider/ops/stats');
-      if (!res.ok) {
-        throw new Error('Failed to fetch stats');
+      // Use the existing providerOpsApiService instead of direct fetch
+      const response = await providerOpsApiService.getDashboardStats();
+      if (response.success && response.data) {
+        const { metrics } = response.data;
+        // Map service data to component interface
+        setStats({
+          totalEarnings: 0, // Not available in dashboard stats
+          pendingPayout: 0, // Not available in dashboard stats
+          completedBookings: metrics.totalBookings,
+          avgRating: metrics.avgRating,
+          responseRate: 0, // Not available in dashboard stats
+          acceptanceRate: 0, // Not available in dashboard stats
+          qualityScore: metrics.avgQualityScore,
+          pendingVerifications: response.data.providers.pending,
+        });
+      } else {
+        throw new Error('Failed to fetch dashboard stats');
       }
-      const data = await res.json();
-      setStats(data);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to load dashboard';
       setError(message);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    fetchStats();
+  }, [fetchStats]);
 
   // Error state with retry
   if (error) {

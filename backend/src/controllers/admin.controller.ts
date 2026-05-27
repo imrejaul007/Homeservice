@@ -10,6 +10,8 @@ import { ApiError } from '../utils/ApiError';
 import logger from '../utils/logger';
 import { getTenantContext, TenantContext } from '../utils/tenantFilter';
 import { sendProviderApproval, sendProviderRejection } from '../services/email.service';
+import { getSocketServer } from '../socket';
+import { NotificationService } from '../services/notification.service';
 import crypto from 'crypto';
 
 /**
@@ -343,6 +345,31 @@ export const approveProvider = asyncHandler(async (req: Request, res: Response) 
     });
   }
 
+  // Create in-app notification for provider
+  try {
+    const notificationService = new NotificationService();
+    await notificationService.createNotification({
+      recipientId: (provider.userId as any)?._id || provider.userId?.toString(),
+      type: 'provider_approved',
+      title: 'Congratulations! Your account has been approved',
+      message: 'Your provider account has been approved. You can now start accepting bookings.',
+      actionText: 'View Dashboard',
+      actionUrl: '/provider/dashboard',
+      metadata: { providerId: id }
+    });
+  } catch (notifError) {
+    logger.error('Failed to create in-app notification', {
+      providerId: id,
+      error: notifError instanceof Error ? notifError.message : String(notifError)
+    });
+  }
+
+  // Emit socket event to provider
+  const socketServer = getSocketServer();
+  if (socketServer && provider.userId) {
+    socketServer.emitProviderApproved((provider.userId as any)?._id || provider.userId.toString());
+  }
+
   res.json({
     success: true,
     message: 'Provider approved successfully',
@@ -425,6 +452,35 @@ export const rejectProvider = asyncHandler(async (req: Request, res: Response) =
         error: err instanceof Error ? err.message : String(err)
       });
     });
+  }
+
+  // Create in-app notification for provider
+  try {
+    const notificationService = new NotificationService();
+    await notificationService.createNotification({
+      recipientId: (provider.userId as any)?._id || provider.userId?.toString(),
+      type: 'provider_rejected',
+      title: 'Application Rejected',
+      message: `Your provider application has been rejected. Reason: ${reason}`,
+      actionText: 'View Details',
+      actionUrl: '/provider/verification',
+      metadata: { providerId: id, reason }
+    });
+  } catch (notifError) {
+    logger.error('Failed to create in-app notification', {
+      providerId: id,
+      error: notifError instanceof Error ? notifError.message : String(notifError)
+    });
+  }
+
+  // Emit socket event to provider
+  const socketServer = getSocketServer();
+  if (socketServer && provider.userId) {
+    socketServer.emitProviderRejected(
+      (provider.userId as any)?._id || provider.userId.toString(),
+      reason,
+      true // canAppeal - providers can submit again
+    );
   }
 
   res.json({
@@ -824,6 +880,43 @@ export const updateServiceStatus = asyncHandler(async (req: Request, res: Respon
     newStatus: status,
     adminId: (req.user as any)?._id
   });
+
+  // Get provider user ID for notifications
+  const providerUserId = (service.providerId as any)?._id || service.providerId?.toString();
+
+  // Create in-app notification for provider
+  if (providerUserId) {
+    try {
+      const notificationService = new NotificationService();
+      const isApproved = status === 'active';
+      await notificationService.createNotification({
+        recipientId: providerUserId,
+        type: isApproved ? 'service_approved' : 'service_rejected',
+        title: isApproved ? 'Service Approved' : 'Service Update Required',
+        message: isApproved
+          ? 'Your service has been approved and is now live.'
+          : `Your service requires updates: ${reason || 'Please review and resubmit.'}`,
+        actionText: isApproved ? 'View Service' : 'Edit Service',
+        actionUrl: `/provider/services/${service._id}/edit`,
+        metadata: { serviceId: service._id.toString(), status }
+      });
+    } catch (notifError) {
+      logger.error('Failed to create service notification', {
+        serviceId: service._id,
+        error: notifError instanceof Error ? notifError.message : String(notifError)
+      });
+    }
+
+    // Emit socket event to provider
+    const socketServer = getSocketServer();
+    if (socketServer) {
+      if (status === 'active') {
+        socketServer.emitServiceApproved(service._id.toString(), providerUserId);
+      } else if (reason) {
+        socketServer.emitServiceRejected(service._id.toString(), providerUserId, reason);
+      }
+    }
+  }
 
   res.json({
     success: true,
@@ -1735,6 +1828,99 @@ export const cancelBooking = asyncHandler(async (req: Request, res: Response) =>
 
 // ========================================
 // Admin Categories Management
+// ========================================
+
+// ========================================
+// Admin Dashboard Stats
+// ========================================
+
+/**
+ * Get admin dashboard statistics
+ * GET /api/admin/stats
+ */
+export const getAdminStats = asyncHandler(async (req: Request, res: Response) => {
+  // Extract tenant context
+  const tenantContext: TenantContext = getTenantContext(req);
+
+  // Build tenant-scoped query
+  const baseQuery: any = {};
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    baseQuery.tenantId = tenantContext.tenantId;
+  }
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+
+  // Parallel queries for performance
+  const [
+    totalUsersResult,
+    userByRoleResult,
+    activeProviders,
+    todayBookings,
+    pendingVerifications,
+    monthlyCompletedBookings,
+  ] = await Promise.all([
+    // Total non-admin users
+    User.countDocuments({ ...baseQuery, role: { $ne: 'admin' } }),
+    // Users grouped by role
+    User.aggregate([
+      { $match: { ...baseQuery, role: { $ne: 'admin' } } },
+      { $group: { _id: '$role', count: { $sum: 1 } } }
+    ]),
+    // Active (approved) providers
+    ProviderProfile.countDocuments({ ...baseQuery, 'verificationStatus.overall': 'approved' }),
+    // Today's bookings (created today)
+    Booking.countDocuments({
+      ...baseQuery,
+      createdAt: { $gte: today, $lt: tomorrow }
+    }),
+    // Pending provider verifications
+    ProviderProfile.countDocuments({ ...baseQuery, 'verificationStatus.overall': 'pending' }),
+    // Monthly completed bookings for revenue calculation
+    Booking.find({
+      ...baseQuery,
+      status: 'completed',
+      completedAt: { $gte: monthStart }
+    }).select('pricing.totalAmount').lean(),
+  ]);
+
+  // Process user counts by role
+  const userCountsByRole = {
+    customer: 0,
+    provider: 0,
+    admin: 0,
+  };
+  userByRoleResult.forEach((item: { _id: string; count: number }) => {
+    if (item._id in userCountsByRole) {
+      userCountsByRole[item._id as keyof typeof userCountsByRole] = item.count;
+    }
+  });
+
+  // Calculate monthly revenue
+  const monthlyRevenue = monthlyCompletedBookings.reduce(
+    (sum, booking) => sum + (booking.pricing?.totalAmount || 0),
+    0
+  );
+
+  res.json({
+    success: true,
+    data: {
+      totalUsers: totalUsersResult,
+      usersByRole: userCountsByRole,
+      activeProviders,
+      todayBookings,
+      pendingVerifications,
+      monthlyRevenue,
+      activeIncidents: 0,
+    }
+  });
+});
+
+// ========================================
+// Admin Service Categories Management
 // ========================================
 
 /**

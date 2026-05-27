@@ -1,5 +1,6 @@
 import express, { Request, Response } from 'express';
 import {
+  getAdminStats,
   getPendingProviders,
   getProviderForVerification,
   approveProvider,
@@ -34,10 +35,6 @@ import {
   addSubcategory,
   getCategoryStats
 } from '../controllers/admin.controller';
-import { asyncHandler } from '../utils/asyncHandler';
-import User from '../models/user.model';
-import ProviderProfile from '../models/providerProfile.model';
-import Booking from '../models/booking.model';
 import { authenticate, requireRole } from '../middleware/auth.middleware';
 import { adminLimiter } from '../middleware/rateLimiter';
 import Joi from 'joi';
@@ -98,43 +95,7 @@ router.use(requireRole('admin'));
 router.use(adminLimiter); // Apply rate limiting to all admin routes
 
 // Dashboard Stats
-router.get('/stats', asyncHandler(async (req: Request, res: Response) => {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const tomorrow = new Date(today);
-  tomorrow.setDate(tomorrow.getDate() + 1);
-
-  const [
-    totalUsers,
-    activeProviders,
-    todayBookings,
-    pendingVerifications,
-  ] = await Promise.all([
-    User.countDocuments({ role: { $ne: 'admin' } }),
-    ProviderProfile.countDocuments({ 'verificationStatus.overall': 'approved' }),
-    Booking.countDocuments({
-      createdAt: { $gte: today, $lt: tomorrow }
-    }),
-    ProviderProfile.countDocuments({ 'verificationStatus.overall': 'pending' }),
-  ]);
-
-  // Calculate revenue from completed bookings this month
-  const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-  const completedBookings = await Booking.find({
-    status: 'completed',
-    completedAt: { $gte: monthStart }
-  });
-  const revenue = completedBookings.reduce((sum, booking) => sum + (booking.pricing?.totalAmount || 0), 0);
-
-  res.json({
-    totalUsers,
-    activeProviders,
-    todayBookings,
-    revenue,
-    pendingVerifications,
-    activeIncidents: 0,
-  });
-}));
+router.get('/stats', getAdminStats);
 
 // Provider verification routes
 router.get('/providers/pending', getPendingProviders);

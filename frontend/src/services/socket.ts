@@ -35,6 +35,18 @@ export interface ServerToClientEvents {
   'unauthorized': () => void;
   'typing:start': (data: { bookingId: string; userId: string }) => void;
   'typing:stop': (data: { bookingId: string; userId: string }) => void;
+  // Provider status events
+  'provider:approved': (data: { providerId: string; verifiedAt: Date }) => void;
+  'provider:rejected': (data: { providerId: string; reason: string; canAppeal: boolean }) => void;
+  'provider:suspended': (data: { providerId: string; reason: string; until?: Date }) => void;
+  'provider:document_verified': (data: { providerId: string; documentId: string; status: 'approved' | 'rejected'; notes?: string }) => void;
+  'provider:verification_complete': (data: { providerId: string; kycLevel: number }) => void;
+  // Service status events
+  'service:approved': (data: { serviceId: string; providerId: string }) => void;
+  'service:rejected': (data: { serviceId: string; providerId: string; reason: string }) => void;
+  // Admin notification events
+  'admin:new_provider_submission': (data: { providerId: string; providerName: string; submittedAt: Date }) => void;
+  'admin:new_service_pending': (data: { serviceId: string; providerId: string; serviceName: string }) => void;
 }
 
 export interface ClientToServerEvents {
@@ -196,6 +208,45 @@ class SocketService {
     this.socket.on('typing:stop', (data) => {
       this.notifyListeners('typing:stop', data);
     });
+
+    // Provider status events
+    this.socket.on('provider:approved', (data) => {
+      this.notifyListeners('provider:approved', data);
+    });
+
+    this.socket.on('provider:rejected', (data) => {
+      this.notifyListeners('provider:rejected', data);
+    });
+
+    this.socket.on('provider:suspended', (data) => {
+      this.notifyListeners('provider:suspended', data);
+    });
+
+    this.socket.on('provider:document_verified', (data) => {
+      this.notifyListeners('provider:document_verified', data);
+    });
+
+    this.socket.on('provider:verification_complete', (data) => {
+      this.notifyListeners('provider:verification_complete', data);
+    });
+
+    // Service status events
+    this.socket.on('service:approved', (data) => {
+      this.notifyListeners('service:approved', data);
+    });
+
+    this.socket.on('service:rejected', (data) => {
+      this.notifyListeners('service:rejected', data);
+    });
+
+    // Admin notification events
+    this.socket.on('admin:new_provider_submission', (data) => {
+      this.notifyListeners('admin:new_provider_submission', data);
+    });
+
+    this.socket.on('admin:new_service_pending', (data) => {
+      this.notifyListeners('admin:new_service_pending', data);
+    });
   }
 
   // Disconnect from socket server
@@ -300,6 +351,45 @@ class SocketService {
 
   off(event: keyof ServerToClientEvents, callback: ServerToClientEvents[keyof ServerToClientEvents]): void {
     this.listeners.get(event)?.delete(callback as Function);
+  }
+
+  // Provider status events
+  onProviderApproved(callback: (data: { providerId: string; verifiedAt: Date }) => void): () => void {
+    return this.on('provider:approved', callback);
+  }
+
+  onProviderRejected(callback: (data: { providerId: string; reason: string; canAppeal: boolean }) => void): () => void {
+    return this.on('provider:rejected', callback);
+  }
+
+  onProviderSuspended(callback: (data: { providerId: string; reason: string; until?: Date }) => void): () => void {
+    return this.on('provider:suspended', callback);
+  }
+
+  onDocumentVerified(callback: (data: { providerId: string; documentId: string; status: 'approved' | 'rejected'; notes?: string }) => void): () => void {
+    return this.on('provider:document_verified', callback);
+  }
+
+  onVerificationComplete(callback: (data: { providerId: string; kycLevel: number }) => void): () => void {
+    return this.on('provider:verification_complete', callback);
+  }
+
+  // Service status events
+  onServiceApproved(callback: (data: { serviceId: string; providerId: string }) => void): () => void {
+    return this.on('service:approved', callback);
+  }
+
+  onServiceRejected(callback: (data: { serviceId: string; providerId: string; reason: string }) => void): () => void {
+    return this.on('service:rejected', callback);
+  }
+
+  // Admin notification events
+  onNewProviderSubmission(callback: (data: { providerId: string; providerName: string; submittedAt: Date }) => void): () => void {
+    return this.on('admin:new_provider_submission', callback);
+  }
+
+  onNewServicePending(callback: (data: { serviceId: string; providerId: string; serviceName: string }) => void): () => void {
+    return this.on('admin:new_service_pending', callback);
   }
 }
 

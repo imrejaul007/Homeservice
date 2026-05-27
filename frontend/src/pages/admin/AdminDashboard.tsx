@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Users, DollarSign, Calendar, TrendingUp, AlertTriangle, CheckCircle } from 'lucide-react';
 import { Skeleton, StatsCardSkeleton } from '../../components/common/Skeleton';
+import { useAuthStore } from '../../stores/authStore';
 
 interface DashboardStats {
   totalUsers: number;
@@ -12,6 +14,16 @@ interface DashboardStats {
 }
 
 export function AdminDashboard() {
+  const navigate = useNavigate();
+  const { user } = useAuthStore();
+
+  // Auth check
+  useEffect(() => {
+    if (!user || user.role !== 'admin') {
+      navigate('/unauthorized');
+    }
+  }, [user, navigate]);
+
   const [stats, setStats] = useState<DashboardStats>({
     totalUsers: 0,
     activeProviders: 0,
@@ -92,7 +104,7 @@ export function AdminDashboard() {
         <StatCard icon={Users} label="Total Users" value={stats.totalUsers} color="blue" />
         <StatCard icon={CheckCircle} label="Active Providers" value={stats.activeProviders} color="green" />
         <StatCard icon={Calendar} label="Today's Bookings" value={stats.todayBookings} color="purple" />
-        <StatCard icon={DollarSign} label="Revenue" value={`Rs${stats.revenue}`} color="yellow" />
+        <StatCard icon={DollarSign} label="Revenue" value={`AED ${stats.revenue.toLocaleString()}`} color="yellow" />
       </div>
 
       {/* Alerts Section */}
@@ -107,10 +119,10 @@ export function AdminDashboard() {
 
       {/* Quick Actions */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <ActionCard title="Users" link="/admin/users" />
+        <ActionCard title="Users" link="/admin/customers" />
         <ActionCard title="Providers" link="/admin/providers" />
-        <ActionCard title="Bookings" link="/admin/bookings" />
-        <ActionCard title="Support" link="/admin/support" />
+        <ActionCard title="Analytics" link="/admin/analytics" />
+        <ActionCard title="Disputes" link="/admin/disputes" />
       </div>
     </div>
   );

@@ -1,7 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { churnApi } from '../../services/analyticsApi';
 import type { ChurnRisk, ChurnStats, CustomerSegment, ChurnOverview, RetentionAction } from '../../services/analyticsApi';
 import PageLayout from '../../components/layout/PageLayout';
+import { useAuthStore } from '../../stores/authStore';
+import { toast } from 'react-hot-toast';
 import {
   Users,
   AlertTriangle,
@@ -190,6 +193,16 @@ const CustomerCard: React.FC<CustomerCardProps> = ({ customer, onExecuteAction }
 // ============================================
 
 const ChurnReport: React.FC = () => {
+  const navigate = useNavigate();
+  const { user } = useAuthStore();
+
+  // Auth check
+  useEffect(() => {
+    if (!user || user.role !== 'admin') {
+      navigate('/unauthorized');
+    }
+  }, [user, navigate]);
+
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState<'at-risk' | 'segments' | 'overview'>('at-risk');
@@ -247,10 +260,10 @@ const ChurnReport: React.FC = () => {
   const handleExecuteAction = async (userId: string, action: RetentionAction) => {
     try {
       await churnApi.executeRetentionAction(userId, action);
-      alert(`Action "${action.title}" executed for user`);
+      toast.success(`Action "${action.title}" executed for user`);
     } catch (error) {
       console.error('Failed to execute action:', error);
-      alert('Failed to execute action');
+      toast.error('Failed to execute action');
     }
   };
 

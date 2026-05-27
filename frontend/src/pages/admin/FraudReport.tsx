@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { fraudApi } from '../../services/analyticsApi';
 import type { FraudReport, FraudStats, FraudOverview, SuspiciousActivity } from '../../services/analyticsApi';
 import PageLayout from '../../components/layout/PageLayout';
+import { useAuthStore } from '../../stores/authStore';
 import {
   Shield,
   AlertTriangle,
@@ -187,6 +189,16 @@ const FraudReportCard: React.FC<FraudReportCardProps> = ({ report, onFlag, onRes
 // ============================================
 
 const FraudReport: React.FC = () => {
+  const navigate = useNavigate();
+  const { user } = useAuthStore();
+
+  // Auth check
+  useEffect(() => {
+    if (!user || user.role !== 'admin') {
+      navigate('/unauthorized');
+    }
+  }, [user, navigate]);
+
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState<'overview' | 'reports' | 'patterns'>('overview');

@@ -566,6 +566,21 @@ export const acceptBooking = asyncHandler(async (req: Request, res: Response) =>
   }
 
   const providerId = (req.user as any)._id.toString();
+
+  // SECURITY: Conflict detection before accepting booking
+  // This prevents accepting a booking for a time slot that conflicts with existing bookings
+  const conflictCheck = await bookingService.checkForTimeSlotConflicts(
+    providerId,
+    id,
+    (req as any).booking?.scheduledDate,
+    (req as any).booking?.scheduledTime,
+    (req as any).booking?.duration
+  );
+
+  if (conflictCheck.hasConflict) {
+    throw new ApiError(409, `Time slot conflict detected. You already have a booking (${conflictCheck.conflictingBookingNumber}) scheduled at this time. Please resolve the conflict before accepting this booking.`);
+  }
+
   const booking = await bookingService.acceptBooking(id, providerId, value);
 
   // Publish booking.confirmed event
@@ -695,6 +710,23 @@ export const addBookingMessage = asyncHandler(async (req: Request, res: Response
   }
 
   const user = req.user as any;
+
+  // SECURITY: Verify user has access to this booking
+  // Both customers and providers can add messages, but only to their own bookings
+  const booking = await Booking.findById(id);
+  if (!booking) {
+    throw new ApiError(404, 'Booking not found');
+  }
+
+  const isCustomer = booking.customerId && booking.customerId.toString() === user._id.toString();
+  const isProvider = booking.providerId.toString() === user._id.toString();
+
+  // SECURITY: Enforce role-based access - providers must go through provider routes
+  // Customers can only add messages to their own bookings
+  if (!isCustomer && !isProvider) {
+    throw new ApiError(403, 'Not authorized to add messages to this booking');
+  }
+
   const messageCount = await bookingService.addMessage(id, user._id.toString(), value);
 
   res.json({

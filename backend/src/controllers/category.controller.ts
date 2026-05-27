@@ -339,6 +339,97 @@ export const searchCategories = asyncHandler(async (req: Request, res: Response)
   });
 });
 
+/**
+ * Update a subcategory
+ * PUT /api/categories/:slug/subcategories/:subSlug
+ */
+export const updateSubcategory = asyncHandler(async (req: Request, res: Response) => {
+  const { slug, subSlug } = req.params;
+  const { name, description, icon, color, imageUrl, isActive, sortOrder } = req.body;
+
+  const category = await ServiceCategory.findOne({ slug });
+
+  if (!category) {
+    throw new ApiError(404, 'Category not found');
+  }
+
+  const subcategoryIndex = category.subcategories.findIndex(sub => sub.slug === subSlug);
+
+  if (subcategoryIndex === -1) {
+    throw new ApiError(404, 'Subcategory not found');
+  }
+
+  // Update fields if provided
+  if (name !== undefined) {
+    category.subcategories[subcategoryIndex].name = name;
+    // Regenerate slug if name changed
+    if (name !== category.subcategories[subcategoryIndex].name) {
+      category.subcategories[subcategoryIndex].slug = name
+        .toLowerCase()
+        .trim()
+        .replace(/[^a-z0-9\s-]/g, '')
+        .replace(/\s+/g, '-')
+        .replace(/-+/g, '-');
+    }
+  }
+  if (description !== undefined) {
+    category.subcategories[subcategoryIndex].description = description;
+  }
+  if (icon !== undefined) {
+    category.subcategories[subcategoryIndex].icon = icon;
+  }
+  if (color !== undefined) {
+    category.subcategories[subcategoryIndex].color = color;
+  }
+  if (imageUrl !== undefined) {
+    category.subcategories[subcategoryIndex].imageUrl = imageUrl;
+  }
+  if (isActive !== undefined) {
+    category.subcategories[subcategoryIndex].isActive = isActive;
+  }
+  if (sortOrder !== undefined) {
+    category.subcategories[subcategoryIndex].sortOrder = sortOrder;
+  }
+
+  await category.save();
+
+  res.json({
+    success: true,
+    message: 'Subcategory updated successfully',
+    data: { subcategory: category.subcategories[subcategoryIndex] }
+  });
+});
+
+/**
+ * Delete a subcategory
+ * DELETE /api/categories/:slug/subcategories/:subSlug
+ */
+export const deleteSubcategory = asyncHandler(async (req: Request, res: Response) => {
+  const { slug, subSlug } = req.params;
+
+  const category = await ServiceCategory.findOne({ slug });
+
+  if (!category) {
+    throw new ApiError(404, 'Category not found');
+  }
+
+  const subcategoryIndex = category.subcategories.findIndex(sub => sub.slug === subSlug);
+
+  if (subcategoryIndex === -1) {
+    throw new ApiError(404, 'Subcategory not found');
+  }
+
+  // Remove the subcategory
+  category.subcategories.splice(subcategoryIndex, 1);
+
+  await category.save();
+
+  res.json({
+    success: true,
+    message: 'Subcategory deleted successfully'
+  });
+});
+
 export default {
   getMasterCategories,
   getCategoryBySlug,
@@ -346,5 +437,7 @@ export default {
   getSubcategories,
   getCategoryServices,
   getCategoryStats,
-  searchCategories
+  searchCategories,
+  updateSubcategory,
+  deleteSubcategory
 };

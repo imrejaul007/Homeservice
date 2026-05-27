@@ -49,6 +49,21 @@ export interface ServerToClientEvents {
   'connected': (data: { socketId: string }) => void;
   'error': (data: { message: string }) => void;
   'unauthorized': () => void;
+
+  // Provider status events (Admin → Provider)
+  'provider:approved': (data: { providerId: string; verifiedAt: Date }) => void;
+  'provider:rejected': (data: { providerId: string; reason: string; canAppeal: boolean }) => void;
+  'provider:suspended': (data: { providerId: string; reason: string; until?: Date }) => void;
+  'provider:document_verified': (data: { providerId: string; documentId: string; status: 'approved' | 'rejected'; notes?: string }) => void;
+  'provider:verification_complete': (data: { providerId: string; kycLevel: number }) => void;
+
+  // Service status events (Admin → Provider)
+  'service:approved': (data: { serviceId: string; providerId: string }) => void;
+  'service:rejected': (data: { serviceId: string; providerId: string; reason: string }) => void;
+
+  // Admin notification events (Provider → Admin)
+  'admin:new_provider_submission': (data: { providerId: string; providerName: string; submittedAt: Date }) => void;
+  'admin:new_service_pending': (data: { serviceId: string; providerId: string; serviceName: string }) => void;
 }
 
 export interface ClientToServerEvents {
@@ -864,6 +879,151 @@ class SocketServer {
       socketToBooking: this.socketToBooking.size,
       deadLetterQueue: this.deadLetterQueue.length,
     };
+  }
+
+  // =============================================================================
+  // Provider Status Events
+  // =============================================================================
+
+  // Emit provider approved event
+  emitProviderApproved(providerId: string): boolean {
+    const emitted = this.emitToUser(providerId, 'provider:approved', {
+      providerId,
+      verifiedAt: new Date(),
+    });
+    if (emitted) {
+      logger.info('Emitted provider approved event', { providerId, action: 'EMIT_PROVIDER_APPROVED' });
+    }
+    return emitted;
+  }
+
+  // Emit provider rejected event
+  emitProviderRejected(providerId: string, reason: string, canAppeal: boolean = true): boolean {
+    const emitted = this.emitToUser(providerId, 'provider:rejected', {
+      providerId,
+      reason,
+      canAppeal,
+    });
+    if (emitted) {
+      logger.info('Emitted provider rejected event', { providerId, reason, action: 'EMIT_PROVIDER_REJECTED' });
+    }
+    return emitted;
+  }
+
+  // Emit provider suspended event
+  emitProviderSuspended(providerId: string, reason: string, until?: Date): boolean {
+    const emitted = this.emitToUser(providerId, 'provider:suspended', {
+      providerId,
+      reason,
+      until,
+    });
+    if (emitted) {
+      logger.info('Emitted provider suspended event', { providerId, reason, action: 'EMIT_PROVIDER_SUSPENDED' });
+    }
+    return emitted;
+  }
+
+  // Emit document verified event
+  emitDocumentVerified(providerId: string, documentId: string, status: 'approved' | 'rejected', notes?: string): boolean {
+    const emitted = this.emitToUser(providerId, 'provider:document_verified', {
+      providerId,
+      documentId,
+      status,
+      notes,
+    });
+    if (emitted) {
+      logger.info('Emitted document verified event', { providerId, documentId, status, action: 'EMIT_DOCUMENT_VERIFIED' });
+    }
+    return emitted;
+  }
+
+  // Emit verification complete event
+  emitVerificationComplete(providerId: string, kycLevel: number): boolean {
+    const emitted = this.emitToUser(providerId, 'provider:verification_complete', {
+      providerId,
+      kycLevel,
+    });
+    if (emitted) {
+      logger.info('Emitted verification complete event', { providerId, kycLevel, action: 'EMIT_VERIFICATION_COMPLETE' });
+    }
+    return emitted;
+  }
+
+  // =============================================================================
+  // Service Status Events
+  // =============================================================================
+
+  // Emit service approved event
+  emitServiceApproved(serviceId: string, providerId: string): boolean {
+    const emitted = this.emitToUser(providerId, 'service:approved', {
+      serviceId,
+      providerId,
+    });
+    if (emitted) {
+      logger.info('Emitted service approved event', { serviceId, providerId, action: 'EMIT_SERVICE_APPROVED' });
+    }
+    return emitted;
+  }
+
+  // Emit service rejected event
+  emitServiceRejected(serviceId: string, providerId: string, reason: string): boolean {
+    const emitted = this.emitToUser(providerId, 'service:rejected', {
+      serviceId,
+      providerId,
+      reason,
+    });
+    if (emitted) {
+      logger.info('Emitted service rejected event', { serviceId, providerId, reason, action: 'EMIT_SERVICE_REJECTED' });
+    }
+    return emitted;
+  }
+
+  // =============================================================================
+  // Admin Notification Events
+  // =============================================================================
+
+  // Track admin socket rooms
+  private adminRooms: Set<string> = new Set();
+
+  // Emit new provider submission to admins
+  emitNewProviderSubmission(providerId: string, providerName: string): boolean {
+    // Emit to all connected admin sockets
+    let emitted = false;
+    for (const socket of this.io.sockets.sockets.values()) {
+      const authSocket = socket as AuthenticatedSocket;
+      if (authSocket.userRole === 'admin') {
+        authSocket.emit('admin:new_provider_submission', {
+          providerId,
+          providerName,
+          submittedAt: new Date(),
+        });
+        emitted = true;
+      }
+    }
+    if (emitted) {
+      logger.info('Emitted new provider submission to admins', { providerId, providerName, action: 'EMIT_NEW_PROVIDER_SUBMISSION' });
+    }
+    return emitted;
+  }
+
+  // Emit new service pending to admins
+  emitNewServicePending(serviceId: string, providerId: string, serviceName: string): boolean {
+    let emitted = false;
+    for (const socket of this.io.sockets.sockets.values()) {
+      const authSocket = socket as AuthenticatedSocket;
+      if (authSocket.userRole === 'admin') {
+        authSocket.emit('admin:new_service_pending', {
+          serviceId,
+          providerId,
+          serviceName,
+        });
+        emitted = true;
+      }
+    }
+    if (emitted) {
+      logger.info('Emitted new service pending to admins', { serviceId, providerId, serviceName, action: 'EMIT_NEW_SERVICE_PENDING' });
+    }
+    return emitted;
   }
 
   // Graceful shutdown

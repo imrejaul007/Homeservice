@@ -4,6 +4,7 @@ import Service from '../models/service.model';
 import ServiceCategory from '../models/serviceCategory.model';
 import Booking from '../models/booking.model';
 import ProviderProfile from '../models/providerProfile.model';
+import User from '../models/user.model';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
 import logger from '../utils/logger';
@@ -12,6 +13,8 @@ import {
   normalizeServiceAreas,
   sanitizeProviderGeo,
 } from '../utils/sanitizeProviderGeo';
+import { getSocketServer } from '../socket';
+import { NotificationService } from '../services/notification.service';
 
 // Helper function to validate and normalize category/subcategory against database
 const validateAndNormalizeCategorySubcategory = async (category: string, subcategory?: string) => {
@@ -974,6 +977,36 @@ export const submitVerification = asyncHandler(async (req: Request, res: Respons
   }
 
   await providerProfile.save();
+
+  // Notify admins about new verification submission
+  const socketServer = getSocketServer();
+  const businessName = (providerProfile.businessInfo as any)?.businessName || 'Unknown Provider';
+
+  if (socketServer) {
+    socketServer.emitNewProviderSubmission(providerId, businessName);
+  }
+
+  // Create notification for admins
+  try {
+    const notificationService = new NotificationService();
+    const admins = await User.find({ role: 'admin' }).select('_id');
+    for (const admin of admins) {
+      await notificationService.createNotification({
+        recipientId: admin._id.toString(),
+        type: 'new_provider_submission',
+        title: 'New Provider Verification',
+        message: `${businessName} has submitted their verification for review.`,
+        actionText: 'Review Now',
+        actionUrl: `/admin/providers/${providerProfile._id}`,
+        metadata: { providerId: providerProfile._id.toString(), submittedBy: providerId }
+      });
+    }
+  } catch (notifError) {
+    logger.error('Failed to create admin notification', {
+      providerId,
+      error: notifError instanceof Error ? notifError.message : String(notifError)
+    });
+  }
 
   res.json({
     success: true,

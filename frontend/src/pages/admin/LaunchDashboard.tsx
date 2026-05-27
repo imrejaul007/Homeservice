@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Rocket,
   Users,
@@ -24,6 +25,7 @@ import {
   Settings,
 } from 'lucide-react';
 import { demoApi, type LaunchReadiness, type ReadinessItem, type UserOnboardingFunnel, type ConversionData } from '../../services/demoApi';
+import { useAuthStore } from '../../stores/authStore';
 
 // ============================================
 // Types
@@ -221,6 +223,16 @@ const ReadinessCategory: React.FC<{
 // ============================================
 
 const LaunchDashboard: React.FC = () => {
+  const navigate = useNavigate();
+  const { user } = useAuthStore();
+
+  // Auth check
+  useEffect(() => {
+    if (!user || user.role !== 'admin') {
+      navigate('/unauthorized');
+    }
+  }, [user, navigate]);
+
   const [readiness, setReadiness] = useState<LaunchReadiness | null>(null);
   const [funnelData, setFunnelData] = useState<UserOnboardingFunnel[]>([]);
   const [conversionData, setConversionData] = useState<ConversionData[]>([]);

@@ -34,12 +34,21 @@ import type {
   DisputeFilters,
   DisputeStats,
 } from '../../services/disputeApi';
+import { useAuthStore } from '../../stores/authStore';
 
 interface DisputeCenterProps {}
 
 const DisputeCenter: React.FC<DisputeCenterProps> = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
+  const { user } = useAuthStore();
+
+  // Auth check
+  useEffect(() => {
+    if (!user || user.role !== 'admin') {
+      navigate('/unauthorized');
+    }
+  }, [user, navigate]);
 
   // State
   const [disputes, setDisputes] = useState<Dispute[]>([]);
