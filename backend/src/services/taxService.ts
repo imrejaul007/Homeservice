@@ -1,5 +1,6 @@
 import mongoose, { Types, Schema as MongooseSchema } from 'mongoose';
 import { Commission } from '../models/commission.model';
+import { ApiError, ERROR_CODES } from '../utils/ApiError';
 import logger from '../utils/logger';
 
 // Tax Configuration Interface
@@ -524,7 +525,7 @@ export class TaxService {
     const User = mongoose.model('User');
     const provider = await User.findById(providerObjectId);
     if (!provider) {
-      throw new Error('Provider not found');
+      throw ApiError.notFound('Provider not found', ERROR_CODES.NOT_FOUND);
     }
 
     // Get commissions in period
@@ -629,7 +630,7 @@ export class TaxService {
     const User = mongoose.model('User');
     const provider = await User.findById(providerObjectId);
     if (!provider) {
-      throw new Error('Provider not found');
+      throw ApiError.notFound('Provider not found', ERROR_CODES.NOT_FOUND);
     }
 
     // Get region

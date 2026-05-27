@@ -9,6 +9,7 @@ import { initializeSocketServer } from './socket';
 import { initializeEventSubscriptions } from './event-bus';
 import { initializeIndexes } from './services/search.service';
 import { initializeScheduledJobs } from './jobs/scheduler';
+import { closeAllQueues } from './queue';
 
 // Create HTTP server
 const server = http.createServer(app);
@@ -46,6 +47,14 @@ const gracefulShutdown = async (signal: string) => {
   if (io) {
     io.getIO().close();
     logger.info('Socket.io server closed');
+  }
+
+  // Close queue connections gracefully
+  try {
+    await closeAllQueues();
+    logger.info('Queue connections closed');
+  } catch (error) {
+    logger.error('Error closing queue connections:', error);
   }
 
   server.close(async () => {

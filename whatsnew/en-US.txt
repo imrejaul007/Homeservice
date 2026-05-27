@@ -1,0 +1,21 @@
+# English (US) Release Notes
+# Copy this file to the version-specific file, e.g., 1.0.0.txt
+
+What's New in This Version:
+
+## New Features
+- Feature 1
+- Feature 2
+
+## Improvements
+- Improvement 1
+- Improvement 2
+
+## Bug Fixes
+- Bug fix 1
+- Bug fix 2
+
+## Security
+- Security update 1
+
+For more information, visit https://nilin.app

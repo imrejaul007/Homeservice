@@ -6,22 +6,76 @@ import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
 
 // ============================================
-// Get User's Favorites
+// Constants
+// ============================================
+const MAX_FAVORITES_PAGE_SIZE = 50;
+const DEFAULT_FAVORITES_PAGE_SIZE = 20;
+
+// ============================================
+// Get User's Favorites (with cursor-based pagination)
 // ============================================
 
-export const getFavorites = asyncHandler(async (req: Request, res: Response) => {
+export const getFavorites = asyncHandler(async (req: Request, res: Response): Promise<Response> => {
   const user = req.user as any;
+
+  // Parse cursor-based pagination params
+  const cursor = req.query.cursor as string | undefined;
+  const limit = Math.min(
+    MAX_FAVORITES_PAGE_SIZE,
+    Math.max(1, parseInt(req.query.limit as string) || DEFAULT_FAVORITES_PAGE_SIZE)
+  );
+  const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
 
   const customerProfile = await CustomerProfile.findOne({ userId: user._id });
 
   if (!customerProfile) {
-    throw new ApiError(404, 'Customer profile not found');
+    return res.json({
+      success: true,
+      data: {
+        favorites: [],
+        pagination: {
+          cursor: null,
+          hasMore: false,
+          total: 0,
+        },
+      },
+    });
   }
 
-  // Get full provider details for each favorite
-  const favoriteProviderIds = customerProfile.favoriteProviders.map(f => f.providerId);
+  // Get favorite providers with sorting and cursor pagination
+  let favoriteProviders = customerProfile.favoriteProviders
+    .filter(fav => fav && fav.providerId)
+    .sort((a, b) => {
+      const dateA = new Date(a.addedAt).getTime();
+      const dateB = new Date(b.addedAt).getTime();
+      return sortOrder === 1 ? dateA - dateB : dateB - dateA;
+    });
 
-  const providers = await User.find({ _id: { $in: favoriteProviderIds } })
+  // Apply cursor pagination
+  if (cursor) {
+    const cursorDate = new Date(cursor);
+    favoriteProviders = favoriteProviders.filter(fav => {
+      const favDate = new Date(fav.addedAt);
+      return sortOrder === 1 ? favDate > cursorDate : favDate < cursorDate;
+    });
+  }
+
+  // Apply limit + 1 to check for more
+  const paginatedFavorites = favoriteProviders.slice(0, limit + 1);
+  const hasMore = paginatedFavorites.length > limit;
+  if (hasMore) {
+    paginatedFavorites.pop();
+  }
+
+  // Get full provider details for paginated favorites
+  const favoriteProviderIds = paginatedFavorites.map(f => f.providerId);
+
+  // FIX: Filter out deleted/inactive providers from favorites
+  const providers = await User.find({
+    _id: { $in: favoriteProviderIds },
+    isDeleted: { $ne: true },
+    isActive: true
+  })
     .select('firstName lastName email phone avatar bio')
     .lean();
 
@@ -30,8 +84,10 @@ export const getFavorites = asyncHandler(async (req: Request, res: Response) => 
     .lean();
 
   // Combine user and provider profile data
-  const favorites = customerProfile.favoriteProviders
-    .filter(fav => fav && fav.providerId) // Filter out invalid entries
+  // FIX: Only include favorites for active, non-deleted providers
+  const providerIdsSet = new Set(providers.map(p => p._id.toString()));
+  const favorites = paginatedFavorites
+    .filter(fav => fav && fav.providerId && providerIdsSet.has(fav.providerId.toString()))
     .map(fav => {
       const favProviderId = fav.providerId?.toString ? fav.providerId.toString() : String(fav.providerId);
       const provider = providers.find(p => p && p._id && p._id.toString() === favProviderId);
@@ -61,11 +117,21 @@ export const getFavorites = asyncHandler(async (req: Request, res: Response) => 
       };
     }).filter(Boolean);
 
-  res.json({
+  // Generate next cursor from last item
+  const nextCursor = hasMore && paginatedFavorites.length > 0
+    ? paginatedFavorites[paginatedFavorites.length - 1].addedAt.toISOString()
+    : null;
+
+  return res.json({
     success: true,
     data: {
       favorites,
-      total: favorites.length,
+      pagination: {
+        cursor: nextCursor,
+        hasMore,
+        limit,
+        total: customerProfile.favoriteProviders.length,
+      },
     },
   });
 });
@@ -78,6 +144,11 @@ export const addFavorite = asyncHandler(async (req: Request, res: Response) => {
   const user = req.user as any;
   const { providerId } = req.params;
   const { category, notes } = req.body;
+
+  // FIX: Validate providerId is a valid ObjectId
+  if (!providerId || !/^[0-9a-fA-F]{24}$/.test(providerId)) {
+    throw new ApiError(400, 'Invalid provider ID format');
+  }
 
   // Validate provider exists
   const provider = await User.findById(providerId);
@@ -148,6 +219,11 @@ export const removeFavorite = asyncHandler(async (req: Request, res: Response) =
   const user = req.user as any;
   const { providerId } = req.params;
 
+  // FIX: Validate providerId is a valid ObjectId
+  if (!providerId || !/^[0-9a-fA-F]{24}$/.test(providerId)) {
+    throw new ApiError(400, 'Invalid provider ID format');
+  }
+
   const customerProfile = await CustomerProfile.findOne({ userId: user._id });
 
   if (!customerProfile) {
@@ -199,6 +275,11 @@ export const updateFavoriteNotes = asyncHandler(async (req: Request, res: Respon
   const user = req.user as any;
   const { providerId } = req.params;
   const { notes, category } = req.body;
+
+  // FIX: Validate providerId is a valid ObjectId
+  if (!providerId || !/^[0-9a-fA-F]{24}$/.test(providerId)) {
+    throw new ApiError(400, 'Invalid provider ID format');
+  }
 
   const customerProfile = await CustomerProfile.findOne({ userId: user._id });
 

@@ -8,6 +8,7 @@
  */
 
 import { Types } from 'mongoose';
+import { ApiError, ERROR_CODES } from '../../utils/ApiError';
 
 /**
  * Booking status enumeration
@@ -331,7 +332,7 @@ export class Booking {
    */
   confirm(actor: StatusUpdateActor, notes?: string): void {
     if (this._status !== BookingStatus.PENDING) {
-      throw new Error('Only pending bookings can be confirmed');
+      throw ApiError.badRequest('Only pending bookings can be confirmed');
     }
 
     this._status = BookingStatus.CONFIRMED;
@@ -349,7 +350,7 @@ export class Booking {
    */
   start(actor: StatusUpdateActor, notes?: string): void {
     if (this._status !== BookingStatus.CONFIRMED) {
-      throw new Error('Only confirmed bookings can be started');
+      throw ApiError.badRequest('Only confirmed bookings can be started');
     }
 
     this._status = BookingStatus.IN_PROGRESS;
@@ -371,7 +372,7 @@ export class Booking {
    */
   complete(actor: StatusUpdateActor, notes?: string): void {
     if (this._status !== BookingStatus.IN_PROGRESS) {
-      throw new Error('Only in-progress bookings can be completed');
+      throw ApiError.badRequest('Only in-progress bookings can be completed');
     }
 
     this._status = BookingStatus.COMPLETED;
@@ -399,7 +400,7 @@ export class Booking {
     refundAmount?: number
   ): void {
     if (!this.canBeCancelled) {
-      throw new Error('This booking cannot be cancelled');
+      throw ApiError.badRequest('This booking cannot be cancelled');
     }
 
     this._status = BookingStatus.CANCELLED;
@@ -424,7 +425,7 @@ export class Booking {
    */
   markNoShow(actor: StatusUpdateActor, reason?: string): void {
     if (this._status !== BookingStatus.CONFIRMED) {
-      throw new Error('Only confirmed bookings can be marked as no-show');
+      throw ApiError.badRequest('Only confirmed bookings can be marked as no-show');
     }
 
     this._status = BookingStatus.NO_SHOW;
@@ -442,11 +443,11 @@ export class Booking {
    */
   reject(providerId: Types.ObjectId, reason: string): void {
     if (!this._providerId.equals(providerId)) {
-      throw new Error('Only the assigned provider can reject');
+      throw ApiError.forbidden('Only the assigned provider can reject');
     }
 
     if (this._status !== BookingStatus.PENDING) {
-      throw new Error('Only pending bookings can be rejected');
+      throw ApiError.badRequest('Only pending bookings can be rejected');
     }
 
     this._providerResponse = {
@@ -470,11 +471,11 @@ export class Booking {
    */
   accept(providerId: Types.ObjectId, estimatedArrival?: Date): void {
     if (!this._providerId.equals(providerId)) {
-      throw new Error('Only the assigned provider can accept');
+      throw ApiError.forbidden('Only the assigned provider can accept');
     }
 
     if (this._status !== BookingStatus.PENDING) {
-      throw new Error('Only pending bookings can be accepted');
+      throw ApiError.badRequest('Only pending bookings can be accepted');
     }
 
     this._providerResponse = {

@@ -582,11 +582,9 @@ userSubscriptionSchema.pre('save', function(next) {
 // ============================================
 // Indexes
 // ============================================
-
+// Note: stripeSubscriptionId and stripeCustomerId already have index: true on fields
 userSubscriptionSchema.index({ userId: 1, status: 1 });
 userSubscriptionSchema.index({ status: 1, currentPeriodEnd: 1 });
-userSubscriptionSchema.index({ stripeSubscriptionId: 1 }, { sparse: true });
-userSubscriptionSchema.index({ stripeCustomerId: 1 }, { sparse: true });
 userSubscriptionSchema.index({ createdAt: -1 });
 
 // Compound index for renewal processing

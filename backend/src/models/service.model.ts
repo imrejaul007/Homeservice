@@ -1,6 +1,9 @@
 import mongoose, { Document, Schema, Model } from 'mongoose';
 
 export interface IService extends Document {
+  // Multi-tenant
+  tenantId?: mongoose.Types.ObjectId;
+
   providerId: mongoose.Types.ObjectId;
   
   // Basic Service Information
@@ -136,6 +139,13 @@ export interface IService extends Document {
 
 const serviceSchema = new Schema<IService>(
   {
+    // Multi-tenant
+    tenantId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Tenant',
+      index: true
+    },
+
     providerId: {
       type: Schema.Types.ObjectId,
       ref: 'User',
@@ -452,6 +462,15 @@ serviceSchema.index({ 'price.amount': 1, 'rating.average': -1 });
 serviceSchema.index({ providerId: 1, isActive: 1 });
 serviceSchema.index({ 'location.address.city': 1, category: 1 });
 serviceSchema.index({ createdAt: -1 }); // For newest first
+
+// Category browsing: find services by category/subcategory with active filter
+serviceSchema.index({ category: 1, subcategory: 1, isActive: 1 });
+
+// Category listing: efficient listing of services by category with consistent ordering
+serviceSchema.index({ category: 1, _id: 1 });
+
+// Service discovery: find active services by category sorted by rating
+serviceSchema.index({ isActive: 1, category: 1, 'rating.average': -1 });
 // Note: searchMetadata.popularityScore already has index from field-level index: -1
 
 // Sparse indexes for optional fields (subcategory and isFeatured already have index: true)

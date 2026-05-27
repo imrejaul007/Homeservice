@@ -1,0 +1,47 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: nilin
+
+commonLabels:
+  variant: production
+
+resources:
+  - ../../base
+
+patchesStrategicMerge:
+  - replica-patch.yaml
+  - resources-patch.yaml
+  - topology-spread.yaml
+
+configMapGenerator:
+  - name: nilin-api-config
+    behavior: merge
+    literals:
+      - NODE_ENV=production
+      - LOG_LEVEL=warn
+      - ENABLE_DEBUG=false
+      - API_URL=https://api.nilin.io
+      - WEB_URL=https://www.nilin.io
+      - STRIPE_ENV=production
+      - SENTRY_DSN=https://example@prod.sentry.io
+      - DATADOG_ENABLED=true
+      - RATE_LIMIT_PER_MINUTE=500
+      - MAX_CONCURRENT_REQUESTS=500
+      - ENABLE_METRICS=true
+
+images:
+  - name: nilin/api
+    newTag: stable
+  - name: nilin/worker
+    newTag: stable
+  - name: nilin/frontend
+    newTag: stable
+
+replicas:
+  - name: nilin-api
+    count: 5
+  - name: nilin-worker
+    count: 3
+  - name: nilin-frontend
+    count: 3

@@ -4,6 +4,7 @@ import { Star, Clock, MapPin, TrendingUp, ChevronRight, Heart } from 'lucide-rea
 import type { Service } from '../../types/service';
 import { useAuthStore } from '../../stores/authStore';
 import { favoritesApi } from '../../services/favoritesApi';
+import { toast } from 'react-hot-toast';
 
 export type { Service };
 
@@ -47,16 +48,19 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
 
     try {
       if (isFavorited) {
-        await favoritesApi.removeFavorite(service._id);
+        await favoritesApi.removeFavorite(service.providerId);
         setIsFavorited(false);
         onFavoriteChange?.(false);
+        toast.success('Removed from favorites');
       } else {
-        await favoritesApi.addFavorite(service._id);
+        await favoritesApi.addFavorite(service.providerId);
         setIsFavorited(true);
         onFavoriteChange?.(true);
+        toast.success('Added to favorites');
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to toggle favorite:', err);
+      toast.error(err.response?.data?.message || 'Failed to update favorites. Please try again.');
     } finally {
       setIsToggling(false);
     }

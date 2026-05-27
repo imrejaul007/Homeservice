@@ -6,6 +6,7 @@ import Service from '../models/service.model';
 import Booking from '../models/booking.model';
 import { ApiError, ERROR_CODES } from '../utils/ApiError';
 import { sendWelcomeEmail } from './email.service';
+import logger from '../utils/logger';
 
 // ============================================
 // Types & Interfaces
@@ -197,7 +198,12 @@ export class DemoService {
         role,
       };
     } catch (error) {
-      console.error('Failed to create demo account:', error);
+      logger.error('Failed to create demo account', {
+        context: 'DemoService',
+        action: 'DEMO_ACCOUNT_CREATION_FAILED',
+        role,
+        error: error instanceof Error ? error.message : String(error),
+      });
       throw new ApiError(500, 'Failed to generate demo account');
     }
   }

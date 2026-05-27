@@ -10,6 +10,7 @@ export const SERVICE_TYPES = {
 export interface IBeautyService extends Document {
   serviceType: 'hair' | 'skincare' | 'makeup' | 'nail' | 'spa' | 'bridal' | 'other';
   types: string[];
+  providerId: mongoose.Types.ObjectId;
   homeService: boolean;
   estimatedDuration: number;
   stylistOptions: boolean;
@@ -25,6 +26,7 @@ const beautyServiceSchema = new Schema({
     default: 'hair',
   },
   types: [String],
+  providerId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
   homeService: { type: Boolean, default: false },
   estimatedDuration: { type: Number, default: 60 },
   stylistOptions: { type: Boolean, default: true },
@@ -32,6 +34,11 @@ const beautyServiceSchema = new Schema({
   hygieneCertified: { type: Boolean, default: false },
   hygieneCertExpiry: Date,
 }, { _id: false });
+
+// Indexes for query optimization
+beautyServiceSchema.index({ serviceType: 1 });
+beautyServiceSchema.index({ types: 1 });
+beautyServiceSchema.index({ providerId: 1 });
 
 export const BeautyService = mongoose.model('BeautyService', beautyServiceSchema);
 export default BeautyService;

@@ -25,12 +25,12 @@ export const APP_CONSTANTS = {
     ADMIN: 'admin'
   } as const,
 
-  // Service Status
+  // Service Status (aligned with Service model)
   SERVICE_STATUS: {
+    DRAFT: 'draft',
     ACTIVE: 'active',
     INACTIVE: 'inactive',
-    PENDING: 'pending',
-    SUSPENDED: 'suspended'
+    PENDING_REVIEW: 'pending_review',
   } as const,
 
   // Booking Status

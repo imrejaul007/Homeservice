@@ -1,0 +1,259 @@
+# Backup CronJob for NILIN
+# Automated daily backups with retention
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: mongodb-backup
+  namespace: nilin
+  labels:
+    app: mongodb
+    tier: database
+    type: backup
+spec:
+  schedule: "0 2 * * *"  # 2 AM daily
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 3
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app: mongodb
+            tier: database
+            type: backup
+        spec:
+          restartPolicy: OnFailure
+
+          containers:
+            - name: backup
+              image: mongo:6.0
+              imagePullPolicy: IfNotPresent
+
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  set -e
+
+                  # Configuration
+                  DATE=$(date +%Y%m%d_%H%M%S)
+                  BACKUP_NAME="nilin_backup_${DATE}"
+                  S3_BUCKET="nilin-backups"
+                  KEEP_DAYS=30
+
+                  echo "Starting MongoDB backup at $(date)"
+
+                  # Create backup directory
+                  mkdir -p /tmp/backup
+
+                  # Perform mongodump
+                  mongodump \
+                    --host mongodb \
+                    --port 27017 \
+                    --username "${MONGODB_USER}" \
+                    --password "${MONGODB_PASSWORD}" \
+                    --authenticationDatabase admin \
+                    --archive=/tmp/backup/backup.archive \
+                    --gzip \
+                    --oplog
+
+                  # Upload to S3
+                  aws s3 cp /tmp/backup/backup.archive s3://${S3_BUCKET}/mongodb/${BACKUP_NAME}.archive.gz
+
+                  # Cleanup old backups (keep last 30 days)
+                  echo "Cleaning up backups older than ${KEEP_DAYS} days..."
+                  CUTOFF_DATE=$(date -d "${KEEP_DAYS} days ago" +%Y%m%d)
+                  aws s3 ls s3://${S3_BUCKET}/mongodb/ | while read -r line; do
+                    BACKUP_DATE=$(echo "$line" | awk '{print $4}' | grep -oE '[0-9]{8}')
+                    if [[ "$BACKUP_DATE" < "$CUTOFF_DATE" ]]; then
+                      BACKUP_FILE=$(echo "$line" | awk '{print $4}')
+                      echo "Deleting old backup: $BACKUP_FILE"
+                      aws s3 rm s3://${S3_BUCKET}/mongodb/$BACKUP_FILE
+                    fi
+                  done
+
+                  echo "Backup completed successfully at $(date)"
+
+              env:
+                - name: MONGODB_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: nilin-secrets
+                      key: MONGODB_USER
+                - name: MONGODB_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: nilin-secrets
+                      key: MONGODB_PASSWORD
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: nilin-secrets
+                      key: AWS_ACCESS_KEY_ID
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: nilin-secrets
+                      key: AWS_SECRET_ACCESS_KEY
+                - name: AWS_DEFAULT_REGION
+                  valueFrom:
+                    configMapKeyRef:
+                      name: nilin-api-config
+                      key: AWS_REGION
+
+              resources:
+                requests:
+                  cpu: 250m
+                  memory: 256Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+
+          volumes:
+            - name: tmp
+              emptyDir:
+                medium: Memory
+                sizeLimit: 1Gi
+
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999
+
+---
+# Redis Backup CronJob
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: redis-backup
+  namespace: nilin
+  labels:
+    app: redis
+    tier: cache
+    type: backup
+spec:
+  schedule: "0 3 * * *"  # 3 AM daily
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 3
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app: redis
+            tier: cache
+            type: backup
+        spec:
+          restartPolicy: OnFailure
+
+          containers:
+            - name: backup
+              image: redis:7-alpine
+              imagePullPolicy: IfNotPresent
+
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -e
+
+                  # Configuration
+                  DATE=$(date +%Y%m%d_%H%M%S)
+                  BACKUP_NAME="nilin_redis_backup_${DATE}"
+                  S3_BUCKET="nilin-backups"
+
+                  echo "Starting Redis backup at $(date)"
+
+                  # Trigger BGSAVE
+                  redis-cli -h redis -p 6379 -a "${REDIS_PASSWORD}" BGSAVE
+
+                  # Wait for save to complete
+                  while [ "$(redis-cli -h redis -p 6379 -a "${REDIS_PASSWORD}" LASTSAVE)" == "$(redis-cli -h redis -p 6379 -a "${REDIS_PASSWORD}" LASTSAVE)" ]; do
+                    sleep 1
+                  done
+
+                  # Copy dump file
+                  redis-cli -h redis -p 6379 -a "${REDIS_PASSWORD}" CONFIG GET dir
+                  DUMP_PATH=$(redis-cli -h redis -p 6379 -a "${REDIS_PASSWORD}" CONFIG GET dir | tail -1)
+                  kubectl cp nilin/redis-0:${DUMP_PATH}/dump.rdb /tmp/redis_backup.rdb
+
+                  # Compress
+                  gzip -c /tmp/redis_backup.rdb > /tmp/redis_backup.gz
+
+                  # Upload to S3
+                  aws s3 cp /tmp/redis_backup.gz s3://${S3_BUCKET}/redis/${BACKUP_NAME}.gz
+
+                  # Cleanup local files
+                  rm -f /tmp/redis_backup.rdb /tmp/redis_backup.gz
+
+                  echo "Redis backup completed successfully at $(date)"
+
+              env:
+                - name: REDIS_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: nilin-secrets
+                      key: REDIS_PASSWORD
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: nilin-secrets
+                      key: AWS_ACCESS_KEY_ID
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: nilin-secrets
+                      key: AWS_SECRET_ACCESS_KEY
+                - name: AWS_DEFAULT_REGION
+                  valueFrom:
+                    configMapKeyRef:
+                      name: nilin-api-config
+                      key: AWS_REGION
+
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                limits:
+                  cpu: 250m
+                  memory: 256Mi
+
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+
+          volumes:
+            - name: tmp
+              emptyDir:
+                medium: Memory
+                sizeLimit: 256Mi
+
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999
+
+          # Init container to wait for Redis to be ready
+          initContainers:
+            - name: wait-for-redis
+              image: redis:7-alpine
+              command:
+                - sh
+                - -c
+                - |
+                  until redis-cli -h redis -p 6379 -a "${REDIS_PASSWORD}" ping | grep -q PONG; do
+                    echo "Waiting for Redis..."
+                    sleep 1
+                  done
+              env:
+                - name: REDIS_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: nilin-secrets
+                      key: REDIS_PASSWORD

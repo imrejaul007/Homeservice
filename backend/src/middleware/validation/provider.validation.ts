@@ -1,7 +1,6 @@
 import Joi from 'joi';
 import { Request, Response, NextFunction } from 'express';
 import { ApiError } from '../../utils/ApiError';
-import { SERVICE_CATEGORIES } from '../../constants/categories';
 
 // Service creation validation schema
 const serviceCreationSchema = Joi.object({
@@ -16,11 +15,13 @@ const serviceCreationSchema = Joi.object({
     }),
   
   category: Joi.string()
-    .valid(...SERVICE_CATEGORIES)
+    .min(1)
+    .max(100)
     .required()
     .messages({
-      'any.only': 'Invalid service category',
-      'any.required': 'Service category is required'
+      'string.min': 'Service category is required',
+      'string.max': 'Category name cannot exceed 100 characters',
+      'any.required': 'Service category is required',
     }),
   
   subcategory: Joi.string().max(50).optional(),
@@ -39,15 +40,19 @@ const serviceCreationSchema = Joi.object({
   
   // Pricing validation
   price: Joi.object({
-    amount: Joi.number()
-      .positive()
-      .max(10000)
-      .required()
-      .messages({
-        'number.positive': 'Price must be a positive number',
-        'number.max': 'Price cannot exceed $10,000',
-        'any.required': 'Price amount is required'
-      }),
+    amount: Joi.when('type', {
+      is: 'custom',
+      then: Joi.number().min(0).max(10000).default(0),
+      otherwise: Joi.number()
+        .positive()
+        .max(10000)
+        .required()
+        .messages({
+          'number.positive': 'Price must be a positive number',
+          'number.max': 'Price cannot exceed $10,000',
+          'any.required': 'Price amount is required',
+        }),
+    }),
     currency: Joi.string().valid('AED', 'INR', 'USD', 'EUR', 'GBP').default('AED'),
     type: Joi.string()
       .valid('fixed', 'hourly', 'custom')
@@ -126,9 +131,11 @@ const serviceCreationSchema = Joi.object({
 });
 
 // Service update validation schema (all fields optional except some restrictions)
-const serviceUpdateSchema = serviceCreationSchema.fork([
-  'name', 'category', 'description', 'price', 'duration', 'location'
-], (schema) => schema.optional());
+const serviceUpdateSchema = serviceCreationSchema
+  .fork(['name', 'category', 'description', 'price', 'duration', 'location'], (schema) => schema.optional())
+  .fork(['status'], () =>
+    Joi.string().valid('draft', 'active', 'inactive', 'pending_review').optional()
+  );
 
 // Service ID validation
 const serviceIdSchema = Joi.object({

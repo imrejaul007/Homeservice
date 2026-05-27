@@ -41,6 +41,14 @@ const THRESHOLDS = {
     maxCancellationRate: 0.5, // 50%
     trustScoreThreshold: 40,
   },
+  // NEW: Velocity-based fraud detection thresholds
+  velocity: {
+    maxRegistrationsPerIPPerHour: 5,
+    maxRegistrationsPerDevicePerDay: 3,
+    maxReferralsPerIPPerDay: 3,
+    referralWindowMinutes: 1, // Time window for self-referral detection
+    registrationVelocityWindow: 60 * 60 * 1000, // 1 hour
+  },
 };
 
 // ============================================
@@ -88,6 +96,25 @@ export interface ChargebackResult extends AbuseDetectionResult {
     totalAmount: number;
     isDisputed: boolean;
     merchantLoss: number;
+  };
+}
+
+// ============================================
+// Velocity Check Result Type
+// ============================================
+
+export interface VelocityCheckResult {
+  isVelocityAbuse: boolean;
+  velocityType: 'registration' | 'referral' | 'login' | 'booking';
+  confidence: number;
+  details: string;
+  recommendedAction: 'allow' | 'review' | 'block';
+  evidence: {
+    ip?: string;
+    fingerprint?: string;
+    count: number;
+    threshold: number;
+    timeWindow: string;
   };
 }
 
@@ -920,6 +947,259 @@ export class AbuseDetectionService {
       userId: userObjectId.toString(),
       amount,
       totalChargebacks: metrics.chargebackCount,
+    });
+  }
+
+  // ========================================
+  // Velocity-Based Fraud Detection
+  // ========================================
+
+  /**
+   * Check for registration velocity abuse (too many registrations from same IP/device)
+   */
+  async checkRegistrationVelocity(ip: string, fingerprint: string): Promise<VelocityCheckResult> {
+    const now = Date.now();
+    const oneHourAgo = new Date(now - THRESHOLDS.velocity.registrationVelocityWindow);
+
+    // Count registrations from same IP in last hour
+    const ipRegistrationCount = await User.countDocuments({
+      registrationIP: ip,
+      createdAt: { $gte: oneHourAgo },
+    });
+
+    // Count registrations from same device fingerprint in last 24 hours
+    const oneDayAgo = new Date(now - 24 * 60 * 60 * 1000);
+    const deviceRegistrationCount = await User.countDocuments({
+      'deviceFingerprints.fingerprint': fingerprint,
+      createdAt: { $gte: oneDayAgo },
+    });
+
+    const ipVelocityExceeded = ipRegistrationCount >= THRESHOLDS.velocity.maxRegistrationsPerIPPerHour;
+    const deviceVelocityExceeded = deviceRegistrationCount >= THRESHOLDS.velocity.maxRegistrationsPerDevicePerDay;
+
+    if (ipVelocityExceeded) {
+      return {
+        isVelocityAbuse: true,
+        velocityType: 'registration',
+        confidence: 80,
+        details: `High velocity registration detected from IP: ${ipRegistrationCount} registrations in last hour`,
+        recommendedAction: 'block',
+        evidence: {
+          ip,
+          count: ipRegistrationCount,
+          threshold: THRESHOLDS.velocity.maxRegistrationsPerIPPerHour,
+          timeWindow: '1 hour',
+        },
+      };
+    }
+
+    if (deviceVelocityExceeded) {
+      return {
+        isVelocityAbuse: true,
+        velocityType: 'registration',
+        confidence: 70,
+        details: `High velocity registration detected from device: ${deviceRegistrationCount} registrations in last 24 hours`,
+        recommendedAction: 'review',
+        evidence: {
+          fingerprint,
+          count: deviceRegistrationCount,
+          threshold: THRESHOLDS.velocity.maxRegistrationsPerDevicePerDay,
+          timeWindow: '24 hours',
+        },
+      };
+    }
+
+    return {
+      isVelocityAbuse: false,
+      velocityType: 'registration',
+      confidence: 0,
+      details: 'Registration velocity normal',
+      recommendedAction: 'allow',
+      evidence: {
+        count: ipRegistrationCount,
+        threshold: THRESHOLDS.velocity.maxRegistrationsPerIPPerHour,
+        timeWindow: '1 hour',
+      },
+    };
+  }
+
+  /**
+   * Check for referral velocity abuse
+   */
+  async checkReferralVelocity(referrerId: string | Types.ObjectId): Promise<VelocityCheckResult> {
+    const userObjectId = new Types.ObjectId(referrerId);
+    const now = Date.now();
+    const oneDayAgo = new Date(now - 24 * 60 * 60 * 1000);
+
+    // Count referrals made in last 24 hours
+    const referralCount = await User.countDocuments({
+      'loyaltySystem.referredBy': userObjectId,
+      createdAt: { $gte: oneDayAgo },
+    });
+
+    if (referralCount >= THRESHOLDS.velocity.maxReferralsPerIPPerDay * 2) {
+      // More than 2x the threshold = high confidence abuse
+      return {
+        isVelocityAbuse: true,
+        velocityType: 'referral',
+        confidence: 90,
+        details: `Critical referral velocity: ${referralCount} referrals in last 24 hours`,
+        recommendedAction: 'block',
+        evidence: {
+          count: referralCount,
+          threshold: THRESHOLDS.velocity.maxReferralsPerIPPerDay,
+          timeWindow: '24 hours',
+        },
+      };
+    }
+
+    if (referralCount >= THRESHOLDS.velocity.maxReferralsPerIPPerDay) {
+      return {
+        isVelocityAbuse: true,
+        velocityType: 'referral',
+        confidence: 60,
+        details: `High referral velocity: ${referralCount} referrals in last 24 hours`,
+        recommendedAction: 'review',
+        evidence: {
+          count: referralCount,
+          threshold: THRESHOLDS.velocity.maxReferralsPerIPPerDay,
+          timeWindow: '24 hours',
+        },
+      };
+    }
+
+    return {
+      isVelocityAbuse: false,
+      velocityType: 'referral',
+      confidence: 0,
+      details: 'Referral velocity normal',
+      recommendedAction: 'allow',
+      evidence: {
+        count: referralCount,
+        threshold: THRESHOLDS.velocity.maxReferralsPerIPPerDay,
+        timeWindow: '24 hours',
+      },
+    };
+  }
+
+  /**
+   * Check for suspicious IP patterns (VPN, Proxy, Tor)
+   * This is a simplified check - in production, use a GeoIP service
+   */
+  async checkIPSuspicion(ip: string): Promise<{
+    isSuspicious: boolean;
+    confidence: number;
+    reasons: string[];
+  }> {
+    const reasons: string[] = [];
+    let confidence = 0;
+
+    // Check for private/invalid IP ranges
+    if (ip.startsWith('10.') || ip.startsWith('172.16.') || ip.startsWith('192.168.')) {
+      reasons.push('Private IP address (may be legitimate VPN)');
+      confidence += 20;
+    }
+
+    // Check for localhost
+    if (ip === '127.0.0.1' || ip === '::1') {
+      reasons.push('Localhost address');
+      confidence += 30;
+    }
+
+    // In production, add more sophisticated checks:
+    // - Check against VPN/Proxy databases
+    // - Check for Tor exit nodes
+    // - Use services like IPQualityScore, MaxMind, etc.
+
+    return {
+      isSuspicious: confidence >= 50,
+      confidence,
+      reasons,
+    };
+  }
+
+  /**
+   * Comprehensive fraud check combining multiple signals
+   */
+  async comprehensiveFraudCheck(
+    ip: string,
+    fingerprint: string,
+    email: string
+  ): Promise<{
+    overallRisk: 'low' | 'medium' | 'high' | 'critical';
+    checks: {
+      registrationVelocity: VelocityCheckResult;
+      ipSuspicion: { isSuspicious: boolean; confidence: number; reasons: string[] };
+      existingAccounts: number;
+    };
+    recommendedAction: 'allow' | 'review' | 'block';
+  }> {
+    // Run all checks in parallel
+    const [velocityCheck, ipSuspicion, existingAccounts] = await Promise.all([
+      this.checkRegistrationVelocity(ip, fingerprint),
+      this.checkIPSuspicion(ip),
+      User.countDocuments({
+        $or: [
+          { registrationIP: ip },
+          { 'deviceFingerprints.fingerprint': fingerprint },
+        ],
+        email: { $ne: email },
+      }),
+    ]);
+
+    // Calculate overall risk
+    let riskScore = 0;
+    if (velocityCheck.isVelocityAbuse) riskScore += velocityCheck.confidence;
+    if (ipSuspicion.isSuspicious) riskScore += ipSuspicion.confidence;
+    if (existingAccounts >= 5) riskScore += 40;
+    else if (existingAccounts >= 3) riskScore += 20;
+    else if (existingAccounts >= 1) riskScore += 10;
+
+    let overallRisk: 'low' | 'medium' | 'high' | 'critical' = 'low';
+    if (riskScore >= 80) overallRisk = 'critical';
+    else if (riskScore >= 60) overallRisk = 'high';
+    else if (riskScore >= 30) overallRisk = 'medium';
+
+    let recommendedAction: 'allow' | 'review' | 'block' = 'allow';
+    if (overallRisk === 'critical') recommendedAction = 'block';
+    else if (overallRisk === 'high') recommendedAction = 'review';
+
+    return {
+      overallRisk,
+      checks: {
+        registrationVelocity: velocityCheck,
+        ipSuspicion,
+        existingAccounts,
+      },
+      recommendedAction,
+    };
+  }
+
+  /**
+   * Record velocity abuse for analytics
+   */
+  async recordVelocityAbuse(
+    type: 'registration' | 'referral',
+    ip?: string,
+    fingerprint?: string,
+    userId?: string
+  ): Promise<void> {
+    logger.warn('Velocity abuse recorded', {
+      type,
+      ip,
+      fingerprint: fingerprint?.substring(0, 8),
+      userId,
+      timestamp: new Date().toISOString(),
+    });
+
+    // Create audit log
+    await createAuditLog({
+      userId: userId || 'SYSTEM',
+      action: 'VELOCITY_ABUSE_DETECTED',
+      resource: 'abuse_detection',
+      resourceId: `${type}_${ip || fingerprint}`,
+      details: { type, ip, fingerprint },
+      status: 'success',
     });
   }
 }

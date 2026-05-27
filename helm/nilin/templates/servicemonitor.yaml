@@ -1,0 +1,29 @@
+{{- /*
+NILIN ServiceMonitor for Prometheus
+*/ -}}
+{{- $fullName := include "nilin.fullname" . -}}
+{{- $namespace := .Release.Namespace -}}
+{{- if .Values.monitoring.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ $fullName }}-api
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "nilin.labels" . | nindent 4 }}
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      {{- include "nilin.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 10s
+  namespaceSelector:
+    matchNames:
+      - {{ $namespace }}
+{{- end }}

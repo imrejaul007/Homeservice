@@ -1,6 +1,12 @@
 import mongoose, { Schema, Document } from 'mongoose';
 
+// Transaction status state machine type
+export type TransactionStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'reversed';
+
 export interface IWallet extends Document {
+  // Multi-tenant
+  tenantId?: mongoose.Types.ObjectId;
+
   userId: mongoose.Types.ObjectId;
   balance: number; // Current wallet balance
   currency: string;
@@ -11,10 +17,11 @@ export interface IWallet extends Document {
     description: string;
     reference: string; // booking ID, payment ID, etc.
     referenceType: 'booking' | 'refund' | 'bonus' | 'payout' | 'topup' | 'commission';
-    status: 'pending' | 'completed' | 'failed' | 'reversed';
+    status: TransactionStatus;
     balanceAfter: number;
     metadata?: Record<string, unknown>;
     createdAt: Date;
+    updatedAt?: Date;
   }>;
   pendingBalance: number; // Pending withdrawals/topups
   totalEarned: number; // Lifetime earnings
@@ -36,16 +43,24 @@ const walletTransactionSchema = new Schema({
   },
   status: {
     type: String,
-    enum: ['pending', 'completed', 'failed', 'reversed'],
+    enum: ['pending', 'processing', 'completed', 'failed', 'reversed'],
     default: 'completed',
   },
   balanceAfter: { type: Number, required: true },
   metadata: { type: Schema.Types.Mixed },
   createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date },
 });
 
 const walletSchema = new Schema<IWallet>(
   {
+    // Multi-tenant
+    tenantId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Tenant',
+      index: true
+    },
+
     userId: {
       type: Schema.Types.ObjectId,
       ref: 'User',
@@ -83,6 +98,9 @@ const walletSchema = new Schema<IWallet>(
 
 // Index for transaction history queries
 walletSchema.index({ 'transactions.createdAt': -1 });
+
+// Compound index for user wallet queries with transaction history
+walletSchema.index({ userId: 1, 'transactions.createdAt': -1 });
 
 const Wallet = mongoose.model<IWallet>('Wallet', walletSchema);
 

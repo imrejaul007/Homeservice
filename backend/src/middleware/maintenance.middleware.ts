@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import PlatformSettings from '../models/settings.model';
+import logger from '../utils/logger';
 
 /**
  * Maintenance Mode Middleware
@@ -79,7 +80,12 @@ export const checkMaintenanceMode = async (
     next();
   } catch (error) {
     // If settings can't be loaded, allow the request (fail open for non-critical errors)
-    console.error('Maintenance mode check error:', error);
+    logger.error('Maintenance mode check error', {
+      context: 'MaintenanceMiddleware',
+      action: 'CHECK_ERROR',
+      path: req.path,
+      error: error instanceof Error ? error.message : String(error),
+    });
     next();
   }
 };
@@ -112,7 +118,12 @@ export const forceMaintenanceCheck = async (
 
     next();
   } catch (error) {
-    console.error('Force maintenance check error:', error);
+    logger.error('Force maintenance check error', {
+      context: 'MaintenanceMiddleware',
+      action: 'FORCE_CHECK_ERROR',
+      path: req.path,
+      error: error instanceof Error ? error.message : String(error),
+    });
     next();
   }
 };

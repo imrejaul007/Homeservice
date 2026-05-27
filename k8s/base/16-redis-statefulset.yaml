@@ -1,0 +1,224 @@
+# Redis StatefulSet for NILIN
+# Production-grade configuration with persistence and clustering
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+  namespace: nilin
+  labels:
+    app: redis
+    tier: cache
+spec:
+  serviceName: redis
+  replicas: 3
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+        tier: cache
+    spec:
+      terminationGracePeriodSeconds: 30
+
+      # Anti-affinity for high availability
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - redis
+                topologyKey: kubernetes.io/hostname
+
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - containerPort: 6379
+              name: redis
+
+          command:
+            - redis-server
+            - /config/redis.conf
+
+          # Resource limits
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 2Gi
+
+          # Health checks
+          livenessProbe:
+            tcpSocket:
+              port: 6379
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          readinessProbe:
+            exec:
+              command:
+                - redis-cli
+                - ping
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          # Volume mounts
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: config
+              mountPath: /config
+
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: nilin-secrets
+                  key: REDIS_PASSWORD
+
+          # Security context
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999
+            fsGroup: 999
+
+      volumes:
+        - name: config
+          configMap:
+            name: redis-config
+
+  # Persistent volume claim template
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: fast-ssd
+        resources:
+          requests:
+            storage: 10Gi
+---
+# Redis Headless Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: nilin
+  labels:
+    app: redis
+    tier: cache
+spec:
+  clusterIP: None
+  selector:
+    app: redis
+  ports:
+    - port: 6379
+      targetPort: 6379
+      name: redis
+---
+# Redis ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-config
+  namespace: nilin
+data:
+  redis.conf: |
+    # Network
+    bind 0.0.0.0
+    port 6379
+    tcp-backlog 511
+    timeout 0
+    tcp-keepalive 300
+
+    # General
+    daemonize no
+    supervised no
+    pidfile /var/run/redis_redis.pid
+    logfile ""
+    databases 16
+
+    # Snapshotting
+    save 900 1
+    save 300 10
+    save 60 10000
+    stop-writes-on-bgsave-error yes
+    rdbcompression yes
+    rdbchecksum yes
+    dbfilename dump.rdb
+    dir /data
+
+    # Replication
+    replica-serve-stale-data yes
+    replica-read-only yes
+    repl-diskless-sync no
+    repl-diskless-sync-delay 5
+
+    # Security
+    requirepass $(REDIS_PASSWORD)
+    rename-command FLUSHDB ""
+    rename-command FLUSHALL ""
+    rename-command DEBUG ""
+
+    # Memory
+    maxmemory 1gb
+    maxmemory-policy allkeys-lru
+    maxmemory-samples 5
+
+    # Lazy freeing
+    lazyfree-lazy-eviction no
+    lazyfree-lazy-expire no
+    lazyfree-lazy-server-del no
+    replica-lazy-flush no
+
+    # Append only mode (optional - enable for persistence)
+    appendonly yes
+    appendfilename "appendonly.aof"
+    appendfsync everysec
+    no-appendfsync-on-rewrite no
+    auto-aof-rewrite-percentage 100
+    auto-aof-rewrite-min-size 64mb
+
+    # Slow log
+    slowlog-log-slower-than 10000
+    slowlog-max-len 128
+
+    # Latency monitor
+    latency-monitor-threshold 100
+
+    # Event notification
+    notify-keyspace-events ""
+
+    # Advanced config
+    hash-max-ziplist-entries 512
+    hash-max-ziplist-value 64
+    list-max-ziplist-size -2
+    set-max-intset-entries 512
+    zset-max-ziplist-entries 128
+    zset-max-ziplist-value 64
+    hll-sparse-max-bytes 3000
+    stream-node-max-bytes 4096
+    stream-node-max-entries 100
+    activerehashing yes
+    client-output-buffer-limit normal 0 0 0
+    client-output-buffer-limit replica 256mb 64mb 60
+    client-output-buffer-limit pubsub 32mb 8mb 60
+    hz 10
+    dynamic-hz yes
+    aof-rewrite-incremental-fsync yes
+    rdb-save-incremental-fsync yes

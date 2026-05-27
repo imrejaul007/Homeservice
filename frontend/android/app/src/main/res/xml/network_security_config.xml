@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Network Security Configuration for NILIN App
+  Android 7.0 (API 24) and above supports network security config
+
+  IMPORTANT SECURITY NOTES:
+  - cleartextTrafficPermitted=false is the secure default for production
+  - All network traffic must use HTTPS in production
+  - Certificate pinning should be enabled for production builds
+
+  SETUP INSTRUCTIONS FOR CERTIFICATE PINNING:
+  1. Obtain the SHA-256 fingerprint of your server certificate
+  2. Add the pin to the domain-config below
+  3. Set expiration date to remind yourself to update pins
+  4. Always include a backup pin for certificate rotation
+-->
+<network-security-config>
+    <!--
+      Base configuration - Most restrictive settings
+      This applies to all domains not explicitly configured
+    -->
+    <base-config cleartextTrafficPermitted="false">
+        <!-- Require TLS 1.2 or higher -->
+        <trust-anchors>
+            <!-- System CAs only - no user-installed certificates -->
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <!--
+      Development configuration
+      Allows localhost for development
+    -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">localhost</domain>
+        <domain includeSubdomains="true">10.0.2.2</domain>
+        <domain includeSubdomains="true">10.0.2.4</domain>
+    </domain-config>
+
+    <!--
+      Production API domain
+      All API traffic must use HTTPS
+    -->
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">api.nilin.app</domain>
+        <domain includeSubdomains="true">nilin.app</domain>
+        <domain includeSubdomains="true">homeservice-9mcs.onrender.com</domain>
+        <domain includeSubdomains="true">render.com</domain>
+
+        <!--
+          Certificate pinning configuration
+          Uncomment and add your production pins here:
+          <pin-set expiration="2025-12-31">
+            <pin digest="SHA-256">YOUR_PRODUCTION_PIN</pin>
+            <pin digest="SHA-256">YOUR_BACKUP_PIN</pin>
+          </pin-set>
+        -->
+    </domain-config>
+
+    <!--
+      External domains configuration
+      Maps, analytics, etc.
+    -->
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">maps.googleapis.com</domain>
+        <domain includeSubdomains="true">googleapis.com</domain>
+        <domain includeSubdomains="true">stripe.com</domain>
+        <domain includeSubdomains="true">firebase.googleapis.com</domain>
+        <domain includeSubdomains="true">sentry.io</domain>
+    </domain-config>
+</network-security-config>

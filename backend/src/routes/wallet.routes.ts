@@ -19,4 +19,7 @@ router.get('/earnings/summary', walletController.getEarningsSummary);
 // Request withdrawal
 router.post('/withdraw', walletController.requestWithdrawal);
 
+// Add money to wallet
+router.post('/add-money', walletController.addMoney);
+
 export default router;

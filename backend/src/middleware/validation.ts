@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import Joi from 'joi';
+import logger from '../utils/logger';
 
 // ===================================
 // BOOKING VALIDATION SCHEMAS
@@ -246,19 +247,19 @@ const updateAvailabilitySchema = Joi.object({
 });
 
 const dateOverrideSchema = Joi.object({
-  date: Joi.date()
-    .min('now')
+  date: Joi.string()
+    .pattern(/^\d{4}-\d{2}-\d{2}$/)
     .required()
     .messages({
-      'date.min': 'Cannot set override for past dates',
+      'string.pattern.base': 'Invalid date format. Use YYYY-MM-DD format',
       'any.required': 'Date is required'
     }),
   isAvailable: Joi.boolean().required(),
   timeSlots: Joi.array().items(timeSlotSchema).optional(),
   reason: Joi.string()
-    .valid('vacation', 'sick', 'booked', 'special_event', 'maintenance', 'personal', 'holiday')
+    .valid('vacation', 'sick', 'booked', 'special_event', 'maintenance', 'personal', 'holiday', 'other')
     .default('personal'),
-  notes: Joi.string().max(500).optional()
+  notes: Joi.string().max(500).allow('', null).optional()
 });
 
 const blockPeriodSchema = Joi.object({
@@ -304,7 +305,11 @@ const createValidationMiddleware = (schema: Joi.ObjectSchema) => {
   return (req: Request, res: Response, next: NextFunction) => {
     // Debug logging for booking validation
     if (req.path === '/api/bookings' || req.originalUrl?.includes('/bookings')) {
-      console.log('🔍 [BOOKING VALIDATION] Request body:', JSON.stringify(req.body, null, 2));
+      logger.debug('Booking validation request', {
+        context: 'ValidationMiddleware',
+        action: 'BOOKING_VALIDATION',
+        body: req.body,
+      });
     }
 
     const { error, value } = schema.validate(req.body, {
@@ -313,7 +318,12 @@ const createValidationMiddleware = (schema: Joi.ObjectSchema) => {
     });
 
     if (error) {
-      console.log('❌ [VALIDATION ERROR]', error.details);
+      logger.warn('Validation error', {
+        context: 'ValidationMiddleware',
+        action: 'VALIDATION_ERROR',
+        path: req.path,
+        errors: error.details.map(d => ({ field: d.path.join('.'), message: d.message })),
+      });
       const errorMessages = error.details.map(detail => ({
         field: detail.path.join('.'),
         message: detail.message

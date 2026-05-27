@@ -1,4 +1,4 @@
-import axios from 'axios';
+import axios, { type AxiosError, type InternalAxiosRequestConfig } from 'axios';
 import { API_BASE_URL } from '@/config/api';
 import type {
   ProviderResponse,
@@ -16,7 +16,49 @@ const api = axios.create({
 const analyticsApi = axios.create({
   baseURL: `${API_BASE_URL}/provider`,
   timeout: 10000,
+  withCredentials: true,
 });
+
+// Generate correlation ID for request tracing
+const generateCorrelationId = () => {
+  return `req-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+};
+
+// Get auth tokens from sessionStorage
+const getAuthTokens = () => {
+  try {
+    const stored = sessionStorage.getItem('auth-storage');
+    if (!stored) return null;
+    const parsed = JSON.parse(stored);
+    const tokens = parsed?.state?.tokens;
+    if (tokens?.accessToken && tokens?.refreshToken) {
+      return tokens;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+};
+
+// Add auth interceptor to analyticsApi
+analyticsApi.interceptors.request.use(
+  (config) => {
+    // Add correlation ID for request tracing
+    config.headers['X-Correlation-ID'] = generateCorrelationId();
+
+    // Add auth token if available
+    const tokens = getAuthTokens();
+    if (tokens?.accessToken) {
+      config.headers.Authorization = `Bearer ${tokens.accessToken}`;
+    }
+
+    return config;
+  },
+  (error: AxiosError) => {
+    console.error('Analytics API request interceptor error:', error);
+    return Promise.reject(error);
+  }
+);
 
 // Types for analytics responses
 export interface ServiceStats {
@@ -24,6 +66,7 @@ export interface ServiceStats {
   active: number;
   draft: number;
   inactive: number;
+  pending_review: number;
 }
 
 export interface PerformanceStats {
@@ -130,13 +173,65 @@ export const providerApi = {
 /**
  * Provider analytics API - uses auth-protected /provider endpoints
  */
+export interface ProviderInsightsAnalytics {
+  overview: {
+    totalViews: number;
+    viewsTrend: number;
+    profileViews: number;
+    profileViewsTrend: number;
+    bookingRequests: number;
+    bookingRequestsTrend: number;
+    conversionRate: number;
+    conversionRateTrend: number;
+  };
+  earnings: {
+    thisMonth: number;
+    lastMonth: number;
+    trend: number;
+  };
+  bookings: {
+    total: number;
+    completed: number;
+    pending: number;
+    cancelled: number;
+  };
+  topServices: Array<{
+    name: string;
+    bookings: number;
+    revenue: number;
+  }>;
+  weeklyData: Array<{
+    day: string;
+    bookings: number;
+    revenue: number;
+  }>;
+  ratings: {
+    average: number;
+    total: number;
+    breakdown: Record<'1' | '2' | '3' | '4' | '5', number>;
+  };
+}
+
 export const providerAnalyticsApi = {
   /**
-   * Get provider overview analytics
+   * Get provider overview analytics (service management dashboard)
    * GET /api/provider/analytics
    */
   getProviderAnalytics: async (): Promise<ProviderAnalyticsResponse> => {
     const response = await analyticsApi.get('/analytics');
+    return response.data;
+  },
+
+  /**
+   * Get provider insights analytics page data
+   * GET /api/provider/analytics/insights?period=7d|30d|90d
+   */
+  getProviderInsights: async (
+    period: '7d' | '30d' | '90d' = '30d',
+  ): Promise<{ success: boolean; data: ProviderInsightsAnalytics }> => {
+    const response = await analyticsApi.get('/analytics/insights', {
+      params: { period },
+    });
     return response.data;
   },
 };

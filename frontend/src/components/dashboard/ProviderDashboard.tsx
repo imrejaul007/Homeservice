@@ -4,6 +4,7 @@ import { useAuthStore } from '../../stores/authStore';
 import { bookingService } from '../../services/BookingService';
 import { providerAnalyticsApi, type ProviderAnalytics } from '../../services/providerApi';
 import { reviewsApi, type Review } from '../../services/reviewsApi';
+import NotificationBell from '../common/NotificationBell';
 import {
   Building,
   DollarSign,
@@ -19,14 +20,14 @@ import {
   Clock,
   Settings,
   LogOut,
-  Bell,
   ChevronDown,
   Plus,
   ArrowRight,
   BarChart,
   Camera,
   Award,
-  Activity
+  Activity,
+  Building2
 } from 'lucide-react';
 
 interface StatCard {
@@ -86,7 +87,88 @@ const ProviderDashboard: React.FC = () => {
   const [loadingReviews, setLoadingReviews] = useState(true);
   const [reviewsError, setReviewsError] = useState<string | null>(null);
 
+  // Booking action state
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+
   const { user, providerProfile, logout } = useAuthStore();
+
+  // Handle booking accept
+  const handleAcceptBooking = async (bookingId: string) => {
+    try {
+      setActionLoading(bookingId);
+      await bookingService.acceptBooking(bookingId);
+      // Refresh bookings
+      const response = await bookingService.getProviderBookings({
+        status: 'pending',
+        limit: 5,
+        sortBy: 'createdAt',
+        sortOrder: 'desc'
+      });
+      if (response.success && response.data.bookings) {
+        const transformedBookings = response.data.bookings.map((booking: any) => ({
+          _id: booking._id,
+          bookingNumber: booking.bookingNumber,
+          customerName: booking.customer?.firstName
+            ? `${booking.customer.firstName} ${booking.customer.lastName}`
+            : booking.isGuestBooking
+              ? 'Guest'
+              : 'Customer',
+          serviceName: booking.service?.name || 'Service',
+          scheduledDate: booking.scheduledDate,
+          scheduledTime: booking.scheduledTime,
+          status: booking.status,
+          totalAmount: booking.pricing?.totalAmount || 0,
+          customer: booking.customer,
+          service: booking.service,
+          pricing: booking.pricing
+        }));
+        setBookingRequests(transformedBookings);
+      }
+    } catch (error) {
+      console.error('Failed to accept booking:', error);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  // Handle booking decline
+  const handleDeclineBooking = async (bookingId: string) => {
+    try {
+      setActionLoading(bookingId);
+      await bookingService.rejectBooking(bookingId, { reason: 'Declined by provider' });
+      // Refresh bookings
+      const response = await bookingService.getProviderBookings({
+        status: 'pending',
+        limit: 5,
+        sortBy: 'createdAt',
+        sortOrder: 'desc'
+      });
+      if (response.success && response.data.bookings) {
+        const transformedBookings = response.data.bookings.map((booking: any) => ({
+          _id: booking._id,
+          bookingNumber: booking.bookingNumber,
+          customerName: booking.customer?.firstName
+            ? `${booking.customer.firstName} ${booking.customer.lastName}`
+            : booking.isGuestBooking
+              ? 'Guest'
+              : 'Customer',
+          serviceName: booking.service?.name || 'Service',
+          scheduledDate: booking.scheduledDate,
+          scheduledTime: booking.scheduledTime,
+          status: booking.status,
+          totalAmount: booking.pricing?.totalAmount || 0,
+          customer: booking.customer,
+          service: booking.service,
+          pricing: booking.pricing
+        }));
+        setBookingRequests(transformedBookings);
+      }
+    } catch (error) {
+      console.error('Failed to decline booking:', error);
+    } finally {
+      setActionLoading(null);
+    }
+  };
 
   // Calculate trends from historical data if available
   const calculateTrend = (current: number, previous: number | undefined): { value: number; isPositive: boolean } | undefined => {
@@ -224,25 +306,58 @@ const ProviderDashboard: React.FC = () => {
     fetchBookingRequests();
   }, []);
 
+  // Helper to provide empty analytics state
+  const getEmptyAnalytics = (): ProviderAnalytics => ({
+    serviceStats: { total: 0, active: 0, draft: 0, inactive: 0, pending_review: 0 },
+    performanceStats: { totalViews: 0, totalClicks: 0, totalBookings: 0, conversionRate: 0, bookingRate: 0 },
+    ratingStats: { averageRating: 0, totalReviews: 0 },
+    bookingStats: { newBookings: 0, pendingRequests: 0, todaySchedule: 0, completedThisMonth: 0 },
+    categories: [],
+    topServices: [],
+  });
+
+  // Retry configuration
+  const RETRY_DELAYS = [1000, 3000, 5000];
+  const MAX_RETRIES = 3;
+
+  // Fetch analytics with retry logic
+  const fetchAnalyticsWithRetry = async (retryCount = 0) => {
+    try {
+      setLoadingAnalytics(true);
+      setAnalyticsError(null);
+      const response = await providerAnalyticsApi.getProviderAnalytics();
+      if (response.success && response.data.overview) {
+        setAnalytics(response.data.overview);
+        return;
+      }
+      // API returned success but no data - this is valid for new providers
+      setAnalytics(response.data.overview || getEmptyAnalytics());
+    } catch (error: any) {
+      const isNetworkError = !error.response || error.code === 'ECONNABORTED';
+      const shouldRetry = isNetworkError && retryCount < MAX_RETRIES;
+
+      if (shouldRetry) {
+        console.warn(`Analytics fetch failed, retrying in ${RETRY_DELAYS[retryCount]}ms...`);
+        await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS[retryCount]));
+        return fetchAnalyticsWithRetry(retryCount + 1);
+      }
+
+      console.error('Failed to fetch analytics:', error);
+      setAnalyticsError(
+        error.response?.status === 401
+          ? 'Session expired. Please log in again.'
+          : 'Failed to load analytics. Your data will update automatically.'
+      );
+      // Provide fallback empty analytics so UI doesn't break
+      setAnalytics(getEmptyAnalytics());
+    } finally {
+      setLoadingAnalytics(false);
+    }
+  };
+
   // Fetch analytics data
   useEffect(() => {
-    const fetchAnalytics = async () => {
-      try {
-        setLoadingAnalytics(true);
-        setAnalyticsError(null);
-        const response = await providerAnalyticsApi.getProviderAnalytics();
-        if (response.success && response.data.overview) {
-          setAnalytics(response.data.overview);
-        }
-      } catch (error) {
-        console.error('Failed to fetch analytics:', error);
-        setAnalyticsError('Failed to load analytics');
-      } finally {
-        setLoadingAnalytics(false);
-      }
-    };
-
-    fetchAnalytics();
+    fetchAnalyticsWithRetry();
   }, []);
 
   // Fetch reviews data
@@ -264,7 +379,7 @@ const ProviderDashboard: React.FC = () => {
               : 'Customer',
             rating: review.rating,
             comment: review.comment,
-            serviceName: 'Service',
+            serviceName: review.service?.name || 'Service',
             date: review.createdAt
           }));
           setRecentReviews(transformedReviews);
@@ -385,10 +500,7 @@ const ProviderDashboard: React.FC = () => {
 
             <div className="flex items-center space-x-4">
               {/* Notifications */}
-              <button className="p-2 rounded-xl text-nilin-warmGray hover:text-nilin-charcoal hover:bg-nilin-blush/50 transition-colors relative">
-                <Bell className="h-5 w-5" />
-                <span className="absolute top-0 right-0 h-2 w-2 bg-nilin-coral rounded-full"></span>
-              </button>
+              <NotificationBell userId={user?._id} userRole="provider" />
 
               {/* User Menu */}
               <div className="relative">
@@ -403,14 +515,14 @@ const ProviderDashboard: React.FC = () => {
                 </button>
 
                 {showUserMenu && (
-                  <div className="origin-top-right absolute right-0 mt-2 w-56 rounded-xl shadow-nilin-lg bg-white ring-1 ring-nilin-border">
+                  <div className="origin-top-right absolute right-0 mt-2 w-56 rounded-xl shadow-nilin-lg bg-white ring-1 ring-nilin-border z-50">
                     <div className="py-1">
                       <div className="px-4 py-3 text-sm border-b border-nilin-border">
                         <div className="font-medium text-nilin-charcoal">{providerProfile?.businessInfo?.businessName || `${user?.firstName} ${user?.lastName}`}</div>
                         <div className="text-nilin-warmGray text-xs mt-0.5">{user?.email}</div>
                       </div>
                       <Link
-                        to="/provider/profile"
+                        to="/provider/settings"
                         className="flex items-center px-4 py-2.5 text-sm text-nilin-charcoal hover:bg-nilin-blush/50 font-sans"
                       >
                         <Settings className="mr-3 h-4 w-4 text-nilin-coral" />
@@ -546,6 +658,21 @@ const ProviderDashboard: React.FC = () => {
           </Link>
 
           <Link
+            to="/provider/ads"
+            className="group glass glass-blur p-6 rounded-2xl border border-nilin-border/50 hover:shadow-nilin-lg transition-all duration-300 card-3d"
+          >
+            <div className="flex items-center">
+              <div className="p-3 bg-nilin-blush/50 rounded-xl group-hover:bg-nilin-blush transition-colors">
+                <Activity className="h-6 w-6 text-nilin-coral" />
+              </div>
+              <div className="ml-4">
+                <h3 className="text-sm font-medium text-nilin-charcoal font-sans">Ads</h3>
+                <p className="text-xs text-nilin-warmGray">Advertising campaigns</p>
+              </div>
+            </div>
+          </Link>
+
+          <Link
             to="/provider/profile"
             className="group glass glass-blur p-6 rounded-2xl border border-nilin-border/50 hover:shadow-nilin-lg transition-all duration-300 card-3d"
           >
@@ -571,6 +698,21 @@ const ProviderDashboard: React.FC = () => {
               <div className="ml-4">
                 <h3 className="text-sm font-medium text-nilin-charcoal font-sans">Availability</h3>
                 <p className="text-xs text-nilin-warmGray">Manage your schedule</p>
+              </div>
+            </div>
+          </Link>
+
+          <Link
+            to="/provider/managed-services"
+            className="group glass glass-blur p-6 rounded-2xl border border-nilin-border/50 hover:shadow-nilin-lg transition-all duration-300 card-3d"
+          >
+            <div className="flex items-center">
+              <div className="p-3 bg-nilin-blush/50 rounded-xl group-hover:bg-nilin-blush transition-colors">
+                <Building2 className="h-6 w-6 text-nilin-coral" />
+              </div>
+              <div className="ml-4">
+                <h3 className="text-sm font-medium text-nilin-charcoal font-sans">Managed Services</h3>
+                <p className="text-xs text-nilin-warmGray">Corporate contracts</p>
               </div>
             </div>
           </Link>
@@ -655,10 +797,18 @@ const ProviderDashboard: React.FC = () => {
                       </div>
                       {request.status === 'pending' && (
                         <div className="flex space-x-2">
-                          <button className="flex-1 bg-gradient-to-r from-nilin-rose to-nilin-coral text-white text-xs py-2.5 px-3 rounded-xl font-medium hover:shadow-nilin-warm transition-all btn-3d">
-                            Accept
+                          <button
+                            onClick={() => handleAcceptBooking(request._id)}
+                            disabled={actionLoading === request._id}
+                            className="flex-1 bg-gradient-to-r from-nilin-rose to-nilin-coral text-white text-xs py-2.5 px-3 rounded-xl font-medium hover:shadow-nilin-warm transition-all btn-3d disabled:opacity-50"
+                          >
+                            {actionLoading === request._id ? 'Processing...' : 'Accept'}
                           </button>
-                          <button className="flex-1 glass-btn bg-nilin-blush text-nilin-charcoal text-xs py-2.5 px-3 rounded-xl font-medium hover:bg-nilin-peach transition-all">
+                          <button
+                            onClick={() => handleDeclineBooking(request._id)}
+                            disabled={actionLoading === request._id}
+                            className="flex-1 glass-btn bg-nilin-blush text-nilin-charcoal text-xs py-2.5 px-3 rounded-xl font-medium hover:bg-nilin-peach transition-all disabled:opacity-50"
+                          >
                             Decline
                           </button>
                         </div>
@@ -805,8 +955,15 @@ const ProviderDashboard: React.FC = () => {
                 ))}
               </div>
             ) : analyticsError ? (
-              <div className="text-center py-2">
-                <p className="text-xs text-red-500">{analyticsError}</p>
+              <div className="text-center py-4">
+                <AlertTriangle className="mx-auto h-8 w-8 text-amber-400 mb-2" />
+                <p className="text-xs text-nilin-charcoal mb-3">{analyticsError}</p>
+                <button
+                  onClick={() => fetchAnalyticsWithRetry()}
+                  className="text-xs text-nilin-coral hover:text-nilin-rose font-medium"
+                >
+                  Retry
+                </button>
               </div>
             ) : (
               <div className="space-y-3">
@@ -842,15 +999,21 @@ const ProviderDashboard: React.FC = () => {
             <div className="space-y-3">
               <div className="flex justify-between items-center">
                 <span className="text-sm text-nilin-warmGray font-sans">Total Earned</span>
-                <span className="text-sm font-medium text-nilin-charcoal font-sans">AED {providerProfile?.earnings?.totalEarned || 0}</span>
+                <span className="text-sm font-medium text-nilin-charcoal font-sans">
+                  AED {(providerProfile?.earnings?.totalEarned ?? 0).toLocaleString()}
+                </span>
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-sm text-nilin-warmGray font-sans">Available</span>
-                <span className="text-sm font-medium text-green-600 font-sans">AED {providerProfile?.earnings?.availableBalance || 0}</span>
+                <span className="text-sm font-medium text-green-600 font-sans">
+                  AED {(providerProfile?.earnings?.availableBalance ?? 0).toLocaleString()}
+                </span>
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-sm text-nilin-warmGray font-sans">Pending</span>
-                <span className="text-sm font-medium text-amber-600 font-sans">AED {providerProfile?.earnings?.pendingBalance || 0}</span>
+                <span className="text-sm font-medium text-amber-600 font-sans">
+                  AED {(providerProfile?.earnings?.pendingBalance ?? 0).toLocaleString()}
+                </span>
               </div>
             </div>
           </div>
@@ -867,16 +1030,36 @@ const ProviderDashboard: React.FC = () => {
                 <span className="text-sm text-nilin-warmGray font-sans">Overall Rating</span>
                 <div className="flex items-center">
                   <Star className="h-4 w-4 text-amber-400 fill-amber-400 mr-1" />
-                  <span className="text-sm font-medium text-nilin-charcoal font-sans">{providerProfile?.ratings?.average || 0}</span>
+                  <span className="text-sm font-medium text-nilin-charcoal font-sans">
+                    {(providerProfile?.ratings?.average ?? 0).toFixed(1)}
+                  </span>
                 </div>
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-sm text-nilin-warmGray font-sans">Total Reviews</span>
-                <span className="text-sm font-medium text-nilin-charcoal font-sans">{providerProfile?.ratings?.count || 0}</span>
+                <span className="text-sm font-medium text-nilin-charcoal font-sans">
+                  {providerProfile?.ratings?.count ?? 0}
+                </span>
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-sm text-nilin-warmGray font-sans">Badge</span>
-                <span className="text-xs bg-nilin-blush text-nilin-charcoal px-2.5 py-1 rounded-full font-sans">Top Rated</span>
+                <span className={`text-xs px-2.5 py-1 rounded-full font-sans ${
+                  (providerProfile?.ratings?.average ?? 0) >= 4.8 && (providerProfile?.ratings?.count ?? 0) >= 10
+                    ? 'bg-amber-100 text-amber-700'
+                    : (providerProfile?.ratings?.average ?? 0) >= 4.5 && (providerProfile?.ratings?.count ?? 0) >= 5
+                    ? 'bg-green-100 text-green-700'
+                    : (providerProfile?.ratings?.count ?? 0) >= 1
+                    ? 'bg-blue-100 text-blue-700'
+                    : 'bg-nilin-blush text-nilin-charcoal'
+                }`}>
+                  {(providerProfile?.ratings?.average ?? 0) >= 4.8 && (providerProfile?.ratings?.count ?? 0) >= 10
+                    ? 'Elite Provider'
+                    : (providerProfile?.ratings?.average ?? 0) >= 4.5 && (providerProfile?.ratings?.count ?? 0) >= 5
+                    ? 'Top Rated'
+                    : (providerProfile?.ratings?.count ?? 0) >= 1
+                    ? 'Rising Star'
+                    : 'New Provider'}
+                </span>
               </div>
             </div>
           </div>

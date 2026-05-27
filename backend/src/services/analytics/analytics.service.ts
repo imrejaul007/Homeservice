@@ -4,6 +4,8 @@ import Service from '../../models/service.model';
 import ServiceCategory from '../../models/serviceCategory.model';
 import logger from '../../utils/logger';
 import { cache } from '../../config/redis';
+import { Request } from 'express';
+import { addTenantToAggregation, addTenantFilter, isAdminOrSystem, getTenantIdOptional } from '../../utils/tenantFilter';
 
 interface DateRange {
   startDate: Date;
@@ -63,8 +65,8 @@ interface RevenueAnalytics {
     bookings: number;
   }>;
   revenueByCategory: Array<{
-    category: string;
-    revenue: number;
+    name: string;
+    value: number;
     percentage: number;
   }>;
   averageOrderValue: number;
@@ -142,21 +144,29 @@ const getCached = async <T>(key: string, fetchFn: () => Promise<T>, ttl = 300): 
   return data;
 };
 
-// Booking Analytics
-export const getBookingAnalytics = async (period: string = 'month'): Promise<BookingAnalytics> => {
-  const cacheKey = `analytics:bookings:${period}`;
+// Booking Analytics (tenant-isolated)
+export const getBookingAnalytics = async (period: string = 'month', req?: Request): Promise<BookingAnalytics> => {
+  const tenantId = req ? getTenantIdOptional(req) : undefined;
+  const isAdmin = req ? isAdminOrSystem(req) : false;
+
+  const cacheKey = `analytics:bookings:${period}:${tenantId || 'global'}`;
   const ttl = 300; // 5 minutes
 
   return getCached(cacheKey, async () => {
     const { startDate, endDate } = getDateRange(period as any);
 
-    const matchStage = {
+    const baseMatch: any = {
       createdAt: { $gte: startDate, $lte: endDate },
     };
 
+    // Apply tenant filter for non-admin requests
+    if (!isAdmin && tenantId) {
+      baseMatch.tenantId = tenantId;
+    }
+
     const [stats, completedStats] = await Promise.all([
       Booking.aggregate([
-        { $match: matchStage },
+        { $match: baseMatch },
         {
           $group: {
             _id: null,
@@ -166,7 +176,7 @@ export const getBookingAnalytics = async (period: string = 'month'): Promise<Boo
         },
       ]),
       Booking.aggregate([
-        { $match: { ...matchStage, status: 'completed' } },
+        { $match: { ...baseMatch, status: 'completed' } },
         {
           $group: {
             _id: null,
@@ -178,8 +188,8 @@ export const getBookingAnalytics = async (period: string = 'month'): Promise<Boo
     ]);
 
     const [cancelledCount, pendingCount] = await Promise.all([
-      Booking.countDocuments({ ...matchStage, status: 'cancelled' }),
-      Booking.countDocuments({ ...matchStage, status: 'pending' }),
+      Booking.countDocuments({ ...baseMatch, status: 'cancelled' }),
+      Booking.countDocuments({ ...baseMatch, status: 'pending' }),
     ]);
 
     const totalBookings = stats[0]?.totalBookings || 0;
@@ -199,19 +209,29 @@ export const getBookingAnalytics = async (period: string = 'month'): Promise<Boo
   }, ttl);
 };
 
-// Provider Analytics
-export const getProviderAnalytics = async (): Promise<ProviderAnalytics> => {
-  const cacheKey = 'analytics:providers';
+// Provider Analytics (tenant-isolated)
+export const getProviderAnalytics = async (period: string = 'month', req?: Request): Promise<ProviderAnalytics> => {
+  const tenantId = req ? getTenantIdOptional(req) : undefined;
+  const isAdmin = req ? isAdminOrSystem(req) : false;
+
+  const cacheKey = `analytics:providers:${period}:${tenantId || 'global'}`;
   const ttl = 600; // 10 minutes
 
   return getCached(cacheKey, async () => {
+    const { startDate } = getDateRange(period as any);
     const now = new Date();
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const startOfMonth = startDate; // Use period-based start date instead of always using start of month
+
+    // Build tenant-filtered base match for users
+    const userMatch: any = { role: 'provider' };
+    if (!isAdmin && tenantId) {
+      userMatch.tenantId = tenantId;
+    }
 
     const [totalProviders, providersByRole] = await Promise.all([
-      User.countDocuments({ role: 'provider' }),
+      User.countDocuments(userMatch),
       User.aggregate([
-        { $match: { role: 'provider' } },
+        { $match: userMatch },
         {
           $lookup: {
             from: 'providerprofiles',
@@ -244,13 +264,11 @@ export const getProviderAnalytics = async (): Promise<ProviderAnalytics> => {
       else if (group._id === 'suspended') providersByStatus.suspended = group.count;
     });
 
+    const newProvidersQuery: any = { ...userMatch, createdAt: { $gte: startOfMonth } };
     const [newProviders, topRated] = await Promise.all([
-      User.countDocuments({
-        role: 'provider',
-        createdAt: { $gte: startOfMonth },
-      }),
+      User.countDocuments(newProvidersQuery),
       User.aggregate([
-        { $match: { role: 'provider' } },
+        { $match: userMatch },
         {
           $lookup: {
             from: 'services',
@@ -288,23 +306,39 @@ export const getProviderAnalytics = async (): Promise<ProviderAnalytics> => {
   }, ttl);
 };
 
-// Customer Analytics
-export const getCustomerAnalytics = async (): Promise<CustomerAnalytics> => {
-  const cacheKey = 'analytics:customers';
+// Customer Analytics (tenant-isolated)
+export const getCustomerAnalytics = async (period: string = 'month', req?: Request): Promise<CustomerAnalytics> => {
+  const tenantId = req ? getTenantIdOptional(req) : undefined;
+  const isAdmin = req ? isAdminOrSystem(req) : false;
+
+  const cacheKey = `analytics:customers:${period}:${tenantId || 'global'}`;
   const ttl = 600;
 
   return getCached(cacheKey, async () => {
+    const { startDate } = getDateRange(period as any);
     const now = new Date();
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const startOfMonth = startDate; // Use period-based start date
+
+    // Build tenant-filtered base match for users
+    const userMatch: any = { role: 'customer' };
+    if (!isAdmin && tenantId) {
+      userMatch.tenantId = tenantId;
+    }
+
+    // Build tenant-filtered base match for bookings
+    const bookingMatch: any = { status: 'completed' };
+    if (!isAdmin && tenantId) {
+      bookingMatch.tenantId = tenantId;
+    }
 
     const [totalCustomers, newCustomers, topCustomers] = await Promise.all([
-      User.countDocuments({ role: 'customer' }),
+      User.countDocuments(userMatch),
       User.countDocuments({
-        role: 'customer',
+        ...userMatch,
         createdAt: { $gte: startOfMonth },
       }),
       Booking.aggregate([
-        { $match: { status: 'completed' } },
+        { $match: bookingMatch },
         {
           $group: {
             _id: '$customerId',
@@ -327,7 +361,7 @@ export const getCustomerAnalytics = async (): Promise<CustomerAnalytics> => {
     ]);
 
     const activeCustomers = await User.countDocuments({
-      role: 'customer',
+      ...userMatch,
       updatedAt: { $gte: new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000) },
     });
 
@@ -346,9 +380,12 @@ export const getCustomerAnalytics = async (): Promise<CustomerAnalytics> => {
   }, ttl);
 };
 
-// Revenue Analytics
-export const getRevenueAnalytics = async (period: string = 'month'): Promise<RevenueAnalytics> => {
-  const cacheKey = `analytics:revenue:${period}`;
+// Revenue Analytics (tenant-isolated)
+export const getRevenueAnalytics = async (period: string = 'month', req?: Request): Promise<RevenueAnalytics> => {
+  const tenantId = req ? getTenantIdOptional(req) : undefined;
+  const isAdmin = req ? isAdminOrSystem(req) : false;
+
+  const cacheKey = `analytics:revenue:${period}:${tenantId || 'global'}`;
   const ttl = 300;
 
   return getCached(cacheKey, async () => {
@@ -358,6 +395,15 @@ export const getRevenueAnalytics = async (period: string = 'month'): Promise<Rev
     const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
     const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0);
 
+    // Build tenant-filtered base match for bookings
+    const buildBookingMatch = (extraMatch: any = {}) => {
+      const match: any = { status: 'completed', ...extraMatch };
+      if (!isAdmin && tenantId) {
+        match.tenantId = tenantId;
+      }
+      return match;
+    };
+
     const [
       totalRevenue,
       revenueThisMonth,
@@ -366,45 +412,66 @@ export const getRevenueAnalytics = async (period: string = 'month'): Promise<Rev
       revenueByCategory,
     ] = await Promise.all([
       Booking.aggregate([
-        { $match: { status: 'completed', createdAt: { $gte: startDate } } },
+        { $match: buildBookingMatch({ createdAt: { $gte: startDate } }) },
         { $group: { _id: null, total: { $sum: '$pricing.totalAmount' } } },
       ]),
       Booking.aggregate([
         {
-          $match: {
-            status: 'completed',
+          $match: buildBookingMatch({
             createdAt: { $gte: startOfMonth, $lte: endDate },
-          },
+          }),
         },
         { $group: { _id: null, total: { $sum: '$pricing.totalAmount' } } },
       ]),
       Booking.aggregate([
         {
-          $match: {
-            status: 'completed',
+          $match: buildBookingMatch({
             createdAt: { $gte: startOfLastMonth, $lte: endOfLastMonth },
-          },
+          }),
         },
         { $group: { _id: null, total: { $sum: '$pricing.totalAmount' } } },
       ]),
       Booking.aggregate([
         {
-          $match: {
-            status: 'completed',
+          $match: buildBookingMatch({
             createdAt: { $gte: startDate, $lte: endDate },
+          }),
+        },
+        {
+          $group: {
+            _id: {
+              date: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
+              status: '$status'
+            },
+            revenue: { $sum: '$pricing.totalAmount' },
+            count: { $sum: 1 },
           },
         },
         {
           $group: {
-            _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
-            revenue: { $sum: '$pricing.totalAmount' },
-            bookings: { $sum: 1 },
+            _id: '$_id.date',
+            revenue: {
+              $sum: {
+                $cond: [{ $eq: ['$_id.status', 'completed'] }, '$revenue', 0]
+              }
+            },
+            bookings: { $sum: '$count' },
+            completed: {
+              $sum: {
+                $cond: [{ $eq: ['$_id.status', 'completed'] }, '$count', 0]
+              }
+            },
+            cancelled: {
+              $sum: {
+                $cond: [{ $eq: ['$_id.status', 'cancelled'] }, '$count', 0]
+              }
+            },
           },
         },
         { $sort: { _id: 1 } },
       ]),
       Booking.aggregate([
-        { $match: { status: 'completed', createdAt: { $gte: startDate } } },
+        { $match: buildBookingMatch({ createdAt: { $gte: startDate } }) },
         {
           $lookup: {
             from: 'services',
@@ -438,10 +505,9 @@ export const getRevenueAnalytics = async (period: string = 'month'): Promise<Rev
     const lastMonth = revenueLastMonth[0]?.total || 0;
     const monthOverMonthGrowth = lastMonth > 0 ? ((thisMonth - lastMonth) / lastMonth) * 100 : 0;
 
-    const bookingsThisMonth = await Booking.countDocuments({
-      status: 'completed',
-      createdAt: { $gte: startOfMonth, $lte: endDate },
-    });
+    const bookingsThisMonth = await Booking.countDocuments(
+      buildBookingMatch({ createdAt: { $gte: startOfMonth, $lte: endDate } })
+    );
 
     const daysInMonth = now.getDate();
     const projectedMonthlyRevenue = thisMonth * (30 / daysInMonth);
@@ -455,10 +521,13 @@ export const getRevenueAnalytics = async (period: string = 'month'): Promise<Rev
         date: d._id,
         revenue: d.revenue,
         bookings: d.bookings,
+        completed: d.completed,
+        cancelled: d.cancelled,
       })),
+      // FIX: Changed 'category' to 'name' and 'revenue' to 'value' to match frontend expectations
       revenueByCategory: revenueByCategory.map((c: any) => ({
-        category: c._id,
-        revenue: c.revenue,
+        name: c._id,
+        value: c.revenue,
         percentage: totalRev > 0 ? (c.revenue / totalRev) * 100 : 0,
       })),
       averageOrderValue: bookingsThisMonth > 0 ? thisMonth / bookingsThisMonth : 0,
@@ -467,16 +536,25 @@ export const getRevenueAnalytics = async (period: string = 'month'): Promise<Rev
   }, ttl);
 };
 
-// Service Analytics
-export const getServiceAnalytics = async (): Promise<ServiceAnalytics> => {
-  const cacheKey = 'analytics:services';
+// Service Analytics (tenant-isolated)
+export const getServiceAnalytics = async (req?: Request): Promise<ServiceAnalytics> => {
+  const tenantId = req ? getTenantIdOptional(req) : undefined;
+  const isAdmin = req ? isAdminOrSystem(req) : false;
+
+  const cacheKey = `analytics:services:${tenantId || 'global'}`;
   const ttl = 600;
 
   return getCached(cacheKey, async () => {
+    // Build tenant-filtered base match for services
+    const serviceMatch: any = { isActive: true };
+    if (!isAdmin && tenantId) {
+      serviceMatch.tenantId = tenantId;
+    }
+
     const [totalServices, topServices, servicesByCategory] = await Promise.all([
-      Service.countDocuments({ isActive: true }),
+      Service.countDocuments(serviceMatch),
       Service.aggregate([
-        { $match: { isActive: true } },
+        { $match: serviceMatch },
         { $sort: { totalBookings: -1 } },
         { $limit: 10 },
       ]),
@@ -488,6 +566,20 @@ export const getServiceAnalytics = async (): Promise<ServiceAnalytics> => {
             foreignField: 'category',
             as: 'services',
           },
+        },
+        // Filter services by tenant after lookup
+        {
+          $addFields: {
+            services: {
+              $filter: {
+                input: '$services',
+                as: 'service',
+                cond: isAdmin || !tenantId
+                  ? { $eq: [true, true] } // No filter for admin or no tenant
+                  : { $eq: ['$$service.tenantId', tenantId] }
+              }
+            }
+          }
         },
         {
           $group: {

@@ -872,6 +872,8 @@ export class ProviderOpsService {
     if (filters.status) {
       if (filters.status === 'approved') {
         query['verificationStatus.overall'] = { $in: ['approved', 'verified'] };
+      } else if (filters.status === 'under_review') {
+        query['verificationStatus.overall'] = 'in_progress';
       } else {
         query['verificationStatus.overall'] = filters.status;
       }

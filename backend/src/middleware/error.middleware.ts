@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import logger from '../utils/logger';
 import { APP_CONSTANTS } from '../config/constants';
 import { ApiError, ERROR_CODES } from '../utils/ApiError';
+import { captureException } from '../config/sentry';
 
 // Map Mongoose error types to application error codes
 const getMongooseErrorInfo = (err: Error): { code: string; statusCode: number; message?: string; errors?: any[] } => {
@@ -100,6 +101,27 @@ export const errorHandler = (
     ip: req.ip,
     userAgent: req.get('user-agent')
   });
+
+  // Capture exception in Sentry with request context
+  if (statusCode >= 500 || !err.message?.includes('Validation')) {
+    captureException(err, {
+      request: {
+        url: req.originalUrl,
+        method: req.method,
+        headers: {
+          'user-agent': req.get('user-agent'),
+          'content-type': req.get('content-type'),
+        },
+        ip: req.ip,
+        correlationId,
+      },
+      error: {
+        code: errorCode,
+        statusCode,
+        userId: (req as any).user?.id,
+      },
+    });
+  }
 
   // Build standardized error response
   const response: Record<string, any> = {

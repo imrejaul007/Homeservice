@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- Exclude sensitive data from backups -->
+    <exclude domain="sharedpref" path="nilin_lifecycle_state.xml"/>
+    <exclude domain="sharedpref" path="nilin_crash_state.xml"/>
+    <exclude domain="sharedpref" path="nilin_sync_state.xml"/>
+    <exclude domain="sharedpref" path="nilin_sync_trigger.xml"/>
+    <exclude domain="sharedpref" path="nilin_fcm.xml"/>
+
+    <!-- Include safe data for user experience -->
+    <include domain="sharedpref" path="nilin_offline_actions.xml"/>
+    <include domain="sharedpref" path="nilin_offline_state.xml"/>
+
+    <!-- Exclude no-backup flag files -->
+    <exclude domain="database" path="." />
+    <exclude domain="external" path="." />
+    <exclude domain="root" path="." />
+</full-backup-content>

@@ -5,6 +5,17 @@ import ProviderProfile from '../models/providerProfile.model';
 import User from '../models/user.model';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
+import { getTenantContext, TenantContext } from '../utils/tenantFilter';
+import logger from '../utils/logger';
+import {
+  searchServices as meiliSearchServices,
+  searchServicesWithGeo,
+  getSearchSuggestions as getMeiliSuggestions,
+  getSearchAnalytics,
+  analyzeRefinementPatterns,
+  expandQueryWithSynonyms,
+  GeoSearchOptions,
+} from '../services/search.service';
 
 // ===================================
 // INTERFACES & TYPES
@@ -36,6 +47,19 @@ export interface SearchResponse {
       resultCount: number;
       searchTime: number;
       suggestions?: string[];
+      didYouMean?: string[];
+      correctionApplied?: boolean;
+      expandedQueries?: string[];
+    };
+    analytics?: {
+      totalSearches: number;
+      zeroResultSearches: number;
+      topQueries: Array<{ query: string; count: number }>;
+    };
+    refinementPatterns?: {
+      commonRefinements: Array<{ from: string; to: string; count: number }>;
+      averageRefinementsPerSession: number;
+      mostAbandonedQueryPattern: string | null;
     };
   };
   message?: string;
@@ -66,32 +90,82 @@ interface SearchFilters {
 /**
  * Search services with comprehensive filtering and sorting
  * GET /api/search/services
+ * Enhanced with typo tolerance, synonyms, and "Did you mean?" suggestions
  */
 export const searchServices = asyncHandler(async (req: Request, res: Response) => {
   const startTime = Date.now();
-  
+
   try {
+    // Extract tenant context for service calls
+    const tenantContext: TenantContext = getTenantContext(req);
+
     // Parse and validate query parameters
     const filters = parseSearchFilters(req.query);
-    
-    // Build search query
-    const { query, countQuery } = buildServiceSearchQuery(filters);
-    
-    // Execute search with population
-    const [services, totalCount] = await Promise.all([
-      Service.find(query)
-        .populate('provider', 'firstName lastName avatar rating reviewsData businessInfo')
-        .sort(buildSortQuery(filters))
-        .skip(((filters.page || 1) - 1) * (filters.limit || 20))
-        .limit(filters.limit || 20),
-      Service.countDocuments(countQuery)
-    ]);
+
+    // Get previous query from session/header for refinement tracking
+    const previousQuery = req.headers['x-previous-query'] as string | undefined;
+
+    // Use Meilisearch with enhanced search if available, with MongoDB fallback
+    let services: any[];
+    let totalCount: number;
+    let didYouMean: string[] | undefined;
+    let correctionApplied = false;
+    let expandedQueries: string[] | undefined;
+
+    // Check if geo-search is needed
+    if (filters.lat && filters.lng && filters.radius) {
+      // Geo search with Meilisearch
+      const geoOptions: GeoSearchOptions = {
+        limit: filters.limit,
+        offset: ((filters.page || 1) - 1) * (filters.limit || 20),
+        category: filters.category,
+        subcategory: filters.subcategory,
+        minPrice: filters.minPrice,
+        maxPrice: filters.maxPrice,
+        minRating: filters.minRating,
+        sortBy: (filters.sortBy === 'price' ? 'price_asc' :
+                filters.sortBy === 'price_desc' ? 'price_desc' :
+                filters.sortBy === 'rating' ? 'rating' : 'popular') as 'price_asc' | 'price_desc' | 'rating' | 'popular',
+        latitude: filters.lat,
+        longitude: filters.lng,
+        radiusKm: filters.radius,
+      };
+
+      const geoResults = await searchServicesWithGeo(filters.q || '', geoOptions, previousQuery);
+      services = geoResults.hits || [];
+      totalCount = geoResults.estimatedTotalHits;
+    } else {
+      // Standard search with typo tolerance and synonyms
+      const searchOptions = {
+        limit: filters.limit,
+        offset: ((filters.page || 1) - 1) * (filters.limit || 20),
+        category: filters.category,
+        subcategory: filters.subcategory,
+        minPrice: filters.minPrice,
+        maxPrice: filters.maxPrice,
+        minRating: filters.minRating,
+        sortBy: (filters.sortBy === 'price' ? 'price_asc' :
+                filters.sortBy === 'price_desc' ? 'price_desc' :
+                filters.sortBy === 'rating' ? 'rating' : 'popular') as 'price_asc' | 'price_desc' | 'rating' | 'popular',
+      };
+
+      const searchResults = await meiliSearchServices(filters.q || '', searchOptions, previousQuery);
+      services = searchResults.hits || [];
+      totalCount = searchResults.estimatedTotalHits;
+      didYouMean = searchResults.didYouMean;
+      correctionApplied = searchResults.correctionApplied || false;
+
+      // Get expanded queries for debugging/display
+      if (filters.q) {
+        expandedQueries = expandQueryWithSynonyms(filters.q);
+      }
+    }
 
     // Process results and add distance for geo searches
     const processedServices = await processSearchResults(services, filters);
 
     // Increment search counts for tracked services (background task)
-    incrementSearchCounts(services.slice(0, 10)); // Top 10 results only
+    incrementSearchCounts(processedServices.slice(0, 10));
 
     // Generate pagination
     const pagination = generatePagination(
@@ -101,7 +175,9 @@ export const searchServices = asyncHandler(async (req: Request, res: Response) =
     );
 
     // Generate search suggestions if no results
-    const suggestions = totalCount === 0 ? await generateSearchSuggestions(filters.q) : undefined;
+    const suggestions = totalCount === 0 && !didYouMean
+      ? await getMeiliSuggestions(filters.q || '', 5)
+      : undefined;
 
     const searchTime = Date.now() - startTime;
 
@@ -114,7 +190,10 @@ export const searchServices = asyncHandler(async (req: Request, res: Response) =
           query: filters.q,
           resultCount: totalCount,
           searchTime,
-          suggestions
+          suggestions: suggestions || didYouMean,
+          didYouMean,
+          correctionApplied,
+          expandedQueries: (expandedQueries?.length ?? 0) > 1 ? expandedQueries : undefined,
         }
       }
     };
@@ -122,7 +201,11 @@ export const searchServices = asyncHandler(async (req: Request, res: Response) =
     res.json(response);
 
   } catch (error: any) {
-    console.error('Service search error:', error);
+    logger.error('Service search error', {
+      context: 'SearchController',
+      action: 'SEARCH_ERROR',
+      error: error.message,
+    });
     throw new ApiError(500, 'Search operation failed', error.message);
   }
 });
@@ -130,8 +213,11 @@ export const searchServices = asyncHandler(async (req: Request, res: Response) =
 /**
  * Get service suggestions/autocomplete
  * GET /api/search/suggestions
+ * Enhanced with typo tolerance using Levenshtein distance
  */
 export const getSearchSuggestions = asyncHandler(async (req: Request, res: Response) => {
+  // Extract tenant context for service calls
+  const tenantContext: TenantContext = getTenantContext(req);
   const { q, limit = 10 } = req.query;
 
   if (!q || typeof q !== 'string' || q.length < 2) {
@@ -142,13 +228,30 @@ export const getSearchSuggestions = asyncHandler(async (req: Request, res: Respo
   }
 
   try {
+    // Try Meilisearch suggestions first (with typo tolerance)
+    const meiliSuggestions = await getMeiliSuggestions(q as string, Number(limit));
+
+    if (meiliSuggestions.length > 0) {
+      return res.json({
+        success: true,
+        data: {
+          suggestions: meiliSuggestions.map(text => ({ text, type: 'service' })),
+          source: 'meilisearch'
+        }
+      });
+    }
+
+    // Fallback to MongoDB suggestions
+    // Build tenant filter for suggestions
+    const tenantMatch: any = { isActive: true, name: { $regex: new RegExp(q as string, 'i') } };
+    if (!tenantContext.isAdmin && tenantContext.tenantId) {
+      tenantMatch.tenantId = tenantContext.tenantId;
+    }
+
     // Get service name suggestions
     const serviceNameSuggestions = await Service.aggregate([
       {
-        $match: {
-          isActive: true,
-          name: { $regex: new RegExp(q, 'i') }
-        }
+        $match: tenantMatch
       },
       {
         $group: {
@@ -161,16 +264,20 @@ export const getSearchSuggestions = asyncHandler(async (req: Request, res: Respo
       { $project: { suggestion: '$_id', type: 'service' } }
     ]);
 
+    // Build tenant filter for category suggestions
+    const categoryMatch: any = { isActive: true };
+    if (!tenantContext.isAdmin && tenantContext.tenantId) {
+      categoryMatch.tenantId = tenantContext.tenantId;
+    }
+    categoryMatch.$or = [
+      { name: { $regex: new RegExp(q as string, 'i') } },
+      { 'subcategories.name': { $regex: new RegExp(q as string, 'i') } }
+    ];
+
     // Get category suggestions
     const categorySuggestions = await ServiceCategory.aggregate([
       {
-        $match: {
-          isActive: true,
-          $or: [
-            { name: { $regex: new RegExp(q, 'i') } },
-            { 'subcategories.name': { $regex: new RegExp(q, 'i') } }
-          ]
-        }
+        $match: categoryMatch
       },
       { $limit: Math.floor(Number(limit) / 2) },
       { $project: { suggestion: '$name', type: 'category' } }
@@ -183,7 +290,7 @@ export const getSearchSuggestions = asyncHandler(async (req: Request, res: Respo
 
     return res.json({
       success: true,
-      data: { suggestions }
+      data: { suggestions, source: 'mongodb' }
     });
 
   } catch (error: any) {
@@ -196,12 +303,14 @@ export const getSearchSuggestions = asyncHandler(async (req: Request, res: Respo
  * GET /api/search/trending
  */
 export const getTrendingServices = asyncHandler(async (req: Request, res: Response) => {
+  // Extract tenant context for service calls
+  const tenantContext: TenantContext = getTenantContext(req);
   const { limit = 10, timeframe = '7d' } = req.query;
 
   try {
     let dateFilter = {};
     const now = new Date();
-    
+
     switch (timeframe) {
       case '1d':
         dateFilter = { 'searchMetadata.lastSearched': { $gte: new Date(now.getTime() - 24 * 60 * 60 * 1000) } };
@@ -214,11 +323,17 @@ export const getTrendingServices = asyncHandler(async (req: Request, res: Respon
         break;
     }
 
-    const trendingServices = await Service.find({
+    // Build tenant-scoped query
+    const query: any = {
       isActive: true,
       status: 'active', // ✅ SECURITY FIX: Only show approved services in trending
       ...dateFilter
-    })
+    };
+    if (!tenantContext.isAdmin && tenantContext.tenantId) {
+      query.tenantId = tenantContext.tenantId;
+    }
+
+    const trendingServices = await Service.find(query)
     .populate('provider', 'firstName lastName avatar rating')
     .sort({ 'searchMetadata.popularityScore': -1, 'searchMetadata.searchCount': -1 })
     .limit(Number(limit));
@@ -238,11 +353,13 @@ export const getTrendingServices = asyncHandler(async (req: Request, res: Respon
  * GET /api/search/filters
  */
 export const getSearchFilters = asyncHandler(async (req: Request, res: Response) => {
+  // Extract tenant context for service calls
+  const tenantContext: TenantContext = getTenantContext(req);
   const { lat, lng, radius } = req.query;
 
   try {
     let locationFilter = {};
-    
+
     // Add location filter if coordinates provided
     if (lat && lng && radius) {
       locationFilter = {
@@ -255,9 +372,15 @@ export const getSearchFilters = asyncHandler(async (req: Request, res: Response)
       };
     }
 
+    // Build tenant filter for aggregations
+    const baseMatch: any = { isActive: true, ...locationFilter };
+    if (!tenantContext.isAdmin && tenantContext.tenantId) {
+      baseMatch.tenantId = tenantContext.tenantId;
+    }
+
     // Get category distribution
     const categoryStats = await Service.aggregate([
-      { $match: { isActive: true, ...locationFilter } },
+      { $match: baseMatch },
       {
         $group: {
           _id: '$category',
@@ -271,7 +394,7 @@ export const getSearchFilters = asyncHandler(async (req: Request, res: Response)
 
     // Get price range
     const priceStats = await Service.aggregate([
-      { $match: { isActive: true, ...locationFilter } },
+      { $match: baseMatch },
       {
         $group: {
           _id: null,
@@ -284,7 +407,7 @@ export const getSearchFilters = asyncHandler(async (req: Request, res: Response)
 
     // Get rating distribution
     const ratingStats = await Service.aggregate([
-      { $match: { isActive: true, ...locationFilter } },
+      { $match: baseMatch },
       {
         $group: {
           _id: null,
@@ -344,9 +467,15 @@ function parseSearchFilters(query: any): SearchFilters {
   };
 }
 
-function buildServiceSearchQuery(filters: SearchFilters) {
+function buildServiceSearchQuery(filters: SearchFilters, tenantContext: TenantContext) {
   let query: any = {};
   let countQuery: any = {};
+
+  // Add tenant filter for non-admin requests
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    query.tenantId = tenantContext.tenantId;
+    countQuery.tenantId = tenantContext.tenantId;
+  }
 
   // Base filter - only active services with approved status
   if (filters.isActive !== false) {
@@ -460,8 +589,9 @@ function buildSortQuery(filters: SearchFilters): any {
 
 async function processSearchResults(services: any[], filters: SearchFilters) {
   return services.map(service => {
-    const result = service.toJSON();
-    
+    // Handle both Mongoose documents (with toJSON) and plain objects
+    const result = typeof service.toJSON === 'function' ? service.toJSON() : { ...service };
+
     // Add computed fields
     result.provider = result.provider || {};
     result.fullLocation = service.fullLocation;
@@ -548,7 +678,11 @@ async function generateSearchSuggestions(query?: string): Promise<string[]> {
 
     return allSuggestions;
   } catch (error) {
-    console.error('Error generating suggestions:', error);
+    logger.error('Error generating suggestions', {
+      context: 'SearchController',
+      action: 'SUGGESTIONS_ERROR',
+      error: error instanceof Error ? error.message : String(error),
+    });
     return [];
   }
 }
@@ -558,15 +692,23 @@ async function generateSearchSuggestions(query?: string): Promise<string[]> {
  * GET /api/search/service/:id
  */
 export const getServiceById = asyncHandler(async (req: Request, res: Response) => {
+  // Extract tenant context for service calls
+  const tenantContext: TenantContext = getTenantContext(req);
   const { id } = req.params;
-  
+
   try {
-    // First get the service - only show active approved services to customers
-    const service = await Service.findOne({
+    // Build tenant-scoped query
+    const serviceQuery: any = {
       _id: id,
       isActive: true,
       status: 'active' // ✅ SECURITY FIX: Only allow customers to view approved services
-    }).lean();
+    };
+    if (!tenantContext.isAdmin && tenantContext.tenantId) {
+      serviceQuery.tenantId = tenantContext.tenantId;
+    }
+
+    // First get the service - only show active approved services to customers
+    const service = await Service.findOne(serviceQuery).lean();
 
     if (!service) {
       throw new ApiError(404, 'Service not found or not available');
@@ -607,7 +749,12 @@ export const getServiceById = asyncHandler(async (req: Request, res: Response) =
           $inc: { 'searchMetadata.clickCount': 1 }
         });
       } catch (error) {
-        console.error('Error incrementing click count:', error);
+        logger.error('Error incrementing click count', {
+          context: 'SearchController',
+          action: 'INCREMENT_CLICK_ERROR',
+          serviceId: id,
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
     });
     
@@ -625,6 +772,8 @@ export const getServiceById = asyncHandler(async (req: Request, res: Response) =
  * POST /api/search/service/:id/click
  */
 export const trackServiceClick = asyncHandler(async (req: Request, res: Response) => {
+  // Extract tenant context for service calls
+  const tenantContext: TenantContext = getTenantContext(req);
   const { id } = req.params;
   
   try {
@@ -685,9 +834,10 @@ export const getPopularServices = asyncHandler(async (req: Request, res: Respons
 export const getServicesByCategory = asyncHandler(async (req: Request, res: Response) => {
   const { category } = req.params;
   const filters = parseSearchFilters({ ...req.query, category });
-  
+  const tenantContext: TenantContext = getTenantContext(req);
+
   try {
-    const { query, countQuery } = buildServiceSearchQuery(filters);
+    const { query, countQuery } = buildServiceSearchQuery(filters, tenantContext);
     const sortQuery = buildSortQuery(filters);
     
     const [services, totalCount] = await Promise.all([
@@ -731,16 +881,238 @@ function incrementSearchCounts(services: any[]) {
       const serviceIds = services.map(s => s._id);
       await Service.updateMany(
         { _id: { $in: serviceIds } },
-        { 
+        {
           $inc: { 'searchMetadata.searchCount': 1 },
           $set: { 'searchMetadata.lastSearched': new Date() }
         }
       );
     } catch (error) {
-      console.error('Error incrementing search counts:', error);
+      logger.error('Error incrementing search counts', {
+        context: 'SearchController',
+        action: 'INCREMENT_SEARCH_ERROR',
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   });
 }
+
+// ============================================
+// SEARCH ANALYTICS ENDPOINTS
+// ============================================
+
+/**
+ * Get search analytics summary
+ * GET /api/search/analytics
+ * Requires admin privileges
+ */
+export const getSearchAnalyticsSummary = asyncHandler(async (req: Request, res: Response) => {
+  const tenantContext: TenantContext = getTenantContext(req);
+
+  // Only allow admin access to analytics
+  if (!tenantContext.isAdmin) {
+    throw new ApiError(403, 'Admin access required for search analytics');
+  }
+
+  try {
+    const analytics = getSearchAnalytics();
+
+    // Calculate zero-result rate
+    const zeroResultRate = analytics.totalSearches > 0
+      ? (analytics.zeroResultSearches / analytics.totalSearches * 100).toFixed(2)
+      : '0.00';
+
+    res.json({
+      success: true,
+      data: {
+        summary: {
+          totalSearches: analytics.totalSearches,
+          zeroResultSearches: analytics.zeroResultSearches,
+          zeroResultRate: `${zeroResultRate}%`,
+          refinementCount: analytics.refinementCount,
+        },
+        topQueries: analytics.topQueries.slice(0, 20),
+        zeroResultQueries: analytics.zeroResultQueries
+          .sort((a, b) => b.count - a.count)
+          .slice(0, 20)
+          .map(q => ({
+            query: q.query,
+            count: q.count,
+            lastSeen: new Date(q.timestamp).toISOString()
+          })),
+      }
+    });
+  } catch (error: any) {
+    logger.error('Error fetching search analytics', {
+      context: 'SearchController',
+      action: 'ANALYTICS_ERROR',
+      error: error.message,
+    });
+    throw new ApiError(500, 'Failed to fetch search analytics', error.message);
+  }
+});
+
+/**
+ * Get search refinement patterns analysis
+ * GET /api/search/analytics/refinements
+ * Requires admin privileges
+ */
+export const getRefinementPatterns = asyncHandler(async (req: Request, res: Response) => {
+  const tenantContext: TenantContext = getTenantContext(req);
+
+  // Only allow admin access to analytics
+  if (!tenantContext.isAdmin) {
+    throw new ApiError(403, 'Admin access required for search analytics');
+  }
+
+  try {
+    const patterns = analyzeRefinementPatterns();
+
+    res.json({
+      success: true,
+      data: patterns
+    });
+  } catch (error: any) {
+    logger.error('Error fetching refinement patterns', {
+      context: 'SearchController',
+      action: 'REFINEMENTS_ERROR',
+      error: error.message,
+    });
+    throw new ApiError(500, 'Failed to fetch refinement patterns', error.message);
+  }
+});
+
+/**
+ * Get synonym dictionary (for debugging/admin)
+ * GET /api/search/synonyms
+ * Requires admin privileges
+ */
+export const getSynonymDictionary = asyncHandler(async (req: Request, res: Response) => {
+  const tenantContext: TenantContext = getTenantContext(req);
+
+  // Only allow admin access to synonym dictionary
+  if (!tenantContext.isAdmin) {
+    throw new ApiError(403, 'Admin access required for synonym dictionary');
+  }
+
+  try {
+    const { SYNONYM_DICTIONARY } = await import('../services/search.service');
+
+    res.json({
+      success: true,
+      data: {
+        synonyms: SYNONYM_DICTIONARY,
+        totalEntries: Object.keys(SYNONYM_DICTIONARY).length,
+      }
+    });
+  } catch (error: any) {
+    logger.error('Error fetching synonym dictionary', {
+      context: 'SearchController',
+      action: 'SYNONYMS_ERROR',
+      error: error.message,
+    });
+    throw new ApiError(500, 'Failed to fetch synonym dictionary', error.message);
+  }
+});
+
+/**
+ * Preview query expansion with synonyms
+ * POST /api/search/preview-expansion
+ * Requires admin privileges
+ */
+export const previewQueryExpansion = asyncHandler(async (req: Request, res: Response) => {
+  const tenantContext: TenantContext = getTenantContext(req);
+
+  // Only allow admin access to preview
+  if (!tenantContext.isAdmin) {
+    throw new ApiError(403, 'Admin access required for query expansion preview');
+  }
+
+  const { query } = req.body;
+
+  if (!query || typeof query !== 'string') {
+    throw new ApiError(400, 'Query parameter is required');
+  }
+
+  try {
+    const expandedQueries = expandQueryWithSynonyms(query);
+
+    res.json({
+      success: true,
+      data: {
+        originalQuery: query,
+        expandedQueries,
+        expandedCount: expandedQueries.length,
+      }
+    });
+  } catch (error: any) {
+    logger.error('Error previewing query expansion', {
+      context: 'SearchController',
+      action: 'PREVIEW_EXPAND_ERROR',
+      error: error.message,
+    });
+    throw new ApiError(500, 'Failed to preview query expansion', error.message);
+  }
+});
+
+/**
+ * Get zero-result searches for content gap analysis
+ * GET /api/search/zero-results
+ * Requires admin privileges
+ */
+export const getZeroResultSearches = asyncHandler(async (req: Request, res: Response) => {
+  const tenantContext: TenantContext = getTenantContext(req);
+
+  // Only allow admin access
+  if (!tenantContext.isAdmin) {
+    throw new ApiError(403, 'Admin access required for zero-result analysis');
+  }
+
+  const { limit = 50, minCount = 1 } = req.query;
+
+  try {
+    const analytics = getSearchAnalytics();
+
+    // Filter by minimum count and sort by count descending
+    const zeroResults = analytics.zeroResultQueries
+      .filter(q => q.count >= Number(minCount))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, Number(limit))
+      .map(q => ({
+        query: q.query,
+        occurrences: q.count,
+        firstSeen: new Date(q.timestamp).toISOString(),
+        suggestions: [] // Could add LLM-based suggestions here
+      }));
+
+    // Generate content opportunity report
+    const contentOpportunities = zeroResults
+      .filter(q => q.occurrences >= 3)
+      .map(q => ({
+        searchTerm: q.query,
+        frequency: q.occurrences,
+        recommendation: `Consider adding services or content for: "${q.query}"`
+      }));
+
+    res.json({
+      success: true,
+      data: {
+        zeroResultSearches: zeroResults,
+        contentOpportunities,
+        summary: {
+          totalUniqueZeroResultQueries: analytics.zeroResultQueries.length,
+          highPriorityOpportunities: contentOpportunities.length,
+        }
+      }
+    });
+  } catch (error: any) {
+    logger.error('Error fetching zero-result searches', {
+      context: 'SearchController',
+      action: 'ZERO_RESULTS_ERROR',
+      error: error.message,
+    });
+    throw new ApiError(500, 'Failed to fetch zero-result searches', error.message);
+  }
+});
 
 // Export all functions
 export default {
@@ -751,5 +1123,11 @@ export default {
   getServiceById,
   trackServiceClick,
   getPopularServices,
-  getServicesByCategory
+  getServicesByCategory,
+  // Analytics endpoints
+  getSearchAnalyticsSummary,
+  getRefinementPatterns,
+  getSynonymDictionary,
+  previewQueryExpansion,
+  getZeroResultSearches,
 };

@@ -1,0 +1,44 @@
+# Dependencies
+node_modules
+npm-debug.log
+
+# Build output
+dist
+
+# Version control
+.git
+.gitignore
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Logs
+logs
+*.log
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test coverage
+coverage
+
+# Documentation
+README.md
+*.md
+
+# Development files
+*.config.js
+nodemon.json
+
+# Local scripts
+scripts/*.ts
+src/scripts/*.ts

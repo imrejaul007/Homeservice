@@ -53,7 +53,6 @@ const offerClaimSchema = new Schema<IOfferClaim>(
     expiresAt: {
       type: Date,
       required: true,
-      index: true,
     },
   },
   {

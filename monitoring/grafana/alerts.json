@@ -1,0 +1,225 @@
+{
+  "apiVersion": 1,
+  "groups": [
+    {
+      "orgId": 1,
+      "name": "NILIN Alerts",
+      "folder": "NILIN",
+      "interval": "1m",
+      "rules": [
+        {
+          "uid": "api-error-rate",
+          "title": "API Error Rate Alert",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "queryType": "prometheus",
+              "model": {
+                "expr": "sum(rate(http_requests_total{status=~\"5..\"}[5m])) / sum(rate(http_requests_total[5m])) * 100",
+                "refId": "A"
+              }
+            },
+            {
+              "refId": "B",
+              "queryType": "reduce",
+              "model": {
+                "type": "last",
+                "reducer": "last",
+                "refId": "B",
+                "expression": "A"
+              }
+            },
+            {
+              "refId": "C",
+              "queryType": "threshold",
+              "model": {
+                "type": "threshold",
+                "refId": "C",
+                "expression": "B",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "params": [5],
+                      "type": "gt"
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Alerting",
+          "for": "5m",
+          "labels": {
+            "severity": "critical",
+            "team": "backend"
+          },
+          "annotations": {
+            "summary": "API error rate exceeds 5%",
+            "description": "Current error rate: {{ $values.B.Value }}%"
+          }
+        },
+        {
+          "uid": "api-latency",
+          "title": "API Latency Alert",
+          "condition": "C",
+          "for": "5m",
+          "data": [
+            {
+              "refId": "A",
+              "queryType": "prometheus",
+              "model": {
+                "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))",
+                "refId": "A"
+              }
+            },
+            {
+              "refId": "B",
+              "queryType": "reduce",
+              "model": {
+                "type": "last",
+                "reducer": "last",
+                "refId": "B",
+                "expression": "A"
+              }
+            },
+            {
+              "refId": "C",
+              "queryType": "threshold",
+              "model": {
+                "type": "threshold",
+                "refId": "C",
+                "expression": "B",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "params": [2],
+                      "type": "gt"
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Alerting",
+          "labels": {
+            "severity": "warning",
+            "team": "backend"
+          },
+          "annotations": {
+            "summary": "p99 latency exceeds 2s",
+            "description": "Current p99 latency: {{ $values.B.Value }}s"
+          }
+        },
+        {
+          "uid": "queue-backlog",
+          "title": "Queue Backlog Alert",
+          "condition": "C",
+          "for": "10m",
+          "data": [
+            {
+              "refId": "A",
+              "queryType": "prometheus",
+              "model": {
+                "expr": "sum(queue_pending_jobs_total)",
+                "refId": "A"
+              }
+            },
+            {
+              "refId": "B",
+              "queryType": "reduce",
+              "model": {
+                "type": "last",
+                "reducer": "last",
+                "refId": "B",
+                "expression": "A"
+              }
+            },
+            {
+              "refId": "C",
+              "queryType": "threshold",
+              "model": {
+                "type": "threshold",
+                "refId": "C",
+                "expression": "B",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "params": [100],
+                      "type": "gt"
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Alerting",
+          "labels": {
+            "severity": "warning",
+            "team": "backend"
+          },
+          "annotations": {
+            "summary": "Queue has {{ $values.B.Value }} pending jobs",
+            "description": "Queue backlog exceeds 100 jobs"
+          }
+        },
+        {
+          "uid": "payment-failure",
+          "title": "Payment Failure Alert",
+          "condition": "C",
+          "for": "5m",
+          "data": [
+            {
+              "refId": "A",
+              "queryType": "prometheus",
+              "model": {
+                "expr": "sum(rate(payment_requests_total{status=~\"failed|error\"}[5m])) / sum(rate(payment_requests_total[5m])) * 100",
+                "refId": "A"
+              }
+            },
+            {
+              "refId": "B",
+              "queryType": "reduce",
+              "model": {
+                "type": "last",
+                "reducer": "last",
+                "refId": "B",
+                "expression": "A"
+              }
+            },
+            {
+              "refId": "C",
+              "queryType": "threshold",
+              "model": {
+                "type": "threshold",
+                "refId": "C",
+                "expression": "B",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "params": [5],
+                      "type": "gt"
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Alerting",
+          "labels": {
+            "severity": "critical",
+            "team": "payments"
+          },
+          "annotations": {
+            "summary": "Payment failure rate exceeds 5%",
+            "description": "Current payment failure rate: {{ $values.B.Value }}%"
+          }
+        }
+      ]
+    }
+  ]
+}

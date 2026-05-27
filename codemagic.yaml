@@ -1,4 +1,8 @@
 workflows:
+  # ============================================
+  # NILIN QA AUTOMATION WORKFLOWS
+  # ============================================
+
   ios-build:
     name: NILIN iOS Build
     max_build_duration: 30
@@ -64,3 +68,394 @@ workflows:
           ./gradlew assembleDebug
     artifacts:
       - frontend/android/app/build/outputs/**/*.apk
+
+  # ============================================
+  # FULL QA PIPELINE
+  # ============================================
+
+  full-qa-pipeline:
+    name: NILIN Full QA Pipeline
+    max_build_duration: 120
+    instance_type: mac_mini_m2
+    environment:
+      node: 22
+      java: 21
+      xcode: latest
+      vars:
+        API_URL: "https://api.nilin.com"
+        FRONTEND_URL: "https://nilin.com"
+        STRIPE_TEST_KEY: "sk_test_xxx"
+        NODE_ENV: "test"
+
+    # ----------------------------------------
+    # STAGE 1: CODE QUALITY
+    # ----------------------------------------
+    scripts:
+      - name: Install dependencies
+        script: |
+          cd frontend
+          npm install
+          cd ../backend
+          npm install
+
+      - name: Type check
+        script: |
+          cd frontend
+          npm run type-check
+        ignore_failure: false
+
+      - name: Lint code
+        script: |
+          cd frontend
+          npm run lint
+        ignore_failure: false
+
+      - name: Backend lint
+        script: |
+          cd backend
+          npm run lint
+        ignore_failure: false
+
+    # ----------------------------------------
+    # STAGE 2: UNIT TESTS
+    # ----------------------------------------
+      - name: Run unit tests (frontend)
+        script: |
+          cd frontend
+          npm run test:coverage -- --ci
+        ignore_failure: false
+        test_reports:
+          - frontend/coverage/
+
+      - name: Run unit tests (backend)
+        script: |
+          cd backend
+          npm run test:ci
+        ignore_failure: false
+        test_reports:
+          - backend/coverage/
+
+    # ----------------------------------------
+    # STAGE 3: SMOKE TESTS
+    # ----------------------------------------
+      - name: Start services for smoke tests
+        script: |
+          # Start backend in background
+          cd backend
+          npm run dev &
+          BACKEND_PID=$!
+
+          # Wait for backend
+          for i in {1..30}; do
+            if curl -s http://localhost:5000/health > /dev/null 2>&1; then
+              echo "Backend is ready"
+              break
+            fi
+            sleep 2
+          done
+
+          # Start frontend in background
+          cd frontend
+          npm run dev &
+          FRONTEND_PID=$!
+
+          # Wait for frontend
+          for i in {1..15}; do
+            if curl -s http://localhost:3000 > /dev/null 2>&1; then
+              echo "Frontend is ready"
+              break
+            fi
+            sleep 2
+          done
+
+          # Save PIDs for cleanup
+          echo $BACKEND_PID > /tmp/backend.pid
+          echo $FRONTEND_PID > /tmp/frontend.pid
+
+      - name: Run smoke tests
+        script: |
+          cd frontend
+          npm run test:smoke -- --ci
+        ignore_failure: false
+        test_reports:
+          - frontend/test-results/smoke/
+
+      # ----------------------------------------
+      # STAGE 4: API CONTRACT TESTS
+      # ----------------------------------------
+      - name: Run API contract tests
+        script: |
+          cd frontend
+          npm run test:api -- --ci
+        ignore_failure: false
+        test_reports:
+          - frontend/test-results/api/
+
+      # ----------------------------------------
+      # STAGE 5: E2E TESTS
+      # ----------------------------------------
+      - name: Install Playwright browsers
+        script: |
+          cd frontend
+          npx playwright install --with-deps chromium firefox webkit
+
+      - name: Run E2E tests
+        script: |
+          cd frontend
+          npm run test:e2e -- --ci
+        ignore_failure: false
+        test_reports:
+          - frontend/playwright-report/
+          - frontend/test-results/e2e/
+
+      # ----------------------------------------
+      # STAGE 6: ANDROID TESTS
+      # ----------------------------------------
+      - name: Build debug APK
+        script: |
+          cd frontend
+          npm run cap:build
+        ignore_failure: true  # Don't fail on build issues
+
+      - name: Run Android Espresso tests
+        script: |
+          cd frontend/android
+          ./gradlew connectedAndroidTest
+        ignore_failure: true
+        test_reports:
+          - frontend/android/app/build/reports/androidTests/connected/
+
+      # ----------------------------------------
+      # STAGE 7: VISUAL REGRESSION
+      # ----------------------------------------
+      - name: Run visual regression tests
+        script: |
+          cd frontend
+          npm run test:visual -- --update-snapshots
+        ignore_failure: true
+        test_reports:
+          - frontend/test-results/visual/
+
+      # ----------------------------------------
+      # STAGE 8: SECURITY SCAN
+      # ----------------------------------------
+      - name: Security audit
+        script: |
+          cd frontend
+          npm audit --audit-level=moderate
+        ignore_failure: true
+
+      - name: OWASP dependency check
+        script: |
+          cd backend
+          npm audit --audit-level=moderate
+        ignore_failure: true
+
+      # ----------------------------------------
+      # STAGE 9: BUILD ARTIFACTS
+      # ----------------------------------------
+      - name: Build production assets
+        script: |
+          cd frontend
+          npm run build
+
+      - name: Build Android APK
+        script: |
+          cd frontend
+          npm run cap:sync
+          cd android
+          ./gradlew assembleRelease
+
+      - name: Build iOS
+        script: |
+          cd frontend
+          npx cap sync ios
+          xcodebuild build \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -destination "generic/platform=iOS" \
+            CODE_SIGNING_ALLOWED=NO
+
+      # ----------------------------------------
+      # STAGE 10: ARTIFACTS
+      # ----------------------------------------
+    artifacts:
+      # Frontend
+      - frontend/dist/**/*
+      - frontend/coverage/**/*
+      - frontend/playwright-report/**/*
+
+      # Android
+      - frontend/android/app/build/outputs/**/*.apk
+      - frontend/android/app/build/reports/**/*
+
+      # iOS
+      - frontend/ios/App/build/**/*.app
+
+      # Test Reports
+      - frontend/test-results/**/*.xml
+      - frontend/test-results/**/*.html
+      - backend/coverage/**/*
+
+    # ----------------------------------------
+    # RELEASE GATES
+    # ----------------------------------------
+    environment:
+      vars:
+        RELEASE_GATE_MIN_COVERAGE: 80
+        RELEASE_GATE_MIN_E2E_PASS: 95
+        RELEASE_GATE_ALLOW_VISUAL_FAIL: true
+
+    triggering:
+      events:
+        - push
+        - pull_request
+      branch_patterns:
+        - pattern: 'main'
+          include: true
+        - pattern: 'develop'
+          include: true
+        - pattern: 'release/*'
+          include: true
+
+  # ============================================
+  # NIGHTLY CHAOS TESTS
+  # ============================================
+
+  chaos-nightly:
+    name: NILIN Chaos Engineering
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+    environment:
+      node: 22
+      vars:
+        API_URL: "https://staging-api.nilin.com"
+        CHAOS_ENABLED: "true"
+
+    scripts:
+      - name: Setup
+        script: |
+          cd frontend
+          npm install
+
+      - name: Run chaos scenarios
+        script: |
+          cd frontend
+          npm run test:chaos -- --ci
+        ignore_failure: true  # Chaos tests are expected to find failures
+        test_reports:
+          - frontend/test-results/chaos/
+
+    triggering:
+      events:
+        - schedule
+      schedule:
+        - cron: "0 2 * * *"  # Daily at 2 AM
+
+  # ============================================
+  # RELEASE VALIDATION
+  # ============================================
+
+  release-validation:
+    name: NILIN Release Validation
+    max_build_duration: 45
+    instance_type: mac_mini_m2
+    environment:
+      node: 22
+      vars:
+        ENVIRONMENT: "staging"
+
+    scripts:
+      - name: Pre-release checks
+        script: |
+          echo "Starting release validation..."
+
+          # Verify version consistency
+          FRONTEND_VERSION=$(cd frontend && cat package.json | grep '"version"' | cut -d'"' -f4)
+          echo "Frontend version: $FRONTEND_VERSION"
+
+          BACKEND_VERSION=$(cd backend && cat package.json | grep '"version"' | cut -d'"' -f4)
+          echo "Backend version: $BACKEND_VERSION"
+
+          if [ "$FRONTEND_VERSION" != "$BACKEND_VERSION" ]; then
+            echo "WARNING: Version mismatch detected"
+          fi
+
+      - name: Run smoke tests
+        script: |
+          cd frontend
+          npm run test:smoke -- --ci
+        ignore_failure: false
+
+      - name: Run critical E2E tests
+        script: |
+          cd frontend
+          npm run test:e2e -- --grep="critical|regression" --ci
+        ignore_failure: false
+
+      - name: Verify deployment readiness
+        script: |
+          echo "Checking deployment prerequisites..."
+
+          # Verify build artifacts exist
+          if [ -d "frontend/dist" ]; then
+            echo "Frontend build: OK"
+          fi
+
+          if [ -d "frontend/android/app/build/outputs" ]; then
+            echo "Android build: OK"
+          fi
+
+      - name: Generate release report
+        script: |
+          echo "Generating release validation report..."
+          echo "Report generated at: $(date)"
+          echo "Release validation: PASSED"
+
+    triggering:
+      events:
+        - tag
+      tag_patterns:
+        - pattern: 'v*.*.*'
+          include: true
+
+# ============================================
+# RELEASE GATES CONFIGURATION
+# ============================================
+
+release_gates:
+  - name: unit_tests
+    command: npm run test:unit
+    threshold: 80%
+    block_on_failure: true
+    timeout: 600
+
+  - name: e2e_tests
+    command: npm run test:e2e
+    threshold: 95%
+    block_on_failure: true
+    timeout: 1800
+
+  - name: smoke_tests
+    command: npm run test:smoke
+    threshold: 100%
+    block_on_failure: true
+    timeout: 300
+
+  - name: security_scan
+    command: npm audit --audit-level=high
+    threshold: 0 vulnerabilities
+    block_on_failure: true
+    timeout: 300
+
+  - name: android_tests
+    command: ./gradlew connectedAndroidTest
+    threshold: 90%
+    block_on_failure: false
+    timeout: 600
+
+  - name: visual_regression
+    command: npm run test:visual
+    threshold: 100%
+    block_on_failure: false
+    timeout: 600

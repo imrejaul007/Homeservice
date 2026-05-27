@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { ApiError, ERROR_CODES } from '../utils/ApiError';
 
 export interface LocaleConfig {
   code: string;
@@ -446,7 +447,7 @@ class LocalizationService {
     if (this.isSupportedLocale(localeCode)) {
       this.defaultLocale = localeCode;
     } else {
-      throw new Error(`Locale ${localeCode} is not supported`);
+      throw ApiError.badRequest(`Locale ${localeCode} is not supported`, [], ERROR_CODES.INVALID_INPUT);
     }
   }
 

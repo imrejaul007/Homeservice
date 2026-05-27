@@ -229,8 +229,49 @@ export const getEarningsSummary = asyncHandler(async (req: Request, res: Respons
       withdrawals,
       netEarnings: earnings - withdrawals,
       transactionCount: periodTransactions.length,
-      startDate,
-      endDate: now,
+      startDate: startDate.toISOString(),
+      endDate: now.toISOString(),
+    },
+  });
+});
+
+/**
+ * Add money to wallet (top-up)
+ */
+export const addMoney = asyncHandler(async (req: Request, res: Response) => {
+  const user = (req as any).user;
+  const { amount, paymentMethodId, idempotencyKey } = req.body;
+
+  if (!amount || amount <= 0) {
+    throw new ApiError(400, 'Invalid amount');
+  }
+
+  // For now, simulate successful top-up
+  // In production, this would integrate with Stripe/payment gateway
+  const result = await creditWallet({
+    userId: user._id.toString(),
+    type: 'credit',
+    amount,
+    description: 'Wallet Top-up',
+    reference: idempotencyKey || `topup-${Date.now()}`,
+    referenceType: 'topup',
+    metadata: {
+      paymentMethodId,
+      source: 'app',
+    },
+  });
+
+  if (!result.success) {
+    throw new ApiError(400, result.error || 'Failed to add money');
+  }
+
+  res.json({
+    success: true,
+    message: 'Money added successfully',
+    data: {
+      transactionId: result.transactionId,
+      newBalance: result.newBalance,
+      amount,
     },
   });
 });
@@ -240,4 +281,5 @@ export default {
   getTransactions,
   requestWithdrawal,
   getEarningsSummary,
+  addMoney,
 };

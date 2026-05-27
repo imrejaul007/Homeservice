@@ -78,8 +78,9 @@ EMAIL_USER=your-email@gmail.com
 EMAIL_PASSWORD=your-app-specific-password
 
 # Admin User (for seeding)
+# IMPORTANT: Change this to a strong, unique password before deploying!
 ADMIN_EMAIL=admin@homeservice.com
-ADMIN_PASSWORD=AdminPassword123!
+ADMIN_PASSWORD=CHANGE_THIS_TO_SECURE_PASSWORD
 ```
 
 ### Frontend Environment (.env)
@@ -185,7 +186,9 @@ npm run dev
 
 ### 3. Default Admin Login
 - **Email**: admin@homeservice.com
-- **Password**: AdminPassword123!
+- **Password**: Use the `ADMIN_PASSWORD` from your `.env` file
+
+> **Security Note**: Never commit real credentials to version control. Use environment variables.
 
 ## 🚨 Troubleshooting
 

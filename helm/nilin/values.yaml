@@ -1,0 +1,166 @@
+# Global settings
+environment: production
+
+# Secrets (REQUIRED - set via --set or values-secrets.yaml)
+# These MUST be provided during helm install/upgrade
+secrets:
+  mongodbUri: ""  # Required: mongodb://user:pass@host:27017/db
+  redisUrl: ""    # Required: redis://host:6379
+  jwtSecret: ""   # Required: your-jwt-secret-key
+  stripeSecret: "" # Required: sk_live_xxx
+  resendApiKey: "" # Optional: for email service
+
+# Backend API
+api:
+  replicaCount: 3
+  image:
+    repository: nilin/backend
+    tag: latest
+    pullPolicy: Always
+
+  service:
+    type: ClusterIP
+    port: 10000
+
+  ingress:
+    enabled: true
+    className: nginx
+    host: api.nilin.app
+    tls: true
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 20
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+
+  env:
+    - name: NODE_ENV
+      value: production
+    - name: PORT
+      value: "10000"
+
+# Frontend Web
+frontend:
+  replicaCount: 2
+  image:
+    repository: nilin/frontend
+    tag: latest
+
+  service:
+    type: ClusterIP
+    port: 80
+
+  ingress:
+    enabled: true
+    className: nginx
+    host: app.nilin.app
+    tls: true
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+# MongoDB
+mongodb:
+  enabled: true
+  auth:
+    rootPassword: "" # Set via secrets
+    database: nilin
+  persistence:
+    enabled: true
+    size: 10Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+# Redis
+redis:
+  enabled: true
+  auth:
+    password: "" # Set via secrets
+  master:
+    persistence:
+      enabled: true
+      size: 1Gi
+  replica:
+    replicaCount: 2
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# ServiceAccount
+serviceAccount:
+  create: true
+  annotations: {}
+    # example: iam.gke.io/gcp-service-account: nilin@project.iam.gserviceaccount.com
+
+# NetworkPolicies
+networkPolicies:
+  enabled: true
+
+# Monitoring
+monitoring:
+  enabled: true
+
+# PodDisruptionBudget
+pdb:
+  enabled: true
+  minAvailable: 2
+
+# Ingress
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+  hosts:
+    - host: api.nilin.app
+      paths: [{ path: /, pathType: Prefix }]
+    - host: app.nilin.app
+      paths: [{ path: /, pathType: Prefix }]
+  tls:
+    - secretName: nilin-tls
+      hosts:
+        - api.nilin.app
+        - app.nilin.app
+
+# Monitoring
+monitoring:
+  enabled: true
+  prometheus:
+    enabled: true
+  grafana:
+    enabled: true
+
+# Pod Disruption Budget
+podDisruptionBudget:
+  api:
+    minAvailable: 2
+  frontend:
+    minAvailable: 1

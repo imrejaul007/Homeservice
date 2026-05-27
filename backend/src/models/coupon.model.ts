@@ -254,10 +254,7 @@ couponSchema.index({
 });
 
 // Partial index for active non-expired coupons (MongoDB 3.2+)
-couponSchema.index(
-  { code: 1 },
-  { partialFilterExpression: { isActive: true } }
-);
+// Note: code already has index from field definition above
 
 const Coupon = mongoose.model<ICoupon>('Coupon', couponSchema);
 

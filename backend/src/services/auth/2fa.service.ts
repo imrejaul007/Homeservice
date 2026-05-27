@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import QRCode from 'qrcode';
 import crypto from 'crypto';
 import logger from '../../utils/logger';
+import { ApiError, ERROR_CODES } from '../../utils/ApiError';
 
 // Configuration for TOTP
 const TOTP_CONFIG = {
@@ -51,7 +52,7 @@ export async function generateSecret(userId: string): Promise<{
 }> {
   // Validate userId
   if (!userId || typeof userId !== 'string') {
-    throw new Error('Valid userId is required for 2FA secret generation');
+    throw ApiError.badRequest('Valid userId is required for 2FA secret generation');
   }
 
   // Generate a new secret
@@ -154,7 +155,7 @@ export function generateRecoveryCodes(count?: number): string[] {
  */
 export async function hashRecoveryCodes(codes: string[]): Promise<string[]> {
   if (!codes || !Array.isArray(codes) || codes.length === 0) {
-    throw new Error('Valid codes array is required for hashing');
+    throw ApiError.badRequest('Valid codes array is required for hashing');
   }
 
   const hashedCodes: string[] = [];
@@ -217,13 +218,17 @@ export async function verifyRecoveryCode(
  */
 export function encryptSecret(secret: string): string {
   if (!secret) {
-    throw new Error('Secret is required for encryption');
+    throw ApiError.badRequest('Secret is required for encryption');
   }
 
   // Get encryption key from environment
   const encryptionKey = process.env.TWO_FA_ENCRYPTION_KEY;
   if (!encryptionKey) {
-    throw new Error('TWO_FA_ENCRYPTION_KEY environment variable is not set');
+    logger.error('TWO_FA_ENCRYPTION_KEY not configured', {
+      context: 'TwoFactorService',
+      action: 'MISSING_ENCRYPTION_KEY',
+    });
+    throw ApiError.internal('Two-factor authentication is not properly configured');
   }
 
   // Derive a proper key from the environment variable
@@ -267,13 +272,17 @@ export function encryptSecret(secret: string): string {
  */
 export function decryptSecret(encryptedSecret: string): string {
   if (!encryptedSecret) {
-    throw new Error('Encrypted secret is required for decryption');
+    throw ApiError.badRequest('Encrypted secret is required for decryption');
   }
 
   // Get encryption key from environment
   const encryptionKey = process.env.TWO_FA_ENCRYPTION_KEY;
   if (!encryptionKey) {
-    throw new Error('TWO_FA_ENCRYPTION_KEY environment variable is not set');
+    logger.error('TWO_FA_ENCRYPTION_KEY not configured for decryption', {
+      context: 'TwoFactorService',
+      action: 'MISSING_DECRYPTION_KEY',
+    });
+    throw ApiError.internal('Two-factor authentication is not properly configured');
   }
 
   // Derive the same key
@@ -328,8 +337,12 @@ export async function generateQRCode(otpauthUrl: string): Promise<string> {
 
     return qrCodeDataUrl;
   } catch (error) {
-    logger.error('Failed to generate QR code', { error: (error as Error).message });
-    throw new Error('Failed to generate QR code');
+    logger.error('Failed to generate QR code', {
+      context: 'TwoFactorService',
+      action: 'QR_GENERATION_FAILED',
+      error: (error as Error).message,
+    });
+    throw ApiError.internal('Failed to generate QR code for authenticator app');
   }
 }
 

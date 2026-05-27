@@ -15,6 +15,8 @@ export const EVENT_TYPES = {
   BOOKING_REJECTED: 'booking.rejected',
   BOOKING_STARTED: 'booking.started',
   BOOKING_RESCHEDULED: 'booking.rescheduled',
+  BOOKING_NO_SHOW: 'booking.no_show',
+  BOOKING_REMINDER: 'booking.reminder',
 
   // Payment events
   PAYMENT_COMPLETED: 'payment.completed',
@@ -25,6 +27,10 @@ export const EVENT_TYPES = {
   USER_REGISTERED: 'user.registered',
   USER_LOGGED_IN: 'user.logged_in',
   USER_VERIFIED: 'user.verified',
+
+  // Review events
+  REVIEW_RECEIVED: 'review.received',
+  REVIEW_REPLY_RECEIVED: 'review.reply_received',
 
   // Notification events
   NOTIFICATION_CREATED: 'notification.created',
@@ -86,6 +92,14 @@ export const EVENT_TYPES = {
   SUBSCRIPTION_RENEWED: 'subscription.renewed',
   SUBSCRIPTION_EXPIRED: 'subscription.expired',
 
+  // Bundle events
+  BUNDLE_CREATED: 'bundle.created',
+  BUNDLE_UPDATED: 'bundle.updated',
+  BUNDLE_REDEEMED: 'bundle.redeemed',
+  BUNDLE_ACTIVATED: 'bundle.activated',
+  BUNDLE_PAUSED: 'bundle.paused',
+  BUNDLE_ARCHIVED: 'bundle.archived',
+
   // Stream/Analytics events
   STREAM_EVENT: 'stream.event',
 } as const;
@@ -121,7 +135,16 @@ export interface DeadLetterEntry {
   error: string;
   failedAt: Date;
   retryCount: number;
+  nextRetryAt?: Date;
 }
+
+// DLQ retry configuration
+const DLQ_RETRY_CONFIG = {
+  maxRetries: 5,
+  initialDelayMs: 1000,
+  maxDelayMs: 300000, // 5 minutes max
+  backoffMultiplier: 2,
+};
 
 class EventBus extends EventEmitter {
   private history: PlatformEvent[] = [];
@@ -129,6 +152,7 @@ class EventBus extends EventEmitter {
   private deadLetterQueue: DeadLetterEntry[] = [];
   private maxHistorySize = 1000;
   private maxDeadLetterSize = 100;
+  private historyHead = 0; // Circular buffer head pointer
 
   constructor() {
     super();
@@ -148,10 +172,14 @@ class EventBus extends EventEmitter {
       metadata,
     };
 
-    // Store in history
-    this.history.push(event as PlatformEvent);
-    if (this.history.length > this.maxHistorySize) {
-      this.history.shift();
+    // Store in history using circular buffer for O(1) operations
+    if (this.history.length < this.maxHistorySize) {
+      // Buffer not full, just append
+      this.history.push(event as PlatformEvent);
+    } else {
+      // Buffer full, overwrite oldest using circular buffer
+      this.history[this.historyHead] = event as PlatformEvent;
+      this.historyHead = (this.historyHead + 1) % this.maxHistorySize;
     }
 
     // Emit to specific event listeners
@@ -306,19 +334,36 @@ class EventBus extends EventEmitter {
 
   /**
    * Get event history
+   * Returns events in chronological order (oldest first)
    */
   getHistory(limit?: number): PlatformEvent[] {
-    if (limit) {
-      return this.history.slice(-limit);
+    let events: PlatformEvent[];
+
+    if (this.history.length < this.maxHistorySize) {
+      // Buffer not full, history is already in order
+      events = [...this.history];
+    } else {
+      // Buffer is full, need to reorder from head
+      events = [
+        ...this.history.slice(this.historyHead),
+        ...this.history.slice(0, this.historyHead),
+      ];
     }
-    return [...this.history];
+
+    if (limit) {
+      return events.slice(-limit);
+    }
+    return events;
   }
 
   /**
    * Get events by type
+   * Returns events in chronological order (oldest first)
    */
   getEventsByType(eventType: string, limit?: number): PlatformEvent[] {
-    const events = this.history.filter((e) => e.eventType === eventType);
+    // Get full history in chronological order first
+    const history = this.getHistory();
+    const events = history.filter((e) => e.eventType === eventType);
     if (limit) {
       return events.slice(-limit);
     }
@@ -333,14 +378,93 @@ class EventBus extends EventEmitter {
   }
 
   /**
-   * Retry a dead letter entry
+   * Get detailed DLQ status including backoff information
    */
-  async retryDeadLetter(entryIndex: number): Promise<boolean> {
+  getDeadLetterQueueStatus(): {
+    total: number;
+    entries: Array<{
+      eventId: string;
+      eventType: string;
+      retryCount: number;
+      maxRetries: number;
+      failedAt: Date;
+      nextRetryAt?: Date;
+      isInBackoff: boolean;
+      remainingBackoffMs?: number;
+    }>;
+  } {
+    const now = Date.now();
+    return {
+      total: this.deadLetterQueue.length,
+      entries: this.deadLetterQueue.map(entry => ({
+        eventId: entry.event.eventId,
+        eventType: entry.event.eventType,
+        retryCount: entry.retryCount,
+        maxRetries: DLQ_RETRY_CONFIG.maxRetries,
+        failedAt: entry.failedAt,
+        nextRetryAt: entry.nextRetryAt,
+        isInBackoff: entry.nextRetryAt ? now < entry.nextRetryAt.getTime() : false,
+        remainingBackoffMs: entry.nextRetryAt ? Math.max(0, entry.nextRetryAt.getTime() - now) : undefined,
+      })),
+    };
+  }
+
+  /**
+   * Calculate exponential backoff delay for DLQ retry
+   */
+  private calculateDLQBackoffDelay(retryCount: number): number {
+    const delay = Math.min(
+      DLQ_RETRY_CONFIG.initialDelayMs * Math.pow(DLQ_RETRY_CONFIG.backoffMultiplier, retryCount),
+      DLQ_RETRY_CONFIG.maxDelayMs
+    );
+    return delay;
+  }
+
+  /**
+   * Check if DLQ entry is ready for retry based on backoff
+   */
+  isDLQEntryReadyForRetry(entryIndex: number): { ready: boolean; nextRetryAt?: Date; retryCount: number } {
+    if (entryIndex < 0 || entryIndex >= this.deadLetterQueue.length) {
+      return { ready: false, retryCount: 0 };
+    }
+
+    const entry = this.deadLetterQueue[entryIndex];
+
+    // If no scheduled retry time, it's ready
+    if (!entry.nextRetryAt) {
+      return { ready: true, retryCount: entry.retryCount };
+    }
+
+    // Check if the scheduled retry time has passed
+    const now = Date.now();
+    if (now >= entry.nextRetryAt.getTime()) {
+      return { ready: true, nextRetryAt: entry.nextRetryAt, retryCount: entry.retryCount };
+    }
+
+    return { ready: false, nextRetryAt: entry.nextRetryAt, retryCount: entry.retryCount };
+  }
+
+  /**
+   * Retry a dead letter entry with exponential backoff
+   */
+  async retryDeadLetter(entryIndex: number, force: boolean = false): Promise<boolean> {
     if (entryIndex < 0 || entryIndex >= this.deadLetterQueue.length) {
       return false;
     }
 
     const entry = this.deadLetterQueue[entryIndex];
+
+    // Check if entry is in backoff period (unless forced)
+    if (!force && entry.nextRetryAt && Date.now() < entry.nextRetryAt.getTime()) {
+      logger.debug('DLQ retry skipped - still in backoff period', {
+        eventId: entry.event.eventId,
+        eventType: entry.event.eventType,
+        retryCount: entry.retryCount,
+        nextRetryAt: entry.nextRetryAt,
+        action: 'DEAD_LETTER_IN_BACKOFF',
+      });
+      return false;
+    }
 
     try {
       await this.publish(
@@ -364,16 +488,67 @@ class EventBus extends EventEmitter {
       entry.error = error instanceof Error ? error.message : String(error);
       entry.failedAt = new Date();
 
-      logger.error('Dead letter retry failed', {
+      // Check if max retries exceeded
+      if (entry.retryCount >= DLQ_RETRY_CONFIG.maxRetries) {
+        logger.error('Dead letter entry permanently failed after max retries', {
+          eventId: entry.event.eventId,
+          eventType: entry.event.eventType,
+          retryCount: entry.retryCount,
+          maxRetries: DLQ_RETRY_CONFIG.maxRetries,
+          error: entry.error,
+          action: 'DEAD_LETTER_MAX_RETRIES_EXCEEDED',
+        });
+        // Remove from queue after max retries
+        this.deadLetterQueue.splice(entryIndex, 1);
+        return false;
+      }
+
+      // Calculate next retry time with exponential backoff
+      const delay = this.calculateDLQBackoffDelay(entry.retryCount);
+      entry.nextRetryAt = new Date(Date.now() + delay);
+
+      logger.warn('Dead letter retry failed, scheduled for retry with backoff', {
         eventId: entry.event.eventId,
         eventType: entry.event.eventType,
         retryCount: entry.retryCount,
+        nextRetryAt: entry.nextRetryAt,
+        backoffDelayMs: delay,
         error: entry.error,
-        action: 'DEAD_LETTER_RETRY_FAILED',
+        action: 'DEAD_LETTER_RETRY_FAILED_WITH_BACKOFF',
       });
 
       return false;
     }
+  }
+
+  /**
+   * Retry all dead letter entries that are ready (past their backoff period)
+   */
+  async retryDeadLetterQueue(): Promise<{ retried: number; failed: number; pending: number }> {
+    let retried = 0;
+    let failed = 0;
+    const pending: number[] = [];
+
+    for (let i = this.deadLetterQueue.length - 1; i >= 0; i--) {
+      const status = this.isDLQEntryReadyForRetry(i);
+      if (status.ready) {
+        const success = await this.retryDeadLetter(i);
+        if (success) {
+          retried++;
+        } else {
+          // Check if it was removed due to max retries
+          if (i >= this.deadLetterQueue.length) {
+            failed++;
+          } else {
+            pending.push(i);
+          }
+        }
+      } else {
+        pending.push(i);
+      }
+    }
+
+    return { retried, failed, pending: pending.length };
   }
 
   /**
@@ -598,7 +773,7 @@ export const initializeEventSubscriptions = async (): Promise<void> => {
         if (data.customerId && data.totalAmount) {
           const pointsEarned = Math.floor(data.totalAmount / 10);
           if (pointsEarned > 0) {
-            await addJob('loyalty-queue', 'award_points', {
+            await addJob('loyalty-queue', 'award_booking_points', {
               userId: data.customerId,
               amount: pointsEarned,
               type: 'earned',
@@ -613,6 +788,20 @@ export const initializeEventSubscriptions = async (): Promise<void> => {
               totalAmount: data.totalAmount,
             });
           }
+
+          // FIX: Award first booking bonus (100 points) - only if not already awarded
+          // The loyalty job handler will check firstBookingAwarded flag
+          await addJob('loyalty-queue', 'award_first_booking_bonus', {
+            userId: data.customerId,
+            type: 'bonus',
+            description: `First booking #${data.bookingNumber || data.bookingId} completed - Welcome bonus!`,
+            relatedBooking: data.bookingId,
+          });
+
+          logger.info('First booking bonus job queued', {
+            customerId: data.customerId,
+            bookingId: data.bookingId,
+          });
         }
       }
 
@@ -690,7 +879,62 @@ export const initializeEventSubscriptions = async (): Promise<void> => {
   }, 10);
 
   // ============================================
-  // Email Subscription
+  // Review Event Subscriptions
+  // ============================================
+  eventBus.subscribe(EVENT_TYPES.REVIEW_RECEIVED, async (event) => {
+    try {
+      const data = event.data as {
+        reviewId?: string;
+        providerId?: string;
+        bookingId?: string;
+        customerName?: string;
+        rating?: number;
+      };
+
+      if (data.providerId) {
+        await addJob('notification-queue', 'send_notification', {
+          userId: data.providerId,
+          type: 'review_received',
+          title: 'New Review Received',
+          message: (data.customerName || 'A customer') + ' left you a ' + (data.rating || 0) + '-star review',
+          data: { reviewId: data.reviewId, bookingId: data.bookingId },
+        });
+      }
+    } catch (error) {
+      logger.error('Failed to send review.received notifications', {
+        eventId: event.eventId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }, 10);
+
+  eventBus.subscribe(EVENT_TYPES.REVIEW_REPLY_RECEIVED, async (event) => {
+    try {
+      const data = event.data as {
+        reviewId?: string;
+        customerId?: string;
+        providerName?: string;
+        bookingId?: string;
+      };
+
+      if (data.customerId) {
+        await addJob('notification-queue', 'send_notification', {
+          userId: data.customerId,
+          type: 'review_received',
+          title: 'Review Reply Received',
+          message: (data.providerName || 'Your service provider') + ' replied to your review',
+          data: { reviewId: data.reviewId, bookingId: data.bookingId },
+        });
+      }
+    } catch (error) {
+      logger.error('Failed to send review.reply_received notifications', {
+        eventId: event.eventId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }, 10);
+
+// Email Subscription
   // Listen to booking.* events and send email confirmations
   // ============================================
   eventBus.subscribe('booking.created', async (event) => {

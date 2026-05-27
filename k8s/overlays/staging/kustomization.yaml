@@ -1,0 +1,45 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: nilin-staging
+
+commonLabels:
+  variant: staging
+
+resources:
+  - ../../base
+
+patchesStrategicMerge:
+  - replica-patch.yaml
+  - resources-patch.yaml
+
+configMapGenerator:
+  - name: nilin-api-config
+    behavior: merge
+    literals:
+      - NODE_ENV=staging
+      - LOG_LEVEL=info
+      - ENABLE_DEBUG=false
+      - API_URL=https://staging-api.nilin.io
+      - WEB_URL=https://staging.nilin.io
+      - STRIPE_ENV=test
+      - SENTRY_DSN=https://example@staging.sentry.io
+      - DATADOG_ENABLED=true
+      - RATE_LIMIT_PER_MINUTE=200
+      - MAX_CONCURRENT_REQUESTS=100
+
+images:
+  - name: nilin/api
+    newTag: staging-latest
+  - name: nilin/worker
+    newTag: staging-latest
+  - name: nilin/frontend
+    newTag: staging-latest
+
+replicas:
+  - name: nilin-api
+    count: 2
+  - name: nilin-worker
+    count: 2
+  - name: nilin-frontend
+    count: 1

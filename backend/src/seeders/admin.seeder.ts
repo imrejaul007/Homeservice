@@ -5,10 +5,12 @@ export const createAdminUser = async (): Promise<void> => {
   try {
     console.log('👑 Creating admin user...');
 
-    // Check if admin already exists
-    const existingAdmin = await User.findOne({ 
-      email: process.env.ADMIN_EMAIL || 'admin@homeservice.com',
-      role: 'admin' 
+    // Check if admin already exists by email OR referral code
+    const existingAdmin = await User.findOne({
+      $or: [
+        { email: process.env.ADMIN_EMAIL || 'admin@homeservice.com', role: 'admin' },
+        { 'loyaltySystem.referralCode': 'ADMIN000' }
+      ]
     });
 
     if (existingAdmin) {

@@ -245,6 +245,15 @@ export interface ProviderAvailability {
   bufferTime: number;
   autoAcceptBookings: boolean;
   maxAdvanceBookingDays: number;
+  minNoticeTime?: number;
+}
+
+export interface AvailabilitySettingsUpdate {
+  bufferTime?: number;
+  maxAdvanceBookingDays?: number;
+  autoAcceptBookings?: boolean;
+  minNoticeTime?: number;
+  timezone?: string;
 }
 
 export interface AvailableSlot {
@@ -255,16 +264,77 @@ export interface AvailableSlot {
   conflictingBookings?: string[];
 }
 
+export interface ProviderBookingsStats {
+  pending: number;
+  confirmed: number;
+  in_progress: number;
+  completed: number;
+  cancelled: number;
+  no_show: number;
+  total: number;
+}
+
 export interface BookingFilters {
   status?: string;
   dateFrom?: string;
   dateTo?: string;
-  providerId?: string;
-  serviceId?: string;
   page?: number;
   limit?: number;
   sortBy?: string;
   sortOrder?: 'asc' | 'desc';
+  search?: string;
+}
+
+export interface RescheduleBookingData {
+  scheduledDate: string; // YYYY-MM-DD format
+  scheduledTime: string; // HH:MM format
+  reason?: string;
+}
+
+export interface GuestInfo {
+  name: string;
+  email: string;
+  phone: string;
+}
+
+export interface CreateGuestBookingData {
+  serviceId: string;
+  providerId: string;
+  scheduledDate: string; // YYYY-MM-DD format
+  scheduledTime: string; // HH:MM format
+  location?: BookingLocation;
+  guestInfo: GuestInfo;
+  addOns?: BookingAddOn[];
+  notes?: string;
+
+  // New booking flow fields
+  locationType?: 'at_home' | 'at_provider' | 'at_hotel';
+  selectedDuration?: number;
+  genderPreference?: 'male' | 'female' | 'no_preference';
+  experiencePreference?: 'no_preference' | 'specific' | 'any_experience';
+  paymentMethod?: 'apple_pay' | 'credit_card' | 'cash';
+}
+
+export interface BookingTrackingData {
+  bookingNumber: string;
+  status: string;
+  serviceName?: string;
+  providerName?: string;
+  scheduledDate?: string;
+  scheduledTime?: string;
+  location?: {
+    address?: string;
+  };
+  pricing?: {
+    totalAmount?: number;
+    currency?: string;
+  };
+}
+
+export interface BlockTimePeriodData {
+  startDate: string; // YYYY-MM-DD format
+  endDate: string; // YYYY-MM-DD format
+  reason?: string;
 }
 
 export interface BookingResponse<T = any> {
@@ -302,6 +372,18 @@ class BookingService {
   }
 
   /**
+   * Create a guest booking (no authentication required)
+   */
+  async createGuestBooking(data: CreateGuestBookingData): Promise<BookingResponse<{ booking: Booking }>> {
+    try {
+      const response = await authService.post<BookingResponse<{ booking: Booking }>>('/bookings/guest', data);
+      return response;
+    } catch (error) {
+      throw new Error(error instanceof Error ? error.message : 'Failed to create guest booking');
+    }
+  }
+
+  /**
    * Get booking details by ID
    */
   async getBooking(bookingId: string): Promise<BookingResponse<{ booking: Booking }>> {
@@ -314,6 +396,33 @@ class BookingService {
   }
 
   /**
+   * Track a booking by booking number (public endpoint, no auth required)
+   */
+  async trackBooking(bookingNumber: string): Promise<BookingResponse<{ booking: BookingTrackingData }>> {
+    try {
+      const baseUrl = import.meta.env.VITE_API_URL || '';
+      const response = await fetch(`${baseUrl}/bookings/track/${encodeURIComponent(bookingNumber)}`, {
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.message || `Failed to track booking: ${response.status}`);
+      }
+
+      return response.json();
+    } catch (error) {
+      if (error instanceof Error) {
+        throw error;
+      }
+      throw new Error('Failed to track booking');
+    }
+  }
+
+  /**
    * Get customer bookings with filters
    */
   async getCustomerBookings(filters?: BookingFilters): Promise<BookingResponse<{ bookings: Booking[] }>> {
@@ -322,17 +431,82 @@ class BookingService {
       if (filters) {
         Object.entries(filters).forEach(([key, value]) => {
           if (value !== undefined && value !== null) {
-            params.append(key, String(value));
+            // Map frontend filter names to backend API names
+            const backendKey = this.mapFilterKeyToBackend(key);
+            params.append(backendKey, String(value));
           }
         });
       }
 
       const url = `/bookings/customer${params.toString() ? `?${params.toString()}` : ''}`;
-      const response = await authService.get<BookingResponse<{ bookings: Booking[] }>>(url);
-      return response;
+      const response = await authService.get<any>(url);
+
+      // Transform backend response to match frontend expectations
+      return this.transformBookingResponse(response);
     } catch (error) {
       throw new Error(error instanceof Error ? error.message : 'Failed to get customer bookings');
     }
+  }
+
+  /**
+   * Map frontend filter keys to backend API parameter names
+   */
+  private mapFilterKeyToBackend(key: string): string {
+    const keyMap: Record<string, string> = {
+      dateFrom: 'startDate',
+      dateTo: 'endDate',
+      sortBy: 'sortBy',
+      sortOrder: 'sortOrder',
+      search: 'search',
+    };
+    return keyMap[key] || key;
+  }
+
+  /**
+   * Transform backend response to frontend format
+   * Backend returns: { success, data: { bookings: [], pagination: { hasMore, nextCursor, limit } } }
+   * Frontend expects: { success, data: { bookings: [] }, pagination: { page, pages, total, limit } }
+   */
+  private transformBookingResponse(response: any): BookingResponse<{ bookings: Booking[] }> & {
+    stats?: ProviderBookingsStats;
+  } {
+    const { success, data, message } = response;
+    const bookings = (data?.bookings || []) as Booking[];
+    const pagination = data?.pagination;
+    const stats = data?.stats as ProviderBookingsStats | undefined;
+
+    let transformedPagination: BookingResponse<{ bookings: Booking[] }>['pagination'] = null;
+
+    if (pagination) {
+      if (typeof pagination.page === 'number' && typeof pagination.total === 'number') {
+        transformedPagination = {
+          page: pagination.page,
+          limit: pagination.limit || 20,
+          total: pagination.total,
+          pages: pagination.pages || 1,
+          hasMore: pagination.hasMore,
+        };
+      } else {
+        transformedPagination = {
+          page: 1,
+          limit: pagination.limit || 20,
+          total: pagination.hasMore
+            ? (pagination.limit || 20) * 2
+            : bookings.length,
+          pages: pagination.hasMore ? 2 : 1,
+          hasMore: pagination.hasMore,
+          nextCursor: pagination.nextCursor,
+        };
+      }
+    }
+
+    return {
+      success: success ?? true,
+      data: { bookings },
+      pagination: transformedPagination,
+      stats,
+      message,
+    };
   }
 
   /**
@@ -344,14 +518,18 @@ class BookingService {
       if (filters) {
         Object.entries(filters).forEach(([key, value]) => {
           if (value !== undefined && value !== null) {
-            params.append(key, String(value));
+            // Map frontend filter names to backend API names
+            const backendKey = this.mapFilterKeyToBackend(key);
+            params.append(backendKey, String(value));
           }
         });
       }
 
       const url = `/bookings/provider${params.toString() ? `?${params.toString()}` : ''}`;
-      const response = await authService.get<BookingResponse<{ bookings: Booking[] }>>(url);
-      return response;
+      const response = await authService.get<any>(url);
+
+      // Transform backend response to match frontend expectations
+      return this.transformBookingResponse(response);
     } catch (error) {
       throw new Error(error instanceof Error ? error.message : 'Failed to get provider bookings');
     }
@@ -436,6 +614,21 @@ class BookingService {
     }
   }
 
+  /**
+   * Reschedule a booking to a new date/time
+   */
+  async rescheduleBooking(bookingId: string, data: RescheduleBookingData): Promise<BookingResponse<{ booking: Booking }>> {
+    try {
+      const response = await authService.patch<BookingResponse<{ booking: Booking }>>(
+        `/bookings/${bookingId}/reschedule`,
+        data
+      );
+      return response;
+    } catch (error) {
+      throw new Error(error instanceof Error ? error.message : 'Failed to reschedule booking');
+    }
+  }
+
   // ==========================================
   // BOOKING COMMUNICATION
   // ==========================================
@@ -476,11 +669,12 @@ class BookingService {
 
   /**
    * Get provider availability schedule
+   * Note: Uses /availability endpoint (for current provider) or public endpoints for slot checking
    */
-  async getProviderAvailability(providerId?: string): Promise<BookingResponse<{ availability: ProviderAvailability }>> {
+  async getProviderAvailability(): Promise<BookingResponse<{ availability: ProviderAvailability }>> {
     try {
-      const url = providerId ? `/availability/provider/${providerId}` : '/availability';
-      const response = await authService.get<BookingResponse<{ availability: ProviderAvailability }>>(url);
+      // Backend uses /availability for provider's own availability
+      const response = await authService.get<BookingResponse<{ availability: ProviderAvailability }>>('/availability');
       return response;
     } catch (error) {
       throw new Error(error instanceof Error ? error.message : 'Failed to get availability');
@@ -534,6 +728,50 @@ class BookingService {
       return response;
     } catch (error) {
       throw new Error(error instanceof Error ? error.message : 'Failed to remove date override');
+    }
+  }
+
+  /**
+   * Block a time period (provider marks unavailable for a date range)
+   */
+  async blockTimePeriod(data: BlockTimePeriodData): Promise<BookingResponse<{ availability: ProviderAvailability }>> {
+    try {
+      const response = await authService.post<BookingResponse<{ availability: ProviderAvailability }>>(
+        '/availability/block',
+        data
+      );
+      return response;
+    } catch (error) {
+      throw new Error(error instanceof Error ? error.message : 'Failed to block time period');
+    }
+  }
+
+  /**
+   * Update availability settings (buffer time, max advance booking, auto-accept, etc.)
+   */
+  async updateAvailabilitySettings(settings: AvailabilitySettingsUpdate): Promise<BookingResponse<{ availability: ProviderAvailability }>> {
+    try {
+      const response = await authService.patch<BookingResponse<{ availability: ProviderAvailability }>>(
+        '/availability/settings',
+        settings
+      );
+      return response;
+    } catch (error) {
+      throw new Error(error instanceof Error ? error.message : 'Failed to update availability settings');
+    }
+  }
+
+  /**
+   * Remove a blocked time period
+   */
+  async removeBlockedPeriod(blockId: string): Promise<BookingResponse<{ availability: ProviderAvailability }>> {
+    try {
+      const response = await authService.delete<BookingResponse<{ availability: ProviderAvailability }>>(
+        `/availability/block/${blockId}`
+      );
+      return response;
+    } catch (error) {
+      throw new Error(error instanceof Error ? error.message : 'Failed to remove blocked period');
     }
   }
 
@@ -640,6 +878,39 @@ class BookingService {
       return response;
     } catch (error) {
       throw new Error(error instanceof Error ? error.message : 'Failed to get availability analytics');
+    }
+  }
+
+  /**
+   * Get blocked periods from provider availability
+   * Filters dateOverrides where isAvailable is false
+   */
+  async getAvailabilityBlocking(): Promise<BookingResponse<{ blockedPeriods: Array<{ date: string; reason?: string }> }>> {
+    try {
+      const response = await this.getProviderAvailability();
+      const availability = response.data?.availability;
+
+      if (!availability) {
+        return {
+          success: true,
+          data: { blockedPeriods: [] },
+        };
+      }
+
+      // Filter dateOverrides to get only blocked periods (where isAvailable is false)
+      const blockedPeriods = (availability.dateOverrides || [])
+        .filter((override: { isAvailable: boolean; date: string; reason?: string }) => override.isAvailable === false)
+        .map((override: { date: string; reason?: string }) => ({
+          date: override.date,
+          reason: override.reason,
+        }));
+
+      return {
+        success: true,
+        data: { blockedPeriods },
+      };
+    } catch (error) {
+      throw new Error(error instanceof Error ? error.message : 'Failed to get blocked periods');
     }
   }
 

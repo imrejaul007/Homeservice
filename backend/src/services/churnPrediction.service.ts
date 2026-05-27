@@ -1,6 +1,8 @@
 import mongoose, { Types, Document } from 'mongoose';
 import User from '../models/user.model';
 import Booking, { IBooking } from '../models/booking.model';
+import { ApiError, ERROR_CODES } from '../utils/ApiError';
+import logger from '../utils/logger';
 
 // =============================================================================
 // NILIN Churn Prediction Service
@@ -146,7 +148,7 @@ class ChurnPredictionService {
       .lean();
 
     if (!user) {
-      throw new Error('User not found');
+      throw ApiError.notFound('User not found', ERROR_CODES.USER_NOT_FOUND);
     }
 
     // Get booking history
@@ -677,7 +679,12 @@ class ChurnPredictionService {
           riskCustomers.push(risk);
         }
       } catch (error) {
-        console.error(`Error predicting churn for user ${user._id}:`, error);
+        logger.error('Error predicting churn for user', {
+          context: 'ChurnPredictionService',
+          action: 'PREDICT_CHURN_ERROR',
+          userId: user._id.toString(),
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
     }
 
@@ -900,7 +907,13 @@ class ChurnPredictionService {
     }
 
     // Log action
-    console.log(`Retention action '${action.title}' executed for user ${userId} via channels: ${executedChannels.join(', ')}`);
+    logger.info('Retention action executed', {
+      context: 'ChurnPredictionService',
+      action: 'RETENTION_ACTION_EXECUTED',
+      userId,
+      actionTitle: action.title,
+      channels: executedChannels,
+    });
 
     return {
       success: true,

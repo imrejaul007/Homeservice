@@ -64,6 +64,9 @@ auditLogSchema.index({ userId: 1, createdAt: -1 });
 auditLogSchema.index({ resource: 1, action: 1, createdAt: -1 });
 auditLogSchema.index({ createdAt: -1 });
 
+// TTL index for automatic log expiration (1 year = 31536000 seconds)
+auditLogSchema.index({ createdAt: 1 }, { expireAfterSeconds: 31536000 });
+
 const AuditLog = mongoose.model<IAuditLog>('AuditLog', auditLogSchema);
 
 export default AuditLog;

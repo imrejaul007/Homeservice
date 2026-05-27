@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import ProviderProfile from '../models/providerProfile.model';
 import Booking from '../models/booking.model';
+import Service from '../models/service.model';
 import User from '../models/user.model';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
@@ -27,13 +28,19 @@ export const getProviderReviews = asyncHandler(async (req: Request, res: Respons
     });
   }
 
-  // Get reviews with customer info
+  // Get reviews with customer and service info
   const reviews = await Promise.all(
     providerProfile.reviewsData.recentReviews.slice(0, 20).map(async (review) => {
-      const booking = await Booking.findById(review.bookingId).populate(
-        'customerId',
-        'firstName lastName avatar'
-      );
+      const booking = await Booking.findById(review.bookingId).populate([
+        { path: 'customerId', select: 'firstName lastName avatar' },
+        { path: 'serviceId', select: 'name' },
+      ]);
+
+      let serviceName = 'Service';
+      if (booking?.serviceId) {
+        const service = await Service.findById(booking.serviceId).select('name').lean();
+        serviceName = service?.name || 'Service';
+      }
 
       return {
         id: review.bookingId?.toString() || '',
@@ -51,6 +58,7 @@ export const getProviderReviews = asyncHandler(async (req: Request, res: Respons
               avatar: (booking.customerId as any).avatar,
             }
           : null,
+        service: booking?.serviceId ? { name: serviceName } : null,
       };
     })
   );
@@ -67,10 +75,11 @@ export const getProviderReviews = asyncHandler(async (req: Request, res: Respons
     data: {
       reviews: paginatedReviews,
       total: providerProfile.reviewsData.totalReviews,
+      totalReviews: providerProfile.reviewsData.totalReviews, // Alias for frontend compatibility
       averageRating: providerProfile.reviewsData.averageRating,
       ratingDistribution: providerProfile.reviewsData.ratingDistribution,
       page: pageNum,
-      pages: Math.ceil(reviews.length / limitNum),
+      pages: Math.ceil(providerProfile.reviewsData.totalReviews / limitNum),
     },
   });
 });

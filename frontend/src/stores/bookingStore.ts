@@ -6,11 +6,13 @@ import type {
   BookingFilters,
   CreateBookingData,
   ProviderAvailability,
+  ProviderBookingsStats,
   AvailableSlot,
   BookingAcceptData,
   BookingCompleteData,
   BookingCancelData,
-  BookingMessage
+  BookingMessage,
+  AvailabilitySettingsUpdate
 } from '../services/BookingService';
 
 export interface BookingError {
@@ -49,6 +51,8 @@ export interface BookingState {
     pages: number;
   } | null;
 
+  providerBookingsStats: ProviderBookingsStats | null;
+
   // Actions - Customer
   createBooking: (data: CreateBookingData) => Promise<Booking>;
   getCustomerBookings: (filters?: BookingFilters) => Promise<void>;
@@ -69,6 +73,7 @@ export interface BookingState {
   // Actions - Availability
   getProviderAvailability: (providerId?: string) => Promise<void>;
   updateWeeklySchedule: (weeklySchedule: ProviderAvailability['weeklySchedule']) => Promise<void>;
+  updateAvailabilitySettings: (settings: AvailabilitySettingsUpdate) => Promise<void>;
   addDateOverride: (override: {
     date: string;
     isAvailable: boolean;
@@ -111,6 +116,7 @@ export const useBookingStore = create<BookingState>()(
       errors: [],
       customerBookingsPagination: null,
       providerBookingsPagination: null,
+      providerBookingsStats: null,
 
       // Customer Actions
       createBooking: async (data: CreateBookingData): Promise<Booking> => {
@@ -186,6 +192,7 @@ export const useBookingStore = create<BookingState>()(
           set((state) => {
             state.providerBookings = response.data.bookings;
             state.providerBookingsPagination = response.pagination || null;
+            state.providerBookingsStats = response.stats || null;
             state.isLoading = false;
           });
         } catch (error) {
@@ -536,6 +543,33 @@ export const useBookingStore = create<BookingState>()(
             state.errors = [{
               message: error instanceof Error ? error.message : 'Failed to update schedule',
               code: 'UPDATE_SCHEDULE_ERROR'
+            }];
+          });
+          throw error;
+        }
+      },
+
+      updateAvailabilitySettings: async (settings: AvailabilitySettingsUpdate): Promise<void> => {
+        const bookingService = (await import('../services/BookingService')).default;
+
+        try {
+          set((state) => {
+            state.isSubmitting = true;
+            state.errors = [];
+          });
+
+          const response = await bookingService.updateAvailabilitySettings(settings);
+
+          set((state) => {
+            state.providerAvailability = response.data.availability;
+            state.isSubmitting = false;
+          });
+        } catch (error) {
+          set((state) => {
+            state.isSubmitting = false;
+            state.errors = [{
+              message: error instanceof Error ? error.message : 'Failed to update availability settings',
+              code: 'UPDATE_SETTINGS_ERROR'
             }];
           });
           throw error;

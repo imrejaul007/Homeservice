@@ -12,8 +12,6 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "sourceMap": true,
-    "declaration": true,
-    "declarationMap": true,
     "removeComments": true,
     "noImplicitAny": true,
     "strictNullChecks": true,

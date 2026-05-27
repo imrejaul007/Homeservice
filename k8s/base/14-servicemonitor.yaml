@@ -1,0 +1,111 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: nilin-api-monitor
+  namespace: nilin
+  labels:
+    app: nilin-api
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: nilin-api
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 10s
+  namespaceSelector:
+    matchNames:
+      - nilin
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: nilin-frontend-monitor
+  namespace: nilin
+  labels:
+    app: nilin-frontend
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: nilin-frontend
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+  namespaceSelector:
+    matchNames:
+      - nilin
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: nilin-alerts
+  namespace: nilin
+  labels:
+    app: nilin
+    release: prometheus
+spec:
+  groups:
+    - name: nilin-api
+      rules:
+        - alert: NILINAPIHighErrorRate
+          expr: rate(http_requests_total{status=~"5.."}[5m]) > 0.05
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "High error rate on NILIN API"
+            description: "API error rate is {{ $value | humanizePercentage }}"
+        - alert: NILINAPIHighLatency
+          expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m])) > 2
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High latency on NILIN API"
+            description: "P95 latency is {{ $value }}s"
+        - alert: NILINAPIHighMemory
+          expr: container_memory_usage_bytes{pod=~"nilin-api-.*"} / container_spec_memory_limit_bytes{pod=~"nilin-api-.*"} > 0.85
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High memory usage on NILIN API"
+            description: "Memory usage is {{ $value | humanizePercentage }}"
+        - alert: NILINAPIHighCPU
+          expr: rate(container_cpu_usage_seconds_total{pod=~"nilin-api-.*"}[5m]) > 0.8
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High CPU usage on NILIN API"
+            description: "CPU usage is {{ $value | humanizePercentage }}"
+        - alert: NILINAPIUnavailable
+          expr: up{job="nilin-api"} == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "NILIN API is down"
+            description: "NILIN API has been unavailable for 1 minute"
+    - name: nilin-database
+      rules:
+        - alert: NILINMongoDBDown
+          expr: up{job="nilin-mongodb"} == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "MongoDB is down"
+            description: "MongoDB replica set has a down member"
+        - alert: NILINRedisDown
+          expr: up{job="nilin-redis"} == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Redis is down"
+            description: "Redis cluster has unavailable nodes"

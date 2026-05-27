@@ -80,6 +80,11 @@ export interface BookingFiltersDTO {
   startDate?: string | Date;
   endDate?: string | Date;
   cursor?: string;
+  // Sorting
+  sortBy?: 'createdAt' | 'scheduledDate' | 'status' | 'totalAmount' | 'updatedAt';
+  sortOrder?: 'asc' | 'desc';
+  // Search
+  search?: string;
 }
 
 export interface PaginationDTO {
@@ -247,7 +252,18 @@ export interface GuestBookingResult {
   trackingUrl: string;
 }
 
+export interface ProviderBookingsStatsDTO {
+  pending: number;
+  confirmed: number;
+  in_progress: number;
+  completed: number;
+  cancelled: number;
+  no_show: number;
+  total: number;
+}
+
 export interface PaginatedBookingsResult {
   bookings: BookingResponse[];
-  pagination: CursorPaginationDTO;
+  pagination: CursorPaginationDTO & Partial<PaginationDTO>;
+  stats?: ProviderBookingsStatsDTO;
 }

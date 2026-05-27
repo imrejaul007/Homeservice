@@ -189,7 +189,8 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
       } else if (keys.length === 2) {
         const key0 = keys[0] as keyof ServiceFormData;
         const key1 = keys[1];
-        const prevValue = prev[key0] as Record<string, unknown>;
+        // Use double cast to handle nested object updates
+        const prevValue = prev[key0] as unknown as Record<string, unknown>;
         return {
           ...prev,
           [key0]: {
@@ -201,7 +202,7 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
         const key0 = keys[0] as keyof ServiceFormData;
         const key1 = keys[1];
         const key2 = keys[2];
-        const prevValue = prev[key0] as Record<string, Record<string, unknown>>;
+        const prevValue = prev[key0] as unknown as Record<string, Record<string, unknown>>;
         return {
           ...prev,
           [key0]: {

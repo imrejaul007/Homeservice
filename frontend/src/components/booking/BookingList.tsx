@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Calendar,
@@ -14,27 +14,45 @@ import {
   Filter,
   Search,
   ChevronDown,
-  Eye
+  Eye,
+  RefreshCw,
 } from 'lucide-react';
 import { useBookingStore } from '../../stores/bookingStore';
 import { useAuthStore } from '../../stores/authStore';
-import type { Booking, BookingFilters } from '../../services/BookingService';
+import type { Booking, BookingFilters, ProviderBookingsStats } from '../../services/BookingService';
 import bookingService from '../../services/BookingService';
 import { cn, formatPrice } from '../../lib/utils';
-import { toast } from 'react-hot-toast';
+import { useToastActions } from '../common/Toast';
 
 interface BookingListProps {
   userType: 'customer' | 'provider';
   className?: string;
+  /** Hide duplicate page title when parent page already renders it */
+  hideHeader?: boolean;
 }
 
-const BookingList: React.FC<BookingListProps> = ({ userType, className }) => {
+const PROVIDER_STATUS_TABS: Array<{
+  value: string;
+  label: string;
+  countKey: keyof ProviderBookingsStats;
+}> = [
+  { value: '', label: 'All', countKey: 'total' },
+  { value: 'pending', label: 'Pending', countKey: 'pending' },
+  { value: 'confirmed', label: 'Confirmed', countKey: 'confirmed' },
+  { value: 'in_progress', label: 'In Progress', countKey: 'in_progress' },
+  { value: 'completed', label: 'Completed', countKey: 'completed' },
+  { value: 'cancelled', label: 'Cancelled', countKey: 'cancelled' },
+];
+
+const BookingList: React.FC<BookingListProps> = ({ userType, className, hideHeader }) => {
   const { user } = useAuthStore();
+  const toast = useToastActions();
   const {
     customerBookings,
     providerBookings,
     customerBookingsPagination,
     providerBookingsPagination,
+    providerBookingsStats,
     getCustomerBookings,
     getProviderBookings,
     acceptBooking,
@@ -55,29 +73,40 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className }) => {
   });
 
   const [showFilters, setShowFilters] = useState(false);
-  const [searchTerm, setSearchTerm] = useState('');
+  const [searchInput, setSearchInput] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [actionLoading, setActionLoading] = useState<{ [key: string]: string | null }>({});
+  const [rejectTargetId, setRejectTargetId] = useState<string | null>(null);
+  const [rejectReason, setRejectReason] = useState('');
 
   const bookings = userType === 'customer' ? customerBookings : providerBookings;
   const pagination = userType === 'customer' ? customerBookingsPagination : providerBookingsPagination;
 
-  // Load bookings on component mount and when filters change
   useEffect(() => {
-    const loadBookings = async () => {
-      const searchFilters = {
-        ...filters,
-        ...(searchTerm && { search: searchTerm })
-      };
+    const timer = setTimeout(() => setDebouncedSearch(searchInput.trim()), 350);
+    return () => clearTimeout(timer);
+  }, [searchInput]);
 
-      if (userType === 'customer') {
-        await getCustomerBookings(searchFilters);
-      } else {
-        await getProviderBookings(searchFilters);
-      }
-    };
+  const buildSearchFilters = useCallback(
+    (): BookingFilters => ({
+      ...filters,
+      ...(debouncedSearch ? { search: debouncedSearch } : {}),
+    }),
+    [filters, debouncedSearch],
+  );
 
-    loadBookings();
-  }, [filters, searchTerm, userType, getCustomerBookings, getProviderBookings]);
+  const reloadBookings = useCallback(async () => {
+    const searchFilters = buildSearchFilters();
+    if (userType === 'customer') {
+      await getCustomerBookings(searchFilters);
+    } else {
+      await getProviderBookings(searchFilters);
+    }
+  }, [buildSearchFilters, getCustomerBookings, getProviderBookings, userType]);
+
+  useEffect(() => {
+    void reloadBookings();
+  }, [reloadBookings]);
 
   const handleFilterChange = (key: keyof BookingFilters, value: any) => {
     setFilters(prev => ({
@@ -133,8 +162,8 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className }) => {
   const getUnreadMessageCount = (booking: Booking): number => {
     if (!user) return 0;
 
-    return booking.messages.filter(message =>
-      !message.readBy.some(read => read.userId === user.id)
+    return (booking.messages || []).filter(message =>
+      !message.readBy?.some(read => read.userId === user.id)
     ).length;
   };
 
@@ -143,41 +172,77 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className }) => {
   };
 
   const handleBookingAction = async (bookingId: string, action: string) => {
+    if (action === 'reject') {
+      setRejectTargetId(bookingId);
+      setRejectReason('');
+      return;
+    }
+
     setActionLoading(prev => ({ ...prev, [bookingId]: action }));
 
     try {
       switch (action) {
         case 'accept':
           await acceptBooking(bookingId, {
-            notes: 'Booking accepted by provider'
+            notes: 'Booking accepted by provider',
           });
-          break;
-        case 'reject':
-          await rejectBooking(bookingId, {
-            reason: 'Provider unavailable',
-            notes: 'Provider rejected the booking'
-          });
+          toast.success('Booking accepted');
           break;
         case 'start':
           await startBooking(bookingId, 'Service started');
+          toast.success('Service marked as in progress');
           break;
         case 'complete':
           await completeBooking(bookingId, {
-            notes: 'Service completed successfully'
+            notes: 'Service completed successfully',
           });
+          toast.success('Booking completed');
           break;
         case 'cancel':
           await cancelBooking(bookingId, {
             reason: 'Cancelled by customer',
-            notes: 'Customer cancelled the booking'
+            notes: 'Customer cancelled the booking',
           });
+          toast.success('Booking cancelled');
           break;
       }
-    } catch (err: any) {
-      toast.error(err.response?.data?.message || 'Failed to perform action');
+      await reloadBookings();
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error
+          ? err.message
+          : (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+            'Failed to perform action';
+      toast.error(message);
     } finally {
       setActionLoading(prev => ({ ...prev, [bookingId]: null }));
     }
+  };
+
+  const confirmReject = async () => {
+    if (!rejectTargetId) return;
+    const reason = rejectReason.trim() || 'Provider unavailable';
+    setActionLoading(prev => ({ ...prev, [rejectTargetId]: 'reject' }));
+
+    try {
+      await rejectBooking(rejectTargetId, {
+        reason,
+        notes: 'Provider rejected the booking',
+      });
+      toast.success('Booking declined');
+      setRejectTargetId(null);
+      setRejectReason('');
+      await reloadBookings();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to decline booking';
+      toast.error(message);
+    } finally {
+      setActionLoading(prev => ({ ...prev, [rejectTargetId]: null }));
+    }
+  };
+
+  const handleStatusTab = (status: string) => {
+    handleFilterChange('status', status || undefined);
   };
 
   const getProviderActions = (booking: Booking): string[] => {
@@ -234,32 +299,45 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className }) => {
     <div className={cn("space-y-6", className)}>
       {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <div>
-          <h2 className="text-2xl font-bold text-nilin-charcoal font-serif">
-            {userType === 'customer' ? 'My Bookings' : 'Service Requests'}
-          </h2>
-          <p className="text-nilin-warmGray">
-            {userType === 'customer'
-              ? 'Track and manage your service bookings'
-              : 'Manage your incoming service requests'
-            }
-          </p>
-        </div>
+        {!hideHeader && (
+          <div>
+            <h2 className="text-2xl font-bold text-nilin-charcoal font-serif">
+              {userType === 'customer' ? 'My Bookings' : 'Service Requests'}
+            </h2>
+            <p className="text-nilin-warmGray">
+              {userType === 'customer'
+                ? 'Track and manage your service bookings'
+                : 'Manage your incoming service requests'
+              }
+            </p>
+          </div>
+        )}
 
         {/* Search and Filter */}
-        <div className="flex items-center gap-3">
-          <div className="relative">
+        <div className={cn("flex items-center gap-3", hideHeader && "w-full justify-end")}>
+          <div className="relative flex-1 sm:flex-none sm:min-w-[240px]">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-nilin-warmGray" />
             <input
               type="text"
               placeholder={`Search ${userType === 'customer' ? 'bookings' : 'requests'}...`}
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="glass-input pl-10 pr-4 py-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-rose/30 font-sans border-glow"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              className="glass-input w-full pl-10 pr-4 py-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-rose/30 font-sans border-glow"
             />
           </div>
 
           <button
+            type="button"
+            onClick={() => void reloadBookings()}
+            disabled={isLoading}
+            className="glass-btn p-2 rounded-xl transition-all"
+            title="Refresh"
+          >
+            <RefreshCw className={cn("h-4 w-4 text-nilin-warmGray", isLoading && "animate-spin")} />
+          </button>
+
+          <button
+            type="button"
             onClick={() => setShowFilters(!showFilters)}
             className="glass-btn flex items-center gap-2 px-4 py-2 rounded-xl transition-all"
           >
@@ -269,6 +347,33 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className }) => {
           </button>
         </div>
       </div>
+
+      {userType === 'provider' && providerBookingsStats && (
+        <div className="flex flex-wrap gap-2">
+          {PROVIDER_STATUS_TABS.map((tab) => {
+            const count = providerBookingsStats[tab.countKey] ?? 0;
+            const active = (filters.status || '') === tab.value;
+            return (
+              <button
+                key={tab.value || 'all'}
+                type="button"
+                onClick={() => handleStatusTab(tab.value)}
+                className={cn(
+                  'px-3 py-1.5 rounded-full text-sm font-sans transition-all border',
+                  active
+                    ? 'bg-gradient-to-r from-nilin-rose to-nilin-coral text-white border-transparent shadow-nilin-warm'
+                    : 'bg-white/60 text-nilin-charcoal border-nilin-blush hover:bg-nilin-blush/40',
+                )}
+              >
+                {tab.label}
+                <span className={cn('ml-1.5 text-xs', active ? 'text-white/90' : 'text-nilin-warmGray')}>
+                  ({count})
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* Filters Panel */}
       {showFilters && (
@@ -443,10 +548,14 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className }) => {
                                 )}
                               </div>
 
-                              {booking.customerInfo.phone && (
+                              {(booking.customerInfo?.phone ||
+                                booking.customer?.phone ||
+                                (booking as { guestInfo?: { phone?: string } }).guestInfo?.phone) && (
                                 <div className="flex items-center gap-2 text-sm text-nilin-warmGray">
                                   <Phone className="h-4 w-4 text-nilin-rose" />
-                                  {booking.customerInfo.phone}
+                                  {booking.customerInfo?.phone ||
+                                    booking.customer?.phone ||
+                                    (booking as { guestInfo?: { phone?: string } }).guestInfo?.phone}
                                 </div>
                               )}
                             </div>
@@ -489,7 +598,7 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className }) => {
                         </div>
 
                         {/* Special Requests */}
-                        {booking.customerInfo.specialRequests && (
+                        {booking.customerInfo?.specialRequests && (
                           <div className="mb-4 p-3 neu-light rounded-xl">
                             <h4 className="text-sm font-medium text-nilin-charcoal mb-1">Special Requests:</h4>
                             <p className="text-sm text-nilin-warmGray">{booking.customerInfo.specialRequests}</p>
@@ -497,13 +606,13 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className }) => {
                         )}
 
                         {/* Recent Messages */}
-                        {booking.messages.length > 0 && (
+                        {(booking.messages?.length ?? 0) > 0 && (
                           <div className="mb-4">
                             <h4 className="text-sm font-medium text-nilin-charcoal mb-2">
-                              Recent Messages ({booking.messages.length})
+                              Recent Messages ({booking.messages!.length})
                             </h4>
                             <div className="glass p-3 rounded-xl">
-                              {booking.messages.slice(-2).map((message) => (
+                              {booking.messages!.slice(-2).map((message) => (
                                 <div key={message._id} className="text-sm">
                                   <span className="font-medium text-nilin-charcoal">
                                     {message.senderType === 'customer' ? 'Customer' : 'Provider'}:
@@ -511,9 +620,9 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className }) => {
                                   <span className="ml-2 text-nilin-warmGray">{message.message}</span>
                                 </div>
                               ))}
-                              {booking.messages.length > 2 && (
+                              {booking.messages!.length > 2 && (
                                 <p className="text-xs text-nilin-warmGray mt-1">
-                                  +{booking.messages.length - 2} more messages
+                                  +{booking.messages!.length - 2} more messages
                                 </p>
                               )}
                             </div>
@@ -557,7 +666,7 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className }) => {
                           </div>
                         )}
 
-                        {booking.messages.length > 0 && (
+                        {(booking.messages?.length ?? 0) > 0 && (
                           <Link
                             to={`/${userType}/bookings/${booking._id}?tab=messages`}
                             className="glass-btn flex items-center gap-2 px-4 py-2 rounded-xl transition-all text-sm relative"
@@ -671,6 +780,44 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className }) => {
             </div>
           )}
         </>
+      )}
+
+      {rejectTargetId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40">
+          <div className="glass w-full max-w-md rounded-2xl p-6 shadow-nilin-warm">
+            <h3 className="text-lg font-serif text-nilin-charcoal mb-2">Decline booking</h3>
+            <p className="text-sm text-nilin-warmGray mb-4 font-sans">
+              Optionally tell the customer why you cannot take this request.
+            </p>
+            <textarea
+              value={rejectReason}
+              onChange={(e) => setRejectReason(e.target.value)}
+              rows={3}
+              placeholder="e.g. Fully booked at this time"
+              className="glass-input w-full px-3 py-2 rounded-xl font-sans mb-4"
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setRejectTargetId(null);
+                  setRejectReason('');
+                }}
+                className="px-4 py-2 rounded-xl text-nilin-charcoal hover:bg-nilin-blush/30 font-sans text-sm"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void confirmReject()}
+                disabled={isSubmitting}
+                className="px-4 py-2 rounded-xl bg-nilin-error text-white text-sm font-medium hover:bg-nilin-error/90 disabled:opacity-50"
+              >
+                Decline request
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

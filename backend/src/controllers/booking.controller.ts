@@ -99,7 +99,10 @@ const bookingFiltersSchema = Joi.object({
   limit: Joi.number().min(1).max(100),
   startDate: Joi.string(),
   endDate: Joi.string(),
-});
+  sortBy: Joi.string().valid('createdAt', 'scheduledDate', 'status', 'totalAmount', 'updatedAt').default('createdAt'),
+  sortOrder: Joi.string().valid('asc', 'desc').default('desc'),
+  search: Joi.string().min(1).max(200),
+}).options({ stripUnknown: true });
 
 const acceptBookingSchema = Joi.object({
   notes: Joi.string(),
@@ -153,11 +156,26 @@ interface BookingNotificationData {
 
 /**
  * Format booking data for email notifications
+ * Uses pre-populated data if available, otherwise fetches in a single batch query
  */
-const formatBookingForEmail = async (booking: any): Promise<BookingNotificationData | null> => {
+const formatBookingForEmail = async (
+  booking: any,
+  prePopulated?: { service?: any; customer?: any; provider?: any }
+): Promise<BookingNotificationData | null> => {
   try {
-    // Get service name
-    const service = await Service.findById(booking.serviceId).select('name duration').lean();
+    // Use pre-populated data if available, otherwise batch fetch
+    let service = prePopulated?.service;
+    let provider = prePopulated?.provider;
+
+    if (!service) {
+      // Try to get from populated booking first
+      service = booking.service || booking._doc?.service;
+      if (!service && booking.serviceId) {
+        const services = await Service.find({ _id: booking.serviceId }).select('name duration').lean();
+        service = services[0];
+      }
+    }
+
     if (!service) {
       logger.warn('Service not found for booking email', { bookingId: booking._id });
       return null;
@@ -171,7 +189,12 @@ const formatBookingForEmail = async (booking: any): Promise<BookingNotificationD
       customerName = booking.guestInfo.name;
       customerEmail = booking.guestInfo.email;
     } else if (booking.customerId) {
-      const customer = await User.findById(booking.customerId).select('firstName lastName email').lean();
+      // Try to get from pre-populated data or populated booking
+      let customer = prePopulated?.customer || booking.customer || booking._doc?.customer;
+      if (!customer) {
+        const customers = await User.find({ _id: booking.customerId }).select('firstName lastName email').lean();
+        customer = customers[0];
+      }
       if (customer) {
         customerName = `${customer.firstName || ''} ${customer.lastName || ''}`.trim() || 'Customer';
         customerEmail = customer.email || '';
@@ -179,7 +202,14 @@ const formatBookingForEmail = async (booking: any): Promise<BookingNotificationD
     }
 
     // Get provider info
-    const provider = await User.findById(booking.providerId).select('firstName lastName email').lean();
+    if (!provider) {
+      provider = booking.provider || booking._doc?.provider;
+      if (!provider && booking.providerId) {
+        const providers = await User.find({ _id: booking.providerId }).select('firstName lastName email').lean();
+        provider = providers[0];
+      }
+    }
+
     if (!provider) {
       logger.warn('Provider not found for booking email', { bookingId: booking._id });
       return null;
@@ -227,6 +257,52 @@ const formatBookingForEmail = async (booking: any): Promise<BookingNotificationD
     });
     return null;
   }
+};
+
+/**
+ * Batch fetch related data for multiple bookings to avoid N+1 queries
+ */
+const prefetchBookingRelations = async (bookings: any[]): Promise<Map<string, { service?: any; customer?: any; provider?: any }>> => {
+  const relationMap = new Map<string, { service?: any; customer?: any; provider?: any }>();
+
+  if (!bookings.length) return relationMap;
+
+  // Collect all IDs using Array.from to convert Set
+  const serviceIds = Array.from(new Set(bookings.map(b => b.serviceId?.toString()).filter(Boolean)));
+  const customerIds = Array.from(new Set(bookings.map(b => b.customerId?.toString()).filter(Boolean)));
+  const providerIds = Array.from(new Set(bookings.map(b => b.providerId?.toString()).filter(Boolean)));
+
+  // Batch fetch all related documents
+  const [services, customers, providers] = await Promise.all([
+    serviceIds.length ? Service.find({ _id: { $in: serviceIds } }).select('name duration').lean() : [],
+    customerIds.length ? User.find({ _id: { $in: customerIds } }).select('firstName lastName email').lean() : [],
+    providerIds.length ? User.find({ _id: { $in: providerIds } }).select('firstName lastName email').lean() : [],
+  ]);
+
+  // Create lookup maps using explicit set() calls to avoid type issues
+  const serviceMap = new Map<string, any>();
+  services.forEach(s => serviceMap.set(s._id.toString(), s));
+
+  const customerMap = new Map<string, any>();
+  customers.forEach(c => customerMap.set(c._id.toString(), c));
+
+  const providerMap = new Map<string, any>();
+  providers.forEach(p => providerMap.set(p._id.toString(), p));
+
+  // Map relations to each booking
+  for (const booking of bookings) {
+    const serviceId = booking.serviceId?.toString();
+    const customerId = booking.customerId?.toString();
+    const providerId = booking.providerId?.toString();
+
+    relationMap.set(booking._id.toString(), {
+      service: serviceMap.get(serviceId),
+      customer: customerMap.get(customerId),
+      provider: providerMap.get(providerId),
+    });
+  }
+
+  return relationMap;
 };
 
 /**
@@ -307,7 +383,15 @@ export const getCustomerBookings = asyncHandler(async (req: Request, res: Respon
   }
 
   const customerId = (req.user as any)._id.toString();
-  const result = await bookingService.getCustomerBookings(customerId, value);
+
+  // CRITICAL: Pass tenant context to prevent cross-tenant data access
+  const userRole = (req.user as any)?.role;
+  const tenantContext = {
+    tenantId: req.tenantId,
+    isAdmin: userRole === 'admin' || userRole === 'super_admin'
+  };
+
+  const result = await bookingService.getCustomerBookings(customerId, value, tenantContext);
 
   res.json({
     success: true,
@@ -640,16 +724,27 @@ export const markMessagesAsRead = asyncHandler(async (req: Request, res: Respons
 
   const unreadField = isCustomer ? 'readByCustomer' : 'readByProvider';
 
-  // Update all messages where the other party sent them
-  await Booking.updateOne(
-    { _id: id },
-    { $set: { [unreadField]: true } }
-  );
+  // FIX: Update all messages where the other party sent them with error handling
+  try {
+    const result = await Booking.updateOne(
+      { _id: id },
+      { $set: { [unreadField]: true } }
+    );
 
-  res.json({
-    success: true,
-    message: 'Messages marked as read',
-  });
+    res.json({
+      success: true,
+      message: 'Messages marked as read',
+      data: { modified: result.modifiedCount }
+    });
+  } catch (error) {
+    logger.error('Failed to mark messages as read', {
+      bookingId: id,
+      userId: user._id,
+      error: (error as Error).message,
+      action: 'MARK_MESSAGES_READ_FAILED'
+    });
+    throw new ApiError(500, 'Failed to mark messages as read');
+  }
 });
 
 // ============================================

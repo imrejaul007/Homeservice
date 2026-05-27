@@ -1,0 +1,59 @@
+{
+  "common": {
+    "app_name": "نيلين",
+    "loading": "جاري التحميل...",
+    "error": "حدث خطأ ما",
+    "retry": "حاول مرة أخرى",
+    "cancel": "إلغاء",
+    "confirm": "تأكيد",
+    "save": "حفظ",
+    "delete": "حذف",
+    "edit": "تعديل",
+    "back": "رجوع",
+    "next": "التالي",
+    "search": "بحث",
+    "no_results": "لم يتم العثور على نتائج",
+    "required_field": "هذا الحقل مطلوب"
+  },
+  "auth": {
+    "login": "تسجيل الدخول",
+    "register": "التسجيل",
+    "logout": "تسجيل الخروج",
+    "email": "البريد الإلكتروني",
+    "password": "كلمة المرور",
+    "forgot_password": "نسيت كلمة المرور؟",
+    "dont_have_account": "ليس لديك حساب؟",
+    "already_have_account": "لديك حساب بالفعل؟"
+  },
+  "booking": {
+    "title": "احجز خدمة",
+    "select_service": "اختر الخدمة",
+    "select_provider": "اختر مقدم الخدمة",
+    "select_date": "اختر التاريخ",
+    "select_time": "اختر الوقت",
+    "confirm_booking": "تأكيد الحجز",
+    "booking_confirmed": "تم تأكيد الحجز!",
+    "booking_number": "رقم الحجز",
+    "status": {
+      "pending": "قيد الانتظار",
+      "confirmed": "مؤكد",
+      "completed": "مكتمل",
+      "cancelled": "ملغي"
+    }
+  },
+  "payment": {
+    "pay_now": "ادفع الآن",
+    "wallet_balance": "رصيد المحفظة",
+    "add_funds": "إضافة رصيد",
+    "payment_method": "طريقة الدفع",
+    "card_number": "رقم البطاقة",
+    "expiry": "تاريخ الانتهاء",
+    "cvv": "CVV"
+  },
+  "errors": {
+    "network_error": "خطأ في الشبكة. يرجى التحقق من الاتصال.",
+    "server_error": "خطأ في الخادم. يرجى المحاولة لاحقاً.",
+    "invalid_credentials": "البريد الإلكتروني أو كلمة المرور غير صحيحة.",
+    "session_expired": "انتهت صلاحية الجلسة. يرجى تسجيل الدخول مرة أخرى."
+  }
+}

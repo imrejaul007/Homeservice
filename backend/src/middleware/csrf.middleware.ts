@@ -2,12 +2,13 @@ import { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import { CookieOptions } from 'express';
 import logger from '../utils/logger';
+import { cache, isRedisAvailable } from '../config/redis';
 
 // CSRF token configuration
 const CSRF_TOKEN_LENGTH = 32; // 32 bytes = 64 hex characters
 const CSRF_TOKEN_EXPIRY_HOURS = 24;
 
-// In-memory token store (use Redis in production for horizontal scaling)
+// In-memory token store for fallback when Redis is unavailable
 interface CSRFTokenEntry {
   token: string;
   userId: string;
@@ -16,12 +17,8 @@ interface CSRFTokenEntry {
   rotated: boolean;
 }
 
-// In-memory token store for single-instance deployments
-// For production with multiple instances, use Redis with TTL
-const tokenStore = new Map<string, CSRFTokenEntry>();
-
-// Cleanup expired tokens periodically (every hour)
-const TOKEN_CLEANUP_INTERVAL = 60 * 60 * 1000; // 1 hour
+// In-memory fallback for single-instance deployments without Redis
+const memoryTokenStore = new Map<string, CSRFTokenEntry>();
 
 // Environment-based configuration
 const getConfig = () => ({
@@ -33,6 +30,93 @@ const getConfig = () => ({
   secure: process.env.NODE_ENV === 'production',
   rotateOnAuth: process.env.CSRF_ROTATE_ON_AUTH !== 'false', // Default true
 });
+
+// ============================================
+// Redis-based CSRF Token Storage
+// ============================================
+
+const CSRF_KEY_PREFIX = 'csrf:';
+
+/**
+ * Store CSRF token in Redis with TTL
+ * Falls back to memory store if Redis is unavailable
+ */
+async function storeToken(key: string, entry: CSRFTokenEntry, ttlMs: number): Promise<void> {
+  if (isRedisAvailable()) {
+    try {
+      const ttlSeconds = Math.ceil(ttlMs / 1000);
+      await cache.set(
+        `${CSRF_KEY_PREFIX}${key}`,
+        JSON.stringify({
+          token: entry.token,
+          userId: entry.userId,
+          createdAt: entry.createdAt.toISOString(),
+          lastUsedAt: entry.lastUsedAt.toISOString(),
+          rotated: entry.rotated,
+        }),
+        ttlSeconds
+      );
+      return;
+    } catch (err) {
+      logger.warn('Redis CSRF store failed, using memory fallback', {
+        error: (err as Error).message,
+        action: 'CSRF_REDIS_STORE_FAILED',
+      });
+    }
+  }
+  // Fallback to memory
+  memoryTokenStore.set(key, entry);
+}
+
+/**
+ * Retrieve CSRF token from Redis
+ * Falls back to memory store if Redis is unavailable
+ */
+async function getToken(key: string): Promise<CSRFTokenEntry | null> {
+  if (isRedisAvailable()) {
+    try {
+      const data = await cache.get(`${CSRF_KEY_PREFIX}${key}`);
+      if (data) {
+        const parsed = JSON.parse(data);
+        return {
+          token: parsed.token,
+          userId: parsed.userId,
+          createdAt: new Date(parsed.createdAt),
+          lastUsedAt: new Date(parsed.lastUsedAt),
+          rotated: parsed.rotated,
+        };
+      }
+      return null;
+    } catch (err) {
+      logger.warn('Redis CSRF get failed, using memory fallback', {
+        error: (err as Error).message,
+        action: 'CSRF_REDIS_GET_FAILED',
+      });
+    }
+  }
+  // Fallback to memory
+  return memoryTokenStore.get(key) || null;
+}
+
+/**
+ * Delete CSRF token from Redis
+ * Falls back to memory store if Redis is unavailable
+ */
+async function deleteToken(key: string): Promise<void> {
+  if (isRedisAvailable()) {
+    try {
+      await cache.del(`${CSRF_KEY_PREFIX}${key}`);
+      return;
+    } catch (err) {
+      logger.warn('Redis CSRF delete failed', {
+        error: (err as Error).message,
+        action: 'CSRF_REDIS_DELETE_FAILED',
+      });
+    }
+  }
+  // Fallback to memory
+  memoryTokenStore.delete(key);
+}
 
 /**
  * Generate a cryptographically secure CSRF token
@@ -60,7 +144,11 @@ export function generateCsrfToken(req: Request, res: Response): string {
   // Store token with expiry
   const expiryTime = config.tokenExpiryHours * 60 * 60 * 1000;
   const storeKey = generateStoreKey(req, token);
-  tokenStore.set(storeKey, tokenEntry);
+
+  // Store asynchronously (don't block response)
+  storeToken(storeKey, tokenEntry, expiryTime).catch(err => {
+    logger.error('Failed to store CSRF token', { error: (err as Error).message });
+  });
 
   // Set CSRF cookie
   const cookieOptions = csrfCookieOptions();
@@ -72,6 +160,7 @@ export function generateCsrfToken(req: Request, res: Response): string {
   logger.debug('CSRF token generated', {
     userId,
     expiresIn: `${config.tokenExpiryHours}h`,
+    storage: isRedisAvailable() ? 'redis' : 'memory',
   });
 
   return token;
@@ -131,7 +220,24 @@ export function validateCsrfToken(req: Request, res: Response, next: NextFunctio
 
   // Validate token exists and matches user
   const storeKey = generateStoreKey(req, token);
-  const tokenEntry = tokenStore.get(storeKey);
+
+  // Use synchronous validation with memory fallback for middleware
+  // For production with Redis, validation happens in the async wrapper below
+  validateTokenAsync(req, res, next, storeKey, token);
+}
+
+/**
+ * Async token validation with Redis support
+ */
+async function validateTokenAsync(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+  storeKey: string,
+  token: string
+): Promise<void> {
+  const config = getConfig();
+  const tokenEntry = await getToken(storeKey);
 
   if (!tokenEntry) {
     logger.warn('CSRF validation failed: Token not found', {
@@ -150,7 +256,7 @@ export function validateCsrfToken(req: Request, res: Response, next: NextFunctio
   // Check token expiry
   const configExpiry = config.tokenExpiryHours * 60 * 60 * 1000;
   if (Date.now() - tokenEntry.createdAt.getTime() > configExpiry) {
-    tokenStore.delete(storeKey);
+    await deleteToken(storeKey);
     logger.warn('CSRF validation failed: Token expired', {
       path: req.path,
       method: req.method,
@@ -167,7 +273,7 @@ export function validateCsrfToken(req: Request, res: Response, next: NextFunctio
   // Verify user identifier matches (prevent token hijacking across users)
   const currentUserId = getUserIdentifier(req);
   if (tokenEntry.userId !== currentUserId) {
-    tokenStore.delete(storeKey);
+    await deleteToken(storeKey);
     logger.warn('CSRF validation failed: User mismatch', {
       path: req.path,
       method: req.method,
@@ -188,13 +294,18 @@ export function validateCsrfToken(req: Request, res: Response, next: NextFunctio
 
   // Rotate token on authenticated requests if enabled
   if (config.rotateOnAuth && req.user && !tokenEntry.rotated) {
-    rotateCsrfToken(req, res, storeKey, tokenEntry);
+    await rotateCsrfToken(req, res, storeKey, tokenEntry);
+  } else {
+    // Re-store the updated entry
+    const expiryTime = config.tokenExpiryHours * 60 * 60 * 1000;
+    await storeToken(storeKey, tokenEntry, expiryTime);
   }
 
   logger.debug('CSRF validation successful', {
     path: req.path,
     method: req.method,
     userId: currentUserId,
+    storage: isRedisAvailable() ? 'redis' : 'memory',
   });
 
   // Attach validated token to request for downstream use
@@ -296,12 +407,12 @@ function getAllowedOrigins(): string[] {
  * Rotate CSRF token after successful validation
  * Creates a new token and invalidates the old one
  */
-function rotateCsrfToken(
+async function rotateCsrfToken(
   req: Request,
   res: Response,
   oldStoreKey: string,
   oldEntry: CSRFTokenEntry
-): void {
+): Promise<void> {
   const config = getConfig();
 
   // Generate new token
@@ -319,24 +430,27 @@ function rotateCsrfToken(
 
   // Store new token
   const newStoreKey = generateStoreKey(req, newToken);
-  tokenStore.set(newStoreKey, newEntry);
+  const expiryTime = config.tokenExpiryHours * 60 * 60 * 1000;
+  await storeToken(newStoreKey, newEntry, expiryTime);
 
   // Set new cookie
-  const expiryTime = config.tokenExpiryHours * 60 * 60 * 1000;
   res.cookie(config.cookieName, newToken, {
     ...csrfCookieOptions(),
     maxAge: expiryTime,
   });
 
-  // Mark old entry as rotated
+  // Mark old entry as rotated and schedule deletion
   oldEntry.rotated = true;
 
   // Remove old token after short grace period (5 minutes)
-  setTimeout(() => {
-    tokenStore.delete(oldStoreKey);
+  setTimeout(async () => {
+    await deleteToken(oldStoreKey);
   }, 5 * 60 * 1000);
 
-  logger.debug('CSRF token rotated', { userId });
+  logger.debug('CSRF token rotated', {
+    userId,
+    storage: isRedisAvailable() ? 'redis' : 'memory',
+  });
 }
 
 /**
@@ -391,31 +505,37 @@ function isValidTokenFormat(token: string): boolean {
 }
 
 /**
- * Cleanup expired tokens
+ * Cleanup expired tokens from memory store
  * Should be called periodically to prevent memory leaks
+ * Note: Redis handles TTL automatically
  */
 export function cleanupExpiredTokens(): void {
+  // Only clean memory store if Redis is not available
+  if (isRedisAvailable()) {
+    return; // Redis handles expiration via TTL
+  }
+
   const config = getConfig();
   const expiryTime = config.tokenExpiryHours * 60 * 60 * 1000;
   const now = Date.now();
 
   let cleanedCount = 0;
 
-  for (const [key, entry] of tokenStore.entries()) {
+  for (const [key, entry] of memoryTokenStore.entries()) {
     if (now - entry.createdAt.getTime() > expiryTime) {
-      tokenStore.delete(key);
+      memoryTokenStore.delete(key);
       cleanedCount++;
     }
   }
 
   if (cleanedCount > 0) {
-    logger.info(`Cleaned up ${cleanedCount} expired CSRF tokens`);
+    logger.info(`Cleaned up ${cleanedCount} expired CSRF tokens from memory`);
   }
 }
 
-// Start periodic cleanup
+// Start periodic cleanup for memory store fallback
 if (process.env.NODE_ENV !== 'test') {
-  setInterval(cleanupExpiredTokens, TOKEN_CLEANUP_INTERVAL);
+  setInterval(cleanupExpiredTokens, 60 * 60 * 1000); // Every hour
 }
 
 /**

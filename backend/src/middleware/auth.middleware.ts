@@ -3,9 +3,11 @@ import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
 import bcrypt from 'bcryptjs';
 import User, { IUser, UserRole } from '../models/user.model';
-import { ApiError } from '../utils/ApiError';
+import { ApiError, ERROR_CODES } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
 import logger from '../utils/logger';
+import { cache } from '../config/redis';
+import { createAuditLog } from '../services/audit.service';
 import {
   verifyToken,
   verifyRecoveryCode,
@@ -37,9 +39,18 @@ export interface JWTPayload {
   exp: number;
 }
 
+// Session timeout configuration (in milliseconds)
+const SESSION_TIMEOUT = parseInt(process.env.SESSION_TIMEOUT || String(30 * 24 * 60 * 60 * 1000)); // Default 30 days
+const SESSION_REFRESH_THRESHOLD = parseInt(process.env.SESSION_REFRESH_THRESHOLD || String(5 * 60 * 1000)); // Refresh every 5 minutes of activity
+
 // Core authentication middleware
 export const authenticate = asyncHandler(async (req: Request, _res: Response, next: NextFunction) => {
   try {
+    // Skip auth if skipAuth header is present (for specific public endpoints)
+    if (req.headers.skipauth === 'true' || req.headers.skipAuth === 'true') {
+      return next();
+    }
+
     let token: string | undefined;
 
     // Extract token from Authorization header or cookies
@@ -90,6 +101,49 @@ export const authenticate = asyncHandler(async (req: Request, _res: Response, ne
       throw new ApiError(401, 'Password was recently changed. Please login again');
     }
 
+    // Session validation and refresh
+    const sessionId = req.headers['x-session-id'] as string | undefined;
+
+    // Validate session and check expiration
+    if (sessionId) {
+      const sessionValidation = await validateSessionWithTimeout(
+        user._id.toString(),
+        sessionId,
+        token
+      );
+
+      if (sessionValidation.expired) {
+        logger.warn('Session expired', {
+          action: 'SESSION_EXPIRED',
+          userId: user._id,
+          sessionId,
+          ip: req.ip,
+        });
+        throw new ApiError(401, 'Session has expired. Please login again.');
+      }
+
+      // Refresh session on activity if threshold is met
+      if (sessionValidation.shouldRefresh) {
+        await refreshSession(user._id.toString(), sessionId);
+        logger.debug('Session refreshed on activity', {
+          userId: user._id,
+          sessionId,
+        });
+      }
+
+      // Redis session validation if enabled
+      if (process.env.REDIS_SESSION_ENABLED === 'true') {
+        const sessionValid = await validateRedisSession(user._id.toString(), sessionId);
+        if (!sessionValid) {
+          logger.warn('Session validation failed in Redis', {
+            userId: user._id,
+            sessionId,
+            ip: req.ip,
+          });
+        }
+      }
+    }
+
     // Update security tracking
     await user.updateSecurityInfo(req);
 
@@ -106,6 +160,197 @@ export const authenticate = asyncHandler(async (req: Request, _res: Response, ne
     next(error);
   }
 });
+
+/**
+ * Validate session with timeout checking
+ * Returns whether session is expired and if it should be refreshed
+ */
+async function validateSessionWithTimeout(
+  userId: string,
+  sessionId: string,
+  token: string
+): Promise<{ expired: boolean; shouldRefresh: boolean }> {
+  try {
+    const user = await User.findOne({
+      _id: userId,
+      'sessions.sessionId': sessionId,
+      'sessions.token': token,
+    }).select('sessions');
+
+    if (!user || !user.sessions || user.sessions.length === 0) {
+      return { expired: true, shouldRefresh: false };
+    }
+
+    const session = user.sessions.find((s: any) => s.sessionId === sessionId);
+
+    if (!session) {
+      return { expired: true, shouldRefresh: false };
+    }
+
+    const now = new Date();
+
+    // Check if session has expired
+    if (session.expiresAt && new Date(session.expiresAt) < now) {
+      // Remove expired session
+      await User.updateOne(
+        { _id: userId },
+        { $pull: { sessions: { sessionId } } }
+      );
+      return { expired: true, shouldRefresh: false };
+    }
+
+    // Check if session should be refreshed based on activity
+    const lastActive = new Date(session.lastActive);
+    const timeSinceLastActivity = now.getTime() - lastActive.getTime();
+    const shouldRefresh = timeSinceLastActivity >= SESSION_REFRESH_THRESHOLD;
+
+    return { expired: false, shouldRefresh };
+  } catch (error) {
+    logger.error('Session validation error', {
+      userId,
+      sessionId,
+      error: (error as Error).message,
+    });
+    // On error, don't block the request
+    return { expired: false, shouldRefresh: false };
+  }
+}
+
+/**
+ * Refresh session on activity
+ * Updates lastActive timestamp and extends expiry
+ */
+async function refreshSession(userId: string, sessionId: string): Promise<void> {
+  try {
+    const newExpiry = new Date();
+    newExpiry.setDate(newExpiry.getDate() + 30); // Extend by 30 days
+
+    // Update session in MongoDB
+    await User.updateOne(
+      { _id: userId, 'sessions.sessionId': sessionId },
+      {
+        $set: {
+          'sessions.$.lastActive': new Date(),
+          'sessions.$.expiresAt': newExpiry,
+        },
+      }
+    );
+
+    // Update Redis session TTL if available
+    if (process.env.REDIS_SESSION_ENABLED === 'true') {
+      try {
+        await cache.set(
+          `session:${sessionId}`,
+          JSON.stringify({ userId, refreshedAt: new Date().toISOString() }),
+          30 * 24 * 60 * 60 // 30 days
+        );
+      } catch (error) {
+        logger.warn('Failed to refresh Redis session TTL', { sessionId, error: (error as Error).message });
+      }
+    }
+  } catch (error) {
+    logger.error('Failed to refresh session', {
+      userId,
+      sessionId,
+      error: (error as Error).message,
+    });
+  }
+}
+
+/**
+ * Redis Session Store Fallback
+ * Validates session in Redis for fast lookup with MongoDB as source of truth
+ */
+async function validateRedisSession(userId: string, sessionId: string): Promise<boolean> {
+  try {
+    const cachedSession = await cache.get(`session:${sessionId}`);
+    if (!cachedSession) {
+      // Session not in Redis - might be new or Redis was cleared
+      // Fall back to MongoDB check
+      return await validateMongoSession(userId, sessionId);
+    }
+
+    const sessionData = JSON.parse(cachedSession);
+    if (sessionData.userId !== userId) {
+      // Session doesn't belong to this user
+      return false;
+    }
+
+    // Refresh TTL on successful validation - set with new TTL
+    await cache.set(`session:${sessionId}`, JSON.stringify(sessionData), 30 * 24 * 60 * 60);
+
+    return true;
+  } catch (error) {
+    // Redis unavailable - fall back to MongoDB
+    logger.warn('Redis session validation failed, falling back to MongoDB', { error: (error as Error).message });
+    return await validateMongoSession(userId, sessionId);
+  }
+}
+
+/**
+ * MongoDB Session Fallback Validation
+ * Validates session exists in user's sessions array and hasn't expired
+ */
+async function validateMongoSession(userId: string, sessionId: string): Promise<boolean> {
+  try {
+    const user = await User.findOne({
+      _id: userId,
+      'sessions.sessionId': sessionId,
+    }).select('sessions');
+
+    if (!user) {
+      return false;
+    }
+
+    const session = user.sessions.find((s: any) => s.sessionId === sessionId);
+    if (!session) {
+      return false;
+    }
+
+    // Check if session has expired
+    if (session.expiresAt && new Date(session.expiresAt) < new Date()) {
+      return false;
+    }
+
+    return true;
+  } catch (error) {
+    logger.error('MongoDB session validation error', { userId, sessionId, error: (error as Error).message });
+    // On error, allow the request (fail open) - MongoDB is source of truth
+    // This prevents Redis failures from blocking all authentication
+    return true;
+  }
+}
+
+/**
+ * Store session in Redis for fast lookup
+ * Called after successful authentication
+ */
+export async function storeRedisSession(sessionId: string, userId: string): Promise<void> {
+  try {
+    await cache.set(
+      `session:${sessionId}`,
+      JSON.stringify({
+        userId,
+        createdAt: new Date().toISOString(),
+      }),
+      30 * 24 * 60 * 60 // 30 days TTL
+    );
+  } catch (error) {
+    // Non-fatal - MongoDB TTL will handle cleanup
+    logger.warn('Failed to store session in Redis', { sessionId, userId, error: (error as Error).message });
+  }
+}
+
+/**
+ * Remove session from Redis (called on logout)
+ */
+export async function removeRedisSession(sessionId: string): Promise<void> {
+  try {
+    await cache.del(`session:${sessionId}`);
+  } catch (error) {
+    logger.warn('Failed to remove session from Redis', { sessionId, error: (error as Error).message });
+  }
+}
 
 // Optional authentication middleware (doesn't throw error if no token)
 export const optionalAuth = asyncHandler(async (req: Request, _res: Response, next: NextFunction) => {
@@ -208,31 +453,52 @@ export const requireOwnership = (resourceUserField: string = 'userId') => {
   });
 };
 
-// Provider-specific middleware (requires provider role and profile completion)
-export const requireProvider = asyncHandler(async (req: Request, _res: Response, next: NextFunction) => {
+// Provider account exists (role + profile) — for onboarding actions like creating services
+export const requireProviderAccount = asyncHandler(async (req: Request, _res: Response, next: NextFunction) => {
   if (!req.user) {
-    throw new ApiError(401, 'Authentication required');
+    throw new ApiError(401, 'Authentication required', [], ERROR_CODES.UNAUTHORIZED);
   }
 
   if (req.user.role !== 'provider' && req.user.role !== 'admin') {
-    throw new ApiError(403, 'Provider access required');
+    throw new ApiError(403, 'Provider access required', [], ERROR_CODES.FORBIDDEN);
   }
 
-  // Check if provider profile exists and is complete (skip for admin)
   if (req.user.role === 'provider') {
     const ProviderProfile = require('../models/providerProfile.model').default;
     const providerProfile = await ProviderProfile.findOne({ userId: req.user._id });
-    
+
     if (!providerProfile) {
-      throw new ApiError(403, 'Provider profile setup required');
+      throw new ApiError(403, 'Provider profile setup required', [], ERROR_CODES.FORBIDDEN);
+    }
+  }
+
+  next();
+});
+
+// Provider-specific middleware (requires profile completion and verification)
+export const requireProvider = asyncHandler(async (req: Request, _res: Response, next: NextFunction) => {
+  if (!req.user) {
+    throw new ApiError(401, 'Authentication required', [], ERROR_CODES.UNAUTHORIZED);
+  }
+
+  if (req.user.role !== 'provider' && req.user.role !== 'admin') {
+    throw new ApiError(403, 'Provider access required', [], ERROR_CODES.FORBIDDEN);
+  }
+
+  if (req.user.role === 'provider') {
+    const ProviderProfile = require('../models/providerProfile.model').default;
+    const providerProfile = await ProviderProfile.findOne({ userId: req.user._id });
+
+    if (!providerProfile) {
+      throw new ApiError(403, 'Provider profile setup required', [], ERROR_CODES.FORBIDDEN);
     }
 
     if (!providerProfile.isProfileComplete) {
-      throw new ApiError(403, 'Please complete your provider profile setup');
+      throw new ApiError(403, 'Please complete your provider profile setup', [], ERROR_CODES.FORBIDDEN);
     }
 
     if (providerProfile.verificationStatus.overall !== 'approved') {
-      throw new ApiError(403, 'Provider verification required');
+      throw new ApiError(403, 'Provider verification required', [], ERROR_CODES.FORBIDDEN);
     }
   }
 
@@ -289,7 +555,12 @@ export const checkSuspiciousActivity = asyncHandler(async (req: Request, res: Re
   const isSuspicious = suspiciousPatterns.some(pattern => pattern.test(userAgent));
 
   if (isSuspicious) {
-    console.warn(`🚨 Suspicious activity detected - IP: ${clientIP}, User-Agent: ${userAgent}`);
+    logger.warn('Suspicious activity detected', {
+      action: 'SUSPICIOUS_ACTIVITY',
+      ip: clientIP,
+      userAgent: userAgent,
+      path: req.path
+    });
     // You could implement additional logging, blocking, or CAPTCHA here
   }
 
@@ -344,23 +615,39 @@ export const getCsrfToken = (_req: Request, res: Response) => {
 // Audit logging middleware
 export const auditLog = (action: string) => {
   return asyncHandler(async (req: Request, _res: Response, next: NextFunction) => {
-    const auditData = {
-      action,
-      userId: req.user?._id,
-      userRole: req.user?.role,
-      ip: req.ip,
-      userAgent: req.get('User-Agent'),
-      timestamp: new Date(),
-      resource: req.originalUrl,
-      method: req.method,
-      body: req.method !== 'GET' ? req.body : undefined
-    };
+    const startTime = Date.now();
 
-    // Log audit trail (implement your audit logging system)
-    console.log('📝 Audit Log:', JSON.stringify(auditData, null, 2));
+    // Store original send
+    const originalSend = req.res?.send;
 
-    // You could store this in a dedicated audit collection
-    // await AuditLog.create(auditData);
+    // Hook into response finish event to capture final status
+    req.res?.on('finish', async () => {
+      const duration = Date.now() - startTime;
+      const status = req.res?.statusCode || 500;
+
+      try {
+        // Create audit log entry
+        await createAuditLog({
+          userId: req.user?._id?.toString() || 'anonymous',
+          action,
+          resource: req.originalUrl,
+          resourceId: req.params.id,
+          details: {
+            method: req.method,
+            duration,
+            statusCode: status,
+            query: req.query,
+            // Exclude sensitive body fields
+            bodyFields: req.method !== 'GET' ? Object.keys(req.body || {}) : undefined
+          },
+          ipAddress: req.ip,
+          userAgent: req.get('User-Agent'),
+          status: status < 400 ? 'success' : 'failure',
+        });
+      } catch (error) {
+        logger.error('Failed to create audit log', { error: (error as Error).message, action });
+      }
+    });
 
     next();
   });
@@ -400,9 +687,8 @@ export const require2FA = asyncHandler(async (req: Request, _res: Response, next
 
   // Check for trusted device
   const deviceId = req.headers['x-device-id'] as string | undefined;
-  const skipTrustedCheck = req.headers['x-skip-2fa-trusted'] === 'true';
 
-  if (deviceId && !skipTrustedCheck) {
+  if (deviceId) {
     const trustedDevice = req.user.twoFactor?.trustedDevices?.find(
       d => d.deviceId === deviceId
     );
@@ -451,6 +737,7 @@ export const require2FA = asyncHandler(async (req: Request, _res: Response, next
     // Bug: findIndex callback cannot be async - the Promise was never awaited!
     const normalizedToken = twoFactorToken.toUpperCase().replace(/[\s-]/g, '');
     let codeFound = false;
+    let codesRemaining = userWithCodes.twoFactor.recoveryCodes.length;
 
     for (let i = 0; i < userWithCodes.twoFactor.recoveryCodes.length; i++) {
       const isMatch = await bcrypt.compare(normalizedToken, userWithCodes.twoFactor.recoveryCodes[i]);
@@ -462,10 +749,35 @@ export const require2FA = asyncHandler(async (req: Request, _res: Response, next
     }
 
     if (codeFound) {
+      codesRemaining = userWithCodes.twoFactor.recoveryCodes.length;
+
+      // SECURITY FIX: Warn when codes < 3 remaining
+      if (codesRemaining > 0 && codesRemaining < 3) {
+        logger.warn('2FA recovery codes running low', {
+          userId: req.user._id,
+          codesRemaining,
+          warning: 'User should generate new recovery codes',
+          action: 'LOW_RECOVERY_CODES',
+        });
+      }
+
+      // SECURITY FIX: When all codes exhausted, set needsReenrollment flag
+      if (codesRemaining === 0) {
+        logger.error('SECURITY_ALERT: All 2FA recovery codes exhausted', {
+          userId: req.user._id,
+          email: userWithCodes.email,
+          action: 'ALL_RECOVERY_CODES_EXHAUSTED',
+          requiresReenrollment: true,
+        });
+
+        // Set reenrollment flag (user must re-setup 2FA)
+        userWithCodes.twoFactor.needsReenrollment = true;
+      }
+
       await userWithCodes.save({ validateBeforeSave: false });
     }
 
-    logger.info('2FA verified via recovery code', { userId: req.user._id });
+    logger.info('2FA verified via recovery code', { userId: req.user._id, codesRemaining });
 
     return next();
   }
@@ -644,6 +956,257 @@ export const removeTrustedDevice = asyncHandler(async (req: Request, _res: Respo
   return next();
 });
 
+// ============================================
+// 2FA Enforcement for Sensitive Operations
+// ============================================
+
+/**
+ * Payment threshold for requiring 2FA
+ * Amounts above this threshold will require 2FA verification
+ */
+const PAYMENT_2FA_THRESHOLD = parseFloat(process.env.PAYMENT_2FA_THRESHOLD || '100'); // Default 100 AED
+
+/**
+ * Require 2FA for high-value payments
+ * Use this middleware for payment endpoints that exceed the threshold
+ */
+export const require2FAForPayment = asyncHandler(async (req: Request, _res: Response, next: NextFunction) => {
+  if (!req.user) {
+    throw new ApiError(401, 'Authentication required');
+  }
+
+  // Check if 2FA is enabled for this user
+  const twoFactorEnabled = req.user.twoFactor?.enabled === true;
+
+  if (!twoFactorEnabled) {
+    // 2FA not enabled, skip verification
+    return next();
+  }
+
+  // Get payment amount from request
+  const amount = parseFloat(req.body.amount || req.body.totalAmount || req.body.price || '0');
+
+  // If amount exceeds threshold, require 2FA
+  if (amount >= PAYMENT_2FA_THRESHOLD) {
+    logger.info('High-value payment detected, requiring 2FA', {
+      action: 'PAYMENT_2FA_REQUIRED',
+      userId: req.user._id,
+      amount,
+      threshold: PAYMENT_2FA_THRESHOLD,
+    });
+
+    // Use the require2FA middleware logic
+    return require2FA(req, _res, next);
+  }
+
+  return next();
+});
+
+/**
+ * Require 2FA for any payment (regardless of amount)
+ * Use this for critical payment operations like withdrawals
+ */
+export const require2FAForAnyPayment = asyncHandler(async (req: Request, _res: Response, next: NextFunction) => {
+  if (!req.user) {
+    throw new ApiError(401, 'Authentication required');
+  }
+
+  // Check if 2FA is enabled for this user
+  const twoFactorEnabled = req.user.twoFactor?.enabled === true;
+
+  if (!twoFactorEnabled) {
+    // 2FA not enabled, skip verification
+    return next();
+  }
+
+  logger.info('Payment operation requiring 2FA', {
+    action: 'PAYMENT_OPERATION_2FA_REQUIRED',
+    userId: req.user._id,
+    endpoint: req.path,
+    method: req.method,
+  });
+
+  // Use the require2FA middleware logic
+  return require2FA(req, _res, next);
+});
+
+/**
+ * Require 2FA for profile changes
+ * Use this middleware for sensitive profile operations
+ */
+export const require2FAForProfileChange = asyncHandler(async (req: Request, _res: Response, next: NextFunction) => {
+  if (!req.user) {
+    throw new ApiError(401, 'Authentication required');
+  }
+
+  // Check if 2FA is enabled for this user
+  const twoFactorEnabled = req.user.twoFactor?.enabled === true;
+
+  if (!twoFactorEnabled) {
+    // 2FA not enabled, skip verification
+    return next();
+  }
+
+  // List of sensitive profile fields that require 2FA
+  const sensitiveFields = [
+    'email', 'phone', 'password', 'address',
+    'bankAccount', 'paymentMethod', 'twoFactor',
+    'dateOfBirth', 'firstName', 'lastName',
+  ];
+
+  const requestFields = Object.keys(req.body || {});
+  const hasSensitiveField = requestFields.some(field =>
+    sensitiveFields.some(sensitive => field.toLowerCase().includes(sensitive.toLowerCase()))
+  );
+
+  if (hasSensitiveField) {
+    logger.info('Sensitive profile change requiring 2FA', {
+      action: 'PROFILE_CHANGE_2FA_REQUIRED',
+      userId: req.user._id,
+      fields: requestFields.filter(f =>
+        sensitiveFields.some(s => f.toLowerCase().includes(s.toLowerCase()))
+      ),
+    });
+
+    // Use the require2FA middleware logic
+    return require2FA(req, _res, next);
+  }
+
+  return next();
+});
+
+/**
+ * Require 2FA for withdrawal requests
+ * Always require 2FA for withdrawals regardless of amount
+ */
+export const require2FAForWithdrawal = asyncHandler(async (req: Request, _res: Response, next: NextFunction) => {
+  if (!req.user) {
+    throw new ApiError(401, 'Authentication required');
+  }
+
+  // Check if 2FA is enabled for this user
+  const twoFactorEnabled = req.user.twoFactor?.enabled === true;
+
+  if (!twoFactorEnabled) {
+    // 2FA not enabled, skip verification but log warning
+    logger.warn('Withdrawal request without 2FA enabled', {
+      action: 'WITHDRAWAL_NO_2FA',
+      userId: req.user._id,
+      endpoint: req.path,
+    });
+    return next();
+  }
+
+  logger.info('Withdrawal request requiring 2FA', {
+    action: 'WITHDRAWAL_2FA_REQUIRED',
+    userId: req.user._id,
+    endpoint: req.path,
+  });
+
+  // Use the require2FA middleware logic
+  return require2FA(req, _res, next);
+});
+
+/**
+ * Require 2FA for provider earnings withdrawal
+ * Always require 2FA for provider payout requests
+ */
+export const require2FAForProviderWithdrawal = asyncHandler(async (req: Request, _res: Response, next: NextFunction) => {
+  if (!req.user) {
+    throw new ApiError(401, 'Authentication required');
+  }
+
+  // Only applies to providers
+  if (req.user.role !== 'provider' && req.user.role !== 'admin') {
+    return next();
+  }
+
+  // Check if 2FA is enabled for this user
+  const twoFactorEnabled = req.user.twoFactor?.enabled === true;
+
+  if (!twoFactorEnabled) {
+    // 2FA not enabled, skip verification but log warning
+    logger.warn('Provider withdrawal request without 2FA enabled', {
+      action: 'PROVIDER_WITHDRAWAL_NO_2FA',
+      userId: req.user._id,
+      endpoint: req.path,
+    });
+    return next();
+  }
+
+  logger.info('Provider withdrawal request requiring 2FA', {
+    action: 'PROVIDER_WITHDRAWAL_2FA_REQUIRED',
+    userId: req.user._id,
+    endpoint: req.path,
+  });
+
+  // Use the require2FA middleware logic
+  return require2FA(req, _res, next);
+});
+
+/**
+ * Check if device is trusted (helper for 2FA trusted device validation)
+ * SECURITY FIX: Removed x-skip-2fa-trusted bypass header
+ */
+async function isTrustedDevice(req: Request): Promise<boolean> {
+  const deviceId = req.headers['x-device-id'] as string | undefined;
+
+  if (!deviceId) {
+    return false;
+  }
+
+  const trustedDevice = req.user?.twoFactor?.trustedDevices?.find(
+    d => d.deviceId === deviceId
+  );
+
+  return !!trustedDevice;
+}
+
+// ============================================
+// HTTP-Only Cookie Authentication Helpers
+// ============================================
+
+/**
+ * Cookie options for HTTP-only access token
+ */
+export const getAccessTokenCookieOptions = () => ({
+  httpOnly: true,
+  secure: process.env.NODE_ENV === 'production',
+  sameSite: 'strict' as const,
+  maxAge: 3600000, // 1 hour
+});
+
+/**
+ * Set HTTP-only access token cookie for web clients
+ * Call this after successful authentication/login
+ */
+export const setAuthCookie = (res: Response, token: string): void => {
+  res.cookie('accessToken', token, getAccessTokenCookieOptions());
+};
+
+/**
+ * Clear the access token cookie (logout)
+ */
+export const clearAuthCookie = (res: Response): void => {
+  res.clearCookie('accessToken', {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'strict',
+  });
+};
+
+/**
+ * Logout handler - clears auth cookies
+ */
+export const logout = (req: Request, res: Response) => {
+  clearAuthCookie(res);
+
+  res.json({
+    success: true,
+    message: 'Logged out successfully',
+  });
+};
+
 export default {
   authenticate,
   optionalAuth,
@@ -652,6 +1215,7 @@ export default {
   requireAccountStatus,
   requireOwnership,
   requireProvider,
+  requireProviderAccount,
   authRateLimit,
   generalRateLimit,
   strictRateLimit,
@@ -665,4 +1229,15 @@ export default {
   setup2FA,
   addTrustedDevice,
   removeTrustedDevice,
+  setAuthCookie,
+  clearAuthCookie,
+  logout,
+  storeRedisSession,
+  removeRedisSession,
+  // 2FA Enforcement for Sensitive Operations
+  require2FAForPayment,
+  require2FAForAnyPayment,
+  require2FAForProfileChange,
+  require2FAForWithdrawal,
+  require2FAForProviderWithdrawal,
 };

@@ -4,6 +4,8 @@ import { ApiError } from '../utils/ApiError';
 import * as settingsService from '../services/settings.service';
 import { uploadBufferToCloudinary, deleteFromCloudinary } from '../utils/cloudinary';
 import PlatformSettings from '../models/settings.model';
+import logger from '../utils/logger';
+import { sendEmail } from '../services/email.service';
 
 /**
  * Get all platform settings
@@ -104,7 +106,12 @@ export const uploadLogo = asyncHandler(async (req: Request, res: Response) => {
     try {
       await deleteFromCloudinary(currentSettings.platformLogoPublicId);
     } catch (error) {
-      console.error('Failed to delete old logo:', error);
+      logger.error('Failed to delete old logo', {
+        context: 'SettingsController',
+        action: 'DELETE_OLD_LOGO_ERROR',
+        publicId: currentSettings.platformLogoPublicId,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -148,7 +155,12 @@ export const deleteLogo = asyncHandler(async (req: Request, res: Response) => {
     try {
       await deleteFromCloudinary(currentSettings.platformLogoPublicId);
     } catch (error) {
-      console.error('Failed to delete logo:', error);
+      logger.error('Failed to delete logo', {
+        context: 'SettingsController',
+        action: 'DELETE_LOGO_ERROR',
+        publicId: currentSettings.platformLogoPublicId,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -247,16 +259,59 @@ export const testEmailConfig = asyncHandler(async (req: Request, res: Response) 
     throw new ApiError(400, 'Test email address is required');
   }
 
-  // TODO: Actually send a test email
-  // For now, just validate the email format
+  // Validate email format
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (!emailRegex.test(testEmail)) {
     throw new ApiError(400, 'Invalid email address');
   }
 
-  res.json({
-    success: true,
-    message: `Test email would be sent to ${testEmail}`,
-    data: { testEmail }
-  });
+  // Send actual test email to verify email configuration
+  const testSubject = 'NILIN Platform - Test Email';
+  const testHtml = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <div style="background: linear-gradient(135deg, #E8B4A8 0%, #D4A89A 100%); padding: 30px; text-align: center;">
+        <h1 style="color: white; margin: 0;">NILIN Platform</h1>
+        <p style="color: white; margin: 10px 0 0;">Test Email Configuration</p>
+      </div>
+      <div style="padding: 30px; background: #F5E6E0;">
+        <h2 style="color: #2D2D2D; margin-top: 0;">Email Configuration Verified</h2>
+        <p style="color: #666; line-height: 1.6;">
+          This is a test email sent from the NILIN Platform admin settings.
+          If you received this email, your email configuration is working correctly.
+        </p>
+        <div style="background: white; padding: 15px; border-radius: 8px; margin-top: 20px;">
+          <p style="margin: 0; color: #666; font-size: 14px;">
+            <strong>Sent to:</strong> ${testEmail}<br>
+            <strong>Timestamp:</strong> ${new Date().toISOString()}<br>
+            <strong>Status:</strong> <span style="color: #22c55e;">Success</span>
+          </p>
+        </div>
+      </div>
+    </div>
+  `;
+
+  try {
+    await sendEmail(testEmail, testSubject, testHtml);
+
+    logger.info('Test email sent successfully', {
+      action: 'TEST_EMAIL_SENT',
+      adminId,
+      testEmail,
+    });
+
+    res.json({
+      success: true,
+      message: `Test email sent successfully to ${testEmail}`,
+      data: { testEmail, sentAt: new Date().toISOString() }
+    });
+  } catch (error) {
+    logger.error('Failed to send test email', {
+      action: 'TEST_EMAIL_FAILED',
+      adminId,
+      testEmail,
+      error: error instanceof Error ? error.message : String(error),
+    });
+
+    throw new ApiError(500, `Failed to send test email: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
 });

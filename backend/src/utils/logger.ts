@@ -16,21 +16,89 @@ if (!fs.existsSync(logsDir)) {
 
 // Sensitive fields to redact in logs
 const sensitiveFields = [
+  // Authentication & Authorization
   'password',
   'token',
+  'accessToken',
+  'refreshToken',
+  'jwtSecret',
+  'jwtToken',
+  'apiKey',
+  'api_secret',
+  'apiKey',
   'secret',
   'authorization',
   'cookie',
-  'refreshToken',
-  'accessToken',
-  'apiKey',
-  'api_secret',
-  'stripeSecret',
-  'jwtSecret',
+  'sessionId',
+
+  // Personal Identifiable Information (PII)
+  'email',
+  'phone',
+  'phoneNumber',
+  'phoneNumberVerified',
+  'address',
+  'coordinates',
+  'location',
+  'geoLocation',
+
+  // Security & Recovery
+  'pin',
+  'otp',
+  'totp',
+  'recoveryCode',
+  'backupCode',
+  'twoFactorSecret',
+  'resetToken',
+  'verificationToken',
+
+  // Payment & Financial
   'cardNumber',
   'cvv',
   'ssn',
+  'bankAccount',
+  'accountNumber',
+  'routingNumber',
+  'taxId',
+
+  // Other
+  'stripeSecret',
+  'privateKey',
+  'publicKey',
 ];
+
+// Regex patterns for redacting sensitive data in strings
+// Matches key=value patterns where key contains sensitive field names
+const REDACTION_PATTERNS: Array<{ pattern: RegExp; replacement: string }> = [
+  // Password patterns
+  { pattern: /(?<![a-zA-Z0-9])(password)[\s:=]+["']?([^\s,"']{1,})/gi, replacement: '$1: [REDACTED]' },
+  // Token patterns
+  { pattern: /(?<![a-zA-Z0-9])(token)[\s:=]+["']?([^\s,"']{1,})/gi, replacement: '$1: [REDACTED]' },
+  // Secret patterns
+  { pattern: /(?<![a-zA-Z0-9])(secret|apiKey|api_key|apiSecret)[\s:=]+["']?([^\s,"']{1,})/gi, replacement: '$1: [REDACTED]' },
+  // Key patterns
+  { pattern: /(?<![a-zA-Z0-9])(key)[\s:=]+["']?([^\s,"']{1,})/gi, replacement: '$1: [REDACTED]' },
+  // Card number patterns (matches 13-19 digit sequences)
+  { pattern: /(?<!\d)(\d{13,19})(?!\d)/g, replacement: '[REDACTED_CARD]' },
+  // CVV patterns (3-4 digit sequences after cvv keyword)
+  { pattern: /(?<![a-zA-Z0-9])(cvv|cvc)[\s:=]+["']?(\d{3,4})/gi, replacement: '$1: [REDACTED]' },
+  // Authorization header patterns
+  { pattern: /(authorization)[\s:=]+["']?(Bearer\s+)?([^\s,"']{1,})/gi, replacement: '$1: [REDACTED]' },
+  // Stripe keys
+  { pattern: /(sk_live_|sk_test_|rk_live_|rk_test_)[a-zA-Z0-9]{20,}/g, replacement: '[REDACTED_STRIPE_KEY]' },
+  // Generic sensitive value patterns (long alphanumeric strings that look like tokens)
+  { pattern: /(?<![a-zA-Z0-9])([a-zA-Z0-9]{40,})(?![a-zA-Z0-9])/g, replacement: '[REDACTED_TOKEN]' },
+];
+
+/**
+ * Redact sensitive data from a string using regex patterns
+ */
+const redactString = (input: string): string => {
+  let result = input;
+  for (const { pattern, replacement } of REDACTION_PATTERNS) {
+    result = result.replace(pattern, replacement);
+  }
+  return result;
+};
 
 // Redact sensitive data from objects
 const redactSensitiveData = (obj: unknown, seen = new WeakSet()): Record<string, unknown> => {
@@ -86,8 +154,10 @@ const logger = winston.createLogger({
         winston.format.printf(({ level, message, timestamp, ...meta }) => {
           const correlationId = global.correlationId || 'N/A';
           const redactedMeta = redactSensitiveData(meta);
+          // Redact sensitive strings in the message itself
+          const redactedMessage = redactString(message as string);
           const metaStr = Object.keys(redactedMeta).length > 0 ? ` ${JSON.stringify(redactedMeta)}` : '';
-          return `${timestamp} [${level}] [${correlationId}] ${message}${metaStr}`;
+          return `${timestamp} [${level}] [${correlationId}] ${redactedMessage}${metaStr}`;
         })
       ),
       handleExceptions: true

@@ -13,7 +13,12 @@ const customerRegistrationSchema = z.object({
   firstName: z.string().min(2, 'First name must be at least 2 characters').max(50).regex(/^[a-zA-Z\s-']+$/, 'Name can only contain letters'),
   lastName: z.string().min(2, 'Last name must be at least 2 characters').max(50).regex(/^[a-zA-Z\s-']+$/, 'Name can only contain letters'),
   email: z.string().email('Please enter a valid email').toLowerCase(),
-  password: z.string().min(8, 'Password must be at least 8 characters').regex(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/, 'Must have uppercase, lowercase, number & special character'),
+  password: z.string()
+    .min(12, 'Password must be at least 12 characters')
+    .regex(/[a-z]/, 'Password must contain a lowercase letter')
+    .regex(/[A-Z]/, 'Password must contain an uppercase letter')
+    .regex(/[0-9]/, 'Password must contain a number')
+    .regex(/[@$!%*?&]/, 'Password must contain a special character'),
   confirmPassword: z.string(),
   phone: z.string().min(10, 'Phone number must be at least 10 digits').regex(/^[\+]?[(]?[\d\s\-\(\)]{10,}$/, 'Please enter a valid phone number'),
   agreeToTerms: z.boolean().refine(v => v === true, 'You must agree to terms'),

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportHeight="108"
+    android:viewportWidth="108">
+
+    <!-- NILIN Elegant N Letterform -->
+    <group
+        android:pivotX="54"
+        android:pivotY="54">
+
+        <!-- Main N stroke - left vertical -->
+        <path
+            android:pathData="M38,28 L38,80 L46,80 L46,52 L66,80 L76,80 L76,28 L68,28 L68,56 L48,28 Z"
+            android:fillColor="#2D2D2D"
+            android:fillType="nonZero"/>
+
+        <!-- Subtle accent - elegant serif-like detail -->
+        <path
+            android:pathData="M40,30 L44,30 L44,50"
+            android:strokeColor="#2D2D2D"
+            android:strokeWidth="1.5"
+            android:strokeLineCap="round"/>
+
+        <!-- Minimalist home/house accent below N -->
+        <path
+            android:pathData="M46,85 L54,78 L62,85 L62,88 L46,88 Z"
+            android:fillColor="#E8B4A8"
+            android:fillType="nonZero"/>
+
+        <!-- Horizontal line accent -->
+        <path
+            android:pathData="M42,90 L66,90"
+            android:strokeColor="#E8B4A8"
+            android:strokeWidth="1"
+            android:strokeLineCap="round"/>
+
+    </group>
+</vector>

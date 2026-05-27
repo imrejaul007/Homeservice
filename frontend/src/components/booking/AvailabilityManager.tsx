@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Calendar,
   Clock,
@@ -8,8 +8,8 @@ import {
   X,
   AlertCircle,
   Check,
-  Edit,
-  Trash2
+  Trash2,
+  Globe
 } from 'lucide-react';
 import { useBookingStore } from '../../stores/bookingStore';
 import type { ProviderAvailability } from '../../services/BookingService';
@@ -50,11 +50,24 @@ const DAY_LABELS = {
   sunday: 'Sunday'
 };
 
+const COMMON_TIMEZONES = [
+  { value: 'Asia/Dubai', label: 'Dubai (GST)' },
+  { value: 'Asia/Kolkata', label: 'India (IST)' },
+  { value: 'Asia/Riyadh', label: 'Riyadh (AST)' },
+  { value: 'Europe/London', label: 'London (GMT)' },
+  { value: 'Europe/Paris', label: 'Paris (CET)' },
+  { value: 'America/New_York', label: 'New York (EST)' },
+  { value: 'America/Los_Angeles', label: 'Los Angeles (PST)' },
+  { value: 'Asia/Singapore', label: 'Singapore (SGT)' },
+  { value: 'UTC', label: 'UTC' }
+];
+
 const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) => {
   const {
     providerAvailability,
     getProviderAvailability,
     updateWeeklySchedule,
+    updateAvailabilitySettings,
     addDateOverride,
     removeDateOverride,
     isLoading,
@@ -63,7 +76,8 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
   } = useBookingStore();
 
   const [weeklySchedule, setWeeklySchedule] = useState<ProviderAvailability['weeklySchedule']>({});
-  const [hasChanges, setHasChanges] = useState(false);
+  const [hasScheduleChanges, setHasScheduleChanges] = useState(false);
+  const [hasSettingsChanges, setHasSettingsChanges] = useState(false);
   const [newOverride, setNewOverride] = useState({
     date: '',
     isAvailable: true,
@@ -71,6 +85,21 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
     notes: ''
   });
   const [showOverrideForm, setShowOverrideForm] = useState(false);
+
+  // Settings state
+  const [settings, setSettings] = useState({
+    bufferTime: 15,
+    maxAdvanceBookingDays: 30,
+    autoAcceptBookings: false,
+    minNoticeTime: 24,
+    timezone: 'Asia/Kolkata'
+  });
+
+  // Validation errors
+  const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
+
+  // Success message
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   // Load availability on component mount
   useEffect(() => {
@@ -81,9 +110,29 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
   useEffect(() => {
     if (providerAvailability?.weeklySchedule) {
       setWeeklySchedule(providerAvailability.weeklySchedule);
-      setHasChanges(false);
+      setHasScheduleChanges(false);
+    }
+
+    // Update settings from provider availability
+    if (providerAvailability) {
+      setSettings({
+        bufferTime: providerAvailability.bufferTime ?? 15,
+        maxAdvanceBookingDays: providerAvailability.maxAdvanceBookingDays ?? 30,
+        autoAcceptBookings: providerAvailability.autoAcceptBookings ?? false,
+        minNoticeTime: providerAvailability.minNoticeTime ?? 24,
+        timezone: providerAvailability.timezone ?? 'Asia/Kolkata'
+      });
+      setHasSettingsChanges(false);
     }
   }, [providerAvailability]);
+
+  // Clear success message after 3 seconds
+  useEffect(() => {
+    if (successMessage) {
+      const timer = setTimeout(() => setSuccessMessage(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [successMessage]);
 
   const initializeDefaultSchedule = () => {
     const defaultSchedule: ProviderAvailability['weeklySchedule'] = {};
@@ -108,6 +157,46 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
     ? weeklySchedule
     : initializeDefaultSchedule();
 
+  // Helper: Convert time string to minutes
+  const timeToMinutes = useCallback((time: string): number => {
+    const [hours, minutes] = time.split(':').map(Number);
+    return hours * 60 + minutes;
+  }, []);
+
+  // Validation: Check for overlapping time slots
+  const validateTimeSlots = useCallback((slots: TimeSlot[]): string | null => {
+    for (let i = 0; i < slots.length; i++) {
+      for (let j = i + 1; j < slots.length; j++) {
+        const start1 = timeToMinutes(slots[i].start);
+        const end1 = timeToMinutes(slots[i].end);
+        const start2 = timeToMinutes(slots[j].start);
+        const end2 = timeToMinutes(slots[j].end);
+
+        // Check for overlap
+        if (start1 < end2 && start2 < end1) {
+          return `Time slots overlap: ${slots[i].start}-${slots[i].end} and ${slots[j].start}-${slots[j].end}`;
+        }
+      }
+    }
+    return null;
+  }, [timeToMinutes]);
+
+  // Validation: Check if start time is before end time
+  const validateTimeRange = useCallback((slot: TimeSlot): string | null => {
+    const start = timeToMinutes(slot.start);
+    const end = timeToMinutes(slot.end);
+
+    if (start >= end) {
+      return `Start time must be before end time`;
+    }
+
+    if (end - start < 30) {
+      return `Time slot must be at least 30 minutes`;
+    }
+
+    return null;
+  }, [timeToMinutes]);
+
   const updateDayAvailability = (day: string, isAvailable: boolean) => {
     setWeeklySchedule(prev => ({
       ...prev,
@@ -119,7 +208,8 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
           : prev[day]?.timeSlots || []
       }
     }));
-    setHasChanges(true);
+    setHasScheduleChanges(true);
+    setValidationErrors({});
   };
 
   const addTimeSlot = (day: string) => {
@@ -128,17 +218,26 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
     const newStart = lastSlot ? addHour(lastSlot.end) : '09:00';
     const newEnd = addHour(newStart);
 
+    const newSlot = { start: newStart, end: newEnd, isActive: true };
+
+    // Check if new slot would cause overlap
+    const allSlots = [...daySchedule.timeSlots, newSlot];
+    const overlapError = validateTimeSlots(allSlots);
+
+    if (overlapError) {
+      setValidationErrors({ [day]: overlapError });
+      return;
+    }
+
     setWeeklySchedule(prev => ({
       ...prev,
       [day]: {
         ...daySchedule,
-        timeSlots: [
-          ...daySchedule.timeSlots,
-          { start: newStart, end: newEnd, isActive: true }
-        ]
+        timeSlots: [...daySchedule.timeSlots, newSlot]
       }
     }));
-    setHasChanges(true);
+    setHasScheduleChanges(true);
+    setValidationErrors({});
   };
 
   const removeTimeSlot = (day: string, index: number) => {
@@ -152,7 +251,8 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
         timeSlots: daySchedule.timeSlots.filter((_, i) => i !== index)
       }
     }));
-    setHasChanges(true);
+    setHasScheduleChanges(true);
+    setValidationErrors({});
   };
 
   const updateTimeSlot = (day: string, index: number, field: 'start' | 'end', value: string) => {
@@ -160,10 +260,30 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
     if (!daySchedule) return;
 
     const updatedSlots = [...daySchedule.timeSlots];
-    updatedSlots[index] = {
-      ...updatedSlots[index],
-      [field]: value
-    };
+    const updatedSlot = { ...updatedSlots[index], [field]: value };
+    updatedSlots[index] = updatedSlot;
+
+    // Validate time range
+    const rangeError = validateTimeRange(updatedSlot);
+    if (rangeError) {
+      setValidationErrors({ [`${day}-${index}`]: rangeError });
+      setWeeklySchedule(prev => ({
+        ...prev,
+        [day]: {
+          ...daySchedule,
+          timeSlots: updatedSlots
+        }
+      }));
+      return;
+    }
+
+    // Check for overlaps with other slots
+    const overlapError = validateTimeSlots(updatedSlots);
+    if (overlapError) {
+      setValidationErrors({ [day]: overlapError });
+    } else {
+      setValidationErrors({});
+    }
 
     setWeeklySchedule(prev => ({
       ...prev,
@@ -172,7 +292,7 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
         timeSlots: updatedSlots
       }
     }));
-    setHasChanges(true);
+    setHasScheduleChanges(true);
   };
 
   const addHour = (time: string): string => {
@@ -184,7 +304,23 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
   const handleSaveSchedule = async () => {
     try {
       await updateWeeklySchedule(weeklySchedule);
-      setHasChanges(false);
+      setHasScheduleChanges(false);
+      setSuccessMessage('Weekly schedule saved successfully!');
+    } catch {
+      // Error handled by store
+    }
+  };
+
+  const handleSaveSettings = async () => {
+    try {
+      await updateAvailabilitySettings({
+        bufferTime: settings.bufferTime,
+        maxAdvanceBookingDays: settings.maxAdvanceBookingDays,
+        autoAcceptBookings: settings.autoAcceptBookings,
+        minNoticeTime: settings.minNoticeTime
+      });
+      setHasSettingsChanges(false);
+      setSuccessMessage('Settings saved successfully!');
     } catch {
       // Error handled by store
     }
@@ -206,6 +342,7 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
         notes: ''
       });
       setShowOverrideForm(false);
+      setSuccessMessage('Special date added successfully!');
     } catch {
       // Error handled by store
     }
@@ -214,6 +351,7 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
   const handleRemoveOverride = async (date: string) => {
     try {
       await removeDateOverride(date);
+      setSuccessMessage('Special date removed successfully!');
     } catch {
       // Error handled by store
     }
@@ -229,19 +367,42 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
 
   return (
     <div className={cn("space-y-6", className)}>
-      {/* Header */}
-      <div className="flex justify-between items-start">
-        <div>
-          <h2 className="text-2xl font-bold text-nilin-charcoal font-serif">Availability Management</h2>
-          <p className="text-nilin-warmGray">Set your weekly schedule and manage special dates</p>
+      {/* Success Message */}
+      {successMessage && (
+        <div className="glass p-4 rounded-xl bg-nilin-success/10 border border-nilin-success/20 flex items-center">
+          <Check className="h-5 w-5 text-nilin-success mr-2" />
+          <span className="text-sm text-nilin-success">{successMessage}</span>
         </div>
+      )}
 
-        {hasChanges && (
+      {/* Top actions */}
+      <div className="flex justify-end items-start gap-2">
+        {hasScheduleChanges && (
           <button
             onClick={handleSaveSchedule}
-            disabled={isSubmitting}
+            disabled={isSubmitting || Object.keys(validationErrors).length > 0}
             className={cn(
               "btn-3d flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-nilin-rose to-nilin-coral text-white rounded-xl font-medium transition-all shadow-nilin-warm",
+              isSubmitting || Object.keys(validationErrors).length > 0
+                ? "opacity-50 cursor-not-allowed"
+                : "hover:shadow-lg"
+            )}
+          >
+            {isSubmitting ? (
+              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+            ) : (
+              <Save className="h-4 w-4" />
+            )}
+            Save Schedule
+          </button>
+        )}
+
+        {hasSettingsChanges && (
+          <button
+            onClick={handleSaveSettings}
+            disabled={isSubmitting}
+            className={cn(
+              "btn-3d flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-nilin-green to-nilin-teal text-white rounded-xl font-medium transition-all",
               isSubmitting
                 ? "opacity-50 cursor-not-allowed"
                 : "hover:shadow-lg"
@@ -252,7 +413,7 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
             ) : (
               <Save className="h-4 w-4" />
             )}
-            Save Changes
+            Save Settings
           </button>
         )}
       </div>
@@ -274,6 +435,23 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
         </div>
       )}
 
+      {/* Validation Errors */}
+      {Object.keys(validationErrors).length > 0 && (
+        <div className="glass p-4 rounded-xl bg-yellow-50 border border-yellow-200">
+          <div className="flex items-center">
+            <AlertCircle className="h-5 w-5 text-yellow-600 mr-2" />
+            <div>
+              <h3 className="text-sm font-medium text-yellow-700">Validation Error</h3>
+              <div className="text-sm text-yellow-700 mt-1">
+                {Object.values(validationErrors).map((error, index) => (
+                  <p key={index}>{error}</p>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Weekly Schedule */}
       <div className="glass glass-blur rounded-xl p-6 gradient-3d card-3d">
         <h3 className="text-lg font-semibold text-nilin-charcoal mb-4 font-serif">Weekly Schedule</h3>
@@ -281,9 +459,13 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
         <div className="space-y-4">
           {DAYS_OF_WEEK.map(day => {
             const daySchedule = schedule[day] || { isAvailable: false, timeSlots: [] };
+            const dayError = validationErrors[day];
 
             return (
-              <div key={day} className="glass p-4 rounded-xl border border-nilin-border/30 card-3d transition-all hover:border-glow">
+              <div key={day} className={cn(
+                "glass p-4 rounded-xl border card-3d transition-all",
+                dayError ? "border-yellow-400" : "border-nilin-border/30 hover:border-glow"
+              )}>
                 <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-3">
                     <label className="flex items-center cursor-pointer">
@@ -310,38 +492,56 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
                   )}
                 </div>
 
+                {dayError && (
+                  <p className="text-sm text-yellow-600 mb-2">{dayError}</p>
+                )}
+
                 {daySchedule.isAvailable && (
                   <div className="space-y-2">
-                    {daySchedule.timeSlots.map((slot, index) => (
-                      <div key={index} className="flex items-center gap-3 neu-light p-3 rounded-xl">
-                        <Clock className="h-4 w-4 text-nilin-rose" />
+                    {daySchedule.timeSlots.map((slot, index) => {
+                      const slotError = validationErrors[`${day}-${index}`];
+                      return (
+                        <div key={index} className={cn(
+                          "flex items-center gap-3 neu-light p-3 rounded-xl",
+                          slotError ? "border border-yellow-300" : ""
+                        )}>
+                          <Clock className="h-4 w-4 text-nilin-rose" />
 
-                        <input
-                          type="time"
-                          value={typeof slot.start === 'string' ? slot.start : ''}
-                          onChange={(e) => updateTimeSlot(day, index, 'start', e.target.value)}
-                          className="glass-input px-3 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-nilin-rose/30 font-sans"
-                        />
+                          <div className="flex-1">
+                            <input
+                              type="time"
+                              value={typeof slot.start === 'string' ? slot.start : ''}
+                              onChange={(e) => updateTimeSlot(day, index, 'start', e.target.value)}
+                              className="glass-input px-3 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-nilin-rose/30 font-sans"
+                            />
+                          </div>
 
-                        <span className="text-nilin-warmGray">to</span>
+                          <span className="text-nilin-warmGray">to</span>
 
-                        <input
-                          type="time"
-                          value={typeof slot.end === 'string' ? slot.end : ''}
-                          onChange={(e) => updateTimeSlot(day, index, 'end', e.target.value)}
-                          className="glass-input px-3 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-nilin-rose/30 font-sans"
-                        />
+                          <div className="flex-1">
+                            <input
+                              type="time"
+                              value={typeof slot.end === 'string' ? slot.end : ''}
+                              onChange={(e) => updateTimeSlot(day, index, 'end', e.target.value)}
+                              className="glass-input px-3 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-nilin-rose/30 font-sans"
+                            />
+                          </div>
 
-                        {daySchedule.timeSlots.length > 1 && (
-                          <button
-                            onClick={() => removeTimeSlot(day, index)}
-                            className="glass-btn p-1 text-nilin-error hover:bg-nilin-error/10 rounded-lg transition-colors"
-                          >
-                            <Minus className="h-4 w-4" />
-                          </button>
-                        )}
-                      </div>
-                    ))}
+                          {daySchedule.timeSlots.length > 1 && (
+                            <button
+                              onClick={() => removeTimeSlot(day, index)}
+                              className="glass-btn p-1 text-nilin-error hover:bg-nilin-error/10 rounded-lg transition-colors"
+                            >
+                              <Minus className="h-4 w-4" />
+                            </button>
+                          )}
+
+                          {slotError && (
+                            <AlertCircle className="h-4 w-4 text-yellow-500" title={slotError} />
+                          )}
+                        </div>
+                      );
+                    })}
 
                     {daySchedule.timeSlots.length === 0 && (
                       <p className="text-sm text-nilin-warmGray italic">
@@ -469,7 +669,7 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
                     <Calendar className="h-5 w-5 text-nilin-rose" />
                     <div>
                       <p className="font-medium text-nilin-charcoal">
-                        {new Date(override.date).toLocaleDateString('en-US', {
+                        {new Date(override.date + 'T00:00:00').toLocaleDateString('en-US', {
                           weekday: 'long',
                           year: 'numeric',
                           month: 'long',
@@ -531,11 +731,15 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
               </p>
               <input
                 type="number"
-                value={providerAvailability?.bufferTime || 15}
+                value={settings.bufferTime}
+                onChange={(e) => {
+                  const value = parseInt(e.target.value) || 0;
+                  setSettings(prev => ({ ...prev, bufferTime: Math.max(0, Math.min(120, value)) }));
+                  setHasSettingsChanges(true);
+                }}
                 min="0"
                 max="120"
-                className="glass-input w-full px-3 py-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-rose/30 font-sans bg-nilin-muted/50"
-                readOnly
+                className="glass-input w-full px-3 py-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-rose/30 font-sans"
               />
             </div>
 
@@ -548,36 +752,78 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
               </p>
               <input
                 type="number"
-                value={providerAvailability?.maxAdvanceBookingDays || 30}
+                value={settings.maxAdvanceBookingDays}
+                onChange={(e) => {
+                  const value = parseInt(e.target.value) || 1;
+                  setSettings(prev => ({ ...prev, maxAdvanceBookingDays: Math.max(1, Math.min(365, value)) }));
+                  setHasSettingsChanges(true);
+                }}
                 min="1"
                 max="365"
-                className="glass-input w-full px-3 py-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-rose/30 font-sans bg-nilin-muted/50"
-                readOnly
+                className="glass-input w-full px-3 py-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-rose/30 font-sans"
               />
             </div>
           </div>
 
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+              <label className="block text-sm font-medium text-nilin-warmGray mb-1">
+                Minimum Notice Time (hours)
+              </label>
+              <p className="text-sm text-nilin-lightGray mb-2">
+                Hours before booking that customer must book
+              </p>
+              <input
+                type="number"
+                value={settings.minNoticeTime}
+                onChange={(e) => {
+                  const value = parseInt(e.target.value) || 0;
+                  setSettings(prev => ({ ...prev, minNoticeTime: Math.max(0, Math.min(168, value)) }));
+                  setHasSettingsChanges(true);
+                }}
+                min="0"
+                max="168"
+                className="glass-input w-full px-3 py-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-rose/30 font-sans"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-nilin-warmGray mb-1">
+                Timezone
+              </label>
+              <div className="relative">
+                <Globe className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-nilin-warmGray" />
+                <select
+                  value={settings.timezone}
+                  onChange={(e) => {
+                    setSettings(prev => ({ ...prev, timezone: e.target.value }));
+                    setHasSettingsChanges(true);
+                  }}
+                  className="glass-input w-full pl-10 pr-3 py-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-rose/30 font-sans appearance-none"
+                >
+                  {COMMON_TIMEZONES.map(tz => (
+                    <option key={tz.value} value={tz.value}>{tz.label}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          </div>
+
           <div>
-            <label className="flex items-center">
+            <label className="flex items-center cursor-pointer">
               <input
                 type="checkbox"
-                checked={providerAvailability?.autoAcceptBookings || false}
+                checked={settings.autoAcceptBookings}
+                onChange={(e) => {
+                  setSettings(prev => ({ ...prev, autoAcceptBookings: e.target.checked }));
+                  setHasSettingsChanges(true);
+                }}
                 className="h-4 w-4 text-nilin-coral border-nilin-border rounded focus:ring-nilin-rose/50"
-                readOnly
               />
               <span className="ml-2 text-sm text-nilin-charcoal">
                 Auto-accept bookings (no manual approval required)
               </span>
             </label>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-nilin-warmGray mb-1">
-              Timezone
-            </label>
-            <p className="text-sm text-nilin-charcoal neu-light p-2 rounded-lg inline-block">
-              {providerAvailability?.timezone || 'Asia/Kolkata'}
-            </p>
           </div>
         </div>
       </div>

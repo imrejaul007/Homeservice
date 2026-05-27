@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { authenticate } from '../middleware/auth.middleware';
+import aiController from '../controllers/ai.controller';
 
 const router = Router();
 router.use(authenticate);
@@ -396,5 +397,21 @@ router.get('/user/:id/churn-risk', async (req: Request, res: Response) => {
     });
   }
 });
+
+// ============================================
+// Customer AI Chat Routes
+// ============================================
+
+// Send message to AI assistant
+router.post('/chat', aiController.chat);
+
+// Get all conversations
+router.get('/conversations', aiController.getConversations);
+
+// Get single conversation
+router.get('/conversations/:conversationId', aiController.getConversation);
+
+// Delete conversation
+router.delete('/conversations/:conversationId', aiController.deleteConversation);
 
 export default router;

@@ -13,6 +13,7 @@ import {
   getServiceAnalytics,
   clearAnalyticsCache,
 } from '../services/analytics/analytics.service';
+import { getProviderAnalyticsData } from '../services/analytics.service';
 
 const router = Router();
 
@@ -26,8 +27,8 @@ router.get('/overview', authenticate, asyncHandler(async (_req: Request, res: Re
 
   const [bookings, providers, customers, revenue] = await Promise.all([
     getBookingAnalytics(period as string),
-    getProviderAnalytics(),
-    getCustomerAnalytics(),
+    getProviderAnalytics(period as string),
+    getCustomerAnalytics(period as string),
     getRevenueAnalytics(period as string),
   ]);
 
@@ -65,7 +66,8 @@ router.get('/bookings', authenticate, asyncHandler(async (_req: Request, res: Re
  * @access  Admin
  */
 router.get('/providers', authenticate, asyncHandler(async (_req: Request, res: Response) => {
-  const analytics = await getProviderAnalytics();
+  const { period = 'month' } = _req.query;
+  const analytics = await getProviderAnalytics(period as string);
 
   res.json({
     success: true,
@@ -79,7 +81,8 @@ router.get('/providers', authenticate, asyncHandler(async (_req: Request, res: R
  * @access  Admin
  */
 router.get('/customers', authenticate, asyncHandler(async (_req: Request, res: Response) => {
-  const analytics = await getCustomerAnalytics();
+  const { period = 'month' } = _req.query;
+  const analytics = await getCustomerAnalytics(period as string);
 
   res.json({
     success: true,
@@ -138,6 +141,7 @@ router.post('/refresh', authenticate, asyncHandler(async (_req: Request, res: Re
  */
 router.get('/provider/:id', authenticate, asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
+  const { period = '30d' } = req.query;
   const user = req.user as any;
 
   // Check if user is the provider or admin
@@ -145,12 +149,15 @@ router.get('/provider/:id', authenticate, asyncHandler(async (req: Request, res:
     throw new ApiError(403, 'Not authorized to view these analytics');
   }
 
+  // Validate period parameter
+  const validPeriods = ['7d', '30d', '90d'];
+  const periodValue = validPeriods.includes(period as string) ? period : '30d';
+
+  const analytics = await getProviderAnalyticsData(id, periodValue as '7d' | '30d' | '90d');
+
   res.json({
     success: true,
-    data: {
-      providerId: id,
-      message: 'Provider analytics endpoint - implement based on requirements',
-    },
+    data: analytics,
   });
 }));
 
@@ -199,7 +206,7 @@ router.get('/dashboard', authenticate, asyncHandler(async (_req: Request, res: R
  */
 router.get('/export/:type', authenticate, asyncHandler(async (req: Request, res: Response) => {
   const { type } = req.params;
-  const { startDate, endDate, format } = req.query;
+  const { period, startDate, endDate, format } = req.query;
 
   // Validate export type
   const validTypes = ['csv', 'json', 'pdf'];
@@ -207,11 +214,44 @@ router.get('/export/:type', authenticate, asyncHandler(async (req: Request, res:
     throw new ApiError(400, `Invalid export type. Must be one of: ${validTypes.join(', ')}`);
   }
 
-  // Build date range
-  const dateRange: { startDate: Date; endDate: Date } = {
-    startDate: startDate ? new Date(startDate as string) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
-    endDate: endDate ? new Date(endDate as string) : new Date()
-  };
+  // Build date range based on period or explicit dates
+  const dateRange: { startDate: Date; endDate: Date } = (() => {
+    // If explicit dates provided, use them
+    if (startDate && endDate) {
+      return {
+        startDate: new Date(startDate as string),
+        endDate: new Date(endDate as string)
+      };
+    }
+    // Otherwise, calculate from period
+    const now = new Date();
+    const endDateCalc = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+    let startDateCalc: Date;
+
+    switch (period) {
+      case 'today':
+        startDateCalc = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+        break;
+      case 'week':
+        startDateCalc = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        break;
+      case 'month':
+        startDateCalc = new Date(now.getFullYear(), now.getMonth(), 1);
+        break;
+      case 'quarter':
+        const quarter = Math.floor(now.getMonth() / 3);
+        startDateCalc = new Date(now.getFullYear(), quarter * 3, 1);
+        break;
+      case 'year':
+        startDateCalc = new Date(now.getFullYear(), 0, 1);
+        break;
+      case 'all':
+      default:
+        startDateCalc = new Date(0);
+        break;
+    }
+    return { startDate: startDateCalc, endDate: endDateCalc };
+  })();
 
   // Fetch data based on format parameter or default
   const exportFormat = format as string || 'bookings';

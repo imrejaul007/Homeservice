@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { ApiError } from './ApiError';
 import User from '../models/user.model';
 import ServiceCategory from '../models/serviceCategory.model';
 import CustomerProfile from '../models/customerProfile.model';
@@ -309,7 +310,7 @@ export const getDatabaseStats = async () => {
       }
     };
   } catch (error) {
-    throw new Error(`Failed to get database stats: ${(error as Error).message}`);
+    throw ApiError.internal(`Failed to get database stats: ${(error as Error).message}`);
   }
 };
 

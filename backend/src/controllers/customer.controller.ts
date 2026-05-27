@@ -4,11 +4,21 @@ import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
 
 // ============================================
-// Addresses
+// Addresses (with pagination)
 // ============================================
+
+const MAX_ADDRESSES_PAGE_SIZE = 50;
+const DEFAULT_ADDRESSES_PAGE_SIZE = 20;
 
 export const getAddresses = asyncHandler(async (req: Request, res: Response): Promise<Response> => {
   const user = req.user as any;
+
+  // Parse pagination params
+  const page = Math.max(1, parseInt(req.query.page as string) || 1);
+  const limit = Math.min(
+    MAX_ADDRESSES_PAGE_SIZE,
+    Math.max(1, parseInt(req.query.limit as string) || DEFAULT_ADDRESSES_PAGE_SIZE)
+  );
 
   const customerProfile = await CustomerProfile.findOne({ userId: user._id });
 
@@ -17,16 +27,37 @@ export const getAddresses = asyncHandler(async (req: Request, res: Response): Pr
       success: true,
       data: {
         addresses: [],
-        total: 0,
+        pagination: {
+          page,
+          limit,
+          total: 0,
+          totalPages: 0,
+          hasNextPage: false,
+          hasPrevPage: false,
+        },
       },
     });
   }
 
+  const allAddresses = customerProfile.addresses || [];
+  const total = allAddresses.length;
+  const totalPages = Math.ceil(total / limit);
+  const startIndex = (page - 1) * limit;
+  const endIndex = startIndex + limit;
+  const paginatedAddresses = allAddresses.slice(startIndex, endIndex);
+
   return res.json({
     success: true,
     data: {
-      addresses: customerProfile.addresses || [],
-      total: customerProfile.addresses?.length || 0,
+      addresses: paginatedAddresses,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages,
+        hasNextPage: page < totalPages,
+        hasPrevPage: page > 1,
+      },
     },
   });
 });
@@ -158,11 +189,21 @@ export const deleteAddress = asyncHandler(async (req: Request, res: Response) =>
 });
 
 // ============================================
-// Payment Methods
+// Payment Methods (with pagination)
 // ============================================
+
+const MAX_PAYMENT_METHODS_PAGE_SIZE = 20;
+const DEFAULT_PAYMENT_METHODS_PAGE_SIZE = 10;
 
 export const getPaymentMethods = asyncHandler(async (req: Request, res: Response): Promise<Response> => {
   const user = req.user as any;
+
+  // Parse pagination params
+  const page = Math.max(1, parseInt(req.query.page as string) || 1);
+  const limit = Math.min(
+    MAX_PAYMENT_METHODS_PAGE_SIZE,
+    Math.max(1, parseInt(req.query.limit as string) || DEFAULT_PAYMENT_METHODS_PAGE_SIZE)
+  );
 
   const customerProfile = await CustomerProfile.findOne({ userId: user._id });
 
@@ -171,16 +212,37 @@ export const getPaymentMethods = asyncHandler(async (req: Request, res: Response
       success: true,
       data: {
         paymentMethods: [],
-        total: 0,
+        pagination: {
+          page,
+          limit,
+          total: 0,
+          totalPages: 0,
+          hasNextPage: false,
+          hasPrevPage: false,
+        },
       },
     });
   }
 
+  const allPaymentMethods = customerProfile.paymentMethods || [];
+  const total = allPaymentMethods.length;
+  const totalPages = Math.ceil(total / limit);
+  const startIndex = (page - 1) * limit;
+  const endIndex = startIndex + limit;
+  const paginatedPaymentMethods = allPaymentMethods.slice(startIndex, endIndex);
+
   return res.json({
     success: true,
     data: {
-      paymentMethods: customerProfile.paymentMethods || [],
-      total: customerProfile.paymentMethods?.length || 0,
+      paymentMethods: paginatedPaymentMethods,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages,
+        hasNextPage: page < totalPages,
+        hasPrevPage: page > 1,
+      },
     },
   });
 });

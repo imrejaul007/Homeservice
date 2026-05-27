@@ -9,6 +9,7 @@ import ProviderProfile from '../models/providerProfile.model';
 import BeautyPlan from '../models/beautyPlan.model';
 import Subscription from '../models/subscription.model';
 import { ApiError } from '../utils/ApiError';
+import logger from '../utils/logger';
 
 // ============================================
 // Type Definitions
@@ -117,7 +118,12 @@ async function getProviderCommissionRate(providerId: string | Types.ObjectId): P
     platformDefaultRate = await getSetting('commissionRate') || 15;
     platformMinPayout = await getSetting('minimumWithdrawalAmount') || 50;
   } catch (error) {
-    console.warn('Failed to get platform settings for commission rate, using defaults');
+    logger.warn('Failed to get platform settings for commission rate, using defaults', {
+      context: 'FinanceService',
+      action: 'SETTINGS_FALLBACK',
+      providerId: pid?.toString(),
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 
   // First check beauty plan
@@ -589,7 +595,12 @@ export async function getProviderPayoutSummary(
   // Fetch completed bookings
   const bookings = await Booking.find(query).lean();
 
-  // Calculate totals
+  // Calculate totals - parallel processing to avoid N+1
+  const earningsResults = await Promise.all(
+    bookings.map(booking => calculateProviderEarningsFromBooking(booking, plan))
+  );
+
+  // Aggregate results
   let totalEarnings = 0;
   let totalCommission = 0;
   let totalPayoutAmount = 0;
@@ -599,8 +610,9 @@ export async function getProviderPayoutSummary(
   // Group by period (week or month based on payout frequency)
   const earningsByPeriod: Record<string, { earnings: number; commission: number; bookingCount: number }> = {};
 
-  for (const booking of bookings) {
-    const earnings = await calculateProviderEarningsFromBooking(booking, plan);
+  for (let i = 0; i < bookings.length; i++) {
+    const earnings = earningsResults[i];
+    const booking = bookings[i];
 
     totalEarnings += earnings.grossAmount;
     totalCommission += earnings.platformCommission;

@@ -3,6 +3,7 @@ import Booking from '../models/booking.model';
 import User from '../models/user.model';
 import Service from '../models/service.model';
 import ProviderProfile from '../models/providerProfile.model';
+import { ApiError, ERROR_CODES } from '../utils/ApiError';
 import logger from '../utils/logger';
 import { cache } from '../config/redis';
 
@@ -279,7 +280,7 @@ export const predictBookingCancellation = async (
       .lean();
 
     if (!booking) {
-      throw new Error('Booking not found');
+      throw ApiError.notFound('Booking not found', ERROR_CODES.NOT_FOUND);
     }
 
     const factors: CancellationFactor[] = [];

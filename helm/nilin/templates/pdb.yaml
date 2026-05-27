@@ -1,0 +1,45 @@
+{{- /*
+NILIN PodDisruptionBudget
+*/ -}}
+{{- $fullName := include "nilin.fullname" . -}}
+{{- $namespace := .Release.Namespace -}}
+{{- if .Values.pdb.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $fullName }}-api-pdb
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "nilin.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  {{- if .Values.pdb.api.minAvailable }}
+  minAvailable: {{ .Values.pdb.api.minAvailable }}
+  {{- else if .Values.pdb.api.maxUnavailable }}
+  maxUnavailable: {{ .Values.pdb.api.maxUnavailable }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "nilin.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $fullName }}-frontend-pdb
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "nilin.labels" . | nindent 4 }}
+    app.kubernetes.io/component: frontend
+spec:
+  {{- if .Values.pdb.frontend.minAvailable }}
+  minAvailable: {{ .Values.pdb.frontend.minAvailable }}
+  {{- else if .Values.pdb.frontend.maxUnavailable }}
+  maxUnavailable: {{ .Values.pdb.frontend.maxUnavailable }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "nilin.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: frontend
+{{- end }}

@@ -8,6 +8,7 @@ import User from '../models/user.model';
 import Booking from '../models/booking.model';
 import Dispute from '../models/dispute.model';
 import Commission from '../models/commission.model';
+import { ApiError, ERROR_CODES } from '../utils/ApiError';
 import Settlement from '../models/settlement.model';
 import Subscription from '../models/subscription.model';
 import CustomerProfile from '../models/customerProfile.model';
@@ -105,6 +106,7 @@ export const createDataRequest = async (
     exportFormat?: 'json' | 'csv' | 'pdf';
     exportDataTypes?: ExportDataType[];
     deletionReason?: string;
+    metadata?: Record<string, any>;
   } = {}
 ): Promise<IDataRequest> => {
   const dataRequest = await DataRequest.create({
@@ -119,12 +121,13 @@ export const createDataRequest = async (
     exportDataTypes: options.exportDataTypes || ['profile', 'bookings', 'payments', 'reviews', 'preferences'],
     deletionReason: options.deletionReason,
     deletionConfirmed: type === 'deletion' ? false : undefined,
-    gracePeriodEnd: type === 'deletion' ? new Date(Date.now() + 14 * 24 * 60 * 60 * 1000) : undefined, // 14 days grace period
+    gracePeriodEnd: type === 'deletion' ? new Date(Date.now() + 90 * 24 * 60 * 60 * 1000) : undefined, // 90 days grace period (GDPR aligned)
     steps: EXPORT_STEPS.map(step => ({
       name: step.name,
       status: 'pending',
     })),
     responseDeadline: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // GDPR: 30 days
+    ...(options.metadata && { metadata: options.metadata }),
   });
 
   // Audit log
@@ -343,7 +346,7 @@ const generateExportFile = async (
 export const processDataExport = async (requestId: string): Promise<void> => {
   const dataRequest = await DataRequest.findById(requestId);
   if (!dataRequest) {
-    throw new Error('Data request not found');
+    throw ApiError.notFound('Data request not found', ERROR_CODES.NOT_FOUND);
   }
 
   try {

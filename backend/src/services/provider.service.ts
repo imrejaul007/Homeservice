@@ -3,6 +3,8 @@ import ProviderProfile from '../models/providerProfile.model';
 import Service from '../models/service.model';
 import ServiceCategory from '../models/serviceCategory.model';
 import { ApiError } from '../utils/ApiError';
+import { Request } from 'express';
+import { addTenantFilter, getTenantId, getTenantIdOptional, isAdminOrSystem, addTenantToAggregation } from '../utils/tenantFilter';
 
 // ============================================
 // Types
@@ -35,12 +37,15 @@ export class ProviderService {
   // Profile Management
   // ========================================
 
-  async getProviderProfile(providerId: string): Promise<any> {
+  async getProviderProfile(providerId: string, req?: Request): Promise<any> {
     if (!mongoose.Types.ObjectId.isValid(providerId)) {
       throw new ApiError(400, 'Invalid provider ID');
     }
 
-    const profile = await ProviderProfile.findOne({ userId: providerId }).populate('userId', 'firstName lastName email phone avatar');
+    // Build query with tenant isolation
+    const query = addTenantFilter({ userId: providerId }, req || {} as Request);
+
+    const profile = await ProviderProfile.findOne(query).populate('userId', 'firstName lastName email phone avatar');
 
     if (!profile) {
       throw new ApiError(404, 'Provider profile not found');
@@ -49,12 +54,15 @@ export class ProviderService {
     return profile;
   }
 
-  async updateProviderProfile(providerId: string, updates: any): Promise<any> {
+  async updateProviderProfile(providerId: string, updates: any, req?: Request): Promise<any> {
     if (!mongoose.Types.ObjectId.isValid(providerId)) {
       throw new ApiError(400, 'Invalid provider ID');
     }
 
-    const profile = await ProviderProfile.findOne({ userId: providerId });
+    // Build query with tenant isolation
+    const query = addTenantFilter({ userId: providerId }, req || {} as Request);
+
+    const profile = await ProviderProfile.findOne(query);
 
     if (!profile) {
       throw new ApiError(404, 'Provider profile not found');
@@ -85,8 +93,11 @@ export class ProviderService {
     return profile;
   }
 
-  async uploadProfilePhoto(providerId: string, photoUrl: string): Promise<any> {
-    const profile = await ProviderProfile.findOne({ userId: providerId });
+  async uploadProfilePhoto(providerId: string, photoUrl: string, req?: Request): Promise<any> {
+    // Build query with tenant isolation
+    const query = addTenantFilter({ userId: providerId }, req || {} as Request);
+
+    const profile = await ProviderProfile.findOne(query);
 
     if (!profile) {
       throw new ApiError(404, 'Provider profile not found');
@@ -102,16 +113,22 @@ export class ProviderService {
   // Service Management
   // ========================================
 
-  async getProviderServices(providerId: string): Promise<any[]> {
+  async getProviderServices(providerId: string, req?: Request): Promise<any[]> {
     if (!mongoose.Types.ObjectId.isValid(providerId)) {
       throw new ApiError(400, 'Invalid provider ID');
     }
 
-    const services = await Service.find({ providerId }).sort({ createdAt: -1 });
+    // Build query with tenant isolation
+    const query = addTenantFilter({ providerId }, req || {} as Request);
+
+    const services = await Service.find(query).sort({ createdAt: -1 });
     return services;
   }
 
-  async createService(providerId: string, serviceData: ProviderServiceInput): Promise<any> {
+  async createService(providerId: string, serviceData: ProviderServiceInput, req?: Request): Promise<any> {
+    // Get tenant ID for service creation
+    const tenantId = req ? getTenantIdOptional(req) : undefined;
+
     // Validate category
     const category = await ServiceCategory.findOne({
       name: { $regex: new RegExp(`^${serviceData.category}$`, 'i') },
@@ -134,14 +151,15 @@ export class ProviderService {
     }
 
     // Get provider location for service
-    const providerProfile = await ProviderProfile.findOne({ userId: providerId });
+    const providerQuery = addTenantFilter({ userId: providerId }, req || {} as Request);
+    const providerProfile = await ProviderProfile.findOne(providerQuery);
     // Extract coordinates from GeoJSON format: { type: 'Point', coordinates: [lng, lat] }
     let coordinatesArray: [number, number] = [55.2708, 25.2048]; // Default: Dubai [lng, lat]
     if (providerProfile?.locationInfo?.primaryAddress?.coordinates?.coordinates) {
       coordinatesArray = providerProfile.locationInfo.primaryAddress.coordinates.coordinates as [number, number];
     }
 
-    const service = new Service({
+    const serviceDataWithTenant: any = {
       providerId,
       name: serviceData.name,
       category: category.name,
@@ -175,7 +193,14 @@ export class ProviderService {
         popularityScore: 0,
         searchKeywords: [serviceData.name, serviceData.category, serviceData.subcategory].filter(Boolean),
       },
-    });
+    };
+
+    // Add tenant ID for multi-tenant isolation
+    if (tenantId) {
+      serviceDataWithTenant.tenantId = tenantId;
+    }
+
+    const service = new Service(serviceDataWithTenant);
 
     await service.save();
 
@@ -200,8 +225,11 @@ export class ProviderService {
     return service;
   }
 
-  async updateService(serviceId: string, providerId: string, updates: UpdateServiceInput): Promise<any> {
-    const service = await Service.findOne({ _id: serviceId, providerId });
+  async updateService(serviceId: string, providerId: string, updates: UpdateServiceInput, req?: Request): Promise<any> {
+    // Build query with tenant isolation
+    const query = addTenantFilter({ _id: serviceId, providerId }, req || {} as Request);
+
+    const service = await Service.findOne(query);
 
     if (!service) {
       throw new ApiError(404, 'Service not found or unauthorized');
@@ -228,8 +256,11 @@ export class ProviderService {
     return service;
   }
 
-  async deleteService(serviceId: string, providerId: string): Promise<void> {
-    const service = await Service.findOneAndDelete({ _id: serviceId, providerId });
+  async deleteService(serviceId: string, providerId: string, req?: Request): Promise<void> {
+    // Build query with tenant isolation
+    const query = addTenantFilter({ _id: serviceId, providerId }, req || {} as Request);
+
+    const service = await Service.findOneAndDelete(query);
 
     if (!service) {
       throw new ApiError(404, 'Service not found or unauthorized');
@@ -246,8 +277,11 @@ export class ProviderService {
     );
   }
 
-  async toggleServiceStatus(serviceId: string, providerId: string): Promise<any> {
-    const service = await Service.findOne({ _id: serviceId, providerId });
+  async toggleServiceStatus(serviceId: string, providerId: string, req?: Request): Promise<any> {
+    // Build query with tenant isolation
+    const query = addTenantFilter({ _id: serviceId, providerId }, req || {} as Request);
+
+    const service = await Service.findOne(query);
 
     if (!service) {
       throw new ApiError(404, 'Service not found or unauthorized');
@@ -269,14 +303,18 @@ export class ProviderService {
   // Analytics & Stats
   // ========================================
 
-  async getProviderStats(providerId: string): Promise<any> {
-    const profile = await ProviderProfile.findOne({ userId: providerId });
+  async getProviderStats(providerId: string, req?: Request): Promise<any> {
+    // Build query with tenant isolation
+    const profileQuery = addTenantFilter({ userId: providerId }, req || {} as Request);
+
+    const profile = await ProviderProfile.findOne(profileQuery);
 
     if (!profile) {
       throw new ApiError(404, 'Provider profile not found');
     }
 
-    const services = await Service.find({ providerId, status: 'approved' });
+    const servicesQuery = addTenantFilter({ providerId, status: 'approved' }, req || {} as Request);
+    const services = await Service.find(servicesQuery);
     const activeServicesCount = services.filter((s) => s.isActive).length;
 
     return {
@@ -298,8 +336,11 @@ export class ProviderService {
     };
   }
 
-  async getProviderReviews(providerId: string, page = 1, limit = 10): Promise<any> {
-    const profile = await ProviderProfile.findOne({ userId: providerId });
+  async getProviderReviews(providerId: string, req?: Request, page = 1, limit = 10): Promise<any> {
+    // Build query with tenant isolation
+    const profileQuery = addTenantFilter({ userId: providerId }, req || {} as Request);
+
+    const profile = await ProviderProfile.findOne(profileQuery);
 
     if (!profile) {
       throw new ApiError(404, 'Provider profile not found');
@@ -323,8 +364,11 @@ export class ProviderService {
   // Verification
   // ========================================
 
-  async submitVerification(providerId: string, verificationData: any): Promise<any> {
-    const profile = await ProviderProfile.findOne({ userId: providerId });
+  async submitVerification(providerId: string, verificationData: any, req?: Request): Promise<any> {
+    // Build query with tenant isolation
+    const profileQuery = addTenantFilter({ userId: providerId }, req || {} as Request);
+
+    const profile = await ProviderProfile.findOne(profileQuery);
 
     if (!profile) {
       throw new ApiError(404, 'Provider profile not found');
@@ -357,8 +401,11 @@ export class ProviderService {
   // Availability (Basic)
   // ========================================
 
-  async updateAvailabilitySchedule(providerId: string, schedule: any): Promise<any> {
-    const profile = await ProviderProfile.findOne({ userId: providerId });
+  async updateAvailabilitySchedule(providerId: string, schedule: any, req?: Request): Promise<any> {
+    // Build query with tenant isolation
+    const profileQuery = addTenantFilter({ userId: providerId }, req || {} as Request);
+
+    const profile = await ProviderProfile.findOne(profileQuery);
 
     if (!profile) {
       throw new ApiError(404, 'Provider profile not found');

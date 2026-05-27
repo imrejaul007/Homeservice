@@ -7,6 +7,7 @@ import {
 import NavigationHeader from '../components/layout/NavigationHeader';
 import Footer from '../components/layout/Footer';
 import { searchApi } from '../services/searchApi';
+import { favoritesApi } from '../services/favoritesApi';
 import { useAuthStore } from '../stores/authStore';
 import { CATEGORY_IMAGES, SUBCATEGORY_IMAGES } from '../constants/images';
 
@@ -117,12 +118,25 @@ const ServiceDetailPage: React.FC = () => {
     navigate(`/book/${id}`, { state: { service } });
   };
 
-  const toggleFavorite = () => {
+  const toggleFavorite = async () => {
     if (!isAuthenticated) {
       navigate('/login', { state: { returnTo: `/services/${id}` } });
       return;
     }
-    setIsFavorited(!isFavorited);
+
+    // Use providerId from the service if available, otherwise check provider._id
+    const providerId = service?.provider?._id;
+    if (!providerId) {
+      console.error('Provider ID not available');
+      return;
+    }
+
+    try {
+      const result = await favoritesApi.toggleFavorite(providerId);
+      setIsFavorited(result.isFavorited);
+    } catch (err) {
+      console.error('Failed to toggle favorite:', err);
+    }
   };
 
   const shareService = async () => {

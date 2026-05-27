@@ -1,5 +1,6 @@
 import PlatformSettings, { IPlatformSettings } from '../models/settings.model';
 import { cacheRedis } from '../config/redis';
+import { ApiError, ERROR_CODES } from '../utils/ApiError';
 import logger from '../utils/logger';
 
 const SETTINGS_CACHE_KEY = 'platform:settings';
@@ -189,7 +190,7 @@ export const importSettings = async (
   reason?: string
 ): Promise<IPlatformSettings> => {
   if (!importData?.settings) {
-    throw new Error('Invalid import file format');
+    throw ApiError.badRequest('Invalid import file format', [], ERROR_CODES.INVALID_FORMAT);
   }
 
   const updates = { ...importData.settings };

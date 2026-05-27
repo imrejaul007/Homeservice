@@ -28,34 +28,99 @@ import {
   Send,
   FileJson,
   AlertCircle,
+  Key,
+  Clock,
+  Palette,
+  Cloud,
+  List,
+  Network,
+  FileCode,
+  Volume2,
+  Moon,
+  Sun,
+  Plus,
+  Copy,
+  ExternalLink,
 } from 'lucide-react';
 import PageLayout from '../layout/PageLayout';
 import authService from '../../services/AuthService';
 import { useToastActions } from '../common/Toast';
 
 // Types
+interface ApiKey {
+  id: string;
+  name: string;
+  key: string;
+  createdAt: string;
+  lastUsed: string | null;
+}
+
 interface PlatformSettings {
   platformName: string;
   platformLogo: string;
   supportEmail: string;
   supportPhone: string;
   maintenanceMode: boolean;
+  maintenanceMessage: string;
+  maintenanceEstimatedDuration: string;
+  // General Settings
+  currency: string;
+  dateFormat: string;
+  language: string;
+  // Fee & Commission
   commissionRate: number;
   paymentProcessingFee: number;
   minimumWithdrawalAmount: number;
+  platformFeeType: 'percentage' | 'fixed' | 'both';
+  // Fee Customization
+  taxRate: number;
+  weekendRates: number;
+  holidayRates: number;
+  // Booking Settings
   defaultBookingBufferMinutes: number;
   cancellationWindowHours: number;
   autoAssignmentEnabled: boolean;
+  autoConfirmEnabled: boolean;
+  maxBookingAdvanceDays: number;
+  minBookingAdvanceHours: number;
+  instantBooking: boolean;
+  maxDailyBookings: number;
+  // Notification Settings
   emailNotificationsEnabled: boolean;
   smsNotificationsEnabled: boolean;
   pushNotificationsEnabled: boolean;
+  notificationSounds: boolean;
+  quietHoursEnabled: boolean;
+  quietHoursStart: string;
+  quietHoursEnd: string;
+  // Security Settings
   require2FA: boolean;
   sessionTimeoutMinutes: number;
   passwordMinLength: number;
   passwordRequireSpecialChar: boolean;
+  passwordRequireNumber: boolean;
+  passwordRequireUppercase: boolean;
+  maxLoginAttempts: number;
+  lockoutDurationMinutes: number;
+  // Custom Security
+  enableFAQ: boolean;
+  apiKeys: ApiKey[];
+  ipAllowlist: string[];
+  enableAuditLogs: boolean;
+  // Branding
+  favicon: string;
+  primaryColor: string;
+  secondaryColor: string;
+  // System Settings
   cacheTTLSeconds: number;
   rateLimitRequestsPerMinute: number;
   apiRateLimitPerHour: number;
+  maxFileUploadSizeMB: number;
+  allowedFileTypes: string[];
+  // Backup Settings
+  backupCloudStorage: 'none' | 'aws' | 'gcp' | 'azure';
+  backupRetentionDays: number;
+  backupEnabled: boolean;
   // Email Config
   emailConfig: {
     provider: 'smtp' | 'ses' | 'sendgrid' | 'resend';
@@ -64,18 +129,27 @@ interface PlatformSettings {
     fromName: string;
     replyToEmail: string;
   };
-  // SMS Config
+  // SMS Config (only providers that exist in backend)
   smsConfig: {
-    provider: 'twilio' | 'vonage' | 'nexmo' | 'msg91';
+    provider: 'twilio' | 'vonage' | 'msg91';
     twilio?: { accountSid: string; authToken: string; fromNumber: string };
     vonage?: { apiKey: string; apiSecret: string; fromNumber: string };
-    nexmo?: { apiKey: string; apiSecret: string; fromNumber: string };
     msg91?: { authKey: string; templateId: string; senderId: string };
     enabled: boolean;
   };
-  // Templates
+  // Templates (using camelCase to match backend)
   emailTemplates: {
-    [key: string]: { subject: string; body: string; enabled: boolean; hoursBefore?: number };
+    bookingConfirmation: { subject: string; body: string; enabled: boolean };
+    bookingReminder: { subject: string; body: string; enabled: boolean; hoursBefore?: number };
+    bookingCancellation: { subject: string; body: string; enabled: boolean };
+    bookingCompletion: { subject: string; body: string; enabled: boolean };
+    passwordReset: { subject: string; body: string; enabled: boolean };
+    welcomeEmail: { subject: string; body: string; enabled: boolean };
+    paymentReceipt: { subject: string; body: string; enabled: boolean };
+    providerApplication: { subject: string; body: string; enabled: boolean };
+    emailVerification: { subject: string; body: string; enabled: boolean };
+    providerApproval: { subject: string; body: string; enabled: boolean };
+    providerRejection: { subject: string; body: string; enabled: boolean };
   };
 }
 
@@ -109,54 +183,66 @@ const SECTIONS: SectionConfig[] = [
   { id: 'system', label: 'System', icon: Settings },
 ];
 
-// Email Templates Configuration
+// Email Templates Configuration (using camelCase to match backend)
 const EMAIL_TEMPLATES_CONFIG: Template[] = [
   {
-    id: 'booking_confirmation',
+    id: 'bookingConfirmation',
     name: 'Booking Confirmation',
     description: 'Sent when a booking is confirmed',
     variables: ['{{userName}}', '{{bookingId}}', '{{bookingDate}}', '{{bookingTime}}', '{{providerName}}', '{{serviceName}}', '{{totalAmount}}'],
   },
   {
-    id: 'booking_reminder',
+    id: 'bookingReminder',
     name: 'Booking Reminder',
     description: 'Sent before a booking appointment',
     variables: ['{{userName}}', '{{bookingId}}', '{{bookingDate}}', '{{bookingTime}}', '{{providerName}}', '{{serviceName}}', '{{address}}'],
   },
   {
-    id: 'booking_cancelled',
+    id: 'bookingCancellation',
     name: 'Booking Cancelled',
     description: 'Sent when a booking is cancelled',
     variables: ['{{userName}}', '{{bookingId}}', '{{bookingDate}}', '{{bookingTime}}', '{{providerName}}', '{{reason}}', '{{refundAmount}}'],
   },
   {
-    id: 'booking_completed',
+    id: 'bookingCompletion',
     name: 'Booking Completed',
     description: 'Sent when a booking is completed',
     variables: ['{{userName}}', '{{bookingId}}', '{{bookingDate}}', '{{providerName}}', '{{serviceName}}', '{{totalAmount}}', '{{reviewLink}}'],
   },
   {
-    id: 'password_reset',
+    id: 'passwordReset',
     name: 'Password Reset',
     description: 'Sent when user requests password reset',
     variables: ['{{userName}}', '{{resetLink}}', '{{expiryTime}}'],
   },
   {
-    id: 'welcome_email',
+    id: 'welcomeEmail',
     name: 'Welcome Email',
     description: 'Sent when a new user registers',
     variables: ['{{userName}}', '{{email}}', '{{verificationLink}}', '{{platformName}}'],
   },
   {
-    id: 'payment_receipt',
+    id: 'paymentReceipt',
     name: 'Payment Receipt',
     description: 'Sent after successful payment',
     variables: ['{{userName}}', '{{transactionId}}', '{{amount}}', '{{paymentMethod}}', '{{bookingId}}', '{{date}}'],
   },
   {
-    id: 'provider_application',
+    id: 'providerApplication',
     name: 'Provider Application Status',
     description: 'Sent when provider application is reviewed',
+    variables: ['{{providerName}}', '{{status}}', '{{comments}}', '{{nextSteps}}'],
+  },
+  {
+    id: 'providerApproval',
+    name: 'Provider Approval',
+    description: 'Sent when provider application is approved',
+    variables: ['{{providerName}}', '{{status}}', '{{comments}}', '{{nextSteps}}'],
+  },
+  {
+    id: 'providerRejection',
+    name: 'Provider Rejection',
+    description: 'Sent when provider application is rejected',
     variables: ['{{providerName}}', '{{status}}', '{{comments}}', '{{nextSteps}}'],
   },
 ];
@@ -168,22 +254,66 @@ const DEFAULT_SETTINGS: PlatformSettings = {
   supportEmail: '',
   supportPhone: '',
   maintenanceMode: false,
+  maintenanceMessage: '',
+  maintenanceEstimatedDuration: '',
+  // General Settings
+  currency: 'USD',
+  dateFormat: 'MM/DD/YYYY',
+  language: 'en',
+  // Fee & Commission
   commissionRate: 10,
   paymentProcessingFee: 2.9,
   minimumWithdrawalAmount: 100,
+  platformFeeType: 'percentage',
+  // Fee Customization
+  taxRate: 0,
+  weekendRates: 0,
+  holidayRates: 0,
+  // Booking Settings
   defaultBookingBufferMinutes: 30,
   cancellationWindowHours: 24,
   autoAssignmentEnabled: true,
+  autoConfirmEnabled: false,
+  maxBookingAdvanceDays: 30,
+  minBookingAdvanceHours: 2,
+  instantBooking: false,
+  maxDailyBookings: 5,
+  // Notification Settings
   emailNotificationsEnabled: true,
   smsNotificationsEnabled: true,
   pushNotificationsEnabled: true,
+  notificationSounds: true,
+  quietHoursEnabled: false,
+  quietHoursStart: '22:00',
+  quietHoursEnd: '08:00',
+  // Security Settings
   require2FA: false,
   sessionTimeoutMinutes: 60,
   passwordMinLength: 8,
   passwordRequireSpecialChar: true,
+  passwordRequireNumber: true,
+  passwordRequireUppercase: true,
+  maxLoginAttempts: 5,
+  lockoutDurationMinutes: 30,
+  // Custom Security
+  enableFAQ: true,
+  apiKeys: [],
+  ipAllowlist: [],
+  enableAuditLogs: true,
+  // Branding
+  favicon: '',
+  primaryColor: '#E8B4A8',
+  secondaryColor: '#D4A89A',
+  // System Settings
   cacheTTLSeconds: 300,
   rateLimitRequestsPerMinute: 100,
   apiRateLimitPerHour: 1000,
+  maxFileUploadSizeMB: 10,
+  allowedFileTypes: ['image/jpeg', 'image/png', 'image/gif', 'application/pdf'],
+  // Backup Settings
+  backupCloudStorage: 'none',
+  backupRetentionDays: 30,
+  backupEnabled: false,
   emailConfig: {
     provider: 'smtp',
     smtp: { host: '', port: 587, secure: false, user: '', pass: '' },
@@ -197,14 +327,17 @@ const DEFAULT_SETTINGS: PlatformSettings = {
     enabled: false,
   },
   emailTemplates: {
-    booking_confirmation: { subject: 'Booking Confirmed - {{bookingId}}', body: '', enabled: true },
-    booking_reminder: { subject: 'Reminder: Your appointment on {{bookingDate}}', body: '', enabled: true, hoursBefore: 24 },
-    booking_cancelled: { subject: 'Booking Cancelled - {{bookingId}}', body: '', enabled: true },
-    booking_completed: { subject: 'Service Completed - {{bookingId}}', body: '', enabled: true },
-    password_reset: { subject: 'Reset Your Password', body: '', enabled: true },
-    welcome_email: { subject: 'Welcome to {{platformName}}!', body: '', enabled: true },
-    payment_receipt: { subject: 'Payment Receipt - {{transactionId}}', body: '', enabled: true },
-    provider_application: { subject: 'Provider Application Update', body: '', enabled: true },
+    bookingConfirmation: { subject: 'Booking Confirmed - {{bookingId}}', body: '', enabled: true },
+    bookingReminder: { subject: 'Reminder: Your appointment on {{bookingDate}}', body: '', enabled: true, hoursBefore: 24 },
+    bookingCancellation: { subject: 'Booking Cancelled - {{bookingId}}', body: '', enabled: true },
+    bookingCompletion: { subject: 'Service Completed - {{bookingId}}', body: '', enabled: true },
+    passwordReset: { subject: 'Reset Your Password', body: '', enabled: true },
+    welcomeEmail: { subject: 'Welcome to {{platformName}}!', body: '', enabled: true },
+    paymentReceipt: { subject: 'Payment Receipt - {{transactionId}}', body: '', enabled: true },
+    providerApplication: { subject: 'Provider Application Update', body: '', enabled: true },
+    emailVerification: { subject: 'Verify Your Email', body: '', enabled: true },
+    providerApproval: { subject: 'Provider Account Approved', body: '', enabled: true },
+    providerRejection: { subject: 'Provider Application Update', body: '', enabled: true },
   },
 };
 
@@ -304,28 +437,18 @@ const TextInput: React.FC<TextInputProps> = ({
   disabled = false,
   className = '',
 }) => {
-  const [showPassword, setShowPassword] = useState(false);
   const isPassword = type === 'password';
 
   return (
     <div className="relative">
       <input
-        type={isPassword && showPassword ? 'text' : type}
+        type={type}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         disabled={disabled}
-        className={`w-full px-3 py-2 pr-10 border border-nilin-border rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-coral focus:border-transparent bg-white text-sm text-nilin-charcoal disabled:bg-nilin-muted disabled:cursor-not-allowed font-sans ${className}`}
+        className={`w-full px-3 py-2 border border-nilin-border rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-coral focus:border-transparent bg-white text-sm text-nilin-charcoal disabled:bg-nilin-muted disabled:cursor-not-allowed font-sans ${className}`}
       />
-      {isPassword && (
-        <button
-          type="button"
-          onClick={() => setShowPassword(!showPassword)}
-          className="absolute right-3 top-1/2 -translate-y-1/2 text-nilin-warmGray hover:text-nilin-charcoal transition-colors"
-        >
-          {showPassword ? <Eye className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-        </button>
-      )}
     </div>
   );
 };
@@ -484,9 +607,37 @@ const AdminSettings: React.FC = () => {
         const fetchedSettings = {
           ...DEFAULT_SETTINGS,
           ...response.data.settings,
-          emailConfig: { ...DEFAULT_SETTINGS.emailConfig, ...response.data.settings.emailConfig },
-          smsConfig: { ...DEFAULT_SETTINGS.smsConfig, ...response.data.settings.smsConfig },
-          emailTemplates: { ...DEFAULT_SETTINGS.emailTemplates, ...response.data.settings.emailTemplates },
+          emailConfig: {
+            ...DEFAULT_SETTINGS.emailConfig,
+            ...response.data.settings.emailConfig,
+            smtp: {
+              ...DEFAULT_SETTINGS.emailConfig.smtp,
+              ...response.data.settings.emailConfig?.smtp,
+            },
+          },
+          smsConfig: {
+            ...DEFAULT_SETTINGS.smsConfig,
+            ...response.data.settings.smsConfig,
+            twilio: {
+              ...DEFAULT_SETTINGS.smsConfig.twilio,
+              ...response.data.settings.smsConfig?.twilio,
+            },
+            vonage: {
+              ...DEFAULT_SETTINGS.smsConfig.vonage,
+              ...response.data.settings.smsConfig?.vonage,
+            },
+            msg91: {
+              ...DEFAULT_SETTINGS.smsConfig.msg91,
+              ...response.data.settings.smsConfig?.msg91,
+            },
+          },
+          emailTemplates: {
+            ...DEFAULT_SETTINGS.emailTemplates,
+            ...response.data.settings.emailTemplates,
+          },
+          apiKeys: response.data.settings.apiKeys || [],
+          ipAllowlist: response.data.settings.ipAllowlist || [],
+          allowedFileTypes: response.data.settings.allowedFileTypes || DEFAULT_SETTINGS.allowedFileTypes,
         };
         setSettings(fetchedSettings);
         setOriginalSettings(fetchedSettings);
@@ -594,16 +745,6 @@ const AdminSettings: React.FC = () => {
       smsConfig: {
         ...prev.smsConfig,
         vonage: { ...(prev.smsConfig.vonage || { apiKey: '', apiSecret: '', fromNumber: '' }), [field]: value },
-      },
-    }));
-  }, []);
-
-  const handleNexmoConfigChange = useCallback((field: string, value: string) => {
-    setSettings((prev) => ({
-      ...prev,
-      smsConfig: {
-        ...prev.smsConfig,
-        nexmo: { ...(prev.smsConfig.nexmo || { apiKey: '', apiSecret: '', fromNumber: '' }), [field]: value },
       },
     }));
   }, []);
@@ -837,6 +978,59 @@ const AdminSettings: React.FC = () => {
         </SettingRow>
       </div>
 
+      <SectionDivider label="Regional Settings" />
+      <div className="glass rounded-2xl border border-nilin-border/50 inner-glow overflow-hidden">
+        <SettingRow label="Currency" description="Default currency for pricing">
+          <select
+            value={settings.currency}
+            onChange={(e) => handleSettingChange('currency', e.target.value)}
+            className="w-32 px-3 py-2 border border-nilin-border rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-coral focus:border-transparent bg-white text-sm text-nilin-charcoal font-sans"
+          >
+            <option value="USD">USD ($)</option>
+            <option value="EUR">EUR (EUR)</option>
+            <option value="GBP">GBP (GBP)</option>
+            <option value="AED">AED (AED)</option>
+            <option value="SAR">SAR (SAR)</option>
+            <option value="INR">INR (INR)</option>
+            <option value="CNY">CNY (CNY)</option>
+            <option value="JPY">JPY (JPY)</option>
+            <option value="CAD">CAD (CAD)</option>
+            <option value="AUD">AUD (AUD)</option>
+          </select>
+        </SettingRow>
+        <SettingRow label="Date Format" description="Format for displaying dates">
+          <select
+            value={settings.dateFormat}
+            onChange={(e) => handleSettingChange('dateFormat', e.target.value)}
+            className="w-40 px-3 py-2 border border-nilin-border rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-coral focus:border-transparent bg-white text-sm text-nilin-charcoal font-sans"
+          >
+            <option value="MM/DD/YYYY">MM/DD/YYYY</option>
+            <option value="DD/MM/YYYY">DD/MM/YYYY</option>
+            <option value="YYYY-MM-DD">YYYY-MM-DD</option>
+            <option value="DD-MM-YYYY">DD-MM-YYYY</option>
+            <option value="MM-DD-YYYY">MM-DD-YYYY</option>
+          </select>
+        </SettingRow>
+        <SettingRow label="Language" description="Default platform language">
+          <select
+            value={settings.language}
+            onChange={(e) => handleSettingChange('language', e.target.value)}
+            className="w-40 px-3 py-2 border border-nilin-border rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-coral focus:border-transparent bg-white text-sm text-nilin-charcoal font-sans"
+          >
+            <option value="en">English</option>
+            <option value="ar">Arabic</option>
+            <option value="es">Spanish</option>
+            <option value="fr">French</option>
+            <option value="de">German</option>
+            <option value="zh">Chinese</option>
+            <option value="hi">Hindi</option>
+            <option value="pt">Portuguese</option>
+            <option value="ru">Russian</option>
+            <option value="ja">Japanese</option>
+          </select>
+        </SettingRow>
+      </div>
+
       <SectionDivider label="Support Contact" />
       <div className="glass rounded-2xl border border-nilin-border/50 inner-glow overflow-hidden">
         <SettingRow label="Support Email" description="Email address for customer support">
@@ -856,7 +1050,7 @@ const AdminSettings: React.FC = () => {
         </SettingRow>
       </div>
 
-      <SectionDivider label="Platform Status" />
+      <SectionDivider label="Maintenance" />
       <div className="glass rounded-2xl border border-nilin-border/50 inner-glow overflow-hidden">
         <SettingRow
           label="Maintenance Mode"
@@ -868,6 +1062,32 @@ const AdminSettings: React.FC = () => {
             onChange={(value) => handleSettingChange('maintenanceMode', value)}
           />
         </SettingRow>
+        {settings.maintenanceMode && (
+          <>
+            <div className="p-4 border-t border-nilin-border/30">
+              <label className="block text-sm font-medium text-nilin-charcoal font-sans mb-1.5">
+                Maintenance Message
+              </label>
+              <textarea
+                value={settings.maintenanceMessage}
+                onChange={(e) => handleSettingChange('maintenanceMessage', e.target.value)}
+                placeholder="The platform is currently under maintenance..."
+                rows={3}
+                className="w-full px-3 py-2 border border-nilin-border rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-coral focus:border-transparent bg-white text-sm text-nilin-charcoal font-sans resize-none"
+              />
+            </div>
+            <div className="p-4 border-t border-nilin-border/30">
+              <label className="block text-sm font-medium text-nilin-charcoal font-sans mb-1.5">
+                Estimated Duration
+              </label>
+              <TextInput
+                value={settings.maintenanceEstimatedDuration}
+                onChange={(value) => handleSettingChange('maintenanceEstimatedDuration', value)}
+                placeholder="e.g., 2 hours"
+              />
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -906,6 +1126,51 @@ const AdminSettings: React.FC = () => {
             suffix="AED"
           />
         </SettingRow>
+        <SettingRow label="Platform Fee Type" description="How platform fees are calculated">
+          <select
+            value={settings.platformFeeType}
+            onChange={(e) => handleSettingChange('platformFeeType', e.target.value as 'percentage' | 'fixed' | 'both')}
+            className="w-36 px-3 py-2 border border-nilin-border rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-coral focus:border-transparent bg-white text-sm text-nilin-charcoal font-sans"
+          >
+            <option value="percentage">Percentage</option>
+            <option value="fixed">Fixed Amount</option>
+            <option value="both">Both</option>
+          </select>
+        </SettingRow>
+      </div>
+
+      <SectionDivider label="Fee Customization" />
+      <div className="glass rounded-2xl border border-nilin-border/50 inner-glow overflow-hidden">
+        <SettingRow label="Tax Rate" description="Additional tax percentage applied to bookings">
+          <NumberInput
+            value={settings.taxRate}
+            onChange={(value) => handleSettingChange('taxRate', value)}
+            min={0}
+            max={100}
+            step={0.1}
+            suffix="%"
+          />
+        </SettingRow>
+        <SettingRow label="Weekend Rates" description="Additional percentage for weekend bookings">
+          <NumberInput
+            value={settings.weekendRates}
+            onChange={(value) => handleSettingChange('weekendRates', value)}
+            min={0}
+            max={100}
+            step={5}
+            suffix="%"
+          />
+        </SettingRow>
+        <SettingRow label="Holiday Rates" description="Additional percentage for holiday bookings">
+          <NumberInput
+            value={settings.holidayRates}
+            onChange={(value) => handleSettingChange('holidayRates', value)}
+            min={0}
+            max={200}
+            step={5}
+            suffix="%"
+          />
+        </SettingRow>
       </div>
     </div>
   );
@@ -935,6 +1200,30 @@ const AdminSettings: React.FC = () => {
             suffix="hrs"
           />
         </SettingRow>
+        <SettingRow label="Max Booking Advance Days" description="Maximum days in advance users can book">
+          <NumberInput
+            value={settings.maxBookingAdvanceDays}
+            onChange={(value) => handleSettingChange('maxBookingAdvanceDays', value)}
+            min={1}
+            max={365}
+            step={1}
+            suffix="days"
+          />
+        </SettingRow>
+        <SettingRow label="Min Booking Advance Hours" description="Minimum hours before booking time">
+          <NumberInput
+            value={settings.minBookingAdvanceHours}
+            onChange={(value) => handleSettingChange('minBookingAdvanceHours', value)}
+            min={0}
+            max={72}
+            step={1}
+            suffix="hrs"
+          />
+        </SettingRow>
+      </div>
+
+      <SectionDivider label="Auto Features" />
+      <div className="glass rounded-2xl border border-nilin-border/50 inner-glow overflow-hidden">
         <SettingRow
           label="Auto-Assignment"
           description="Automatically assign providers to bookings"
@@ -942,6 +1231,38 @@ const AdminSettings: React.FC = () => {
           <ToggleSwitch
             enabled={settings.autoAssignmentEnabled}
             onChange={(value) => handleSettingChange('autoAssignmentEnabled', value)}
+          />
+        </SettingRow>
+        <SettingRow
+          label="Auto-Confirm Bookings"
+          description="Automatically confirm bookings without manual approval"
+        >
+          <ToggleSwitch
+            enabled={settings.autoConfirmEnabled}
+            onChange={(value) => handleSettingChange('autoConfirmEnabled', value)}
+          />
+        </SettingRow>
+        <SettingRow
+          label="Instant Booking"
+          description="Allow customers to book instantly without provider approval"
+        >
+          <ToggleSwitch
+            enabled={settings.instantBooking}
+            onChange={(value) => handleSettingChange('instantBooking', value)}
+          />
+        </SettingRow>
+      </div>
+
+      <SectionDivider label="Booking Limits" />
+      <div className="glass rounded-2xl border border-nilin-border/50 inner-glow overflow-hidden">
+        <SettingRow label="Max Bookings Per Day" description="Maximum bookings per user per day">
+          <NumberInput
+            value={settings.maxDailyBookings}
+            onChange={(value) => handleSettingChange('maxDailyBookings', value)}
+            min={1}
+            max={50}
+            step={1}
+            suffix="bookings"
           />
         </SettingRow>
       </div>
@@ -980,6 +1301,58 @@ const AdminSettings: React.FC = () => {
             onChange={(value) => handleSettingChange('pushNotificationsEnabled', value)}
           />
         </SettingRow>
+      </div>
+
+      <SectionDivider label="Sound Settings" />
+      <div className="glass rounded-2xl border border-nilin-border/50 inner-glow overflow-hidden">
+        <SettingRow
+          label="Notification Sounds"
+          description="Play sounds for notifications"
+        >
+          <ToggleSwitch
+            enabled={settings.notificationSounds}
+            onChange={(value) => handleSettingChange('notificationSounds', value)}
+          />
+        </SettingRow>
+      </div>
+
+      <SectionDivider label="Quiet Hours" />
+      <div className="glass rounded-2xl border border-nilin-border/50 inner-glow overflow-hidden">
+        <SettingRow
+          label="Enable Quiet Hours"
+          description="Pause notifications during specified hours"
+        >
+          <ToggleSwitch
+            enabled={settings.quietHoursEnabled}
+            onChange={(value) => handleSettingChange('quietHoursEnabled', value)}
+          />
+        </SettingRow>
+        {settings.quietHoursEnabled && (
+          <>
+            <div className="p-4 border-t border-nilin-border/30">
+              <label className="block text-sm font-medium text-nilin-charcoal font-sans mb-1.5">
+                Start Time
+              </label>
+              <input
+                type="time"
+                value={settings.quietHoursStart}
+                onChange={(e) => handleSettingChange('quietHoursStart', e.target.value)}
+                className="w-full px-3 py-2 border border-nilin-border rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-coral focus:border-transparent bg-white text-sm text-nilin-charcoal font-sans"
+              />
+            </div>
+            <div className="p-4 border-t border-nilin-border/30">
+              <label className="block text-sm font-medium text-nilin-charcoal font-sans mb-1.5">
+                End Time
+              </label>
+              <input
+                type="time"
+                value={settings.quietHoursEnd}
+                onChange={(e) => handleSettingChange('quietHoursEnd', e.target.value)}
+                className="w-full px-3 py-2 border border-nilin-border rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-coral focus:border-transparent bg-white text-sm text-nilin-charcoal font-sans"
+              />
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -1172,7 +1545,6 @@ const AdminSettings: React.FC = () => {
               options={[
                 { value: 'twilio', label: 'Twilio' },
                 { value: 'vonage', label: 'Vonage' },
-                { value: 'nexmo', label: 'Nexmo' },
                 { value: 'msg91', label: 'MSG91' },
               ]}
               disabled={!settings.smsConfig.enabled}
@@ -1260,50 +1632,6 @@ const AdminSettings: React.FC = () => {
                 <TextInput
                   value={settings.smsConfig.vonage?.fromNumber || ''}
                   onChange={(value) => handleVonageConfigChange('fromNumber', value)}
-                  placeholder="+1234567890"
-                  disabled={!settings.smsConfig.enabled}
-                />
-              </div>
-            </div>
-          </div>
-        </>
-      )}
-
-      {settings.smsConfig.provider === 'nexmo' && (
-        <>
-          <SectionDivider label="Nexmo Credentials" />
-          <div className="glass rounded-2xl border border-nilin-border/50 inner-glow overflow-hidden">
-            <div className="p-4 space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-nilin-charcoal font-sans mb-1.5">
-                  API Key
-                </label>
-                <TextInput
-                  value={settings.smsConfig.nexmo?.apiKey || ''}
-                  onChange={(value) => handleNexmoConfigChange('apiKey', value)}
-                  placeholder="Enter API key"
-                  disabled={!settings.smsConfig.enabled}
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-nilin-charcoal font-sans mb-1.5">
-                  API Secret
-                </label>
-                <TextInput
-                  value={settings.smsConfig.nexmo?.apiSecret || ''}
-                  onChange={(value) => handleNexmoConfigChange('apiSecret', value)}
-                  type="password"
-                  placeholder="Enter API secret"
-                  disabled={!settings.smsConfig.enabled}
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-nilin-charcoal font-sans mb-1.5">
-                  From Number
-                </label>
-                <TextInput
-                  value={settings.smsConfig.nexmo?.fromNumber || ''}
-                  onChange={(value) => handleNexmoConfigChange('fromNumber', value)}
                   placeholder="+1234567890"
                   disabled={!settings.smsConfig.enabled}
                 />
@@ -1593,12 +1921,120 @@ const AdminSettings: React.FC = () => {
           />
         </div>
       </div>
+
+      <SectionDivider label="Favicon" />
+      <div className="glass rounded-2xl border border-nilin-border/50 inner-glow overflow-hidden">
+        <div className="p-4 space-y-4">
+          <SettingRow label="Favicon URL" description="URL to your platform favicon (32x32 or 64x64)">
+            <TextInput
+              value={settings.favicon}
+              onChange={(value) => handleSettingChange('favicon', value)}
+              type="url"
+              placeholder="https://example.com/favicon.ico"
+            />
+          </SettingRow>
+        </div>
+      </div>
+
+      <SectionDivider label="Brand Colors" />
+      <div className="glass rounded-2xl border border-nilin-border/50 inner-glow overflow-hidden">
+        <div className="p-4 space-y-4">
+          <div className="flex items-center justify-between py-4 px-4">
+            <div className="flex-1 mr-4">
+              <label className="text-sm font-medium text-nilin-charcoal font-sans">Primary Color</label>
+              <p className="text-xs text-nilin-warmGray mt-0.5 font-sans">Main brand color for buttons and accents</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="color"
+                value={settings.primaryColor}
+                onChange={(e) => handleSettingChange('primaryColor', e.target.value)}
+                className="w-12 h-10 rounded-lg cursor-pointer border border-nilin-border"
+              />
+              <TextInput
+                value={settings.primaryColor}
+                onChange={(value) => handleSettingChange('primaryColor', value)}
+                placeholder="#E8B4A8"
+                className="w-28"
+              />
+            </div>
+          </div>
+          <div className="flex items-center justify-between py-4 px-4 border-t border-nilin-border/30">
+            <div className="flex-1 mr-4">
+              <label className="text-sm font-medium text-nilin-charcoal font-sans">Secondary Color</label>
+              <p className="text-xs text-nilin-warmGray mt-0.5 font-sans">Secondary brand color for gradients</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="color"
+                value={settings.secondaryColor}
+                onChange={(e) => handleSettingChange('secondaryColor', e.target.value)}
+                className="w-12 h-10 rounded-lg cursor-pointer border border-nilin-border"
+              />
+              <TextInput
+                value={settings.secondaryColor}
+                onChange={(value) => handleSettingChange('secondaryColor', value)}
+                placeholder="#D4A89A"
+                className="w-28"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 
   // Render Backup Settings
   const renderBackupSettings = () => (
     <div className="space-y-1">
+      <SectionDivider label="Cloud Backup" />
+      <div className="glass rounded-2xl border border-nilin-border/50 inner-glow overflow-hidden">
+        <SettingRow
+          label="Enable Automatic Backup"
+          description="Automatically backup settings to cloud storage"
+        >
+          <ToggleSwitch
+            enabled={settings.backupEnabled}
+            onChange={(value) => handleSettingChange('backupEnabled', value)}
+          />
+        </SettingRow>
+        {settings.backupEnabled && (
+          <>
+            <div className="p-4 border-t border-nilin-border/30">
+              <label className="block text-sm font-medium text-nilin-charcoal font-sans mb-1.5">
+                Cloud Storage Provider
+              </label>
+              <select
+                value={settings.backupCloudStorage}
+                onChange={(e) => handleSettingChange('backupCloudStorage', e.target.value as 'none' | 'aws' | 'gcp' | 'azure')}
+                className="w-full px-3 py-2 border border-nilin-border rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-coral focus:border-transparent bg-white text-sm text-nilin-charcoal font-sans"
+              >
+                <option value="none">Select Provider</option>
+                <option value="aws">Amazon Web Services (AWS S3)</option>
+                <option value="gcp">Google Cloud Platform (GCP)</option>
+                <option value="azure">Microsoft Azure (Blob Storage)</option>
+              </select>
+            </div>
+            <div className="p-4 border-t border-nilin-border/30">
+              <label className="block text-sm font-medium text-nilin-charcoal font-sans mb-1.5">
+                Retention Period (Days)
+              </label>
+              <p className="text-xs text-nilin-warmGray mb-2 font-sans">
+                How long to keep backup snapshots before automatic deletion
+              </p>
+              <NumberInput
+                value={settings.backupRetentionDays}
+                onChange={(value) => handleSettingChange('backupRetentionDays', value)}
+                min={1}
+                max={365}
+                step={1}
+                suffix="days"
+              />
+            </div>
+          </>
+        )}
+      </div>
+
       <SectionDivider label="Export Settings" />
       <div className="glass rounded-2xl border border-nilin-border/50 inner-glow overflow-hidden">
         <div className="p-6">
@@ -1689,55 +2125,372 @@ const AdminSettings: React.FC = () => {
   );
 
   // Render Security Settings
-  const renderSecuritySettings = () => (
-    <div className="space-y-1">
-      <SectionDivider label="Authentication" />
-      <div className="glass rounded-2xl border border-nilin-border/50 inner-glow overflow-hidden">
-        <SettingRow
-          label="Require 2FA"
-          description="Mandatory two-factor authentication for all users"
-        >
-          <ToggleSwitch
-            enabled={settings.require2FA}
-            onChange={(value) => handleSettingChange('require2FA', value)}
-          />
-        </SettingRow>
-        <SettingRow label="Session Timeout" description="Minutes before inactive session expires">
-          <NumberInput
-            value={settings.sessionTimeoutMinutes}
-            onChange={(value) => handleSettingChange('sessionTimeoutMinutes', value)}
-            min={5}
-            max={1440}
-            step={5}
-            suffix="min"
-          />
-        </SettingRow>
-      </div>
+  const renderSecuritySettings = () => {
+    // State for API key modal
+    const [showApiKeyModal, setShowApiKeyModal] = useState(false);
+    const [newApiKeyName, setNewApiKeyName] = useState('');
+    const [isGeneratingKey, setIsGeneratingKey] = useState(false);
+    const [newlyGeneratedKey, setNewlyGeneratedKey] = useState<string | null>(null);
 
-      <SectionDivider label="Password Policy" />
-      <div className="glass rounded-2xl border border-nilin-border/50 inner-glow overflow-hidden">
-        <SettingRow label="Minimum Password Length" description="Minimum characters required for passwords">
-          <NumberInput
-            value={settings.passwordMinLength}
-            onChange={(value) => handleSettingChange('passwordMinLength', value)}
-            min={6}
-            max={128}
-            step={1}
-            suffix="chars"
-          />
-        </SettingRow>
-        <SettingRow
-          label="Require Special Characters"
-          description="Password must contain special characters (!@#$%)"
-        >
-          <ToggleSwitch
-            enabled={settings.passwordRequireSpecialChar}
-            onChange={(value) => handleSettingChange('passwordRequireSpecialChar', value)}
-          />
-        </SettingRow>
+    // State for IP allowlist
+    const [newIpAddress, setNewIpAddress] = useState('');
+
+    // Generate API key
+    const handleGenerateApiKey = useCallback(async () => {
+      if (!newApiKeyName.trim()) {
+        toast.error('API key name required', 'Please enter a name for the API key');
+        return;
+      }
+      setIsGeneratingKey(true);
+      try {
+        // Generate a random API key
+        const generatedKey = `sk_${Array.from(crypto.getRandomValues(new Uint8Array(32)))
+          .map(b => b.toString(16).padStart(2, '0'))
+          .join('')}`;
+        setNewlyGeneratedKey(generatedKey);
+        setShowApiKeyModal(false);
+        setNewApiKeyName('');
+
+        // Add to settings
+        const newKey: ApiKey = {
+          id: `key_${Date.now()}`,
+          name: newApiKeyName,
+          key: generatedKey,
+          createdAt: new Date().toISOString(),
+          lastUsed: null,
+        };
+        handleSettingChange('apiKeys', [...settings.apiKeys, newKey]);
+        toast.success('API key generated', 'Make sure to copy and save the key securely');
+      } catch (error: any) {
+        toast.error('Failed to generate key', error.message);
+      } finally {
+        setIsGeneratingKey(false);
+      }
+    }, [newApiKeyName, settings.apiKeys, handleSettingChange, toast]);
+
+    // Delete API key
+    const handleDeleteApiKey = useCallback((keyId: string) => {
+      handleSettingChange('apiKeys', settings.apiKeys.filter(k => k.id !== keyId));
+      toast.success('API key deleted', 'The key has been removed');
+    }, [settings.apiKeys, handleSettingChange, toast]);
+
+    // Copy API key
+    const handleCopyApiKey = useCallback((key: string) => {
+      navigator.clipboard.writeText(key);
+      toast.success('Copied', 'API key copied to clipboard');
+    }, [toast]);
+
+    // Add IP to allowlist
+    const handleAddIpAddress = useCallback(() => {
+      const ipRegex = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$|^([a-fA-F0-9:]+)$/;
+      if (!ipRegex.test(newIpAddress)) {
+        toast.error('Invalid IP address', 'Please enter a valid IP address');
+        return;
+      }
+      if (settings.ipAllowlist.includes(newIpAddress)) {
+        toast.error('IP already exists', 'This IP address is already in the allowlist');
+        return;
+      }
+      handleSettingChange('ipAllowlist', [...settings.ipAllowlist, newIpAddress]);
+      setNewIpAddress('');
+      toast.success('IP added', 'IP address added to allowlist');
+    }, [newIpAddress, settings.ipAllowlist, handleSettingChange, toast]);
+
+    // Remove IP from allowlist
+    const handleRemoveIpAddress = useCallback((ip: string) => {
+      handleSettingChange('ipAllowlist', settings.ipAllowlist.filter(i => i !== ip));
+      toast.success('IP removed', 'IP address removed from allowlist');
+    }, [settings.ipAllowlist, handleSettingChange, toast]);
+
+    return (
+      <div className="space-y-1">
+        <SectionDivider label="Authentication" />
+        <div className="glass rounded-2xl border border-nilin-border/50 inner-glow overflow-hidden">
+          <SettingRow
+            label="Require 2FA"
+            description="Mandatory two-factor authentication for all users"
+          >
+            <ToggleSwitch
+              enabled={settings.require2FA}
+              onChange={(value) => handleSettingChange('require2FA', value)}
+            />
+          </SettingRow>
+          <SettingRow label="Session Timeout" description="Minutes before inactive session expires">
+            <NumberInput
+              value={settings.sessionTimeoutMinutes}
+              onChange={(value) => handleSettingChange('sessionTimeoutMinutes', value)}
+              min={5}
+              max={1440}
+              step={5}
+              suffix="min"
+            />
+          </SettingRow>
+        </div>
+
+        <SectionDivider label="Password Policy" />
+        <div className="glass rounded-2xl border border-nilin-border/50 inner-glow overflow-hidden">
+          <SettingRow label="Minimum Password Length" description="Minimum characters required for passwords">
+            <NumberInput
+              value={settings.passwordMinLength}
+              onChange={(value) => handleSettingChange('passwordMinLength', value)}
+              min={6}
+              max={128}
+              step={1}
+              suffix="chars"
+            />
+          </SettingRow>
+          <SettingRow
+            label="Require Special Characters"
+            description="Password must contain special characters (!@#$%)"
+          >
+            <ToggleSwitch
+              enabled={settings.passwordRequireSpecialChar}
+              onChange={(value) => handleSettingChange('passwordRequireSpecialChar', value)}
+            />
+          </SettingRow>
+          <SettingRow
+            label="Require Numbers"
+            description="Password must contain at least one number"
+          >
+            <ToggleSwitch
+              enabled={settings.passwordRequireNumber}
+              onChange={(value) => handleSettingChange('passwordRequireNumber', value)}
+            />
+          </SettingRow>
+          <SettingRow
+            label="Require Uppercase"
+            description="Password must contain uppercase letters"
+          >
+            <ToggleSwitch
+              enabled={settings.passwordRequireUppercase}
+              onChange={(value) => handleSettingChange('passwordRequireUppercase', value)}
+            />
+          </SettingRow>
+          <SettingRow label="Max Login Attempts" description="Failed attempts before account lockout">
+            <NumberInput
+              value={settings.maxLoginAttempts}
+              onChange={(value) => handleSettingChange('maxLoginAttempts', value)}
+              min={3}
+              max={20}
+              step={1}
+              suffix="attempts"
+            />
+          </SettingRow>
+          <SettingRow label="Lockout Duration" description="Account lockout duration in minutes">
+            <NumberInput
+              value={settings.lockoutDurationMinutes}
+              onChange={(value) => handleSettingChange('lockoutDurationMinutes', value)}
+              min={5}
+              max={1440}
+              step={5}
+              suffix="min"
+            />
+          </SettingRow>
+        </div>
+
+        <SectionDivider label="Platform Features" />
+        <div className="glass rounded-2xl border border-nilin-border/50 inner-glow overflow-hidden">
+          <SettingRow
+            label="Enable FAQ"
+            description="Show FAQ/help section on the platform"
+          >
+            <ToggleSwitch
+              enabled={settings.enableFAQ}
+              onChange={(value) => handleSettingChange('enableFAQ', value)}
+            />
+          </SettingRow>
+          <SettingRow
+            label="Enable Audit Logs"
+            description="Track and log all admin actions"
+          >
+            <ToggleSwitch
+              enabled={settings.enableAuditLogs}
+              onChange={(value) => handleSettingChange('enableAuditLogs', value)}
+            />
+          </SettingRow>
+        </div>
+
+        <SectionDivider label="IP Allowlist" />
+        <div className="glass rounded-2xl border border-nilin-border/50 inner-glow overflow-hidden">
+          <div className="p-4 space-y-4">
+            <p className="text-xs text-nilin-warmGray font-sans">
+              Restrict admin panel access to specific IP addresses. Leave empty to allow all IPs.
+            </p>
+            <div className="flex gap-2">
+              <TextInput
+                value={newIpAddress}
+                onChange={setNewIpAddress}
+                placeholder="e.g., 192.168.1.1"
+                className="flex-1"
+              />
+              <button
+                onClick={handleAddIpAddress}
+                className="inline-flex items-center px-4 py-2 bg-gradient-to-r from-nilin-rose to-nilin-coral text-white rounded-xl text-sm font-medium font-sans hover:shadow-nilin-warm transition-all"
+              >
+                <Plus className="h-4 w-4 mr-1" />
+                Add
+              </button>
+            </div>
+            {settings.ipAllowlist.length > 0 && (
+              <div className="space-y-2">
+                {settings.ipAllowlist.map((ip, index) => (
+                  <div key={index} className="flex items-center justify-between p-3 bg-nilin-blush/20 rounded-lg">
+                    <span className="text-sm font-mono text-nilin-charcoal">{ip}</span>
+                    <button
+                      onClick={() => handleRemoveIpAddress(ip)}
+                      className="p-1 text-red-500 hover:bg-red-50 rounded transition-colors"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <SectionDivider label="API Keys" />
+        <div className="glass rounded-2xl border border-nilin-border/50 inner-glow overflow-hidden">
+          <div className="p-4 space-y-4">
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-nilin-warmGray font-sans">
+                Manage API keys for external integrations. Keys are only shown once after generation.
+              </p>
+              <button
+                onClick={() => setShowApiKeyModal(true)}
+                className="inline-flex items-center px-4 py-2 bg-gradient-to-r from-nilin-rose to-nilin-coral text-white rounded-xl text-sm font-medium font-sans hover:shadow-nilin-warm transition-all"
+              >
+                <Key className="h-4 w-4 mr-1" />
+                Generate Key
+              </button>
+            </div>
+            {settings.apiKeys.length > 0 ? (
+              <div className="space-y-2">
+                {settings.apiKeys.map((apiKey) => (
+                  <div key={apiKey.id} className="p-4 bg-nilin-blush/20 rounded-xl">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-sm font-medium text-nilin-charcoal">{apiKey.name}</span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => handleCopyApiKey(apiKey.key)}
+                          className="p-2 text-nilin-coral hover:bg-nilin-coral/10 rounded-lg transition-colors"
+                          title="Copy API key"
+                        >
+                          <Copy className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteApiKey(apiKey.id)}
+                          className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                          title="Delete API key"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between text-xs text-nilin-warmGray">
+                      <span className="font-mono">{apiKey.key.substring(0, 20)}...{apiKey.key.slice(-8)}</span>
+                      <span>Created: {new Date(apiKey.createdAt).toLocaleDateString()}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-nilin-warmGray text-center py-4">No API keys generated yet</p>
+            )}
+          </div>
+        </div>
+
+        {/* New API Key Modal */}
+        {showApiKeyModal && (
+          <div className="fixed inset-0 bg-nilin-charcoal/50 backdrop-blur-md flex items-center justify-center p-4 z-50">
+            <div className="glass glass-blur rounded-2xl max-w-md w-full shadow-nilin-lg inner-glow">
+              <div className="p-6">
+                <h3 className="text-lg font-serif text-nilin-charcoal mb-4">Generate API Key</h3>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-nilin-charcoal font-sans mb-1.5">
+                      Key Name
+                    </label>
+                    <TextInput
+                      value={newApiKeyName}
+                      onChange={setNewApiKeyName}
+                      placeholder="e.g., Production API, Development Key"
+                    />
+                  </div>
+                  <p className="text-xs text-nilin-warmGray font-sans">
+                    The API key will be shown once after generation. Make sure to copy and store it securely.
+                  </p>
+                </div>
+                <div className="flex justify-end gap-3 mt-6">
+                  <button
+                    onClick={() => {
+                      setShowApiKeyModal(false);
+                      setNewApiKeyName('');
+                    }}
+                    className="px-4 py-2 border border-nilin-border rounded-xl text-sm font-medium text-nilin-charcoal bg-white hover:bg-nilin-blush/50 font-sans transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleGenerateApiKey}
+                    disabled={isGeneratingKey || !newApiKeyName.trim()}
+                    className="inline-flex items-center px-4 py-2 bg-gradient-to-r from-nilin-rose to-nilin-coral text-white rounded-xl text-sm font-medium font-sans hover:shadow-nilin-warm transition-all disabled:opacity-50"
+                  >
+                    {isGeneratingKey ? (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    ) : (
+                      <Key className="h-4 w-4 mr-2" />
+                    )}
+                    Generate
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Newly Generated Key Modal */}
+        {newlyGeneratedKey && (
+          <div className="fixed inset-0 bg-nilin-charcoal/50 backdrop-blur-md flex items-center justify-center p-4 z-50">
+            <div className="glass glass-blur rounded-2xl max-w-md w-full shadow-nilin-lg inner-glow">
+              <div className="p-6">
+                <div className="flex items-center justify-center mb-4">
+                  <div className="w-12 h-12 rounded-full bg-green-100 flex items-center justify-center">
+                    <Check className="h-6 w-6 text-green-600" />
+                  </div>
+                </div>
+                <h3 className="text-lg font-serif text-nilin-charcoal text-center mb-2">API Key Generated</h3>
+                <p className="text-sm text-nilin-warmGray text-center mb-4 font-sans">
+                  Copy and save this key securely. It will not be shown again.
+                </p>
+                <div className="bg-nilin-blush/30 p-3 rounded-xl">
+                  <code className="text-xs font-mono break-all text-nilin-charcoal">{newlyGeneratedKey}</code>
+                </div>
+                <div className="flex justify-center gap-3 mt-6">
+                  <button
+                    onClick={() => {
+                      handleCopyApiKey(newlyGeneratedKey);
+                      setNewlyGeneratedKey(null);
+                    }}
+                    className="inline-flex items-center px-4 py-2 bg-gradient-to-r from-nilin-rose to-nilin-coral text-white rounded-xl text-sm font-medium font-sans hover:shadow-nilin-warm transition-all"
+                  >
+                    <Copy className="h-4 w-4 mr-2" />
+                    Copy & Close
+                  </button>
+                  <button
+                    onClick={() => setNewlyGeneratedKey(null)}
+                    className="px-4 py-2 border border-nilin-border rounded-xl text-sm font-medium text-nilin-charcoal bg-white hover:bg-nilin-blush/50 font-sans transition-colors"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
-    </div>
-  );
+    );
+  };
 
   // Render System Settings
   const renderSystemSettings = () => (
@@ -1820,6 +2573,7 @@ const AdminSettings: React.FC = () => {
     <PageLayout
       title="Settings"
       subtitle="Platform configuration"
+      backHref="/admin/dashboard"
       headerActions={
         <div className="flex items-center space-x-3">
           <button

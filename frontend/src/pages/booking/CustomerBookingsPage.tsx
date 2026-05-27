@@ -7,6 +7,7 @@ import Breadcrumb from '../../components/common/Breadcrumb';
 import BookingCard from '../../components/customer/BookingCard';
 import { useBookingStore } from '../../stores/bookingStore';
 import type { BookingFilters } from '../../services/BookingService';
+import { toast } from 'react-hot-toast';
 
 const CustomerBookingsPage: React.FC = () => {
   const navigate = useNavigate();
@@ -25,6 +26,7 @@ const CustomerBookingsPage: React.FC = () => {
   });
 
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
+  const [cancellingBookingId, setCancellingBookingId] = useState<string | null>(null);
 
   useEffect(() => {
     getCustomerBookings(filters);
@@ -44,9 +46,19 @@ const CustomerBookingsPage: React.FC = () => {
   };
 
   const handleCancelBooking = async (bookingId: string) => {
-    if (window.confirm('Are you sure you want to cancel this booking?')) {
+    if (!window.confirm('Are you sure you want to cancel this booking?')) {
+      return;
+    }
+
+    setCancellingBookingId(bookingId);
+    try {
       await cancelBooking(bookingId, { reason: 'Customer requested cancellation' });
+      toast.success('Booking cancelled successfully');
       getCustomerBookings(filters);
+    } catch (err: any) {
+      toast.error(err.response?.data?.message || 'Failed to cancel booking. Please try again.');
+    } finally {
+      setCancellingBookingId(null);
     }
   };
 
@@ -138,6 +150,7 @@ const CustomerBookingsPage: React.FC = () => {
                         ? () => handleCancelBooking(booking._id)
                         : undefined
                     }
+                    isCancelling={cancellingBookingId === booking._id}
                   />
                 ))}
               </div>

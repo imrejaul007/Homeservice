@@ -15,13 +15,13 @@ import routes from './routes';
 import { errorHandler } from './middleware/error.middleware';
 import { correlationIdMiddleware } from './middleware/correlationId.middleware';
 import {
-  helmetConfig,
-  mongoSanitizeConfig,
-  perUserRateLimiter,
-  strictRateLimiter,
-  securityHeaders,
-  uploadSizeLimit,
-} from './middleware/security.middleware';
+  healthCheckHandler,
+  livenessProbe,
+  readinessProbe,
+  circuitBreakerHeaders,
+  resetCircuitBreakers,
+} from './middleware/resilience.middleware';
+import { securityMiddleware, applyRateLimits, strictRateLimiter, perUserRateLimiter } from './middleware/security.middleware';
 import {
   sanitizeInput,
   blockAttackPatterns,
@@ -32,6 +32,10 @@ import {
   sentryErrorHandler,
 } from './config/sentry';
 import { checkRedisConnection } from './config/redis';
+import { featureFlagsMiddleware } from './services/featureFlags.service';
+import healthRoutes from './routes/health.routes';
+import swaggerUi from 'swagger-ui-express';
+import { swaggerSpec } from './config/swagger';
 
 // Load environment variables
 dotenv.config({ path: path.join(__dirname, '../.env') });
@@ -61,11 +65,8 @@ app.use((req, res, next) => {
   next();
 });
 
-// Security middleware - Helmet with strict CSP
-app.use(helmetConfig);
-
-// Additional security headers
-app.use(securityHeaders);
+// Security middleware
+app.use(securityMiddleware);
 
 // CORS configuration
 const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || [
@@ -99,10 +100,12 @@ const corsOptions = {
     'Authorization',
     'X-Requested-With',
     'X-Correlation-ID',
+    'x-correlation-id',
     'skipAuth',
     'skipauth',
     'x-csrf-token',
     'x-2fa-token',
+    'stripe-signature',
   ],
   exposedHeaders: [
     'X-Total-Count',
@@ -154,10 +157,17 @@ app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
 // Request size validation middleware
-app.use(uploadSizeLimit(5));
+app.use((req, _res, next) => {
+  const size = parseInt(req.headers['content-length'] || '0');
+  if (size > 5 * 1024 * 1024) {
+    req.headers['x-request-rejected'] = 'size-limit';
+  }
+  next();
+});
 
 // MongoDB sanitization (enhanced)
-app.use(mongoSanitizeConfig);
+import mongoSanitize from 'express-mongo-sanitize';
+app.use(mongoSanitize());
 
 // Sanitize user input
 app.use(sanitizeInput);
@@ -190,42 +200,8 @@ app.use('/api', globalLimiter);
 // Per-user rate limiting (stricter for authenticated users)
 app.use('/api', perUserRateLimiter);
 
-// Public health check endpoint (no rate limiting, no auth required)
-// Use this for load balancers, orchestrators, and health checks that need to work under load
-app.get('/health', async (_req: Request, res: Response) => {
-  try {
-    const mongoose = (await import('mongoose')).default;
-    const dbState = mongoose.connection.readyState;
-    const isConnected = dbState === 1;
-
-    if (!isConnected) {
-      res.status(503).json({
-        status: 'unhealthy',
-        timestamp: new Date().toISOString(),
-        checks: { database: 'disconnected' },
-      });
-      return;
-    }
-
-    // Ping the database to verify connection
-    await mongoose.connection.db?.admin().ping();
-
-    res.json({
-      status: 'healthy',
-      service: APP_CONSTANTS.APP_NAME,
-      timestamp: new Date().toISOString(),
-      uptime: process.uptime(),
-      environment: process.env.NODE_ENV,
-      version: APP_CONSTANTS.API_VERSION,
-    });
-  } catch {
-    res.status(503).json({
-      status: 'unhealthy',
-      timestamp: new Date().toISOString(),
-      error: 'Health check failed',
-    });
-  }
-});
+// Health routes (no rate limiting for basic checks)
+app.use('/', healthRoutes);
 
 // Health check endpoint (with strict rate limiting for detailed checks)
 app.get('/api/health', strictRateLimiter, (_req: Request, res: Response) => {
@@ -239,51 +215,16 @@ app.get('/api/health', strictRateLimiter, (_req: Request, res: Response) => {
   });
 });
 
-// Readiness check (for Kubernetes/Load Balancers)
-app.get('/health/ready', async (_req: Request, res: Response) => {
-  try {
-    const mongoose = (await import('mongoose')).default;
-    const dbState = mongoose.connection.readyState;
-    const isConnected = dbState === 1;
-    const redisHealthy = await checkRedisConnection();
+// Comprehensive resilience health check endpoints (no rate limiting)
+app.get('/health', healthCheckHandler);
+app.get('/health/live', livenessProbe);
+app.get('/health/ready', readinessProbe);
 
-    const checks = {
-      database: isConnected ? 'connected' : 'disconnected',
-      redis: redisHealthy ? 'connected' : 'disconnected',
-    };
+// Circuit breaker management endpoint
+app.post('/health/circuits/reset', resetCircuitBreakers);
 
-    const allHealthy = isConnected && redisHealthy;
-
-    if (!allHealthy) {
-      res.status(503).json({
-        status: 'unhealthy',
-        ready: false,
-        checks,
-      });
-      return;
-    }
-
-    res.json({
-      status: 'healthy',
-      ready: true,
-      checks,
-    });
-  } catch {
-    res.status(503).json({
-      status: 'unhealthy',
-      ready: false,
-      error: 'Health check failed',
-    });
-  }
-});
-
-// Liveness check
-app.get('/health/live', (_req: Request, res: Response) => {
-  res.json({
-    status: 'alive',
-    timestamp: new Date().toISOString(),
-  });
-});
+// Apply circuit breaker headers to all API responses
+app.use('/api', circuitBreakerHeaders);
 
 // Metrics endpoints
 import { getMetrics, getPrometheusMetrics } from './utils/metrics';
@@ -304,8 +245,18 @@ app.get('/api/test', (_req: Request, res: Response) => {
 import { checkMaintenanceMode } from './middleware/maintenance.middleware';
 app.use(checkMaintenanceMode);
 
+// Feature flags middleware
+app.use(featureFlagsMiddleware);
+
+// Tenant isolation middleware - MUST be before routes to add tenantId to all requests
+import { tenantMiddleware } from './middleware/tenant.middleware';
+app.use(tenantMiddleware);
+
 // API routes
 app.use('/api', routes);
+
+// Swagger documentation
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 // Static files (for uploaded content in development)
 if (process.env.NODE_ENV === 'development') {

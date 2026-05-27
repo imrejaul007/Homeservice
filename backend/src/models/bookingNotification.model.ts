@@ -358,6 +358,7 @@ const notificationSchema = new Schema<IBookingNotification>(
 notificationSchema.index({ recipientId: 1, status: 1 });
 notificationSchema.index({ type: 1, status: 1 });
 notificationSchema.index({ priority: 1, status: 1 });
+// Note: bookingId compound index removed - bookingId already indexed at field level
 
 // Scheduling and delivery
 notificationSchema.index({ scheduled: 1, scheduledFor: 1 });
@@ -370,11 +371,10 @@ notificationSchema.index({ 'channels.email.sent': 1 });
 notificationSchema.index({ 'channels.sms.deliveryStatus': 1 });
 
 // Cleanup and maintenance
-notificationSchema.index({ expiresAt: 1 });
+// Note: expiresAt TTL index already defined at field level
 
 // Composite indexes for complex queries
 notificationSchema.index({ recipientId: 1, type: 1, status: 1 });
-notificationSchema.index({ bookingId: 1, type: 1 });
 
 // ===================================
 // VIRTUAL PROPERTIES

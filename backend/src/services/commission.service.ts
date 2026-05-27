@@ -3,6 +3,7 @@ import { Commission, CommissionRule, ICommission, ICommissionRule, ICommissionTi
 import Booking from '../models/booking.model';
 import Service from '../models/service.model';
 import logger from '../utils/logger';
+import { taxService } from './taxService';
 
 // Commission calculation input
 export interface CommissionCalculationInput {
@@ -11,7 +12,9 @@ export interface CommissionCalculationInput {
   serviceId: string | Types.ObjectId;
   grossAmount: number;
   discountAmount?: number;
+  taxAmount?: number;
   categoryId?: string | Types.ObjectId;
+  region?: string;
 }
 
 // Commission calculation result
@@ -231,7 +234,20 @@ export class CommissionService {
       // Calculate commission amounts
       const grossAmount = input.grossAmount;
       const discountAmount = input.discountAmount || 0;
-      const netAmount = Math.max(0, grossAmount - discountAmount);
+      const providedTaxAmount = input.taxAmount || 0;
+
+      // Calculate tax on commission using taxService (for UAE VAT, KSA VAT, etc.)
+      const region = input.region || 'AE';
+      const commissionTaxResult = await taxService.calculateCommissionTax(
+        grossAmount - discountAmount,
+        providerId,
+        region
+      );
+      const taxAmount = Math.max(providedTaxAmount, commissionTaxResult.taxAmount);
+
+      // Net amount after discount and tax (commission is calculated on pre-tax amount)
+      const taxableAmount = Math.max(0, grossAmount - discountAmount - taxAmount);
+      const netAmount = taxableAmount;
 
       let commissionRate: number;
       let commissionAmount: number;
@@ -246,7 +262,7 @@ export class CommissionService {
         ruleType = rule.type;
 
         if (rule.type === 'tiered' && rule.tiers && rule.tiers.length > 0) {
-          const tierResult = this.calculateTieredRate(rule.tiers, netAmount);
+          const tierResult = this.calculateTieredRate(rule.tiers, taxableAmount);
           tierApplied = tierResult ?? undefined;
           commissionRate = tierApplied?.rate || rule.rate || DEFAULT_COMMISSION_RATE;
         } else {
@@ -257,7 +273,9 @@ export class CommissionService {
         if (rule.commissionType === 'flat' && rule.flatAmount) {
           commissionAmount = rule.flatAmount;
         } else {
-          commissionAmount = rule.appliesTo === 'gross' ? grossAmount * (commissionRate / 100) : netAmount * (commissionRate / 100);
+          commissionAmount = rule.appliesTo === 'gross'
+            ? grossAmount * (commissionRate / 100)
+            : taxableAmount * (commissionRate / 100);
         }
       } else {
         // Use default commission rate
@@ -265,16 +283,16 @@ export class CommissionService {
         ruleName = 'Default Commission';
         ruleType = 'standard';
         commissionRate = DEFAULT_COMMISSION_RATE;
-        commissionAmount = netAmount * (DEFAULT_COMMISSION_RATE / 100);
+        commissionAmount = taxableAmount * (DEFAULT_COMMISSION_RATE / 100);
       }
 
       // Calculate platform and processing fees
       const platformFee = rule?.type === 'promotional' ? 0 : DEFAULT_PLATFORM_FEE;
-      const paymentProcessingFee = netAmount * (DEFAULT_PAYMENT_PROCESSING_FEE_PERCENT / 100);
+      const paymentProcessingFee = taxableAmount * (DEFAULT_PAYMENT_PROCESSING_FEE_PERCENT / 100);
 
       // Calculate total deductions and provider earnings
       const totalDeductions = commissionAmount + platformFee + paymentProcessingFee;
-      const providerEarnings = Math.max(0, netAmount - totalDeductions);
+      const providerEarnings = Math.max(0, grossAmount - discountAmount - taxAmount - totalDeductions);
 
       // Get category name
       let categoryName = 'Uncategorized';
@@ -317,6 +335,7 @@ export class CommissionService {
         commissionAmount,
         platformFee,
         paymentProcessingFee,
+        taxAmount,
         totalDeductions,
         providerEarnings,
         ruleId,
@@ -395,6 +414,7 @@ export class CommissionService {
           serviceId: booking.serviceId,
           grossAmount: booking.pricing.totalAmount,
           discountAmount: (booking.pricing as any).couponDiscount || 0,
+          taxAmount: (booking.pricing as any).tax || 0,
         };
 
         // Try to get category from service

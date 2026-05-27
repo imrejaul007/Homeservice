@@ -1,0 +1,43 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: nilin-api-pdb
+  namespace: nilin
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: nilin-api
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: nilin-frontend-pdb
+  namespace: nilin
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: nilin-frontend
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: nilin-mongodb-pdb
+  namespace: nilin
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: nilin-mongodb
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: nilin-redis-pdb
+  namespace: nilin
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: nilin-redis

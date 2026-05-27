@@ -37,7 +37,7 @@ export interface IStylist extends Document {
 }
 
 const stylistSchema = new Schema({
-  providerId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+  providerId: { type: Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
   portfolio: {
     images: [String],
     specialties: [String],
@@ -58,6 +58,9 @@ const stylistSchema = new Schema({
     maxTravelDistance: { type: Number, default: 10 },
   },
 });
+
+// Unique index on providerId
+stylistSchema.index({ providerId: 1 }, { unique: true });
 
 export const Stylist = mongoose.model<IStylist>('Stylist', stylistSchema);
 export default Stylist;

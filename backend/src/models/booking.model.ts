@@ -1,6 +1,9 @@
 import mongoose, { Document, Schema, Model } from 'mongoose';
 
 export interface IBooking extends Document {
+  // Multi-tenant
+  tenantId?: mongoose.Types.ObjectId;
+
   // Core Booking Information
   _id: mongoose.Types.ObjectId;
   bookingNumber: string; // Unique booking reference (e.g., "RZ-20240117-001")
@@ -23,14 +26,14 @@ export interface IBooking extends Document {
   estimatedEndTime: Date;
 
   // New Booking Flow Fields
-  locationType: 'at_home' | 'hotel';
+  locationType: 'at_home' | 'at_provider' | 'at_hotel';
   selectedDuration: number; // User-selected duration from service options
   professionalPreference: 'male' | 'female' | 'no_preference';
   paymentMethod: 'apple_pay' | 'credit_card' | 'cash';
 
   // Location Information
   location: {
-    type: 'customer_address' | 'provider_location' | 'online';
+    type: 'customer_address' | 'provider_location' | 'hotel';
     address: {
       street: string;
       city: string;
@@ -121,7 +124,7 @@ export interface IBooking extends Document {
 
   // Payment Integration (for future payment system)
   payment: {
-    status: 'pending' | 'paid' | 'refunded' | 'failed';
+    status: 'pending' | 'completed' | 'refunded' | 'failed';
     method?: string; // 'card', 'cash', 'digital_wallet'
     transactionId?: string;
     paidAt?: Date;
@@ -169,6 +172,13 @@ export interface IBooking extends Document {
 
 const bookingSchema = new Schema<IBooking>(
   {
+    // Multi-tenant
+    tenantId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Tenant',
+      index: true
+    },
+
     bookingNumber: {
       type: String,
       unique: true,
@@ -179,7 +189,6 @@ const bookingSchema = new Schema<IBooking>(
     customerId: {
       type: Schema.Types.ObjectId,
       ref: 'User',
-      index: true,
       default: null
     },
 
@@ -501,7 +510,7 @@ const bookingSchema = new Schema<IBooking>(
     payment: {
       status: {
         type: String,
-        enum: ['pending', 'paid', 'refunded', 'failed'],
+        enum: ['pending', 'completed', 'refunded', 'failed'],
         default: 'pending'
       },
       method: String,
@@ -587,8 +596,7 @@ bookingSchema.index({ 'location.address.coordinates': '2dsphere' });
 
 // Time-based queries
 bookingSchema.index({ scheduledDate: 1, status: 1 });
-bookingSchema.index({ createdAt: -1 }); // For newest first
-bookingSchema.index({ updatedAt: -1 }); // For recently updated
+// createdAt and updatedAt indexes defined below (customerId: 1, createdAt: -1 already covers createdAt)
 
 // Payment and completion tracking
 bookingSchema.index({ 'payment.status': 1 });
@@ -610,6 +618,14 @@ bookingSchema.index({ status: 1, createdAt: -1 });
 // Provider analytics: get completed bookings by provider with status filter
 // Supports queries like: find completed bookings for provider X in last 30 days
 bookingSchema.index({ providerId: 1, status: 1, completedAt: -1 });
+
+// Service analytics: get bookings by service with status filter, sorted by creation date
+// Supports queries like: find all bookings for service X, newest first
+bookingSchema.index({ serviceId: 1, status: 1, createdAt: -1 });
+
+// Customer dashboard: get bookings by customer sorted by creation date
+// Supports queries like: find all bookings for customer X, newest first
+bookingSchema.index({ customerId: 1, createdAt: -1 });
 
 // Customer dashboard: get bookings by customer with status filter, sorted by creation date
 // Supports queries like: find all pending bookings for customer X, newest first
@@ -641,7 +657,17 @@ bookingSchema.index({
 
 // Delta sync support index - efficiently find recently updated bookings for a user
 // Supports: delta sync queries for mobile app offline support
-bookingSchema.index({ updatedAt: -1 });
+// Note: updatedAt index moved to tenant-scoped index below for efficiency
+
+// ===================================
+// TENANT ISOLATION INDEXES (CRITICAL for multi-tenancy)
+// ===================================
+// These compound indexes ensure efficient tenant-scoped queries
+bookingSchema.index({ tenantId: 1, customerId: 1, status: 1 });
+bookingSchema.index({ tenantId: 1, providerId: 1, status: 1 });
+bookingSchema.index({ tenantId: 1, createdAt: -1 });
+bookingSchema.index({ tenantId: 1, status: 1, createdAt: -1 });
+bookingSchema.index({ tenantId: 1, scheduledDate: 1, status: 1 });
 
 // ===================================
 // VIRTUAL PROPERTIES
@@ -840,35 +866,10 @@ bookingSchema.methods.markAsCompleted = async function(): Promise<void> {
     }
   );
 
-  // Integrate with loyalty system - award points to customer
-  try {
-    const User = mongoose.model('User');
-    const pointsEarned = Math.floor(this.pricing.totalAmount * 0.01); // 1% of booking value as points
-
-    await User.findByIdAndUpdate(
-      this.customerId,
-      {
-        $inc: {
-          'loyaltySystem.coins': pointsEarned,
-          'loyaltySystem.totalEarned': pointsEarned
-        },
-        $push: {
-          'loyaltySystem.pointsHistory': {
-            type: 'earned',
-            amount: pointsEarned,
-            description: `Points earned from booking ${this.bookingNumber}`,
-            date: new Date(),
-            relatedBooking: this._id
-          }
-        }
-      }
-    );
-
-    console.log(`Awarded ${pointsEarned} loyalty points to customer ${this.customerId} for booking ${this.bookingNumber}`);
-  } catch (error) {
-    console.error('Error awarding loyalty points:', error);
-    // Don't fail the booking completion if loyalty points fail
-  }
+  // NOTE: Loyalty points are now awarded via the queue system (loyalty-queue)
+  // in event-bus/index.ts for booking completion events.
+  // This ensures transactional consistency and proper tier multipliers.
+  // See: award_booking_points job handler in workers.ts
 };
 
 // Send notification (placeholder for notification service integration)

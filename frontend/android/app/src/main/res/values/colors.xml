@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- NILIN Brand Colors -->
+    <color name="colorPrimary">#E8B4A8</color>
+    <color name="colorPrimaryDark">#D4A89A</color>
+    <color name="colorAccent">#2D2D2D</color>
+
+    <!-- NILIN Design System -->
+    <color name="nilin_blush">#F5E6E0</color>
+    <color name="nilin_peach">#FAE5E0</color>
+    <color name="nilin_cream">#FDFBF9</color>
+    <color name="nilin_rose">#D4A89A</color>
+    <color name="nilin_coral">#E8B4A8</color>
+    <color name="nilin_charcoal">#2D2D2D</color>
+    <color name="nilin_warmGray">#6B6B6B</color>
+    <color name="nilin_success">#7BA889</color>
+    <color name="nilin_error">#D4A89A</color>
+
+    <!-- Splash Screen -->
+    <color name="splash_background">#F5E6E0</color>
+
+    <!-- Status Bar -->
+    <color name="status_bar_color">#2D2D2D</color>
+
+    <!-- Notification Color (NILIN brand #E8B4A8) -->
+    <color name="notification_color">#FFE8B4A8</color>
+</resources>

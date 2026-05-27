@@ -1,0 +1,40 @@
+global:
+  resolve_timeout: 5m
+  smtp_smarthost: "smtp.example.com:587"
+  smtp_from: "alerts@nilin.app"
+  smtp_auth_username: "alerts@nilin.app"
+  smtp_auth_password: "${SMTP_PASSWORD}"
+
+route:
+  group_by: ['alertname', 'severity']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: 'email-and-slack'
+  routes:
+    - match:
+        severity: critical
+      receiver: 'pagerduty'
+      continue: true
+    - match:
+        team: payments
+      receiver: 'payments-slack'
+      continue: true
+
+receivers:
+  - name: 'email-and-slack'
+    email_configs:
+      - to: "oncall@nilin.app"
+        send_resolved: true
+    slack_configs:
+      - channel: '#alerts'
+        send_resolved: true
+
+  - name: 'pagerduty'
+    pagerduty_configs:
+      - service_key: "${PAGERDUTY_KEY}"
+        severity: critical
+
+  - name: 'payments-slack'
+    slack_configs:
+      - channel: '#payments-alerts'

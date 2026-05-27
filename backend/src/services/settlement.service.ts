@@ -225,7 +225,7 @@ export const generateSettlement = async (
     providerId: providerObjectId,
     status: 'completed',
     completedAt: { $gte: periodStart, $lte: periodEnd },
-    'payment.status': 'paid',
+    'payment.status': 'completed',
   });
 
   if (bookings.length === 0) {
@@ -325,7 +325,7 @@ export const generateBulkSettlements = async (
       $match: {
         status: 'completed',
         completedAt: { $gte: periodStart, $lte: periodEnd },
-        'payment.status': 'paid',
+        'payment.status': 'completed',
       },
     },
     {

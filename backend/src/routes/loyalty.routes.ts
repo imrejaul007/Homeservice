@@ -31,4 +31,9 @@ router.post('/redeem',
   loyaltyController.redeemPoints
 );
 
+// Expire old points (internal/system endpoint for scheduler)
+router.post('/expire-old-points',
+  loyaltyController.expireOldPoints
+);
+
 export default router;

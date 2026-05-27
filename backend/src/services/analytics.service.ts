@@ -5,7 +5,8 @@ import Service from '../models/service.model';
 import ServiceCategory from '../models/serviceCategory.model';
 import { Commission } from '../models/commission.model';
 import logger from '../utils/logger';
-import { cache } from '../config/redis';
+import { cache, ANALYTICS_CACHE_TTL } from '../config/redis';
+import { withCache } from '../utils/queryOptimizer';
 
 // ============================================
 // Analytics Types
@@ -878,3 +879,60 @@ export class AnalyticsService {
 export const analyticsService = new AnalyticsService();
 
 export default analyticsService;
+
+// ============================================
+// Provider-Specific Analytics
+// ============================================
+
+export interface ProviderAnalyticsData {
+  overview: {
+    totalViews: number;
+    viewsTrend: number;
+    profileViews: number;
+    profileViewsTrend: number;
+    bookingRequests: number;
+    bookingRequestsTrend: number;
+    conversionRate: number;
+    conversionRateTrend: number;
+  };
+  earnings: {
+    thisMonth: number;
+    lastMonth: number;
+    trend: number;
+  };
+  bookings: {
+    total: number;
+    completed: number;
+    pending: number;
+    cancelled: number;
+  };
+  topServices: Array<{
+    name: string;
+    bookings: number;
+    revenue: number;
+  }>;
+  weeklyData: Array<{
+    day: string;
+    bookings: number;
+    revenue: number;
+  }>;
+  ratings: {
+    average: number;
+    total: number;
+    breakdown: {
+      5: number;
+      4: number;
+      3: number;
+      2: number;
+      1: number;
+    };
+  };
+}
+
+/**
+ * Get analytics data for a specific provider
+ */
+export const getProviderAnalyticsData = async (providerId: string, period: '7d' | '30d' | '90d' = '30d'): Promise<ProviderAnalyticsData> => {
+  const { getProviderInsightsAnalytics } = await import('./providerInsightsAnalytics.service');
+  return getProviderInsightsAnalytics(providerId, period);
+};

@@ -693,12 +693,14 @@ export class BusinessIntelligenceService {
       const rating = avgRating[0]?.avgRating || 0;
 
       return {
-        marketShare: 0.15, // Would require market data
-        marketRank: 3,
-        averageRatingVsCompetitors: rating - 4.2, // Assumed competitor average
-        pricePosition: 'mid_market',
-        serviceCoverage: (totalProviders / 100) * 100, // Percentage of target coverage
-        geographicPenetration: 45, // Percentage of target markets
+        // FIX: Removed hardcoded placeholder values
+        // These metrics require actual market data and competitive analysis
+        marketShare: 0, // Requires external market data
+        marketRank: 0, // Requires competitive benchmarking
+        averageRatingVsCompetitors: 0, // Requires competitor data collection
+        pricePosition: 'mid_market', // Can be calculated from pricing data
+        serviceCoverage: (totalProviders / 100) * 100, // Valid calculation
+        geographicPenetration: 0, // Requires location analytics implementation
       };
     }, this.CACHE_TTL.LONG);
   }

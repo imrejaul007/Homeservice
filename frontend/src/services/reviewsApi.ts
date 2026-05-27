@@ -7,8 +7,10 @@ export interface Review {
   comment: string;
   photos?: string[];
   isVerified: boolean;
+  helpfulVotes?: number;
   createdAt: string;
   customer?: { id: string; firstName: string; lastName: string; avatar?: string };
+  service?: { id: string; name: string };
 }
 
 interface ReviewsResponse {

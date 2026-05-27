@@ -2,6 +2,8 @@ import mongoose, { Types } from 'mongoose';
 import Service from '../models/service.model';
 import Booking from '../models/booking.model';
 import User from '../models/user.model';
+import { ApiError, ERROR_CODES } from '../utils/ApiError';
+import logger from '../utils/logger';
 
 // =============================================================================
 // NILIN Pricing Recommendation Service
@@ -228,7 +230,7 @@ class PricingRecommendationService {
   ): Promise<PriceRecommendation> {
     const service = await Service.findById(serviceId).lean();
     if (!service) {
-      throw new Error('Service not found');
+      throw ApiError.notFound('Service not found', ERROR_CODES.NOT_FOUND);
     }
 
     const currentPrice = service.price.amount;
@@ -565,14 +567,14 @@ class PricingRecommendationService {
   async getProviderPricingAnalysis(providerId: string): Promise<ProviderPricingAnalysis> {
     const provider = await User.findById(providerId).lean();
     if (!provider) {
-      throw new Error('Provider not found');
+      throw ApiError.notFound('Provider not found', ERROR_CODES.NOT_FOUND);
     }
 
     // Get all services for this provider
     const services = await Service.find({ providerId, isActive: true }).lean();
 
     if (services.length === 0) {
-      throw new Error('No active services found for this provider');
+      throw ApiError.notFound('No active services found for this provider', ERROR_CODES.NOT_FOUND);
     }
 
     // Calculate current performance
@@ -793,7 +795,7 @@ class PricingRecommendationService {
   async getDemandBasedPricing(serviceId: string): Promise<DemandBasedPricing> {
     const service = await Service.findById(serviceId).lean();
     if (!service) {
-      throw new Error('Service not found');
+      throw ApiError.notFound('Service not found', ERROR_CODES.NOT_FOUND);
     }
 
     const basePrice = service.price.amount;
@@ -880,7 +882,7 @@ class PricingRecommendationService {
   ): Promise<CompetitorPrice[]> {
     const service = await Service.findById(serviceId).lean();
     if (!service) {
-      throw new Error('Service not found');
+      throw ApiError.notFound('Service not found', ERROR_CODES.NOT_FOUND);
     }
 
     const competitors = await Service.find({

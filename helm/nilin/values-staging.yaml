@@ -1,0 +1,96 @@
+global:
+  imageRegistry: nilin
+  imageTag: staging
+
+namespace: nilin-staging
+environment: staging
+
+replicas:
+  api: 2
+  worker: 1
+  scheduler: 1
+  frontend: 2
+
+ingress:
+  enabled: true
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+  hosts:
+    - host: staging.nilin.io
+      paths:
+        - path: /api
+          pathType: Prefix
+          service: api
+        - path: /
+          pathType: Prefix
+          service: frontend
+
+autoscaling:
+  enabled: true
+  api:
+    minReplicas: 2
+    maxReplicas: 10
+  worker:
+    minReplicas: 1
+    maxReplicas: 5
+  frontend:
+    minReplicas: 2
+    maxReplicas: 8
+
+resources:
+  api:
+    requests:
+      cpu: 200m
+      memory: 384Mi
+    limits:
+      cpu: 750m
+      memory: 768Mi
+  worker:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  frontend:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 300m
+      memory: 384Mi
+
+logging:
+  level: info
+
+monitoring:
+  enabled: true
+  sentry:
+    sampleRate: 0.5
+    tracesSampleRate: 0.5
+
+mongodb:
+  replicaCount: 2
+  persistence:
+    size: 20Gi
+
+redis:
+  replicaCount: 2
+  persistence:
+    size: 2Gi
+
+prometheus:
+  enabled: true
+  server:
+    retention: 7d
+    persistentVolume:
+      size: 20Gi
+
+grafana:
+  enabled: true
+
+loki:
+  enabled: true
+  persistence:
+    size: 10Gi

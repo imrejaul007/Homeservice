@@ -368,7 +368,7 @@ export const processPayout = async (payoutId: string): Promise<ProcessPayoutResu
         await payout.markAsCompleted(undefined);
         return { success: true, payoutId: payout._id.toString() };
       } else {
-        throw new Error(result.error || 'Wallet credit failed');
+        throw ApiError.internal(result.error || 'Wallet credit failed');
       }
     } else {
       // Bank transfer via Stripe
@@ -383,7 +383,7 @@ export const processPayout = async (payoutId: string): Promise<ProcessPayoutResu
           stripePayoutId: stripePayout.id,
         };
       } else {
-        throw new Error('Stripe payout creation failed');
+        throw ApiError.internal('Stripe payout creation failed');
       }
     }
   } catch (error: any) {

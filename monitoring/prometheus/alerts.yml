@@ -1,0 +1,90 @@
+groups:
+  - name: nilin-api
+    rules:
+      # API Availability
+      - alert: APIHighErrorRate
+        expr: |
+          sum(rate(http_requests_total{status=~"5.."}[5m]))
+          / sum(rate(http_requests_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High API error rate"
+          description: "API error rate is {{ $value | humanizePercentage }}"
+
+      - alert: APIHighLatency
+        expr: |
+          histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High API latency"
+          description: "p99 latency is {{ $value }}s"
+
+      # Booking Metrics
+      - alert: NoBookingsCreated
+        expr: |
+          increase(bookings_total{status="created"}[1h]) == 0
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "No bookings in the last hour"
+          description: "No new bookings have been created in the past hour"
+
+      # Queue Health
+      - alert: QueueBacklog
+        expr: |
+          sum(queue_jobs_total{status="pending"}) > 100
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Queue backlog growing"
+          description: "{{ $value }} pending jobs in queue"
+
+      - alert: QueueJobFailures
+        expr: |
+          sum(rate(queue_jobs_total{status="failed"}[15m]))
+          / sum(rate(queue_jobs_total[15m])) > 0.1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High queue job failure rate"
+          description: "More than 10% of queue jobs are failing"
+
+      # Payment Health
+      - alert: PaymentFailureRate
+        expr: |
+          sum(rate(payments_total{status="failed"}[5m]))
+          / sum(rate(payments_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High payment failure rate"
+          description: "Payment failure rate is {{ $value | humanizePercentage }}"
+
+      # Infrastructure
+      - alert: HighMemoryUsage
+        expr: |
+          (container_memory_usage_bytes / container_spec_memory_limit_bytes) > 0.85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage"
+          description: "Memory usage is at {{ $value | humanizePercentage }}"
+
+      - alert: PodNotReady
+        expr: |
+          kube_pod_status_ready{condition="true"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Pod not ready"
+          description: "Pod {{ $labels.pod }} has been not ready for 5 minutes"

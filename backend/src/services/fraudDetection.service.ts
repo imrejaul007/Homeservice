@@ -378,20 +378,24 @@ export class FraudDetectionService {
 
     for (const pattern of patterns) {
       score += patternWeights[pattern.id] || 10;
+      // FIX: Cap at 100 after each addition
+      if (score > 100) score = 100;
     }
 
-    // Add severity multipliers
+    // Add severity multipliers (FIX: Apply additively, not multiplicatively)
     for (const activity of activities) {
-      const severityMultiplier: Record<string, number> = {
-        'low': 1,
-        'medium': 1.5,
-        'high': 2,
-        'critical': 3,
+      const severityBonus: Record<string, number> = {
+        'low': 5,
+        'medium': 10,
+        'high': 20,
+        'critical': 35,
       };
-      score *= severityMultiplier[activity.severity] || 1;
+      score += severityBonus[activity.severity] || 0;
+      // FIX: Cap at 100 after each addition
+      if (score > 100) score = 100;
     }
 
-    return Math.min(100, Math.round(score));
+    return Math.round(score);
   }
 
   /**

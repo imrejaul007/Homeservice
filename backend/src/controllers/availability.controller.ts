@@ -1,7 +1,55 @@
 import { Request, Response } from 'express';
 import ProviderProfile from '../models/providerProfile.model';
+import User from '../models/user.model';
 import Booking from '../models/booking.model';
 import { asyncHandler } from '../utils/asyncHandler';
+import { REGIONS } from '../services/region.service';
+import logger from '../utils/logger';
+
+// Helper function to get provider's timezone
+async function getProviderTimezone(providerId: string): Promise<string> {
+  try {
+    const user = await User.findById(providerId).select('communicationPreferences.timezone').lean();
+    if (user?.communicationPreferences?.timezone) {
+      return user.communicationPreferences.timezone;
+    }
+  } catch (error) {
+    logger.error('Error fetching user timezone', {
+      context: 'AvailabilityController',
+      action: 'FETCH_TIMEZONE_ERROR',
+      providerId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  // Fallback: try to get timezone from provider profile's country
+  try {
+    const providerProfile = await ProviderProfile.findOne({ userId: providerId }).select('locationInfo.primaryAddress.country').lean();
+    if (providerProfile?.locationInfo?.primaryAddress?.country) {
+      const country = providerProfile.locationInfo.primaryAddress.country.toUpperCase();
+      // Map country to region timezone
+      const countryToRegion: Record<string, string> = {
+        'AE': 'UAE', 'UNITED ARAB EMIRATES': 'UAE',
+        'SA': 'KSA', 'SAUDI ARABIA': 'KSA',
+        'IN': 'INDIA', 'INDIA': 'INDIA',
+        'GB': 'UK', 'UK': 'UK', 'UNITED KINGDOM': 'UK',
+      };
+      const regionCode = countryToRegion[country];
+      if (regionCode && REGIONS[regionCode]) {
+        return REGIONS[regionCode].timezone;
+      }
+    }
+  } catch (error) {
+    logger.error('Error fetching provider country for timezone', {
+      context: 'AvailabilityController',
+      action: 'FETCH_COUNTRY_ERROR',
+      providerId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  return 'UTC'; // Default fallback
+}
 
 // Transform old availability format to new provider profile format
 const transformToProviderProfile = (oldWeeklySchedule: any) => {
@@ -91,29 +139,37 @@ export const getProviderAvailability = asyncHandler(async (req: Request, res: Re
   let providerProfile = await ProviderProfile.findOne({ userId: req.user?._id });
 
   if (!providerProfile) {
-    providerProfile = new ProviderProfile({
-      userId: req.user?._id,
-      availability: {
-        schedule: createDefaultSchedule(),
-        exceptions: [],
-        bufferTime: 15,
-        maxAdvanceBooking: 30,
-        minNoticeTime: 24,
-        autoAcceptBookings: false
-      }
+    return res.status(404).json({
+      success: false,
+      message: 'Provider profile not found. Complete profile setup first.'
     });
-    await providerProfile.save();
   } else if (!providerProfile.availability || !providerProfile.availability.schedule) {
-    providerProfile.availability = {
-      schedule: createDefaultSchedule(),
-      exceptions: [],
-      bufferTime: 15,
-      maxAdvanceBooking: 30,
-      minNoticeTime: 24,
-      autoAcceptBookings: false
-    };
-    await providerProfile.save();
+    providerProfile = await ProviderProfile.findByIdAndUpdate(
+      providerProfile._id,
+      {
+        $set: {
+          availability: {
+            schedule: createDefaultSchedule(),
+            exceptions: [],
+            bufferTime: 15,
+            maxAdvanceBooking: 30,
+            minNoticeTime: 24,
+            autoAcceptBookings: false
+          }
+        }
+      },
+      { new: true }
+    );
   }
+  if (!providerProfile) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to initialize availability settings'
+    });
+  }
+
+  // Get provider's timezone dynamically
+  const providerTimezone = await getProviderTimezone(req.user?._id?.toString() || '');
 
   const legacyAvailability = {
     _id: providerProfile._id,
@@ -123,14 +179,15 @@ export const getProviderAvailability = asyncHandler(async (req: Request, res: Re
       date: exception.date,
       isAvailable: exception.type !== 'unavailable',
       reason: exception.reason,
-      notes: exception.reason,
+      notes: exception.notes,
       createdAt: exception.date
     })),
     blockedPeriods: [],
-    timezone: 'Asia/Kolkata',
+    timezone: providerTimezone,
     bufferTime: providerProfile.availability.bufferTime,
     autoAcceptBookings: providerProfile.availability.autoAcceptBookings,
-    maxAdvanceBookingDays: providerProfile.availability.maxAdvanceBooking
+    maxAdvanceBookingDays: providerProfile.availability.maxAdvanceBooking,
+    minNoticeTime: providerProfile.availability.minNoticeTime
   };
 
   return res.json({
@@ -156,52 +213,62 @@ export const updateWeeklySchedule = asyncHandler(async (req: Request, res: Respo
     });
   }
 
-  let providerProfile = await ProviderProfile.findOne({ userId: req.user?._id });
-
+  const providerProfile = await ProviderProfile.findOne({ userId: req.user?._id });
   if (!providerProfile) {
-    providerProfile = new ProviderProfile({
-      userId: req.user?._id,
-      availability: {
-        schedule: transformToProviderProfile(weeklySchedule),
-        exceptions: [],
-        bufferTime: 15,
-        maxAdvanceBooking: 30,
-        minNoticeTime: 24,
-        autoAcceptBookings: false
-      }
+    return res.status(404).json({
+      success: false,
+      message: 'Provider profile not found. Complete profile setup first.'
     });
-  } else {
-    if (!providerProfile.availability) {
-      providerProfile.availability = {
-        schedule: {},
-        exceptions: [],
-        bufferTime: 15,
-        maxAdvanceBooking: 30,
-        minNoticeTime: 24,
-        autoAcceptBookings: false
-      };
-    }
-    providerProfile.availability.schedule = transformToProviderProfile(weeklySchedule);
   }
 
-  await providerProfile.save();
+  const availabilityBase = providerProfile.availability || {
+    schedule: createDefaultSchedule(),
+    exceptions: [],
+    bufferTime: 15,
+    maxAdvanceBooking: 30,
+    minNoticeTime: 24,
+    autoAcceptBookings: false
+  };
+
+  const updatedProfile = await ProviderProfile.findByIdAndUpdate(
+    providerProfile._id,
+    {
+      $set: {
+        availability: {
+          ...availabilityBase,
+          schedule: transformToProviderProfile(weeklySchedule)
+        }
+      }
+    },
+    { new: true }
+  );
+  if (!updatedProfile) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update weekly schedule'
+    });
+  }
+
+  // Get provider's timezone dynamically
+  const providerTimezone = await getProviderTimezone(req.user?._id?.toString() || '');
 
   const legacyAvailability = {
-    _id: providerProfile._id,
-    providerId: providerProfile.userId,
-    weeklySchedule: transformToLegacyFormat(providerProfile.availability.schedule),
-    dateOverrides: providerProfile.availability.exceptions.map(exception => ({
+    _id: updatedProfile!._id,
+    providerId: updatedProfile!.userId,
+    weeklySchedule: transformToLegacyFormat(updatedProfile!.availability.schedule),
+    dateOverrides: updatedProfile!.availability.exceptions.map(exception => ({
       date: exception.date,
       isAvailable: exception.type !== 'unavailable',
       reason: exception.reason,
-      notes: exception.reason,
+      notes: exception.notes,
       createdAt: exception.date
     })),
     blockedPeriods: [],
-    timezone: 'Asia/Kolkata',
-    bufferTime: providerProfile.availability.bufferTime,
-    autoAcceptBookings: providerProfile.availability.autoAcceptBookings,
-    maxAdvanceBookingDays: providerProfile.availability.maxAdvanceBooking
+    timezone: providerTimezone,
+    bufferTime: updatedProfile!.availability.bufferTime,
+    autoAcceptBookings: updatedProfile!.availability.autoAcceptBookings,
+    maxAdvanceBookingDays: updatedProfile!.availability.maxAdvanceBooking,
+    minNoticeTime: updatedProfile!.availability.minNoticeTime
   };
 
   return res.json({
@@ -237,17 +304,41 @@ export const addDateOverride = asyncHandler(async (req: Request, res: Response) 
     });
   }
 
+  // Normalize date to YYYY-MM-DD for comparison (handles both ISO strings and date strings)
+  const normalizeDateString = (d: Date): string => {
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  const normalizedInputDate = date.split('T')[0]; // Handle both "2024-01-15" and ISO strings
+
   providerProfile.availability.exceptions = providerProfile.availability.exceptions.filter(
-    exception => exception.date.toISOString().split('T')[0] !== date
+    exception => normalizeDateString(exception.date) !== normalizedInputDate
   );
 
   providerProfile.availability.exceptions.push({
     date: new Date(date),
     type: isAvailable === false ? 'unavailable' : 'custom_hours',
-    reason: reason || (isAvailable === false ? 'Unavailable' : 'Custom hours')
+    reason: reason || (isAvailable === false ? 'Unavailable' : 'Custom hours'),
+    notes: req.body.notes || undefined
   });
 
-  await providerProfile.save();
+  providerProfile = await ProviderProfile.findByIdAndUpdate(
+    providerProfile._id,
+    { $set: { availability: providerProfile.availability } },
+    { new: true }
+  );
+  if (!providerProfile) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to save date override'
+    });
+  }
+
+  // Get provider's timezone dynamically
+  const providerTimezone = await getProviderTimezone(req.user?._id?.toString() || '');
 
   const legacyAvailability = {
     _id: providerProfile._id,
@@ -257,14 +348,15 @@ export const addDateOverride = asyncHandler(async (req: Request, res: Response) 
       date: exception.date,
       isAvailable: exception.type !== 'unavailable',
       reason: exception.reason,
-      notes: exception.reason,
+      notes: exception.notes,
       createdAt: exception.date
     })),
     blockedPeriods: [],
-    timezone: 'Asia/Kolkata',
+    timezone: providerTimezone,
     bufferTime: providerProfile.availability.bufferTime,
     autoAcceptBookings: providerProfile.availability.autoAcceptBookings,
-    maxAdvanceBookingDays: providerProfile.availability.maxAdvanceBooking
+    maxAdvanceBookingDays: providerProfile.availability.maxAdvanceBooking,
+    minNoticeTime: providerProfile.availability.minNoticeTime
   };
 
   return res.json({
@@ -293,11 +385,35 @@ export const removeDateOverride = asyncHandler(async (req: Request, res: Respons
     });
   }
 
+  // Normalize date to YYYY-MM-DD for comparison (handle both formats)
+  const normalizeDateString = (d: Date): string => {
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  // Handle both "2024-01-15" and "2024-01-15T00:00:00.000Z" formats from params
+  const normalizedParamDate = date.split('T')[0];
+
   providerProfile.availability.exceptions = providerProfile.availability.exceptions.filter(
-    exception => exception.date.toISOString().split('T')[0] !== date
+    exception => normalizeDateString(exception.date) !== normalizedParamDate
   );
 
-  await providerProfile.save();
+  providerProfile = await ProviderProfile.findByIdAndUpdate(
+    providerProfile._id,
+    { $set: { availability: providerProfile.availability } },
+    { new: true }
+  );
+  if (!providerProfile) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to remove date override'
+    });
+  }
+
+  // Get provider's timezone dynamically
+  const providerTimezone = await getProviderTimezone(req.user?._id?.toString() || '');
 
   const legacyAvailability = {
     _id: providerProfile._id,
@@ -307,14 +423,15 @@ export const removeDateOverride = asyncHandler(async (req: Request, res: Respons
       date: exception.date,
       isAvailable: exception.type !== 'unavailable',
       reason: exception.reason,
-      notes: exception.reason,
+      notes: exception.notes,
       createdAt: exception.date
     })),
     blockedPeriods: [],
-    timezone: 'Asia/Kolkata',
+    timezone: providerTimezone,
     bufferTime: providerProfile.availability.bufferTime,
     autoAcceptBookings: providerProfile.availability.autoAcceptBookings,
-    maxAdvanceBookingDays: providerProfile.availability.maxAdvanceBooking
+    maxAdvanceBookingDays: providerProfile.availability.maxAdvanceBooking,
+    minNoticeTime: providerProfile.availability.minNoticeTime
   };
 
   return res.json({
@@ -350,13 +467,50 @@ export const blockTimePeriod = asyncHandler(async (req: Request, res: Response) 
     });
   }
 
-  providerProfile.availability.exceptions.push({
-    date: new Date(startDate),
-    type: 'unavailable',
-    reason: reason || 'Blocked period'
-  });
+  // Add all dates from startDate to endDate (inclusive)
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  const current = new Date(start);
 
-  await providerProfile.save();
+  while (current <= end) {
+    // Check if this date already has an exception
+    const existingIndex = providerProfile.availability.exceptions.findIndex(
+      ex => ex.date.toISOString().split('T')[0] === current.toISOString().split('T')[0]
+    );
+
+    if (existingIndex >= 0) {
+      // Update existing exception to unavailable
+      providerProfile.availability.exceptions[existingIndex] = {
+        date: new Date(current),
+        type: 'unavailable',
+        reason: reason || 'Blocked period'
+      };
+    } else {
+      // Add new exception
+      providerProfile.availability.exceptions.push({
+        date: new Date(current),
+        type: 'unavailable',
+        reason: reason || 'Blocked period'
+      });
+    }
+
+    current.setDate(current.getDate() + 1);
+  }
+
+  providerProfile = await ProviderProfile.findByIdAndUpdate(
+    providerProfile._id,
+    { $set: { availability: providerProfile.availability } },
+    { new: true }
+  );
+  if (!providerProfile) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to block selected period'
+    });
+  }
+
+  // Get provider's timezone dynamically
+  const providerTimezone = await getProviderTimezone(req.user?._id?.toString() || '');
 
   const legacyAvailability = {
     _id: providerProfile._id,
@@ -366,14 +520,15 @@ export const blockTimePeriod = asyncHandler(async (req: Request, res: Response) 
       date: exception.date,
       isAvailable: exception.type !== 'unavailable',
       reason: exception.reason,
-      notes: exception.reason,
+      notes: exception.notes,
       createdAt: exception.date
     })),
     blockedPeriods: [],
-    timezone: 'Asia/Kolkata',
+    timezone: providerTimezone,
     bufferTime: providerProfile.availability.bufferTime,
     autoAcceptBookings: providerProfile.availability.autoAcceptBookings,
-    maxAdvanceBookingDays: providerProfile.availability.maxAdvanceBooking
+    maxAdvanceBookingDays: providerProfile.availability.maxAdvanceBooking,
+    minNoticeTime: providerProfile.availability.minNoticeTime
   };
 
   return res.json({
@@ -402,11 +557,35 @@ export const removeBlockedPeriod = asyncHandler(async (req: Request, res: Respon
     });
   }
 
+  // Normalize date to YYYY-MM-DD for comparison (handle both formats)
+  const normalizeDateString = (d: Date): string => {
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  // Handle both "2024-01-15" and "2024-01-15T00:00:00.000Z" formats from params
+  const normalizedBlockId = blockId.split('T')[0];
+
   providerProfile.availability.exceptions = providerProfile.availability.exceptions.filter(
-    exception => exception.date.toISOString().split('T')[0] !== blockId
+    exception => normalizeDateString(exception.date) !== normalizedBlockId
   );
 
-  await providerProfile.save();
+  providerProfile = await ProviderProfile.findByIdAndUpdate(
+    providerProfile._id,
+    { $set: { availability: providerProfile.availability } },
+    { new: true }
+  );
+  if (!providerProfile) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to remove blocked period'
+    });
+  }
+
+  // Get provider's timezone dynamically
+  const providerTimezone = await getProviderTimezone(req.user?._id?.toString() || '');
 
   const legacyAvailability = {
     _id: providerProfile._id,
@@ -416,14 +595,15 @@ export const removeBlockedPeriod = asyncHandler(async (req: Request, res: Respon
       date: exception.date,
       isAvailable: exception.type !== 'unavailable',
       reason: exception.reason,
-      notes: exception.reason,
+      notes: exception.notes,
       createdAt: exception.date
     })),
     blockedPeriods: [],
-    timezone: 'Asia/Kolkata',
+    timezone: providerTimezone,
     bufferTime: providerProfile.availability.bufferTime,
     autoAcceptBookings: providerProfile.availability.autoAcceptBookings,
-    maxAdvanceBookingDays: providerProfile.availability.maxAdvanceBooking
+    maxAdvanceBookingDays: providerProfile.availability.maxAdvanceBooking,
+    minNoticeTime: providerProfile.availability.minNoticeTime
   };
 
   return res.json({
@@ -558,7 +738,12 @@ export const getProviderAvailableSlots = asyncHandler(async (req: Request, res: 
         currentTime.setTime(currentTime.getTime() + slotDuration * 60 * 1000);
       }
     } catch (error) {
-      console.error('Error processing time slot:', timeSlot, error);
+      logger.error('Error processing time slot', {
+        context: 'AvailabilityController',
+        action: 'PROCESS_SLOT_ERROR',
+        timeSlot,
+        error: error instanceof Error ? error.message : String(error),
+      });
       continue;
     }
   }
@@ -614,5 +799,94 @@ export const checkTimeSlotAvailability = asyncHandler(async (req: Request, res: 
       isAvailable,
       conflictingBookings: existingBookings.length
     }
+  });
+});
+
+export const updateAvailabilitySettings = asyncHandler(async (req: Request, res: Response) => {
+  if (req.user?.role !== 'provider') {
+    return res.status(403).json({
+      success: false,
+      message: 'Only providers can update availability settings'
+    });
+  }
+
+  const { bufferTime, maxAdvanceBookingDays, autoAcceptBookings, minNoticeTime, timezone } = req.body;
+
+  let providerProfile = await ProviderProfile.findOne({ userId: req.user?._id });
+
+  if (!providerProfile) {
+    return res.status(404).json({
+      success: false,
+      message: 'Provider profile not found'
+    });
+  }
+
+  // Initialize availability object if it doesn't exist
+  if (!providerProfile.availability) {
+    providerProfile.availability = {
+      schedule: createDefaultSchedule(),
+      exceptions: [],
+      bufferTime: 15,
+      maxAdvanceBooking: 30,
+      minNoticeTime: 24,
+      autoAcceptBookings: false
+    };
+  }
+
+  // Update only provided fields
+  if (bufferTime !== undefined) {
+    providerProfile.availability.bufferTime = Math.max(0, Math.min(120, bufferTime));
+  }
+
+  if (maxAdvanceBookingDays !== undefined) {
+    providerProfile.availability.maxAdvanceBooking = Math.max(1, Math.min(365, maxAdvanceBookingDays));
+  }
+
+  if (autoAcceptBookings !== undefined) {
+    providerProfile.availability.autoAcceptBookings = autoAcceptBookings;
+  }
+
+  if (minNoticeTime !== undefined) {
+    providerProfile.availability.minNoticeTime = Math.max(0, Math.min(168, minNoticeTime));
+  }
+
+  providerProfile = await ProviderProfile.findByIdAndUpdate(
+    providerProfile._id,
+    { $set: { availability: providerProfile.availability } },
+    { new: true }
+  );
+  if (!providerProfile) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update availability settings'
+    });
+  }
+
+  // Get provider's timezone dynamically
+  const providerTimezone = timezone || await getProviderTimezone(req.user?._id?.toString() || '');
+
+  const legacyAvailability = {
+    _id: providerProfile._id,
+    providerId: providerProfile.userId,
+    weeklySchedule: transformToLegacyFormat(providerProfile.availability.schedule),
+    dateOverrides: providerProfile.availability.exceptions.map(exception => ({
+      date: exception.date,
+      isAvailable: exception.type !== 'unavailable',
+      reason: exception.reason,
+      notes: exception.notes,
+      createdAt: exception.date
+    })),
+    blockedPeriods: [],
+    timezone: providerTimezone,
+    bufferTime: providerProfile.availability.bufferTime,
+    autoAcceptBookings: providerProfile.availability.autoAcceptBookings,
+    maxAdvanceBookingDays: providerProfile.availability.maxAdvanceBooking,
+    minNoticeTime: providerProfile.availability.minNoticeTime
+  };
+
+  return res.json({
+    success: true,
+    message: 'Availability settings updated successfully',
+    data: { availability: legacyAvailability }
   });
 });

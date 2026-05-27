@@ -35,9 +35,10 @@ async function createTestProvider() {
   try {
     console.log('🚀 Creating test provider...');
 
-    // Connect to MongoDB
-    await mongoose.connect('mongodb://localhost:27017/rezz');
-    console.log('✅ Connected to MongoDB');
+    // Connect to MongoDB - use env var or default to Atlas
+    const mongoUri = process.env.MONGODB_URI || 'mongodb://localhost:27017/rezz';
+    await mongoose.connect(mongoUri);
+    console.log('✅ Connected to MongoDB:', mongoUri.includes('mongodb.net') ? 'Atlas' : 'Local');
 
     // Check if provider already exists
     const existingUser = await User.findOne({ email: 'testprovider@example.com' });

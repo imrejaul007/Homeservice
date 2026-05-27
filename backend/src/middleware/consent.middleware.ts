@@ -3,6 +3,7 @@ import { asyncHandler } from '../utils/asyncHandler';
 import { ApiError } from '../utils/ApiError';
 import consentService from '../services/consent.service';
 import type { ConsentType } from '../models/consent.model';
+import logger from '../utils/logger';
 
 // Extend Express Request to include consent info
 declare global {
@@ -99,7 +100,12 @@ export const requireConsent = (requiredConsents?: ConsentType[]) => {
     // If consents are outdated, allow access but flag for update
     if (outdatedConsents.length > 0) {
       // Log warning but allow access (user can update later)
-      console.warn(`User ${userId} has outdated consents: ${outdatedConsents.join(', ')}`);
+      logger.warn('User has outdated consents', {
+        context: 'ConsentMiddleware',
+        action: 'OUTDATED_CONSENTS',
+        userId,
+        outdatedConsents,
+      });
     }
 
     next();
@@ -144,7 +150,11 @@ export const requireCookieConsent = asyncHandler(async (req: Request, _res: Resp
 
   if (!hasCookieConsent) {
     // Log but don't block - cookie consent is usually handled client-side
-    console.warn(`User ${userId} accessing protected route without cookie consent`);
+    logger.warn('User accessing protected route without cookie consent', {
+      context: 'ConsentMiddleware',
+      action: 'NO_COOKIE_CONSENT',
+      userId,
+    });
   }
 
   next();
@@ -283,7 +293,12 @@ export const recordConsentOnAccept = (consentType: ConsentType) => {
         },
       });
 
-      console.log(`Consent recorded: ${consentType} for user ${userId}`);
+      logger.info('Consent recorded', {
+        context: 'ConsentMiddleware',
+        action: 'CONSENT_RECORDED',
+        userId,
+        consentType,
+      });
     }
 
     next();

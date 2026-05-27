@@ -708,15 +708,31 @@ class AuthService {
    * HTTP POST request with automatic auth handling
    */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private formatRequestError(error: unknown, fallback: string): Error {
+    if (axios.isAxiosError(error) && error.response) {
+      const data = error.response.data as {
+        message?: string;
+        errors?: Array<{ field?: string; message: string }>;
+      };
+      const message = data?.message || fallback;
+      const detailedErrors = data?.errors;
+      if (detailedErrors && Array.isArray(detailedErrors)) {
+        const details = detailedErrors
+          .map((e) => `${e.field || 'form'}: ${e.message}`)
+          .join('; ');
+        return new Error(`${message} — ${details}`);
+      }
+      return new Error(message);
+    }
+    return error instanceof Error ? error : new Error(fallback);
+  }
+
   async post<T>(url: string, data?: any, config?: any): Promise<T> {
     try {
       const response = await this.httpClient.post<T>(url, data, config);
       return response.data;
     } catch (error) {
-      if (axios.isAxiosError(error) && error.response) {
-        throw new Error(error.response.data?.message || `POST ${url} failed`);
-      }
-      throw error;
+      throw this.formatRequestError(error, `POST ${url} failed`);
     }
   }
 
@@ -729,10 +745,7 @@ class AuthService {
       const response = await this.httpClient.put<T>(url, data, config);
       return response.data;
     } catch (error) {
-      if (axios.isAxiosError(error) && error.response) {
-        throw new Error(error.response.data?.message || `PUT ${url} failed`);
-      }
-      throw error;
+      throw this.formatRequestError(error, `PUT ${url} failed`);
     }
   }
 
@@ -745,10 +758,7 @@ class AuthService {
       const response = await this.httpClient.patch<T>(url, data, config);
       return response.data;
     } catch (error) {
-      if (axios.isAxiosError(error) && error.response) {
-        throw new Error(error.response.data?.message || `PATCH ${url} failed`);
-      }
-      throw error;
+      throw this.formatRequestError(error, `PATCH ${url} failed`);
     }
   }
 
@@ -761,10 +771,7 @@ class AuthService {
       const response = await this.httpClient.delete<T>(url, config);
       return response.data;
     } catch (error) {
-      if (axios.isAxiosError(error) && error.response) {
-        throw new Error(error.response.data?.message || `DELETE ${url} failed`);
-      }
-      throw error;
+      throw this.formatRequestError(error, `DELETE ${url} failed`);
     }
   }
 

@@ -1,0 +1,29 @@
+# Production secrets (IMPORTANT: Set these before deploying!)
+# For security, use external secrets or a secrets manager in production
+secrets:
+  mongodbUri: "REPLACE_WITH_PROD_MONGODB_URI"
+  redisUrl: "REPLACE_WITH_PROD_REDIS_URL"
+  jwtSecret: "REPLACE_WITH_PROD_JWT_SECRET"
+  stripeSecret: "REPLACE_WITH_PROD_STRIPE_KEY"
+  resendApiKey: "REPLACE_WITH_PROD_RESEND_KEY"
+
+api:
+  replicaCount: 5
+  autoscaling:
+    minReplicas: 5
+    maxReplicas: 50
+
+resources:
+  api:
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+redis:
+  master:
+    persistence:
+      size: 5Gi
+
+mongodb:
+  persistence:
+    size: 50Gi

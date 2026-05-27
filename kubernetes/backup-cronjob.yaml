@@ -1,0 +1,15 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: nilin-backup
+spec:
+  schedule: "0 2 * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: backup
+            image: mongo:7
+            command: ["mongodump", "--uri=$MONGODB_URI", "--out=/backup"]
+          restartPolicy: OnFailure

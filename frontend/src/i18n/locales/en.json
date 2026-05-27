@@ -1,0 +1,59 @@
+{
+  "common": {
+    "app_name": "NILIN",
+    "loading": "Loading...",
+    "error": "Something went wrong",
+    "retry": "Try Again",
+    "cancel": "Cancel",
+    "confirm": "Confirm",
+    "save": "Save",
+    "delete": "Delete",
+    "edit": "Edit",
+    "back": "Back",
+    "next": "Next",
+    "search": "Search",
+    "no_results": "No results found",
+    "required_field": "This field is required"
+  },
+  "auth": {
+    "login": "Login",
+    "register": "Register",
+    "logout": "Logout",
+    "email": "Email",
+    "password": "Password",
+    "forgot_password": "Forgot Password?",
+    "dont_have_account": "Don't have an account?",
+    "already_have_account": "Already have an account?"
+  },
+  "booking": {
+    "title": "Book a Service",
+    "select_service": "Select Service",
+    "select_provider": "Select Provider",
+    "select_date": "Select Date",
+    "select_time": "Select Time",
+    "confirm_booking": "Confirm Booking",
+    "booking_confirmed": "Booking Confirmed!",
+    "booking_number": "Booking Number",
+    "status": {
+      "pending": "Pending",
+      "confirmed": "Confirmed",
+      "completed": "Completed",
+      "cancelled": "Cancelled"
+    }
+  },
+  "payment": {
+    "pay_now": "Pay Now",
+    "wallet_balance": "Wallet Balance",
+    "add_funds": "Add Funds",
+    "payment_method": "Payment Method",
+    "card_number": "Card Number",
+    "expiry": "Expiry",
+    "cvv": "CVV"
+  },
+  "errors": {
+    "network_error": "Network error. Please check your connection.",
+    "server_error": "Server error. Please try again later.",
+    "invalid_credentials": "Invalid email or password.",
+    "session_expired": "Your session has expired. Please login again."
+  }
+}

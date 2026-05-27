@@ -1,15 +1,18 @@
 import Joi from 'joi';
 
 // Password validation schema
+// SECURITY FIX: Strengthened password policy
+// - Minimum 12 characters (up from 8)
+// - Requires uppercase, lowercase, number, and special character
 const passwordSchema = Joi.string()
-  .min(8)
+  .min(12)
   .max(128)
   .pattern(new RegExp('^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)(?=.*[@$!%*?&])[A-Za-z\\d@$!%*?&]'))
   .required()
   .messages({
-    'string.min': 'Password must be at least 8 characters long',
+    'string.min': 'Password must be at least 12 characters long',
     'string.max': 'Password cannot exceed 128 characters',
-    'string.pattern.base': 'Password must contain at least one lowercase letter, one uppercase letter, one digit, and one special character',
+    'string.pattern.base': 'Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character (@$!%*?&)',
     'any.required': 'Password is required'
   });
 
@@ -350,7 +353,20 @@ export const updateProfileSchema = Joi.object({
     language: Joi.string(),
     timezone: Joi.string(),
     currency: Joi.string()
-  }).optional()
+  }).optional(),
+  yearsExperience: Joi.number().integer().min(0).max(50).optional(),
+  serviceAreas: Joi.array().items(Joi.string().max(100)).optional(),
+  serviceLocation: Joi.object({
+    label: Joi.string().max(200).optional(),
+    formattedAddress: Joi.string().max(500).optional(),
+    street: Joi.string().max(200).optional(),
+    city: Joi.string().max(100).optional(),
+    state: Joi.string().max(100).optional(),
+    zipCode: Joi.string().max(20).optional(),
+    country: Joi.string().max(100).optional(),
+    lat: Joi.number().min(-90).max(90).required(),
+    lng: Joi.number().min(-180).max(180).required(),
+  }).optional(),
 });
 
 // Validation middleware factory

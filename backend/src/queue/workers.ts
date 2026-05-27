@@ -1,7 +1,11 @@
 import { Worker, Job } from 'bullmq';
+import mongoose from 'mongoose';
 import logger from '../utils/logger';
 import emailService from '../services/email.service';
-import { QUEUE_NAMES, areQueuesEnabled } from './index';
+import { QUEUE_NAMES, areQueuesEnabled, getQueue, storeFailedJob } from './index';
+import { queueResilience } from '../services/queueResilience.service';
+import { ApiError, ERROR_CODES } from '../utils/ApiError';
+import User from '../models/user.model';
 import dotenv from 'dotenv';
 import path from 'path';
 
@@ -58,6 +62,7 @@ interface EmailJobData {
 
 const emailProcessor = async (job: Job<EmailJobData>) => {
   const { to, type, metadata } = job.data;
+  const startTime = Date.now();
 
   logger.info(`Processing email job: ${job.id}`, {
     jobId: job.id,
@@ -140,9 +145,14 @@ const emailProcessor = async (job: Job<EmailJobData>) => {
         });
     }
 
+    // Record processing time for monitoring
+    const processingTime = Date.now() - startTime;
+    queueResilience.recordProcessingTime(QUEUE_NAMES.EMAIL, processingTime);
+
     logger.info(`Email job completed: ${job.id}`, {
       jobId: job.id,
       type,
+      processingTime,
       action: 'EMAIL_JOB_COMPLETED',
     });
 
@@ -172,6 +182,7 @@ interface NotificationJobData {
 
 const notificationProcessor = async (job: Job<NotificationJobData>) => {
   const { userId, type, title, message, data } = job.data;
+  const startTime = Date.now();
 
   logger.info(`Processing notification job: ${job.id}`, {
     jobId: job.id,
@@ -198,8 +209,13 @@ const notificationProcessor = async (job: Job<NotificationJobData>) => {
       metadata: data,
     });
 
+    // Record processing time for monitoring
+    const processingTime = Date.now() - startTime;
+    queueResilience.recordProcessingTime(QUEUE_NAMES.NOTIFICATION, processingTime);
+
     logger.info(`Notification job completed: ${job.id}`, {
       jobId: job.id,
+      processingTime,
       action: 'NOTIFICATION_JOB_COMPLETED',
     });
 
@@ -263,6 +279,7 @@ const checkAndUpgradeTier = async (userId: string): Promise<void> => {
 
 const loyaltyProcessor = async (job: Job<LoyaltyJobData>) => {
   const { userId, action, metadata } = job.data;
+  const startTime = Date.now();
 
   logger.info(`Processing loyalty job: ${job.id}`, {
     jobId: job.id,
@@ -271,59 +288,85 @@ const loyaltyProcessor = async (job: Job<LoyaltyJobData>) => {
     stage: 'LOYALTY_JOB_STARTED',
   });
 
+  // Actions that award coins need transaction and idempotency tracking
+  const coinAwardActions = ['award_signup_bonus', 'award_booking_points', 'award_review_bonus', 'award_first_booking_bonus'];
+  const needsTransaction = coinAwardActions.includes(action);
+
   try {
     const User = (await import('../models/user.model')).default;
-    const user = await User.findById(userId);
-    if (!user) {
-      throw new Error(`User not found: ${userId}`);
+
+    // For coin award actions, use transaction to prevent race conditions
+    if (needsTransaction && mongoose.connection.readyState === 1) {
+      const session = await mongoose.startSession();
+      try {
+        session.startTransaction();
+
+        const user = await User.findById(userId).session(session);
+        if (!user) {
+          throw ApiError.notFound(`User not found: ${userId}`, ERROR_CODES.USER_NOT_FOUND);
+        }
+
+        // Initialize processedJobIds array if it doesn't exist (for existing users)
+        if (!user.loyaltySystem.processedJobIds) {
+          user.loyaltySystem.processedJobIds = [];
+        }
+
+        // Idempotency check: skip if this job was already processed
+        if (job.id && user.loyaltySystem.processedJobIds.includes(job.id)) {
+          await session.abortTransaction();
+          logger.info(`Loyalty job already processed, skipping: ${job.id}`, {
+            jobId: job.id,
+            action,
+            userId,
+            stage: 'LOYALTY_JOB_SKIPPED_DUPLICATE',
+          });
+          return { success: true, skipped: true, reason: 'already_processed' };
+        }
+
+        await processLoyaltyAction(user, action, metadata, job.id);
+
+        await session.commitTransaction();
+      } catch (error) {
+        await session.abortTransaction();
+        throw error;
+      } finally {
+        session.endSession();
+      }
+    } else {
+      // Fallback for non-transactional actions or when MongoDB is unavailable
+      const user = await User.findById(userId);
+      if (!user) {
+        throw ApiError.notFound(`User not found: ${userId}`, ERROR_CODES.USER_NOT_FOUND);
+      }
+
+      // Initialize processedJobIds array if it doesn't exist (for existing users)
+      if (!user.loyaltySystem.processedJobIds) {
+        user.loyaltySystem.processedJobIds = [];
+      }
+
+      // Idempotency check: skip if this job was already processed
+      if (job.id && user.loyaltySystem.processedJobIds.includes(job.id)) {
+        logger.info(`Loyalty job already processed, skipping: ${job.id}`, {
+          jobId: job.id,
+          action,
+          userId,
+          stage: 'LOYALTY_JOB_SKIPPED_DUPLICATE',
+        });
+        return { success: true, skipped: true, reason: 'already_processed' };
+      }
+
+      await processLoyaltyAction(user, action, metadata, job.id);
     }
 
-    switch (action) {
-      case 'award_signup_bonus': {
-        const SIGNUP_BONUS = 100;
-        user.loyaltySystem = user.loyaltySystem || { coins: 0, totalEarned: 0, tier: 'bronze', points: 0, benefits: [] };
-        user.loyaltySystem.coins += SIGNUP_BONUS;
-        user.loyaltySystem.totalEarned += SIGNUP_BONUS;
-        user.loyaltySystem.tier = calculateTier(user.loyaltySystem.totalEarned);
-        await user.save();
-        break;
-      }
-
-      case 'award_booking_points': {
-        const amount = (metadata?.amount as number) || 0;
-        const POINTS_PER_AED = 0.1; // 1 point per 10 AED
-        const points = Math.floor(amount * POINTS_PER_AED);
-        user.loyaltySystem = user.loyaltySystem || { coins: 0, totalEarned: 0, tier: 'bronze', points: 0, benefits: [] };
-        user.loyaltySystem.coins += points;
-        user.loyaltySystem.totalEarned += points;
-        user.loyaltySystem.tier = calculateTier(user.loyaltySystem.totalEarned);
-        await user.save();
-        await checkAndUpgradeTier(userId);
-        break;
-      }
-
-      case 'award_review_bonus': {
-        const REVIEW_BONUS = 50;
-        user.loyaltySystem = user.loyaltySystem || { coins: 0, totalEarned: 0, tier: 'bronze', points: 0, benefits: [] };
-        user.loyaltySystem.coins += REVIEW_BONUS;
-        user.loyaltySystem.totalEarned += REVIEW_BONUS;
-        user.loyaltySystem.tier = calculateTier(user.loyaltySystem.totalEarned);
-        await user.save();
-        await checkAndUpgradeTier(userId);
-        break;
-      }
-
-      case 'check_tier_upgrade':
-        await checkAndUpgradeTier(userId);
-        break;
-
-      default:
-        logger.warn(`Unknown loyalty action: ${action}`, { jobId: job.id });
-    }
+    // Record processing time for monitoring
+    const processingTime = Date.now() - startTime;
+    queueResilience.recordProcessingTime(QUEUE_NAMES.LOYALTY, processingTime);
 
     logger.info(`Loyalty job completed: ${job.id}`, {
       jobId: job.id,
       action,
+      processingTime,
+      needsIdempotency: needsTransaction,
       stage: 'LOYALTY_JOB_COMPLETED',
     });
 
@@ -335,9 +378,206 @@ const loyaltyProcessor = async (job: Job<LoyaltyJobData>) => {
       error: (error as Error).message,
       stage: 'LOYALTY_JOB_FAILED',
     });
+
+    // Store failed job in the FailedJob collection for later retry
+    await storeFailedJob(
+      job.id || 'unknown',
+      QUEUE_NAMES.LOYALTY,
+      `loyalty:${action}`,
+      job.data,
+      (error as Error).message,
+      job.attemptsMade || 0
+    );
+
     throw error;
   }
 };
+
+/**
+ * Process a loyalty action (helper function to avoid code duplication in transaction)
+ */
+async function processLoyaltyAction(user: any, action: string, metadata: any, jobId: string | undefined): Promise<void> {
+  switch (action) {
+    case 'award_signup_bonus': {
+      const SIGNUP_BONUS = 100;
+      user.loyaltySystem = user.loyaltySystem || {
+        coins: 0,
+        totalEarned: 0,
+        tier: 'bronze',
+        points: 0,
+        benefits: [],
+        processedJobIds: []
+      };
+      user.loyaltySystem.coins += SIGNUP_BONUS;
+      user.loyaltySystem.totalEarned += SIGNUP_BONUS;
+      user.loyaltySystem.tier = calculateTier(user.loyaltySystem.totalEarned);
+      // Track the job ID for idempotency
+      if (jobId) {
+        user.loyaltySystem.processedJobIds.push(jobId);
+      }
+      await user.save();
+      await checkAndUpgradeTier(user._id.toString());
+      break;
+    }
+
+    case 'award_booking_points': {
+      const amount = (metadata?.amount as number) || 0;
+      const POINTS_PER_AED = 0.1; // 1 point per 10 AED
+
+      // Tier multipliers for booking points
+      const TIER_MULTIPLIERS: Record<string, number> = {
+        bronze: 1,
+        silver: 1.5,
+        gold: 2,
+        platinum: 3
+      };
+
+      // Get user's current tier before updating
+      const currentTier = user.loyaltySystem?.tier || 'bronze';
+      const tierMultiplier = TIER_MULTIPLIERS[currentTier] || 1;
+
+      const basePoints = Math.floor(amount * POINTS_PER_AED);
+      const points = Math.floor(basePoints * tierMultiplier);
+      user.loyaltySystem = user.loyaltySystem || {
+        coins: 0,
+        totalEarned: 0,
+        tier: 'bronze',
+        points: 0,
+        benefits: [],
+        processedJobIds: []
+      };
+      user.loyaltySystem.coins += points;
+      user.loyaltySystem.totalEarned += points;
+      user.loyaltySystem.tier = calculateTier(user.loyaltySystem.totalEarned);
+      // Track the job ID for idempotency
+      if (jobId) {
+        user.loyaltySystem.processedJobIds.push(jobId);
+      }
+      await user.save();
+      await checkAndUpgradeTier(user._id.toString());
+      break;
+    }
+
+    case 'award_review_bonus': {
+      const REVIEW_BONUS = 50;
+      user.loyaltySystem = user.loyaltySystem || {
+        coins: 0,
+        totalEarned: 0,
+        tier: 'bronze',
+        points: 0,
+        benefits: [],
+        processedJobIds: []
+      };
+      user.loyaltySystem.coins += REVIEW_BONUS;
+      user.loyaltySystem.totalEarned += REVIEW_BONUS;
+      user.loyaltySystem.tier = calculateTier(user.loyaltySystem.totalEarned);
+      // Track the job ID for idempotency
+      if (jobId) {
+        user.loyaltySystem.processedJobIds.push(jobId);
+      }
+      await user.save();
+      await checkAndUpgradeTier(user._id.toString());
+      break;
+    }
+
+    case 'award_first_booking_bonus': {
+      const FIRST_BOOKING_BONUS = 100;
+
+      // Initialize loyalty system if needed
+      user.loyaltySystem = user.loyaltySystem || {
+        coins: 0,
+        totalEarned: 0,
+        tier: 'bronze',
+        points: 0,
+        benefits: [],
+        processedJobIds: [],
+        pendingRewards: []
+      };
+
+      // Initialize pendingRewards array if needed
+      if (!user.loyaltySystem.pendingRewards) {
+        user.loyaltySystem.pendingRewards = [];
+      }
+
+      // Process pending rewards (welcome bonus, referral bonus)
+      const pendingRewards = user.loyaltySystem.pendingRewards || [];
+      let totalPendingAwarded = 0;
+      const awardedRewards: string[] = [];
+
+      for (const reward of pendingRewards) {
+        if (reward.status === 'pending') {
+          user.loyaltySystem.coins += reward.amount;
+          user.loyaltySystem.totalEarned += reward.amount;
+          reward.status = 'awarded';
+          reward.awardedAt = new Date();
+          totalPendingAwarded += reward.amount;
+          awardedRewards.push(`${reward.type}: ${reward.amount}`);
+
+          // Award referrer bonus if this was a referral
+          if (reward.referrerId && reward.type === 'referral_bonus') {
+            const referrer = await User.findById(reward.referrerId);
+            if (referrer) {
+              const REFERRER_BONUS = 500;
+              referrer.loyaltySystem = referrer.loyaltySystem || {
+                coins: 0,
+                totalEarned: 0,
+                tier: 'bronze',
+                points: 0,
+                benefits: [],
+                processedJobIds: []
+              };
+              referrer.loyaltySystem.coins += REFERRER_BONUS;
+              referrer.loyaltySystem.totalEarned += REFERRER_BONUS;
+              referrer.loyaltySystem.tier = calculateTier(referrer.loyaltySystem.totalEarned);
+              await referrer.save();
+
+              logger.info('Referrer bonus awarded for successful referral', {
+                referrerId: reward.referrerId,
+                refereeId: user._id.toString(),
+                bonusAmount: REFERRER_BONUS,
+              });
+            }
+          }
+        }
+      }
+
+      // Award the first booking bonus as well
+      if (!user.loyaltySystem.firstBookingAwarded) {
+        user.loyaltySystem.coins += FIRST_BOOKING_BONUS;
+        user.loyaltySystem.totalEarned += FIRST_BOOKING_BONUS;
+        user.loyaltySystem.firstBookingAwarded = true;
+        totalPendingAwarded += FIRST_BOOKING_BONUS;
+        awardedRewards.push(`first_booking_bonus: ${FIRST_BOOKING_BONUS}`);
+      }
+
+      user.loyaltySystem.tier = calculateTier(user.loyaltySystem.totalEarned);
+
+      // Track the job ID for idempotency
+      if (jobId) {
+        user.loyaltySystem.processedJobIds.push(jobId);
+      }
+      await user.save();
+      await checkAndUpgradeTier(user._id.toString());
+
+      logger.info(`First booking rewards awarded: ${totalPendingAwarded} points`, {
+        userId: user._id.toString(),
+        jobId,
+        bonusAmount: totalPendingAwarded,
+        rewards: awardedRewards,
+        stage: 'FIRST_BOOKING_REWARDS_AWARDED',
+      });
+      break;
+    }
+
+    case 'check_tier_upgrade':
+      // Tier check doesn't award coins, no idempotency needed
+      await checkAndUpgradeTier(user._id.toString());
+      break;
+
+    default:
+      logger.warn(`Unknown loyalty action: ${action}`, { jobId });
+  }
+}
 
 // ============================================
 // Worker Registry
@@ -376,15 +616,38 @@ export const initializeWorkers = (): void => {
     });
   });
 
-  emailWorker.on('failed', (job, err) => {
+  emailWorker.on('failed', async (job, err) => {
     logger.error(`Email job ${job?.id} failed`, {
       jobId: job?.id,
       error: err.message,
       action: 'EMAIL_WORKER_JOB_FAILED',
     });
+
+    // Store failed job in the FailedJob collection for later retry
+    if (job) {
+      await storeFailedJob(
+        job.id || 'unknown',
+        QUEUE_NAMES.EMAIL,
+        job.name,
+        job.data,
+        err.message,
+        job.attemptsMade || 0
+      );
+    }
   });
 
   workers.push({ worker: emailWorker, name: QUEUE_NAMES.EMAIL });
+
+  // Register email queue with resilience service
+  queueResilience.registerQueue(emailWorker as any, {
+    name: QUEUE_NAMES.EMAIL,
+    maxRetries: 5,
+    backoffType: 'exponential',
+    backoffDelay: 5000,
+    maxBackoffDelay: 300000,
+    alertThreshold: 100,
+    criticalThreshold: 500,
+  });
 
   // Notification Worker
   const notificationWorker = new Worker(QUEUE_NAMES.NOTIFICATION, notificationProcessor, {
@@ -396,13 +659,38 @@ export const initializeWorkers = (): void => {
     logger.debug(`Notification job ${job.id} completed`);
   });
 
-  notificationWorker.on('failed', (job, err) => {
+  notificationWorker.on('failed', async (job, err) => {
     logger.error(`Notification job ${job?.id} failed`, {
+      jobId: job?.id,
       error: err.message,
+      action: 'NOTIFICATION_WORKER_JOB_FAILED',
     });
+
+    // Store failed job in the FailedJob collection for later retry
+    if (job) {
+      await storeFailedJob(
+        job.id || 'unknown',
+        QUEUE_NAMES.NOTIFICATION,
+        job.name,
+        job.data,
+        err.message,
+        job.attemptsMade || 0
+      );
+    }
   });
 
   workers.push({ worker: notificationWorker, name: QUEUE_NAMES.NOTIFICATION });
+
+  // Register notification queue with resilience service
+  queueResilience.registerQueue(notificationWorker as any, {
+    name: QUEUE_NAMES.NOTIFICATION,
+    maxRetries: 3,
+    backoffType: 'exponential',
+    backoffDelay: 2000,
+    maxBackoffDelay: 60000,
+    alertThreshold: 200,
+    criticalThreshold: 1000,
+  });
 
   // Loyalty Worker
   const loyaltyWorker = new Worker(QUEUE_NAMES.LOYALTY, loyaltyProcessor, {
@@ -414,18 +702,90 @@ export const initializeWorkers = (): void => {
     logger.debug(`Loyalty job ${job.id} completed`);
   });
 
-  loyaltyWorker.on('failed', (job, err) => {
+  loyaltyWorker.on('failed', async (job, err) => {
     logger.error(`Loyalty job ${job?.id} failed`, {
+      jobId: job?.id,
       error: err.message,
+      action: 'LOYALTY_WORKER_JOB_FAILED',
     });
+
+    // Store failed job in the FailedJob collection for later retry
+    if (job) {
+      await storeFailedJob(
+        job.id || 'unknown',
+        QUEUE_NAMES.LOYALTY,
+        job.name,
+        job.data,
+        err.message,
+        job.attemptsMade || 0
+      );
+    }
   });
 
   workers.push({ worker: loyaltyWorker, name: QUEUE_NAMES.LOYALTY });
+
+  // Register loyalty queue with resilience service
+  queueResilience.registerQueue(loyaltyWorker as any, {
+    name: QUEUE_NAMES.LOYALTY,
+    maxRetries: 2,
+    backoffType: 'fixed',
+    backoffDelay: 1000,
+    maxBackoffDelay: 10000,
+    alertThreshold: 50,
+    criticalThreshold: 200,
+  });
 
   logger.info('Queue workers initialized', {
     count: workers.length,
     action: 'WORKERS_INITIALIZED',
   });
+
+  // ============================================
+  // Worker Health Monitoring
+  // ============================================
+  // Periodic queue depth logging for monitoring
+  setInterval(async () => {
+    for (const queueName of Object.values(QUEUE_NAMES)) {
+      const queue = getQueue(queueName);
+      if (queue) {
+        try {
+          const jobCounts = await queue.getJobCounts();
+          logger.info('Queue depth', {
+            queue: queueName,
+            waiting: jobCounts.waiting,
+            active: jobCounts.active,
+            completed: jobCounts.completed,
+            failed: jobCounts.failed,
+            action: 'QUEUE_DEPTH_LOG',
+          });
+
+          // Alert on high queue depth
+          const alertThreshold = 100;
+          const criticalThreshold = 500;
+          if (jobCounts.waiting >= criticalThreshold) {
+            logger.error('CRITICAL: Queue depth exceeded critical threshold', {
+              queue: queueName,
+              waiting: jobCounts.waiting,
+              threshold: criticalThreshold,
+              action: 'QUEUE_DEPTH_CRITICAL',
+            });
+          } else if (jobCounts.waiting >= alertThreshold) {
+            logger.warn('Queue depth exceeded alert threshold', {
+              queue: queueName,
+              waiting: jobCounts.waiting,
+              threshold: alertThreshold,
+              action: 'QUEUE_DEPTH_WARNING',
+            });
+          }
+        } catch (error) {
+          logger.error(`Failed to get job counts for queue ${queueName}`, {
+            queue: queueName,
+            error: (error as Error).message,
+          });
+        }
+      }
+    }
+  }, 60000); // Log every minute
 };
 
 // Graceful shutdown

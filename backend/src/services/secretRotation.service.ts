@@ -198,7 +198,7 @@ const SALT_LENGTH = 32;
 function getEncryptionKey(): Buffer {
   const masterKey = process.env.SECRET_MASTER_KEY || process.env.ENCRYPTION_KEY;
   if (!masterKey) {
-    throw new Error('SECRET_MASTER_KEY or ENCRYPTION_KEY environment variable is required');
+    throw ApiError.internal('SECRET_MASTER_KEY or ENCRYPTION_KEY environment variable is required');
   }
   // Derive a 256-bit key from the master key using SHA-256
   return crypto.createHash('sha256').update(masterKey).digest();
@@ -229,7 +229,7 @@ function decrypt(encryptedValue: string): string {
   const parts = encryptedValue.split(':');
 
   if (parts.length !== 3) {
-    throw new Error('Invalid encrypted value format');
+    throw ApiError.badRequest('Invalid encrypted value format', [], ERROR_CODES.INVALID_FORMAT);
   }
 
   const iv = Buffer.from(parts[0], 'hex');

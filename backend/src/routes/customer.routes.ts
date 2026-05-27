@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import customerController from '../controllers/customer.controller';
+import customerAnalyticsController from '../controllers/customer.analytics.controller';
 import authMiddleware from '../middleware/auth.middleware';
 import Joi from 'joi';
 import { validate } from '../middleware/validation.middleware';
@@ -97,6 +98,20 @@ router.patch('/payment-methods/:paymentMethodId',
   authMiddleware.authenticate,
   validate(updatePaymentMethodSchema),
   customerController.updatePaymentMethod
+);
+
+// ============================================
+// Customer Analytics Routes
+// ============================================
+
+router.get('/stats',
+  authMiddleware.authenticate,
+  customerAnalyticsController.getCustomerStats
+);
+
+router.get('/analytics',
+  authMiddleware.authenticate,
+  customerAnalyticsController.getCustomerAnalytics
 );
 
 export default router;

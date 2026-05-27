@@ -1,5 +1,6 @@
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
+import bcrypt from 'bcryptjs';
 import mongoose from 'mongoose';
 import User from '../models/user.model';
 import CustomerProfile from '../models/customerProfile.model';
@@ -7,9 +8,15 @@ import ProviderProfile from '../models/providerProfile.model';
 import Service from '../models/service.model';
 import ServiceCategory from '../models/serviceCategory.model';
 import Booking from '../models/booking.model';
+import CustomerMetrics from '../models/customerMetrics.model';
 import { ApiError, ERROR_CODES } from '../utils/ApiError';
+import { normalizeServiceAreas, sanitizeProviderGeo } from '../utils/sanitizeProviderGeo';
+import { formatProviderProfileForClient } from '../utils/formatProviderProfileResponse';
 import { sendVerificationEmail, sendWelcomeEmail, sendPasswordResetEmail } from './email.service';
 import { uploadBufferToCloudinary } from '../utils/cloudinary';
+import { cache } from '../config/redis';
+import logger from '../utils/logger';
+import { createAuditLog } from './audit.service';
 import {
   CustomerRegistrationDTO,
   ProviderRegistrationDTO,
@@ -51,6 +58,85 @@ const formatUserResponse = (user: any): UserResponse => ({
 });
 
 // ============================================
+// Device Fingerprinting
+// ============================================
+
+/**
+ * Generates a device fingerprint hash from request headers
+ * Used for device tracking and session security
+ */
+export function generateDeviceFingerprint(userAgent: string, ip: string, acceptLanguage?: string): string {
+  const fingerprintData = {
+    ua: userAgent.toLowerCase().split(' ').slice(0, 3).join(' '), // First 3 parts of UA
+    os: extractOS(userAgent),
+    browser: extractBrowser(userAgent),
+    ip: ip.substring(0, 7), // First 3 octets for geo privacy
+    lang: acceptLanguage?.split(',')[0]?.substring(0, 5) || 'unknown',
+  };
+
+  const fingerprintString = JSON.stringify(fingerprintData);
+  return crypto.createHash('sha256').update(fingerprintString).digest('hex').substring(0, 32);
+}
+
+/**
+ * Extract OS from user agent string
+ */
+function extractOS(userAgent: string): string {
+  if (userAgent.includes('Windows')) return 'windows';
+  if (userAgent.includes('Mac OS') || userAgent.includes('Macintosh')) return 'macos';
+  if (userAgent.includes('iPhone') || userAgent.includes('iPad')) return 'ios';
+  if (userAgent.includes('Android')) return 'android';
+  if (userAgent.includes('Linux')) return 'linux';
+  return 'unknown';
+}
+
+/**
+ * Extract browser from user agent string
+ */
+function extractBrowser(userAgent: string): string {
+  if (userAgent.includes('Chrome') && !userAgent.includes('Edg')) return 'chrome';
+  if (userAgent.includes('Firefox')) return 'firefox';
+  if (userAgent.includes('Safari') && !userAgent.includes('Chrome')) return 'safari';
+  if (userAgent.includes('Edg')) return 'edge';
+  if (userAgent.includes('Opera') || userAgent.includes('OPR')) return 'opera';
+  return 'unknown';
+}
+
+/**
+ * Get device type from user agent
+ */
+export function getDeviceType(userAgent: string): 'mobile' | 'tablet' | 'desktop' {
+  const ua = userAgent.toLowerCase();
+  if (ua.includes('mobile') || ua.includes('android') || ua.includes('iphone')) {
+    return 'mobile';
+  }
+  if (ua.includes('tablet') || ua.includes('ipad')) {
+    return 'tablet';
+  }
+  return 'desktop';
+}
+
+// ============================================
+// Fraud Detection Types
+// ============================================
+
+interface FraudCheckResult {
+  isSuspicious: boolean;
+  confidence: number;
+  reasons: string[];
+  shouldBlock: boolean;
+  shouldFlag: boolean;
+  flags?: string[];
+}
+
+interface ReferralFraudCheck {
+  isFraud: boolean;
+  confidence: number;
+  fraudTypes: string[];
+  details: string;
+}
+
+// ============================================
 // AuthService Class
 // ============================================
 
@@ -60,6 +146,14 @@ export class AuthService {
   // ========================================
 
   async registerCustomer(data: CustomerRegistrationDTO): Promise<AuthResult> {
+    // Extract IP and userAgent from data or use defaults
+    const registrationIP = data.ip || 'unknown';
+    const userAgent = data.userAgent || 'unknown';
+    const acceptLanguage = data.acceptLanguage;
+
+    // Generate device fingerprint for fraud detection
+    const deviceFingerprint = generateDeviceFingerprint(userAgent, registrationIP, acceptLanguage);
+
     // Check if user already exists
     const existingUser = await User.findOne({ email: data.email });
     if (existingUser) {
@@ -68,16 +162,108 @@ export class AuthService {
 
     // Handle referral code
     let referredBy;
+    let referralFraudCheck: ReferralFraudCheck | undefined;
+
     if (data.referralCode) {
+      // Prevent self-referral by checking if the referral code belongs to someone with the same email
       const referrer = await User.findOne({
         'loyaltySystem.referralCode': data.referralCode,
       });
       if (referrer) {
+        // Check if the referrer has the same email (self-referral)
+        if (referrer.email === data.email) {
+          throw new ApiError(400, 'You cannot use your own referral code');
+        }
+
+        // FIX: Also check for device fingerprint and IP match to prevent bypass via phone/device
+        const hasMatchingFingerprint = referrer.deviceFingerprints?.some(
+          (df: any) => df.fingerprint === deviceFingerprint
+        );
+        if (hasMatchingFingerprint) {
+          logger.warn('Self-referral detected via device fingerprint', {
+            referrerId: referrer._id,
+            newUserEmail: data.email,
+            fingerprint: deviceFingerprint.substring(0, 8) + '...',
+            action: 'SELF_REFERRAL_DEVICE_BLOCKED',
+          });
+          throw new ApiError(400, 'You cannot use your own referral code');
+        }
+
+        // Check if this IP has been used by the referrer for registration
+        const hasMatchingIP = (referrer as any).registrationIPs?.includes(registrationIP);
+        if (hasMatchingIP) {
+          logger.warn('Self-referral detected via registration IP', {
+            referrerId: referrer._id,
+            newUserEmail: data.email,
+            registrationIP,
+            action: 'SELF_REFERRAL_IP_BLOCKED',
+          });
+          throw new ApiError(400, 'You cannot use your own referral code');
+        }
+
+        // Check for referral fraud patterns (IP correlation, device fingerprint, timestamp)
+        referralFraudCheck = await this.checkReferralFraud(
+          referrer._id,
+          data.email,
+          registrationIP,
+          deviceFingerprint
+        );
+
+        if (referralFraudCheck.isFraud && referralFraudCheck.confidence >= 70) {
+          logger.warn('Suspicious referral detected during registration', {
+            referrerId: referrer._id,
+            newUserEmail: data.email,
+            fraudTypes: referralFraudCheck.fraudTypes,
+            confidence: referralFraudCheck.confidence,
+            action: 'SUSPICIOUS_REFERRAL_BLOCKED',
+          });
+
+          // Block high-confidence fraud
+          throw new ApiError(403, 'Registration blocked due to suspicious activity. Please contact support.');
+        }
+
         referredBy = referrer._id;
       }
     }
 
-    // Create user data
+    // FRAUD DETECTION: Check device fingerprint for suspicious patterns
+    const deviceFraudCheck = await this.checkDeviceFingerprint(registrationIP, userAgent, data.email);
+
+    if (deviceFraudCheck.shouldBlock) {
+      logger.warn('Registration blocked due to device fingerprint fraud', {
+        email: data.email,
+        fingerprint: deviceFingerprint.substring(0, 8) + '...',
+        reasons: deviceFraudCheck.reasons,
+        action: 'DEVICE_FRAUD_BLOCKED',
+      });
+      throw new ApiError(403, 'Registration blocked. Please contact support.');
+    }
+
+    // Log flagged registrations for review
+    if (deviceFraudCheck.shouldFlag) {
+      await createAuditLog({
+        userId: 'SYSTEM',
+        action: 'FRAUD_FLAGGED',
+        resource: 'registration',
+        resourceId: data.email,
+        details: {
+          type: 'device_fraud',
+          fingerprint: deviceFingerprint.substring(0, 8) + '...',
+          reasons: deviceFraudCheck.reasons,
+          confidence: deviceFraudCheck.confidence,
+          registrationIP,
+        },
+        status: 'success',
+      });
+
+      logger.info('Registration flagged for fraud review', {
+        email: data.email,
+        reasons: deviceFraudCheck.reasons,
+        confidence: deviceFraudCheck.confidence,
+      });
+    }
+
+    // Create user data with fraud detection fields
     const userData = {
       firstName: data.firstName,
       lastName: data.lastName,
@@ -104,6 +290,17 @@ export class AuthService {
         totalSpent: 0,
         pointsHistory: [],
       },
+      // Fraud detection fields
+      registrationIP,
+      knownIPs: registrationIP !== 'unknown' ? [registrationIP] : [],
+      deviceFingerprints: [{
+        fingerprint: deviceFingerprint,
+        userAgent,
+        ip: registrationIP,
+        firstSeen: new Date(),
+        lastSeen: new Date(),
+        isSuspicious: deviceFraudCheck.isSuspicious,
+      }],
       communicationPreferences: {
         email: {
           marketing: data.communicationPreferences?.email?.marketing || false,
@@ -249,8 +446,8 @@ export class AuthService {
       const customerProfile = new CustomerProfile(customerProfileData);
       await customerProfile.save({ session });
 
-      // Award referral/welcome bonus (within transaction)
-      await this.awardCustomerWelcomeBonus(user, referredBy);
+      // Award referral/welcome bonus (within transaction, passing fraud check for reduced bonus if suspicious)
+      await this.awardCustomerWelcomeBonus(user, referredBy, referralFraudCheck);
 
       // Generate and save verification token (within transaction)
       const verificationToken = user.generateVerificationToken();
@@ -264,7 +461,7 @@ export class AuthService {
       try {
         await sendVerificationEmail(user.email, user.firstName, verificationToken);
       } catch (emailError) {
-        console.error('Failed to send verification email:', emailError);
+        logger.error('Failed to send verification email', { userId: user._id, error: (emailError as Error).message });
         // Continue - user can request a new verification email later
       }
 
@@ -285,16 +482,436 @@ export class AuthService {
     }
   }
 
-  private async awardCustomerWelcomeBonus(user: any, referredBy?: any): Promise<void> {
+  private async awardCustomerWelcomeBonus(user: any, referredBy?: any, fraudCheck?: ReferralFraudCheck): Promise<void> {
+    // FIX: Store pending rewards instead of awarding immediately
+    // Per terms: "when they sign up AND complete their first booking"
+    // Initialize loyalty system if not exists
+    user.loyaltySystem = user.loyaltySystem || {
+      coins: 0,
+      totalEarned: 0,
+      tier: 'bronze',
+      points: 0,
+      benefits: [],
+      processedJobIds: [],
+      pendingRewards: []
+    };
+
+    // Initialize pendingRewards array if needed
+    if (!user.loyaltySystem.pendingRewards) {
+      user.loyaltySystem.pendingRewards = [];
+    }
+
     if (referredBy) {
       const referrer = await User.findById(referredBy);
+
       if (referrer) {
-        await referrer.addLoyaltyPoints(500, 'referral', `Referral bonus for ${user.firstName} ${user.lastName}`, undefined);
-        await user.addLoyaltyPoints(250, 'referral', 'Welcome bonus for using referral code', undefined);
+        // SECURITY FIX: Check referral count limit (max 50 referrals per user)
+        const referralCount = await User.countDocuments({
+          'loyaltySystem.referredBy': referrer._id,
+          _id: { $ne: user._id }
+        });
+
+        const MAX_REFERRALS_PER_USER = 50;
+        if (referralCount >= MAX_REFERRALS_PER_USER) {
+          logger.warn('Referrer has reached maximum referral limit', {
+            referrerId: referrer._id,
+            referralCount,
+            maxReferrals: MAX_REFERRALS_PER_USER,
+            action: 'REFERRAL_LIMIT_REACHED',
+          });
+          // Still add pending reward for new user
+          user.loyaltySystem.pendingRewards.push({
+            type: 'welcome_bonus',
+            amount: 250,
+            description: 'Welcome bonus for using referral code',
+            status: 'pending'
+          });
+          await user.save();
+          return;
+        }
+
+        // Check if referral was flagged as suspicious
+        if (fraudCheck?.isFraud) {
+          logger.warn('Suspicious referral detected, storing reduced bonus as pending', {
+            userId: user._id,
+            referrerId: referrer._id,
+            fraudTypes: fraudCheck.fraudTypes,
+            action: 'SUSPICIOUS_REFERRAL_PENDING',
+          });
+          // Add reduced bonus as pending
+          user.loyaltySystem.pendingRewards.push({
+            type: 'referral_bonus',
+            amount: 50,
+            description: 'Welcome bonus for using referral code (reduced - flagged)',
+            status: 'pending'
+          });
+
+          // Flag both users in metrics
+          await this.flagUserForSuspiciousReferral(user._id, referrer._id, fraudCheck.fraudTypes);
+          await user.save();
+          return;
+        }
+
+        // Add pending rewards for legitimate referral
+        // User will receive 250 when first booking completes
+        // Referrer will receive 500 when their referral completes first booking
+        user.loyaltySystem.pendingRewards.push({
+          type: 'referral_bonus',
+          amount: 250,
+          description: 'Welcome bonus for using referral code',
+          status: 'pending',
+          referrerId: referredBy.toString()
+        });
+
+        await user.save();
+
+        logger.info('Referral bonus pending until first booking completion', {
+          userId: user._id,
+          referrerId: referredBy,
+          pendingAmount: 250,
+          action: 'PENDING_REFERRAL_REWARD',
+        });
+        return;
       }
-    } else {
-      await user.addLoyaltyPoints(100, 'bonus', 'Welcome to the platform!', undefined);
     }
+
+    // No referral - still add pending welcome bonus
+    user.loyaltySystem.pendingRewards.push({
+      type: 'welcome_bonus',
+      amount: 100,
+      description: 'Welcome to the platform!',
+      status: 'pending'
+    });
+    await user.save();
+
+    logger.info('Welcome bonus pending until first booking completion', {
+      userId: user._id,
+      pendingAmount: 100,
+      action: 'PENDING_WELCOME_REWARD',
+    });
+  }
+
+  // ========================================
+  // Fraud Detection Methods
+  // ========================================
+
+  /**
+   * Check for device fingerprint fraud during registration
+   */
+  async checkDeviceFingerprint(ip: string, userAgent: string, email: string): Promise<FraudCheckResult> {
+    const result: FraudCheckResult = {
+      isSuspicious: false,
+      confidence: 0,
+      reasons: [],
+      shouldBlock: false,
+      shouldFlag: false,
+    };
+
+    // Generate device fingerprint
+    const fingerprint = generateDeviceFingerprint(userAgent, ip);
+
+    // 1. Check if this device fingerprint has been used by multiple accounts
+    const usersWithSameDevice = await User.find({
+      'deviceFingerprints.fingerprint': fingerprint,
+      email: { $ne: email },
+    }).select('_id email deviceFingerprints');
+
+    if (usersWithSameDevice.length > 0) {
+      // Multiple accounts from same device
+      if (usersWithSameDevice.length >= 3) {
+        result.isSuspicious = true;
+        result.confidence += 50;
+        result.reasons.push(`Device used by ${usersWithSameDevice.length} other accounts`);
+        result.shouldFlag = true;
+      } else {
+        result.confidence += 20;
+        result.reasons.push(`Device used by ${usersWithSameDevice.length} other account(s)`);
+      }
+    }
+
+    // 2. Check if this IP has been used for multiple registrations
+    const usersWithSameIP = await User.find({
+      $or: [
+        { registrationIP: ip },
+        { 'deviceFingerprints.ip': ip },
+        { 'knownIPs': ip },
+      ],
+      email: { $ne: email },
+    }).select('_id email registrationIP');
+
+    if (usersWithSameIP.length > 0) {
+      if (usersWithSameIP.length >= 3) {
+        result.isSuspicious = true;
+        result.confidence += 40;
+        result.reasons.push(`IP used by ${usersWithSameIP.length} other accounts`);
+        result.shouldFlag = true;
+      } else {
+        result.confidence += 15;
+        result.reasons.push(`IP used by ${usersWithSameIP.length} other account(s)`);
+      }
+    }
+
+    // 3. Check for VPN/Proxy indicators (simplified check)
+    if (this.isLikelyVPN(ip)) {
+      result.confidence += 20;
+      result.reasons.push('Registration from VPN/Proxy detected');
+    }
+
+    // Determine if should block (very high confidence)
+    result.shouldBlock = result.confidence >= 80;
+
+    return result;
+  }
+
+  /**
+   * Check for referral fraud patterns
+   */
+  async checkReferralFraud(
+    referrerId: mongoose.Types.ObjectId,
+    newUserEmail: string,
+    newUserIP: string,
+    newUserFingerprint: string
+  ): Promise<ReferralFraudCheck> {
+    const result: ReferralFraudCheck = {
+      isFraud: false,
+      confidence: 0,
+      fraudTypes: [],
+      details: '',
+    };
+
+    const referrer = await User.findById(referrerId).select('email registrationIP deviceFingerprints createdAt');
+    if (!referrer) {
+      return result;
+    }
+
+    // 1. Check IP correlation - referrer and referred from same IP
+    if (referrer.registrationIP === newUserIP || referrer.knownIPs?.includes(newUserIP)) {
+      result.isFraud = true;
+      result.confidence += 40;
+      result.fraudTypes.push('SAME_IP');
+      result.details = 'Referrer and referred user registered from same IP';
+    }
+
+    // 2. Check device fingerprint correlation
+    const referrerFingerprints = referrer.deviceFingerprints || [];
+    const matchingFingerprint = referrerFingerprints.find(
+      (d: any) => d.fingerprint === newUserFingerprint
+    );
+    if (matchingFingerprint) {
+      result.isFraud = true;
+      result.confidence += 50;
+      result.fraudTypes.push('SAME_DEVICE');
+      result.details = 'Referrer and referred user used same device';
+    }
+
+    // 3. Check timestamp correlation - signup within 1 minute of each other
+    const referrerCreatedAt = referrer.createdAt.getTime();
+    const now = Date.now();
+    const timeDiff = now - referrerCreatedAt;
+
+    // If referrer account was created very recently AND referred user is signing up
+    if (timeDiff < 60 * 1000) { // Within 1 minute
+      result.isFraud = true;
+      result.confidence += 60;
+      result.fraudTypes.push('RAPID_REFERRAL');
+      result.details = `Referrer created ${Math.round(timeDiff / 1000)} seconds before referred signup`;
+    }
+
+    // 4. Check for same email domain patterns (potential coordinated fraud)
+    const referrerDomain = referrer.email.split('@')[1];
+    const newUserDomain = newUserEmail.split('@')[1];
+    if (referrerDomain === newUserDomain && ['gmail.com', 'yahoo.com', 'hotmail.com'].includes(referrerDomain)) {
+      result.confidence += 10;
+      result.fraudTypes.push('SAME_EMAIL_DOMAIN');
+    }
+
+    // 5. Check referrer's referral velocity
+    const recentReferralCount = await User.countDocuments({
+      'loyaltySystem.referredBy': referrerId,
+      createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }, // Last 24 hours
+    });
+
+    if (recentReferralCount >= 10) {
+      result.isFraud = true;
+      result.confidence += 30;
+      result.fraudTypes.push('HIGH_REFERRAL_VELOCITY');
+      result.details = `Referrer made ${recentReferralCount} referrals in last 24 hours`;
+    }
+
+    return result;
+  }
+
+  /**
+   * Simple VPN/Proxy detection (basic implementation)
+   * In production, use a service like IPQualityScore or MaxMind
+   */
+  private isLikelyVPN(ip: string): boolean {
+    // Common patterns that might indicate VPN/Proxy
+    // This is a simplified check - real implementation would use a GeoIP service
+    const vpnIndicators = [
+      ip.startsWith('10.'),      // Private IP ranges
+      ip.startsWith('172.16.'),  // Private IP ranges
+      ip.startsWith('192.168.'), // Private IP ranges
+      ip === '127.0.0.1',
+      ip === 'localhost',
+    ];
+
+    // In production, add more sophisticated checks:
+    // - Check against known VPN/proxy IP databases
+    // - Use reverse DNS lookups
+    // - Check for Tor exit nodes
+
+    return vpnIndicators.some(Boolean);
+  }
+
+  /**
+   * Flag users for suspicious referral activity
+   */
+  private async flagUserForSuspiciousReferral(
+    referredUserId: mongoose.Types.ObjectId,
+    referrerId: mongoose.Types.ObjectId,
+    fraudTypes: string[]
+  ): Promise<void> {
+    try {
+      const metrics = await CustomerMetrics.getOrCreateForUser(referredUserId);
+      metrics.suspiciousReferrals += 1;
+      metrics.trustScore = metrics.calculateTrustScore();
+      const risk = metrics.assessRisk();
+      metrics.riskLevel = risk.level;
+      metrics.riskFactors = risk.factors;
+      await metrics.save();
+
+      // Also flag the referrer
+      const referrerMetrics = await CustomerMetrics.getOrCreateForUser(referrerId);
+      referrerMetrics.suspiciousReferrals += 1;
+      referrerMetrics.trustScore = referrerMetrics.calculateTrustScore();
+      const referrerRisk = referrerMetrics.assessRisk();
+      referrerMetrics.riskLevel = referrerRisk.level;
+      referrerMetrics.riskFactors = referrerRisk.factors;
+      await referrerMetrics.save();
+
+      // Create audit log
+      await createAuditLog({
+        userId: referrerId.toString(),
+        action: 'FRAUD_DETECTED',
+        resource: 'user',
+        resourceId: referredUserId.toString(),
+        details: {
+          fraudTypes,
+          referredUserId: referredUserId.toString(),
+          detectedAt: new Date().toISOString(),
+        },
+        status: 'success',
+      });
+
+      logger.warn('Users flagged for suspicious referral activity', {
+        referredUserId: referredUserId.toString(),
+        referrerId: referrerId.toString(),
+        fraudTypes,
+      });
+    } catch (error) {
+      logger.error('Failed to flag users for suspicious referral', {
+        referredUserId: referredUserId.toString(),
+        referrerId: referrerId.toString(),
+        error: (error as Error).message,
+      });
+    }
+  }
+
+  /**
+   * Award conversion bonus when user completes first booking
+   * This is called from booking service when a booking is completed
+   */
+  async awardConversionBonus(userId: string): Promise<{ success: boolean; bonusAmount: number }> {
+    const user = await User.findById(userId);
+    if (!user) {
+      return { success: false, bonusAmount: 0 };
+    }
+
+    // Check if user has already received a conversion bonus
+    const hasConversionBonus = user.loyaltySystem.pointsHistory.some(
+      (p: any) => p.description.includes('First booking') || p.description.includes('conversion')
+    );
+
+    if (hasConversionBonus) {
+      return { success: false, bonusAmount: 0 };
+    }
+
+    // Award conversion bonus
+    const bonusAmount = 100;
+    await user.addLoyaltyPoints(bonusAmount, 'bonus', 'First booking conversion bonus!', undefined);
+
+    // Also award referrer if user was referred
+    if (user.loyaltySystem.referredBy) {
+      const referrer = await User.findById(user.loyaltySystem.referredBy);
+      if (referrer) {
+        // Higher bonus for referrer when referral actually converts (completes booking)
+        await referrer.addLoyaltyPoints(300, 'referral', `Referral conversion bonus - ${user.firstName} completed first booking`, userId);
+      }
+    }
+
+    logger.info('Conversion bonus awarded', {
+      userId,
+      bonusAmount,
+      hasReferrer: !!user.loyaltySystem.referredBy,
+    });
+
+    return { success: true, bonusAmount };
+  }
+
+  /**
+   * Store device fingerprint for a user
+   */
+  async storeDeviceFingerprint(
+    userId: string,
+    fingerprint: string,
+    userAgent: string,
+    ip: string
+  ): Promise<{ isNew: boolean; totalDevices: number }> {
+    const user = await User.findById(userId);
+    if (!user) {
+      throw new ApiError(404, 'User not found');
+    }
+
+    // Check if this fingerprint already exists
+    const existingIndex = user.deviceFingerprints.findIndex(
+      (d: any) => d.fingerprint === fingerprint
+    );
+
+    if (existingIndex >= 0) {
+      // Update existing fingerprint
+      user.deviceFingerprints[existingIndex].lastSeen = new Date();
+      if (ip) {
+        user.deviceFingerprints[existingIndex].ip = ip;
+      }
+      await user.save({ validateBeforeSave: false });
+      return { isNew: false, totalDevices: user.deviceFingerprints.length };
+    }
+
+    // Add new fingerprint
+    user.deviceFingerprints.push({
+      fingerprint,
+      userAgent: userAgent?.substring(0, 500) || 'unknown',
+      ip,
+      firstSeen: new Date(),
+      lastSeen: new Date(),
+      isSuspicious: false,
+    });
+
+    // Add IP to known IPs
+    if (ip && !user.knownIPs.includes(ip)) {
+      user.knownIPs.push(ip);
+    }
+
+    await user.save({ validateBeforeSave: false });
+
+    logger.info('Device fingerprint stored', {
+      userId,
+      fingerprint: fingerprint.substring(0, 8) + '...',
+      totalDevices: user.deviceFingerprints.length,
+    });
+
+    return { isNew: true, totalDevices: user.deviceFingerprints.length };
   }
 
   // ========================================
@@ -302,7 +919,7 @@ export class AuthService {
   // ========================================
 
   async registerProvider(data: ProviderRegistrationDTO): Promise<AuthResult & { providerProfile?: any }> {
-    console.log('🚀 [AuthService] Starting provider registration');
+    logger.info('Starting provider registration', { email: data.email });
 
     // Check if user already exists
     const existingUser = await User.findOne({ email: data.email });
@@ -617,7 +1234,7 @@ export class AuthService {
         const verificationToken = user.generateVerificationToken();
         await sendVerificationEmail(user.email, user.firstName, verificationToken);
       } catch (emailError) {
-        console.error('Failed to send verification email:', emailError);
+        logger.error('Failed to send verification email', { userId: user._id, error: (emailError as Error).message });
         // Continue - user can request a new verification email later
       }
 
@@ -763,9 +1380,9 @@ export class AuthService {
         });
 
         await newService.save();
-        console.log(`✅ [AuthService] Created service: ${newService.name}`);
+        logger.info('Service created', { serviceId: newService._id, serviceName: newService.name });
       } catch (serviceError) {
-        console.error(`❌ [AuthService] Failed to create service ${service.name}:`, serviceError);
+        logger.error('Failed to create service', { serviceName: service.name, error: (serviceError as Error).message });
       }
     }
   }
@@ -871,8 +1488,17 @@ export class AuthService {
     try {
       await sendWelcomeEmail(admin.email, admin.firstName, 'admin');
     } catch (emailError) {
-      console.error('Failed to send welcome email:', emailError);
+      logger.error('Failed to send welcome email', { adminId: admin._id, error: (emailError as Error).message });
     }
+
+    // Audit log: Admin account created
+    logger.info('SECURITY_AUDIT: Admin account created', {
+      action: 'ADMIN_ACCOUNT_CREATED',
+      adminId: admin._id,
+      adminEmail: admin.email,
+      createdBy: creatorId,
+      timestamp: new Date().toISOString()
+    });
 
     return {
       user: formatUserResponse(admin),
@@ -890,22 +1516,57 @@ export class AuthService {
     const user = await User.findOne({ email }).select('+password');
 
     if (!user) {
+      // Audit log: Failed login attempt (user not found)
+      logger.warn('SECURITY_AUDIT: Failed login attempt - user not found', {
+        action: 'LOGIN_FAILED',
+        reason: 'USER_NOT_FOUND',
+        email: email, // Email is not sensitive - it's the identifier
+        ip: ip || 'unknown',
+        timestamp: new Date().toISOString()
+      });
       throw new ApiError(401, 'Invalid email or password');
     }
 
     // Check if account is locked
     if (user.isLocked()) {
-      const lockTimeRemaining = Math.ceil((user.lockUntil!.getTime() - Date.now()) / (1000 * 60));
-      throw new ApiError(423, `Account is locked. Try again in ${lockTimeRemaining} minutes.`);
+      // Audit log: Login attempt on locked account
+      logger.warn('SECURITY_AUDIT: Login attempt on locked account', {
+        action: 'LOGIN_BLOCKED',
+        reason: 'ACCOUNT_LOCKED',
+        userId: user._id,
+        email: email,
+        ip: ip || 'unknown',
+        lockExpiresAt: (user as any).lockUntil,
+        timestamp: new Date().toISOString()
+      });
+      throw new ApiError(423, 'Account is temporarily locked due to too many failed attempts.');
     }
 
     // Check if account is active
     if (!user.isActive || user.isDeleted) {
+      // Audit log: Login attempt on deactivated account
+      logger.warn('SECURITY_AUDIT: Login attempt on deactivated account', {
+        action: 'LOGIN_FAILED',
+        reason: 'ACCOUNT_DEACTIVATED',
+        userId: user._id,
+        email: email,
+        ip: ip || 'unknown',
+        timestamp: new Date().toISOString()
+      });
       throw new ApiError(401, 'Account has been deactivated');
     }
 
     // Check account status
     if (user.accountStatus === 'suspended') {
+      // Audit log: Login attempt on suspended account
+      logger.warn('SECURITY_AUDIT: Login attempt on suspended account', {
+        action: 'LOGIN_FAILED',
+        reason: 'ACCOUNT_SUSPENDED',
+        userId: user._id,
+        email: email,
+        ip: ip || 'unknown',
+        timestamp: new Date().toISOString()
+      });
       throw new ApiError(403, 'Account has been suspended. Please contact support.');
     }
 
@@ -914,6 +1575,16 @@ export class AuthService {
 
     if (!isPasswordValid) {
       await user.incLoginAttempts();
+      // Audit log: Failed login attempt (invalid password)
+      logger.warn('SECURITY_AUDIT: Failed login attempt - invalid password', {
+        action: 'LOGIN_FAILED',
+        reason: 'INVALID_PASSWORD',
+        userId: user._id,
+        email: email,
+        ip: ip || 'unknown',
+        loginAttempts: user.loginAttempts + 1,
+        timestamp: new Date().toISOString()
+      });
       throw new ApiError(401, 'Invalid email or password');
     }
 
@@ -965,18 +1636,19 @@ export class AuthService {
       };
     } else if (user.role === 'provider') {
       const providerProfile = await ProviderProfile.findOne({ userId: user._id });
+      if (!providerProfile) return { providerProfile: null };
+
+      // Calculate pending earnings from incomplete bookings
+      const pendingBookings = await Booking.find({
+        providerId: user._id,
+        status: { $in: ['confirmed', 'in_progress'] }
+      });
+      const pendingBalance = pendingBookings.reduce(
+        (sum, b) => sum + (b.pricing?.totalAmount || 0), 0
+      );
+
       return {
-        providerProfile: providerProfile
-          ? {
-              id: providerProfile._id,
-              businessName: providerProfile.businessInfo.businessName,
-              completionPercentage: providerProfile.completionPercentage,
-              verificationStatus: providerProfile.verificationStatus,
-              servicesCount: providerProfile.services.length,
-              averageRating: providerProfile.reviewsData.averageRating,
-              totalEarnings: providerProfile.analytics.revenueStats.totalEarnings,
-            }
-          : null,
+        providerProfile: formatProviderProfileForClient(providerProfile, pendingBalance),
       };
     }
     return {};
@@ -1009,8 +1681,370 @@ export class AuthService {
     const user = await User.findById(userId);
     if (user) {
       user.refreshTokens = [];
+      user.sessions = []; // Clear all sessions
       await user.save({ validateBeforeSave: false });
     }
+  }
+
+  // ========================================
+  // Session Management with TTL
+  // ========================================
+
+  /**
+   * Creates a new session for a user with automatic TTL (30 days)
+   * Includes device fingerprinting for enhanced security
+   */
+  async createSession(userId: string, sessionData: {
+    token: string;
+    device: string;
+    browser?: string;
+    os?: string;
+    ip?: string;
+    location?: string;
+    userAgent?: string;
+    acceptLanguage?: string;
+  }): Promise<string> {
+    const user = await User.findById(userId);
+    if (!user) {
+      throw new ApiError(404, 'User not found');
+    }
+
+    // Generate unique session ID
+    const sessionId = crypto.randomBytes(32).toString('hex');
+
+    // Calculate expiry (30 days from now)
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 30);
+
+    // Generate device fingerprint
+    const deviceFingerprint = generateDeviceFingerprint(
+      sessionData.userAgent || 'unknown',
+      sessionData.ip || 'unknown',
+      sessionData.acceptLanguage
+    );
+
+    // Mark other sessions as not current
+    user.sessions.forEach(s => s.isCurrent = false);
+
+    // Add new session with device fingerprint
+    user.sessions.push({
+      sessionId,
+      token: sessionData.token,
+      device: sessionData.device,
+      browser: sessionData.browser,
+      os: sessionData.os,
+      ip: sessionData.ip,
+      location: sessionData.location,
+      userAgent: sessionData.userAgent,
+      lastActive: new Date(),
+      createdAt: new Date(),
+      expiresAt,
+      isCurrent: true,
+      deviceFingerprint, // Store device fingerprint hash
+    });
+
+    // Track device in device list
+    await this.trackDevice(user, {
+      fingerprint: deviceFingerprint,
+      device: sessionData.device,
+      browser: sessionData.browser,
+      os: sessionData.os,
+      ip: sessionData.ip,
+    });
+
+    // Limit total sessions per user (keep last 10)
+    if (user.sessions.length > 10) {
+      user.sessions = user.sessions
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+        .slice(0, 10);
+    }
+
+    await user.save({ validateBeforeSave: false });
+
+    // Also store in Redis for fast lookup (if available)
+    try {
+      await cache.set(
+        `session:${sessionId}`,
+        JSON.stringify({ userId: userId.toString(), deviceFingerprint, createdAt: new Date().toISOString() }),
+        30 * 24 * 60 * 60 // 30 days in seconds
+      );
+    } catch (error) {
+      logger.warn('Failed to store session in Redis, MongoDB TTL will handle cleanup', { userId, error });
+    }
+
+    return sessionId;
+  }
+
+  /**
+   * Track a device for the user (for device list management)
+   */
+  private async trackDevice(
+    user: any,
+    deviceInfo: { fingerprint: string; device: string; browser?: string; os?: string; ip?: string }
+  ): Promise<void> {
+    // Initialize deviceList if it doesn't exist
+    if (!user.deviceList) {
+      user.deviceList = [];
+    }
+
+    // Check if device already exists
+    const existingDeviceIndex = user.deviceList.findIndex(
+      (d: any) => d.fingerprint === deviceInfo.fingerprint
+    );
+
+    if (existingDeviceIndex !== -1) {
+      // Update existing device
+      user.deviceList[existingDeviceIndex] = {
+        ...user.deviceList[existingDeviceIndex],
+        lastActive: new Date(),
+        lastIp: deviceInfo.ip,
+        loginCount: (user.deviceList[existingDeviceIndex].loginCount || 1) + 1,
+      };
+    } else {
+      // Add new device
+      user.deviceList.push({
+        fingerprint: deviceInfo.fingerprint,
+        device: deviceInfo.device,
+        browser: deviceInfo.browser,
+        os: deviceInfo.os,
+        firstSeen: new Date(),
+        lastActive: new Date(),
+        lastIp: deviceInfo.ip,
+        loginCount: 1,
+        isTrusted: false,
+      });
+
+      // Keep only last 20 devices
+      if (user.deviceList.length > 20) {
+        user.deviceList = user.deviceList
+          .sort((a: any, b: any) => b.lastActive.getTime() - a.lastActive.getTime())
+          .slice(0, 20);
+      }
+
+      // Log new device detection for security monitoring
+      logger.info('New device detected for user', {
+        action: 'NEW_DEVICE_DETECTED',
+        userId: user._id,
+        device: deviceInfo.device,
+        browser: deviceInfo.browser,
+        os: deviceInfo.os,
+        fingerprint: deviceInfo.fingerprint.substring(0, 8) + '...', // Log partial for privacy
+      });
+    }
+  }
+
+  /**
+   * Get all devices for a user
+   */
+  async getUserDevices(userId: string): Promise<any[]> {
+    const user = await User.findById(userId).select('deviceList');
+    if (!user) {
+      throw new ApiError(404, 'User not found');
+    }
+
+    return (user.deviceList || []).map((d: any) => ({
+      fingerprint: d.fingerprint.substring(0, 8) + '...', // Mask for response
+      device: d.device,
+      browser: d.browser,
+      os: d.os,
+      firstSeen: d.firstSeen,
+      lastActive: d.lastActive,
+      loginCount: d.loginCount,
+      isTrusted: d.isTrusted,
+    }));
+  }
+
+  /**
+   * Remove a device from user's device list
+   */
+  async removeDevice(userId: string, fingerprint: string): Promise<void> {
+    const user = await User.findById(userId);
+    if (!user) {
+      throw new ApiError(404, 'User not found');
+    }
+
+    // Remove device from deviceList
+    user.deviceList = (user.deviceList || []).filter(
+      (d: any) => d.fingerprint !== fingerprint
+    );
+
+    // Also invalidate any sessions with this device fingerprint
+    user.sessions = (user.sessions || []).filter(
+      (s: any) => s.deviceFingerprint !== fingerprint
+    );
+
+    await user.save({ validateBeforeSave: false });
+
+    logger.info('Device removed from user account', {
+      action: 'DEVICE_REMOVED',
+      userId,
+      fingerprint: fingerprint.substring(0, 8) + '...',
+    });
+  }
+
+  /**
+   * Mark a device as trusted
+   */
+  async trustDevice(userId: string, fingerprint: string): Promise<void> {
+    const user = await User.findById(userId);
+    if (!user) {
+      throw new ApiError(404, 'User not found');
+    }
+
+    const device = (user.deviceList || []).find((d: any) => d.fingerprint === fingerprint);
+    if (device) {
+      device.isTrusted = true;
+      device.trustedAt = new Date();
+      await user.save({ validateBeforeSave: false });
+
+      logger.info('Device marked as trusted', {
+        action: 'DEVICE_TRUSTED',
+        userId,
+        fingerprint: fingerprint.substring(0, 8) + '...',
+      });
+    }
+  }
+
+  /**
+   * Check if a device is recognized (new device detection)
+   */
+  async isDeviceRecognized(userId: string, userAgent: string, ip: string, acceptLanguage?: string): Promise<{
+    isRecognized: boolean;
+    fingerprint: string;
+    isTrusted: boolean;
+    device?: any;
+  }> {
+    const user = await User.findById(userId).select('deviceList');
+    if (!user) {
+      return { isRecognized: false, fingerprint: '', isTrusted: false };
+    }
+
+    const fingerprint = generateDeviceFingerprint(userAgent, ip, acceptLanguage);
+    const device = (user.deviceList || []).find((d: any) => d.fingerprint === fingerprint);
+
+    return {
+      isRecognized: !!device,
+      fingerprint,
+      isTrusted: device?.isTrusted || false,
+      device,
+    };
+  }
+
+  /**
+   * Updates session lastActive timestamp
+   */
+  async touchSession(userId: string, sessionId: string): Promise<void> {
+    try {
+      // Try Redis first for fast lookup
+      const cachedSession = await cache.get(`session:${sessionId}`);
+      if (cachedSession) {
+        // Refresh Redis TTL on activity - set with new TTL
+        await cache.set(`session:${sessionId}`, cachedSession, 30 * 24 * 60 * 60);
+      }
+    } catch (error) {
+      // Redis unavailable, continue with MongoDB update
+    }
+
+    await User.updateOne(
+      { _id: userId, 'sessions.sessionId': sessionId },
+      { $set: { 'sessions.$.lastActive': new Date() } }
+    );
+  }
+
+  /**
+   * Invalidates a specific session
+   */
+  async invalidateSession(userId: string, sessionId: string): Promise<void> {
+    // Remove from Redis
+    try {
+      await cache.del(`session:${sessionId}`);
+    } catch (error) {
+      logger.warn('Failed to remove session from Redis', { userId, sessionId, error });
+    }
+
+    // Remove from MongoDB
+    await User.updateOne(
+      { _id: userId },
+      { $pull: { sessions: { sessionId } } }
+    );
+  }
+
+  /**
+   * Cleanup expired sessions from MongoDB (backup cleanup, TTL handles most cases)
+   * This is a maintenance method that can be called periodically
+   */
+  async cleanupExpiredSessions(): Promise<{ deleted: number }> {
+    const now = new Date();
+    const result = await User.updateMany(
+      { 'sessions.expiresAt': { $lt: now } },
+      { $pull: { sessions: { expiresAt: { $lt: now } } } }
+    );
+
+    if (result.modifiedCount > 0) {
+      logger.info('Cleaned up expired sessions', { modifiedCount: result.modifiedCount });
+    }
+
+    return { deleted: result.modifiedCount };
+  }
+
+  /**
+   * Get all active sessions for a user
+   */
+  async getUserSessions(userId: string): Promise<Array<{
+    sessionId: string;
+    device: string;
+    browser?: string;
+    os?: string;
+    ip?: string;
+    location?: string;
+    lastActive: Date;
+    createdAt: Date;
+    isCurrent: boolean;
+  }>> {
+    const user = await User.findById(userId).select('sessions');
+    if (!user) {
+      throw new ApiError(404, 'User not found');
+    }
+
+    const now = new Date();
+    return user.sessions
+      .filter(s => s.expiresAt > now) // Only return non-expired sessions
+      .map(s => ({
+        sessionId: s.sessionId,
+        device: s.device,
+        browser: s.browser,
+        os: s.os,
+        ip: s.ip,
+        location: s.location,
+        lastActive: s.lastActive,
+        createdAt: s.createdAt,
+        isCurrent: s.isCurrent,
+      }));
+  }
+
+  /**
+   * Validate a session from Redis (fast path) or MongoDB (slow path)
+   */
+  async validateSession(sessionId: string, userId: string): Promise<boolean> {
+    // Fast path: Check Redis first
+    try {
+      const cached = await cache.get(`session:${sessionId}`);
+      if (cached) {
+        const sessionData = JSON.parse(cached);
+        return sessionData.userId === userId;
+      }
+    } catch (error) {
+      // Redis unavailable, fall back to MongoDB
+    }
+
+    // Slow path: Check MongoDB
+    const user = await User.findOne({
+      _id: userId,
+      'sessions.sessionId': sessionId,
+      'sessions.expiresAt': { $gt: new Date() }
+    });
+
+    return !!user;
   }
 
   // ========================================
@@ -1020,30 +2054,60 @@ export class AuthService {
   async refreshToken(token: string): Promise<{ tokens: TokenPair; user: UserResponse }> {
     // Verify refresh token
     const decoded = jwt.verify(token, process.env.JWT_REFRESH_SECRET as string) as any;
+    const userId = decoded.id;
 
-    // Find user and check if refresh token exists
-    const user = await User.findById(decoded.id);
+    // Acquire Redis lock to prevent race conditions from concurrent refresh requests
+    const lockKey = `refresh:lock:${userId}`;
+    const lockTTL = 10; // 10 seconds lock timeout
 
-    if (!user || !user.refreshTokens.includes(token)) {
-      throw new ApiError(401, 'Invalid refresh token');
+    // Try to acquire lock with retry logic
+    let lockAcquired = false;
+    const maxRetries = 5;
+    const retryDelay = 100; // 100ms between retries
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      // Use SET NX (set if not exists) to acquire lock
+      const lockResult = await cache.client?.set(lockKey, '1', 'EX', lockTTL, 'NX');
+      if (lockResult === 'OK') {
+        lockAcquired = true;
+        break;
+      }
+      // Wait before retrying
+      await new Promise(resolve => setTimeout(resolve, retryDelay));
     }
 
-    // Check if user is still active
-    if (!user.isActive || user.isDeleted || user.accountStatus === 'suspended') {
-      throw new ApiError(401, 'User account is no longer active');
+    if (!lockAcquired) {
+      throw new ApiError(429, 'Token refresh is in progress. Please wait a moment and try again.');
     }
 
-    // Generate new tokens
-    const tokens = generateTokens(user);
+    try {
+      // Find user and check if refresh token exists
+      const user = await User.findById(userId);
 
-    // Remove old refresh token and add new one
-    user.refreshTokens = user.refreshTokens.filter((t) => t !== token);
-    await user.save({ validateBeforeSave: false });
+      if (!user || !user.refreshTokens.includes(token)) {
+        throw new ApiError(401, 'Invalid refresh token');
+      }
 
-    return {
-      tokens,
-      user: formatUserResponse(user),
-    };
+      // Check if user is still active
+      if (!user.isActive || user.isDeleted || user.accountStatus === 'suspended') {
+        throw new ApiError(401, 'User account is no longer active');
+      }
+
+      // Generate new tokens
+      const tokens = generateTokens(user);
+
+      // Remove old refresh token and add new one
+      user.refreshTokens = user.refreshTokens.filter((t) => t !== token);
+      await user.save({ validateBeforeSave: false });
+
+      return {
+        tokens,
+        user: formatUserResponse(user),
+      };
+    } finally {
+      // Always release the lock
+      await cache.del(lockKey);
+    }
   }
 
   // ========================================
@@ -1054,6 +2118,14 @@ export class AuthService {
     const user = await User.findOne({ email });
 
     if (!user) {
+      // Audit log: Password reset requested for non-existent account
+      // We log this for security monitoring even though we don't reveal the user exists
+      logger.info('SECURITY_AUDIT: Password reset requested for non-existent account', {
+        action: 'PASSWORD_RESET_REQUESTED',
+        reason: 'USER_NOT_FOUND',
+        email: email,
+        timestamp: new Date().toISOString()
+      });
       // Don't reveal if email exists for security
       return;
     }
@@ -1061,6 +2133,14 @@ export class AuthService {
     // Generate reset token
     const resetToken = user.generateResetToken();
     await user.save({ validateBeforeSave: false });
+
+    // Audit log: Password reset requested
+    logger.info('SECURITY_AUDIT: Password reset requested', {
+      action: 'PASSWORD_RESET_REQUESTED',
+      userId: user._id,
+      email: email,
+      timestamp: new Date().toISOString()
+    });
 
     // Send password reset email
     try {
@@ -1070,6 +2150,7 @@ export class AuthService {
       user.resetPasswordToken = undefined;
       user.resetPasswordExpire = undefined;
       await user.save({ validateBeforeSave: false });
+      logger.error('Failed to send password reset email', { userId: user._id, error: (error as Error).message });
       throw new ApiError(500, 'Failed to send password reset email. Please try again.');
     }
   }
@@ -1084,7 +2165,23 @@ export class AuthService {
     });
 
     if (!user) {
+      // Audit log: Password reset attempted with invalid/expired token
+      logger.warn('SECURITY_AUDIT: Password reset attempted with invalid token', {
+        action: 'PASSWORD_RESET_FAILED',
+        reason: 'INVALID_OR_EXPIRED_TOKEN',
+        timestamp: new Date().toISOString()
+      });
       throw new ApiError(400, 'Password reset token is invalid or has expired');
+    }
+
+    // FIX: Check password history to prevent reuse
+    if (user.passwordHistory && user.passwordHistory.length > 0) {
+      for (const oldHash of user.passwordHistory) {
+        const isMatch = await bcrypt.compare(password, oldHash);
+        if (isMatch) {
+          throw new ApiError(400, 'Cannot reuse any of your last 5 passwords. Please choose a different password.');
+        }
+      }
     }
 
     // Update password
@@ -1093,7 +2190,24 @@ export class AuthService {
     user.resetPasswordExpire = undefined;
     user.refreshTokens = [];
 
+    // FIX: Add old password to history before saving
+    const currentHash = await bcrypt.hash(password, 10);
+    user.passwordHistory = user.passwordHistory || [];
+    user.passwordHistory.unshift(currentHash);
+    // Keep only last 5 passwords
+    if (user.passwordHistory.length > 5) {
+      user.passwordHistory = user.passwordHistory.slice(0, 5);
+    }
+
     await user.save();
+
+    // Audit log: Password successfully reset
+    logger.info('SECURITY_AUDIT: Password successfully reset', {
+      action: 'PASSWORD_RESET_COMPLETED',
+      userId: user._id,
+      email: user.email,
+      timestamp: new Date().toISOString()
+    });
 
     // Generate new tokens
     const tokens = generateTokens(user);
@@ -1172,7 +2286,7 @@ export class AuthService {
     try {
       await sendWelcomeEmail(user.email, user.firstName, user.role);
     } catch (emailError) {
-      console.error('Failed to send welcome email:', emailError);
+      logger.error('Failed to send welcome email', { userId: user._id, error: (emailError as Error).message });
     }
 
     // Award email verification bonus
@@ -1233,6 +2347,7 @@ export class AuthService {
     const allowedUpdates = [
       'firstName', 'lastName', 'phone', 'bio', 'dateOfBirth', 'gender',
       'avatar', 'address', 'socialMediaLinks', 'communicationPreferences',
+      'yearsExperience', 'serviceAreas', 'serviceLocation',
     ];
 
     const updateKeys = Object.keys(updates);
@@ -1255,6 +2370,60 @@ export class AuthService {
     });
 
     await user.save();
+
+    // Update ProviderProfile for providers
+    if (user.role === 'provider') {
+      const providerProfile = await ProviderProfile.findOne({ userId: user._id });
+      if (providerProfile) {
+        if (updates.bio !== undefined) {
+          providerProfile.instagramStyleProfile.bio = updates.bio;
+        }
+        if (updates.yearsExperience !== undefined) {
+          (providerProfile.businessInfo as any).yearsExperience = updates.yearsExperience;
+        }
+        if (updates.serviceAreas !== undefined) {
+          providerProfile.locationInfo.serviceAreas = normalizeServiceAreas(updates.serviceAreas) as any;
+        }
+        if (updates.serviceLocation) {
+          const loc = updates.serviceLocation;
+          const lng = Number(loc.lng);
+          const lat = Number(loc.lat);
+          const areaLabel =
+            loc.label || loc.city || loc.formattedAddress || 'Service area';
+
+          if (!Number.isNaN(lng) && !Number.isNaN(lat)) {
+            providerProfile.locationInfo.primaryAddress = {
+              street: loc.street || areaLabel,
+              city: loc.city || areaLabel,
+              state: loc.state || loc.city || 'Dubai',
+              zipCode: loc.zipCode || '00000',
+              country: loc.country || 'AE',
+              coordinates: {
+                type: 'Point',
+                coordinates: [lng, lat],
+              },
+            } as any;
+            providerProfile.locationInfo.serviceAreas = normalizeServiceAreas([areaLabel]) as any;
+          }
+        }
+        if (!providerProfile.instagramStyleProfile) {
+          (providerProfile as any).instagramStyleProfile = { bio: '' };
+        }
+        sanitizeProviderGeo(providerProfile);
+        providerProfile.markModified('locationInfo');
+        try {
+          await providerProfile.save({ validateBeforeSave: false });
+        } catch (err: any) {
+          if (err?.name === 'MongoServerError' && String(err?.message || '').includes('geo')) {
+            throw new ApiError(
+              400,
+              'Location coordinates are invalid. Please set your service address in profile settings.'
+            );
+          }
+          throw err;
+        }
+      }
+    }
 
     return this.getProfile(userId);
   }

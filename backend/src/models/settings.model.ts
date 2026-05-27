@@ -124,6 +124,16 @@ export interface IPlatformSettings extends Document {
       body: string;
       enabled: boolean;
     };
+    paymentReceipt: {
+      subject: string;
+      body: string;
+      enabled: boolean;
+    };
+    providerApplication: {
+      subject: string;
+      body: string;
+      enabled: boolean;
+    };
   };
 
   // Security Settings
@@ -432,6 +442,16 @@ const SettingsSchema = new Schema<IPlatformSettings>(
         welcomeEmail: {
           subject: 'Welcome to Homeservice!',
           body: 'Dear {{userName}},\n\nWelcome to Homeservice! We\'re excited to have you join our community.\n\nGet started by exploring our services and booking your first appointment.',
+          enabled: true
+        },
+        paymentReceipt: {
+          subject: 'Payment Receipt - {{transactionId}}',
+          body: 'Dear {{userName}},\n\nYour payment has been processed successfully.\n\nTransaction ID: {{transactionId}}\nAmount: {{amount}}\nPayment Method: {{paymentMethod}}\nBooking ID: {{bookingId}}\nDate: {{date}}\n\nThank you for choosing Homeservice!',
+          enabled: true
+        },
+        providerApplication: {
+          subject: 'Provider Application Update',
+          body: 'Dear {{providerName}},\n\nYour provider application status has been updated.\n\nStatus: {{status}}\nComments: {{comments}}\nNext Steps: {{nextSteps}}\n\nThank you for your interest in joining Homeservice!',
           enabled: true
         }
       })

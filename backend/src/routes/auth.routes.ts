@@ -15,22 +15,29 @@ import {
   handleFileUploadError,
   uploadConfig
 } from '../middleware/validation.middleware';
+import { authLimiter, passwordResetLimiter, otpLimiter, twoFactorVerifyLimiter } from '../middleware/rateLimiter';
+import { verifyCaptcha, getCaptchaSiteKey } from '../middleware/captcha.middleware';
 
 const router = express.Router();
-
-// Rate limiting removed for development
 
 // ========================================
 // Public Routes (No Authentication Required)
 // ========================================
 
+// CAPTCHA configuration endpoint (public - returns site key)
+router.get('/captcha-config', getCaptchaSiteKey);
+
 // Registration Routes
 router.post('/register/customer',
+  authLimiter,
+  verifyCaptcha({ required: true, skipIfDisabled: true }),
   validateCustomerRegistration,
   authController.registerCustomer
 );
 
 router.post('/register/provider',
+  authLimiter,
+  verifyCaptcha({ required: true, skipIfDisabled: true }),
   ...validateProviderRegistrationWithoutFiles,
   handleFileUploadError,
   authController.registerProvider
@@ -38,28 +45,38 @@ router.post('/register/provider',
 
 // Login Route
 router.post('/login',
+  authLimiter,
+  verifyCaptcha({ required: true, skipIfDisabled: true }),
   validateLogin,
   authController.login
 );
 
 // Password Reset Routes
 router.post('/forgot-password',
+  passwordResetLimiter,
+  verifyCaptcha({ required: true, skipIfDisabled: true }),
   validateForgotPassword,
   authController.forgotPassword
 );
 
 router.post('/reset-password',
+  passwordResetLimiter,
+  verifyCaptcha({ required: true, skipIfDisabled: true }),
   validateResetPassword,
   authController.resetPassword
 );
 
 // Email Verification Routes
 router.post('/verify-email',
+  otpLimiter,
+  verifyCaptcha({ required: false, skipIfDisabled: true }),
   validateEmailVerification,
   authController.verifyEmail
 );
 
 router.post('/resend-verification',
+  otpLimiter,
+  verifyCaptcha({ required: true, skipIfDisabled: true }),
   validateResendVerification,
   authController.resendVerificationEmail
 );
@@ -109,6 +126,34 @@ router.get('/login-history',
   authController.getLoginHistory
 );
 
+// ============================================
+// Device Management Routes
+// ============================================
+
+// Get all devices for the current user
+router.get('/devices',
+  authMiddleware.authenticate,
+  authController.getDevices
+);
+
+// Remove a specific device
+router.delete('/devices/:fingerprint',
+  authMiddleware.authenticate,
+  authController.removeDevice
+);
+
+// Remove all devices except current session
+router.delete('/devices',
+  authMiddleware.authenticate,
+  authController.removeAllDevices
+);
+
+// Trust a device (skip 2FA for this device)
+router.post('/devices/:fingerprint/trust',
+  authMiddleware.authenticate,
+  authController.trustDevice
+);
+
 // Logout All Devices (keeps current session)
 router.post('/logout-all-devices',
   authMiddleware.authenticate,
@@ -146,13 +191,48 @@ router.delete('/account',
 // Admin Only Routes
 // ========================================
 
-// Admin User Creation
+import { requirePermission } from '../middleware/rbac.middleware';
+
+// Admin User Creation - requires admin:all permission
 router.post('/register/admin',
   authMiddleware.authenticate,
   authMiddleware.requireRole('admin'),
+  requirePermission('admin:all'),
   authMiddleware.auditLog('admin_user_creation'),
   validateCustomerRegistration, // Reuse customer schema (simpler for admin)
   authController.registerAdmin
+);
+
+// ============================================
+// Admin Invite Management Routes (Task #66 - SECURITY FIX)
+// Uses crypto.randomBytes(32) instead of predictable tokens
+// ============================================
+
+// Generate admin invite token - requires admin role
+router.post('/admin/invite',
+  authMiddleware.authenticate,
+  authMiddleware.requireRole('admin'),
+  authController.generateAdminInvite
+);
+
+// Accept admin invite token - requires authentication
+router.post('/admin/accept-invite',
+  authMiddleware.authenticate,
+  authController.acceptAdminInvite
+);
+
+// List pending admin invites - requires admin role
+router.get('/admin/invites',
+  authMiddleware.authenticate,
+  authMiddleware.requireRole('admin'),
+  authController.listAdminInvites
+);
+
+// Revoke admin invite token - requires admin role
+router.delete('/admin/invites/:token',
+  authMiddleware.authenticate,
+  authMiddleware.requireRole('admin'),
+  authController.revokeAdminInvite
 );
 
 // Health Check Route
@@ -182,8 +262,10 @@ router.post('/2fa/setup',
 );
 
 // Enable 2FA (verify code first)
+// SECURITY: Rate limited to prevent brute force attacks on TOTP codes
 router.post('/2fa/enable',
   authMiddleware.authenticate,
+  twoFactorVerifyLimiter,
   authController.enable2FA
 );
 

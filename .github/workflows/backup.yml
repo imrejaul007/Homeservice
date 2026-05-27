@@ -1,0 +1,223 @@
+name: Database Backup
+
+on:
+  # Run daily at 2 AM UTC
+  schedule:
+    - cron: '0 2 * * *'
+
+  # Allow manual triggers
+  workflow_dispatch:
+    inputs:
+      backup_type:
+        description: 'Backup type'
+        required: true
+        default: 'full'
+        type: choice
+        options:
+          - full
+          - incremental
+      retention_days:
+        description: 'Days to retain backups'
+        required: false
+        default: '30'
+        type: string
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  backup:
+    name: Create Database Backup
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: backend
+
+      - name: Run database backup
+        id: backup
+        run: |
+          npm run db:backup
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+        continue-on-error: true
+
+      - name: Upload backup to storage
+        if: steps.backup.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: db-backup-${{ github.run_number }}
+          path: backend/backups/*.json
+          retention-days: ${{ inputs.retention_days || '30' }}
+
+      - name: Upload backup to cloud storage
+        if: steps.backup.outcome == 'success'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_S3_BUCKET: ${{ secrets.AWS_S3_BACKUP_BUCKET }}
+        run: |
+          if [ -n "$AWS_ACCESS_KEY_ID" ]; then
+            # Find the latest backup file
+            BACKUP_FILE=$(ls -t backend/backups/*.json 2>/dev/null | head -1)
+            if [ -n "$BACKUP_FILE" ]; then
+              aws s3 cp "$BACKUP_FILE" "s3://$AWS_S3_BUCKET/$(basename $BACKUP_FILE)"
+              aws s3 cp "$BACKUP_FILE" "s3://$AWS_S3_BUCKET/latest-backup.json"
+            fi
+          fi
+
+      - name: Cleanup old local backups
+        if: always()
+        run: |
+          find backend/backups -name "*.json" -mtime +${{ inputs.retention_days || '30' }} -delete 2>/dev/null || true
+
+      - name: Send failure notification
+        if: steps.backup.outcome != 'success'
+        uses: slackapi/slack-github-action@v1
+        with:
+          channel-id: ${{ secrets.SLACK_CHANNEL_ID }}
+          slack-message: |
+            :x: *Database Backup Failed*
+            Run: ${{ github.run_number }}
+            Workflow: ${{ github.workflow }}
+            ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+        continue-on-error: true
+
+  verify-backup:
+    name: Verify Backup Integrity
+    runs-on: ubuntu-latest
+    needs: backup
+    if: needs.backup.result == 'success'
+
+    steps:
+      - name: Download latest backup
+        uses: actions/download-artifact@v4
+        with:
+          name: db-backup-${{ github.run_number }}
+          path: ./backups
+
+      - name: Verify backup structure
+        run: |
+          BACKUP_FILE=$(ls -t backups/*.json | head -1)
+          echo "Verifying backup: $BACKUP_FILE"
+
+          # Check if file exists and has content
+          if [ ! -s "$BACKUP_FILE" ]; then
+            echo "Error: Backup file is empty"
+            exit 1
+          fi
+
+          # Validate JSON structure
+          if ! command -v jq &> /dev/null; then
+            echo "jq not installed, using node to validate JSON"
+            node -e "
+              const fs = require('fs');
+              const data = JSON.parse(fs.readFileSync('$BACKUP_FILE', 'utf8'));
+              console.log('Backup version:', data.version);
+              console.log('Collections:', data.collections?.length || 0);
+              console.log('Total documents:', data.totalDocuments);
+            "
+          fi
+
+          # Check required fields
+          jq -e '.version and .timestamp and .collections and .data' "$BACKUP_FILE"
+
+          # List collections in backup
+          echo ""
+          echo "Collections in backup:"
+          jq -r '.collections[]' "$BACKUP_FILE" | while read col; do
+            count=$(jq ".data.\"$col\" | length" "$BACKUP_FILE")
+            echo "  - $col: $count documents"
+          done
+
+          echo ""
+          echo "Backup verified successfully!"
+
+      - name: Report backup success
+        if: always()
+        uses: slackapi/slack-github-action@v1
+        if: always() && needs.backup.result == 'success'
+        with:
+          channel-id: ${{ secrets.SLACK_CHANNEL_ID }}
+          slack-message: |
+            :white_check_mark: *Database Backup Successful*
+            Run: ${{ github.run_number }}
+            Collections: Verified
+            Workflow: ${{ github.workflow }}
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+        continue-on-error: true
+
+  # Optional: Restore test (run weekly)
+  test-restore:
+    name: Test Backup Restore
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # Run only on schedule, not on manual trigger
+    if: github.event_name == 'schedule'
+    # Run only on Sundays
+    if: github.event.schedule == '0 2 * * 0'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup MongoDB
+        uses: supercharge/mongodb-github-action@1.10.0
+        with:
+          mongodb-version: '7.0'
+
+      - name: Download latest backup
+        uses: actions/download-artifact@v4
+        with:
+          path: ./backups
+
+      - name: Test restore
+        run: |
+          # This is a dry-run test - we restore to a test instance
+          echo "Testing backup restore capability..."
+          BACKUP_FILE=$(ls -t backups/*.json | head -1)
+
+          node -e "
+            const fs = require('fs');
+            const mongoose = require('mongoose');
+
+            const data = JSON.parse(fs.readFileSync('$BACKUP_FILE', 'utf8'));
+
+            async function testRestore() {
+              await mongoose.connect('mongodb://localhost:27017/nilin_test');
+
+              for (const collectionName of data.collections) {
+                const documents = data.data[collectionName];
+                if (documents && documents.length > 0) {
+                  const Collection = mongoose.connection.collection(collectionName);
+                  await Collection.insertMany(documents.slice(0, 10)); // Test with first 10 docs
+                  console.log('Test restored', 10, 'documents from', collectionName);
+                }
+              }
+
+              await mongoose.disconnect();
+              console.log('Test restore completed successfully');
+            }
+
+            testRestore().catch(console.error);
+          "
+
+      - name: Cleanup test database
+        if: always()
+        run: |
+          docker stop $(docker ps -q --filter ancestor=mongo:7.0) 2>/dev/null || true

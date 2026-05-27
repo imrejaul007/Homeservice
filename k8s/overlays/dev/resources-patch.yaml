@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nilin-api
+spec:
+  template:
+    spec:
+      containers:
+        - name: api
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          env:
+            - name: ENABLE_DEBUG
+              value: "true"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nilin-worker
+spec:
+  template:
+    spec:
+      containers:
+        - name: worker
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

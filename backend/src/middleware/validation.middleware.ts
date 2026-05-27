@@ -14,6 +14,7 @@ import {
 } from '../validation/auth.validation';
 import { ApiError, ERROR_CODES } from '../utils/ApiError';
 import multer from 'multer';
+import logger from '../utils/logger';
 
 // File upload configuration
 const storage = multer.memoryStorage();
@@ -78,26 +79,24 @@ export const uploadConfig = {
 // JSON parsing middleware for FormData
 export const parseFormDataJSON = (fields: string[]) => {
   return (req: Request, _res: Response, next: NextFunction): void => {
-    console.log('🔍 [parseFormDataJSON] Raw request body:', req.body);
-    console.log('🔍 [parseFormDataJSON] Fields to parse:', fields);
+    logger.debug('[parseFormDataJSON] Processing FormData', { fields });
 
     // Parse JSON strings in specified fields
     fields.forEach(field => {
       if (req.body[field] && typeof req.body[field] === 'string') {
         try {
-          console.log(`🔍 [parseFormDataJSON] Parsing field "${field}":`, req.body[field]);
           req.body[field] = JSON.parse(req.body[field]);
-          console.log(`✅ [parseFormDataJSON] Parsed field "${field}":`, req.body[field]);
+          logger.debug('[parseFormDataJSON] Parsed field', { field });
         } catch (error) {
-          console.log(`❌ [parseFormDataJSON] Failed to parse field "${field}":`, error);
+          logger.warn('[parseFormDataJSON] Failed to parse field, keeping as string', {
+            field,
+            error: (error as Error).message
+          });
           // Keep as string if parsing fails, let validation handle it
         }
-      } else {
-        console.log(`🔍 [parseFormDataJSON] Field "${field}" not found or not a string:`, req.body[field]);
       }
     });
 
-    console.log('🔍 [parseFormDataJSON] Final parsed body:', req.body);
     next();
   };
 };
@@ -118,7 +117,7 @@ const validate = (schema: Joi.ObjectSchema, options?: {
 
     // Determine what to validate
     let dataToValidate = req.body;
-    
+
     if (options?.validateParams && options?.validateQuery) {
       dataToValidate = { ...req.body, ...req.params, ...req.query };
     } else if (options?.validateParams) {
@@ -127,21 +126,16 @@ const validate = (schema: Joi.ObjectSchema, options?: {
       dataToValidate = { ...req.body, ...req.query };
     }
 
-    console.log('🔍 [validate] Data to validate:', JSON.stringify(dataToValidate, null, 2));
-    console.log('🔍 [validate] Validation options:', validationOptions);
-
     const { error, value } = schema.validate(dataToValidate, validationOptions);
 
     if (error) {
-      console.log('❌ [validate] Validation failed:', error.details);
+      logger.debug('[validate] Validation failed', { errorCount: error.details.length });
 
       const validationErrors = error.details.map(detail => ({
         field: detail.path.join('.'),
         message: detail.message,
         value: detail.context?.value
       }));
-
-      console.log('❌ [validate] Formatted validation errors:', validationErrors);
 
       return res.status(400).json({
         success: false,
@@ -151,7 +145,7 @@ const validate = (schema: Joi.ObjectSchema, options?: {
       });
     }
 
-    console.log('✅ [validate] Validation successful, validated value:', JSON.stringify(value, null, 2));
+    logger.debug('[validate] Validation successful');
 
     // Update request object with validated data
     if (options?.validateParams && options?.validateQuery) {
@@ -308,17 +302,6 @@ export const handleFileUploadError = (err: any, _req: Request, res: Response, ne
   next(err);
 };
 
-// Rate limiting validation (can be combined with other validations)
-export const validateRateLimitBypass = (req: Request, _res: Response, next: NextFunction) => {
-  const bypassToken = req.headers['x-rate-limit-bypass'] as string;
-  
-  if (bypassToken && bypassToken === process.env.RATE_LIMIT_BYPASS_TOKEN) {
-    req.skipRateLimit = true;
-  }
-  
-  next();
-};
-
 // Custom validation for specific business logic
 export const validateProviderStatus = (requiredStatus?: string) => {
   return async (req: Request, res: Response, next: NextFunction): Promise<void | Response> => {
@@ -374,12 +357,3 @@ export const validateProviderRole = (req: Request, res: Response, next: NextFunc
 
 // Export the base validate function for custom schemas
 export { validate };
-
-// TypeScript module augmentation for custom properties
-declare global {
-  namespace Express {
-    interface Request {
-      skipRateLimit?: boolean;
-    }
-  }
-}

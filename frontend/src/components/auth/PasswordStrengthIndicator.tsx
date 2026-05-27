@@ -13,8 +13,8 @@ interface PasswordRequirement {
 
 const PASSWORD_REQUIREMENTS: PasswordRequirement[] = [
   {
-    label: 'At least 8 characters',
-    test: (pwd) => pwd.length >= 8,
+    label: 'At least 12 characters',
+    test: (pwd) => pwd.length >= 12,
   },
   {
     label: 'One lowercase letter',
@@ -157,8 +157,8 @@ export default PasswordStrengthIndicator;
 export const validatePassword = (password: string): { valid: boolean; errors: string[] } => {
   const errors: string[] = [];
 
-  if (password.length < 8) {
-    errors.push('Password must be at least 8 characters');
+  if (password.length < 12) {
+    errors.push('Password must be at least 12 characters');
   }
   if (!/[a-z]/.test(password)) {
     errors.push('Password must contain at least one lowercase letter');

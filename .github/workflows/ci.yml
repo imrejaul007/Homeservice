@@ -74,14 +74,21 @@ jobs:
         run: npm ci
         working-directory: backend
 
-      - name: Run tests
-        run: npm run test
+      - name: Run tests with coverage
+        run: npm run test:ci
         working-directory: backend
         env:
           MONGODB_URI: mongodb://localhost:27017/test_db
           JWT_SECRET: test_jwt_secret
           JWT_ACCESS_SECRET: test_access_secret
           JWT_REFRESH_SECRET: test_refresh_secret
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage/lcov.info
+          fail_ci_if_error: true
+          token: ${{ secrets.CODECOV_TOKEN }}
 
   frontend-build:
     name: Frontend Build

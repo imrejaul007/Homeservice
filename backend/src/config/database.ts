@@ -5,6 +5,18 @@ const logger = winston.createLogger({
   transports: [new winston.transports.Console()]
 });
 
+// Alert service for critical failures
+let alertService: any = null;
+const initAlertService = async () => {
+  try {
+    const module = await import('../services/alert.service');
+    alertService = module.alertService;
+  } catch {
+    logger.warn('Alert service not available for MongoDB alerts');
+  }
+};
+initAlertService();
+
 // Connection pool configuration
 // Optimal pool size: 20-30 for most deployments
 // Higher values increase memory usage but improve throughput under load
@@ -168,7 +180,26 @@ class Database {
         });
       }, delay);
     } else {
-      logger.error('MongoDB max reconnection attempts reached');
+      logger.error('MongoDB max reconnection attempts reached - triggering critical alert');
+
+      // Create critical alert for MongoDB reconnection failure
+      if (alertService) {
+        alertService.create(
+          'system',
+          'critical',
+          'MongoDB connection failed after maximum retry attempts',
+          {
+            connectionRetries: this.connectionRetries,
+            maxRetries: RETRY_CONFIG.maxRetries,
+            retryIntervalMs: RETRY_CONFIG.retryIntervalMs,
+            backoffMultiplier: RETRY_CONFIG.backoffMultiplier,
+            host: mongoose.connection.host,
+            database: mongoose.connection.name,
+          }
+        ).catch((err: Error) => {
+          logger.error('Failed to create MongoDB failure alert:', err.message);
+        });
+      }
     }
   }
 

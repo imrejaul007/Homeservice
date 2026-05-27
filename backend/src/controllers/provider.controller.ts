@@ -3,8 +3,15 @@ import mongoose from 'mongoose';
 import Service from '../models/service.model';
 import ServiceCategory from '../models/serviceCategory.model';
 import Booking from '../models/booking.model';
+import ProviderProfile from '../models/providerProfile.model';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
+import logger from '../utils/logger';
+import {
+  buildServiceAddressFromProvider,
+  normalizeServiceAreas,
+  sanitizeProviderGeo,
+} from '../utils/sanitizeProviderGeo';
 
 // Helper function to validate and normalize category/subcategory against database
 const validateAndNormalizeCategorySubcategory = async (category: string, subcategory?: string) => {
@@ -63,13 +70,8 @@ interface ServiceAnalytics {
   totalClicks: number;
   totalBookings: number;
   conversionRate: number;
+  bookingRate: number;
   popularityScore: number;
-  recentActivity: {
-    period: string;
-    views: number;
-    clicks: number;
-    bookings: number;
-  }[];
 }
 
 // ===================================
@@ -227,8 +229,11 @@ export const getServiceById = asyncHandler(async (req: Request, res: Response) =
  */
 export const createService = asyncHandler(async (req: Request, res: Response) => {
   try {
-    console.log('🚀 [createService] Starting service creation');
-    console.log('🔍 [createService] Request body:', JSON.stringify(req.body, null, 2));
+    logger.debug('Starting service creation', {
+      context: 'ProviderController',
+      action: 'CREATE_SERVICE_START',
+      userId: (req.user as any)?._id?.toString(),
+    });
 
     // Get provider's location from their profile
     const ProviderProfile = require('../models/providerProfile.model').default;
@@ -238,7 +243,11 @@ export const createService = asyncHandler(async (req: Request, res: Response) =>
       throw new ApiError(400, 'Provider location not found. Please complete your profile first.');
     }
 
-    console.log('🔍 [createService] Provider profile location:', JSON.stringify(providerProfile.locationInfo.primaryAddress, null, 2));
+    logger.debug('Provider profile location found', {
+      context: 'ProviderController',
+      action: 'PROVIDER_LOCATION_FOUND',
+      userId: (req.user as any)?._id?.toString(),
+    });
 
     // Validate and normalize category/subcategory against database (single source of truth)
     const { category, subcategory } = await validateAndNormalizeCategorySubcategory(
@@ -247,7 +256,12 @@ export const createService = asyncHandler(async (req: Request, res: Response) =>
     );
     req.body.category = category;
     req.body.subcategory = subcategory;
-    console.log('✅ [createService] Category/subcategory validated:', { category, subcategory });
+    logger.debug('Category/subcategory validated', {
+      context: 'ProviderController',
+      action: 'CATEGORY_VALIDATED',
+      category,
+      subcategory,
+    });
 
     // ✅ FIX: Extract coordinates properly from provider profile and convert to array format
     // Now uses GeoJSON format: { type: 'Point', coordinates: [lng, lat] }
@@ -257,34 +271,53 @@ export const createService = asyncHandler(async (req: Request, res: Response) =>
     if (coords?.coordinates && Array.isArray(coords.coordinates) && coords.coordinates.length === 2) {
       // New GeoJSON format: { type: 'Point', coordinates: [lng, lat] }
       serviceCoordinates = coords.coordinates as [number, number];
-      console.log(`✅ [createService] Using GeoJSON coordinates: [${serviceCoordinates}]`);
+      logger.debug('Using GeoJSON coordinates', {
+        context: 'ProviderController',
+        action: 'GEOJSON_COORDS',
+        coordinates: serviceCoordinates,
+      });
     } else if (coords?.lat !== undefined && coords?.lng !== undefined) {
       // Legacy format: { lat, lng } - convert to array [lng, lat]
       serviceCoordinates = [coords.lng, coords.lat];
-      console.log(`⚠️ [createService] Converted legacy lat/lng to array: [${serviceCoordinates}]`);
+      logger.info('Converted legacy lat/lng to GeoJSON format', {
+        context: 'ProviderController',
+        action: 'LEGACY_COORDS_CONVERTED',
+        coordinates: serviceCoordinates,
+      });
     } else {
       // Fallback to Dubai coordinates (default for the platform)
-      console.log('⚠️ [createService] No coordinates found, using Dubai default');
+      logger.warn('No coordinates found, using Dubai default', {
+        context: 'ProviderController',
+        action: 'DEFAULT_COORDS',
+      });
       serviceCoordinates = [55.2708, 25.2048]; // [lng, lat]
     }
 
-    console.log('🔍 [createService] Using coordinates:', serviceCoordinates);
+    logger.debug('Using service coordinates', {
+      context: 'ProviderController',
+      action: 'USING_COORDS',
+      coordinates: serviceCoordinates,
+    });
+
+    const serviceAddress = buildServiceAddressFromProvider(providerProfile);
+    const serviceRadius =
+      (providerProfile.businessInfo as { serviceRadius?: number })?.serviceRadius ?? 25;
 
     // Add provider ID and audit fields with inherited location
     const serviceData = {
       ...req.body,
-      // Inherit location from provider profile
+      // Inherit location from provider profile (full address required by Service schema)
       location: {
-        address: providerProfile.locationInfo.primaryAddress,
+        address: serviceAddress,
         coordinates: {
           type: 'Point',
-          coordinates: serviceCoordinates // ✅ FIX: Properly formatted coordinates array
+          coordinates: serviceCoordinates,
         },
         serviceArea: {
           type: 'radius',
-          value: providerProfile.locationInfo.serviceRadius || 25,
-          maxDistance: providerProfile.locationInfo.serviceRadius || 25
-        }
+          value: serviceRadius,
+          maxDistance: serviceRadius,
+        },
       },
       // ✅ FIX: Add default availability schedule to prevent validation errors
       availability: req.body.availability || {
@@ -323,12 +356,21 @@ export const createService = asyncHandler(async (req: Request, res: Response) =>
       }
     };
 
-    console.log('🔍 [createService] Final service data:', JSON.stringify(serviceData, null, 2));
+    logger.debug('Creating service with data', {
+      context: 'ProviderController',
+      action: 'CREATE_SERVICE_DATA',
+      serviceData: { ...serviceData, searchMetadata: '[REDACTED]' },
+    });
 
     const service = new Service(serviceData);
     await service.save();
 
-    console.log('✅ [createService] Service created successfully:', service._id);
+    logger.info('Service created successfully', {
+      context: 'ProviderController',
+      action: 'SERVICE_CREATED',
+      serviceId: service._id.toString(),
+      userId: (req.user as any)?._id?.toString(),
+    });
 
     res.status(201).json({
       success: true,
@@ -336,8 +378,15 @@ export const createService = asyncHandler(async (req: Request, res: Response) =>
       data: { service }
     });
   } catch (error: any) {
-    console.error('❌ [createService] Error creating service:', error);
-    console.error('❌ [createService] Error stack:', error.stack);
+    logger.error('Error creating service', {
+      context: 'ProviderController',
+      action: 'CREATE_SERVICE_ERROR',
+      userId: (req.user as any)?._id?.toString(),
+      error: error.message,
+    });
+    if (error.name === 'ValidationError') {
+      throw new ApiError(400, `Service validation failed: ${error.message}`);
+    }
     throw new ApiError(500, 'Failed to create service', error.message);
   }
 });
@@ -374,13 +423,27 @@ export const updateService = asyncHandler(async (req: Request, res: Response) =>
       if (req.body.subcategory) req.body.subcategory = subcategory;
     }
 
-    // Add audit fields
-    const updateData = {
-      ...req.body,
+    // Strip system-owned fields; provider may set status (including active)
+    const {
+      isActive: _isActive,
+      providerId: _providerId,
+      location: _location,
+      searchMetadata: _searchMetadata,
+      rating: _rating,
+      createdBy: _createdBy,
+      ...providerEditableFields
+    } = req.body;
+
+    const updateData: Record<string, unknown> = {
+      ...providerEditableFields,
       updatedBy: (req.user as any)._id,
-      updatedAt: new Date()
+      updatedAt: new Date(),
     };
-    
+
+    if (typeof updateData.status === 'string') {
+      updateData.isActive = updateData.status === 'active';
+    }
+
     const service = await Service.findByIdAndUpdate(
       id,
       updateData,
@@ -398,14 +461,13 @@ export const updateService = asyncHandler(async (req: Request, res: Response) =>
 });
 
 /**
- * Delete service (soft delete by setting inactive)
+ * Delete service permanently
  * DELETE /api/provider/services/:id
  */
 export const deleteService = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
   
   try {
-    // Check if service exists and belongs to provider
     const service = await Service.findOne({
       _id: id,
       providerId: (req.user as any)._id.toString()
@@ -414,20 +476,27 @@ export const deleteService = asyncHandler(async (req: Request, res: Response) =>
     if (!service) {
       throw new ApiError(404, 'Service not found or access denied');
     }
+
+    const openBooking = await Booking.findOne({
+      serviceId: service._id,
+      status: { $in: ['pending', 'confirmed', 'in_progress'] },
+    }).lean();
+
+    if (openBooking) {
+      throw new ApiError(
+        400,
+        'Cannot delete this service while it has active bookings. Cancel or complete them first.'
+      );
+    }
     
-    // Soft delete by setting inactive
-    await Service.findByIdAndUpdate(id, {
-      isActive: false,
-      status: 'inactive',
-      updatedBy: (req.user as any)._id,
-      updatedAt: new Date()
-    });
+    await Service.findByIdAndDelete(id);
     
     res.json({
       success: true,
-      message: 'Service deleted successfully'
+      message: 'Service permanently deleted'
     });
   } catch (error: any) {
+    if (error instanceof ApiError) throw error;
     throw new ApiError(500, 'Failed to delete service', error.message);
   }
 });
@@ -439,9 +508,9 @@ export const deleteService = asyncHandler(async (req: Request, res: Response) =>
 export const toggleServiceStatus = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
   const { status } = req.body;
-  
-  // Validate status
-  const validStatuses = ['draft', 'active', 'inactive', 'pending_review'];
+
+  // Validate status against SERVICE_STATUS constants
+  const validStatuses = ['active', 'inactive'];
   if (!validStatuses.includes(status)) {
     throw new ApiError(400, 'Invalid status. Must be: ' + validStatuses.join(', '));
   }
@@ -457,14 +526,12 @@ export const toggleServiceStatus = asyncHandler(async (req: Request, res: Respon
       throw new ApiError(404, 'Service not found or access denied');
     }
     
-    // Update status and isActive flag
     const updateData: any = {
       status,
       updatedBy: (req.user as any)._id,
       updatedAt: new Date()
     };
     
-    // Update isActive based on status
     updateData.isActive = status === 'active';
     
     const updatedService = await Service.findByIdAndUpdate(
@@ -505,23 +572,17 @@ export const getServiceAnalytics = asyncHandler(async (req: Request, res: Respon
       throw new ApiError(404, 'Service not found or access denied');
     }
     
-    // Calculate analytics
+    const totalViews = service.searchMetadata.searchCount;
+    const totalClicks = service.searchMetadata.clickCount;
+    const totalBookings = service.searchMetadata.bookingCount;
+
     const analytics: ServiceAnalytics = {
-      totalViews: service.searchMetadata.searchCount,
-      totalClicks: service.searchMetadata.clickCount,
-      totalBookings: service.searchMetadata.bookingCount,
-      conversionRate: service.searchMetadata.searchCount > 0 
-        ? (service.searchMetadata.clickCount / service.searchMetadata.searchCount) * 100 
-        : 0,
+      totalViews,
+      totalClicks,
+      totalBookings,
+      conversionRate: totalViews > 0 ? (totalClicks / totalViews) * 100 : 0,
+      bookingRate: totalClicks > 0 ? (totalBookings / totalClicks) * 100 : 0,
       popularityScore: service.searchMetadata.popularityScore,
-      recentActivity: [
-        {
-          period: 'Last 7 days',
-          views: Math.floor(service.searchMetadata.searchCount * 0.3), // Mock recent data
-          clicks: Math.floor(service.searchMetadata.clickCount * 0.3),
-          bookings: Math.floor(service.searchMetadata.bookingCount * 0.3)
-        }
-      ]
     };
     
     res.json({
@@ -532,6 +593,30 @@ export const getServiceAnalytics = asyncHandler(async (req: Request, res: Respon
     throw new ApiError(500, 'Failed to fetch service analytics', error.message);
   }
 });
+
+/**
+ * Provider analytics dashboard (insights page)
+ * GET /api/provider/analytics/insights?period=7d|30d|90d
+ */
+export const getProviderInsightsAnalytics = asyncHandler(
+  async (req: Request, res: Response) => {
+    const providerId = (req.user as any)._id.toString();
+    const periodParam = String(req.query.period || '30d');
+    const period = (['7d', '30d', '90d'].includes(periodParam)
+      ? periodParam
+      : '30d') as '7d' | '30d' | '90d';
+
+    const { getProviderInsightsAnalytics: loadInsights } = await import(
+      '../services/providerInsightsAnalytics.service'
+    );
+    const analytics = await loadInsights(providerId, period);
+
+    res.json({
+      success: true,
+      data: analytics,
+    });
+  },
+);
 
 /**
  * Get provider overview analytics
@@ -551,6 +636,16 @@ export const getOverviewAnalytics = asyncHandler(async (req: Request, res: Respo
     const activeServices = services.filter(s => s.isActive && s.status === 'active').length;
     const draftServices = services.filter(s => s.status === 'draft').length;
     const inactiveServices = services.filter(s => s.status === 'inactive').length;
+    const pendingReviewServices = services.filter(s => s.status === 'pending_review').length;
+
+    // Calculate status counts for filter UI
+    const statusCounts = {
+      all: totalServices,
+      active: activeServices,
+      draft: draftServices,
+      inactive: inactiveServices,
+      pending_review: pendingReviewServices
+    };
 
     const totalViews = services.reduce((sum, service) => sum + service.searchMetadata.searchCount, 0);
     const totalClicks = services.reduce((sum, service) => sum + service.searchMetadata.clickCount, 0);
@@ -666,16 +761,26 @@ export const getOverviewAnalytics = asyncHandler(async (req: Request, res: Respo
         popularityScore: service.searchMetadata.popularityScore
       }));
 
-    // Get unique categories from services
-    const categories = [...new Set(services.map(s => s.category).filter(Boolean))];
+    // Get unique categories from services (for provider's used categories)
+    const providerCategories = [...new Set(services.map(s => s.category).filter(Boolean))];
+
+    // Get all available categories from ServiceCategory collection
+    const allCategories = await ServiceCategory.find({ isActive: true })
+      .select('name')
+      .sort({ name: 1 })
+      .lean();
+
+    const allCategoryNames = allCategories.map(c => c.name);
 
     const overview = {
       serviceStats: {
         total: totalServices,
         active: activeServices,
         draft: draftServices,
-        inactive: inactiveServices
+        inactive: inactiveServices,
+        pending_review: pendingReviewServices
       },
+      statusCounts,
       performanceStats: {
         totalViews,
         totalClicks,
@@ -705,7 +810,8 @@ export const getOverviewAnalytics = asyncHandler(async (req: Request, res: Respo
         cancelled: statusMap.get('cancelled') || 0,
         no_show: statusMap.get('no_show') || 0
       },
-      categories,
+      categories: providerCategories,
+      allCategories: allCategoryNames,
       topServices
     };
 
@@ -716,4 +822,510 @@ export const getOverviewAnalytics = asyncHandler(async (req: Request, res: Respo
   } catch (error: any) {
     throw new ApiError(500, 'Failed to fetch overview analytics', error.message);
   }
+});
+
+// ===================================
+// PROVIDER ONBOARDING
+// ===================================
+
+/**
+ * Get provider's own onboarding status
+ * GET /api/provider/onboarding
+ */
+export const getProviderOnboardingStatus = asyncHandler(async (req: Request, res: Response) => {
+  try {
+    // Use authenticated user, or allow query param for admin fallback
+    let providerId = (req.user as any)._id?.toString();
+    if (!providerId && req.query.providerId) {
+      providerId = req.query.providerId as string;
+    }
+
+    if (!providerId) {
+      throw new ApiError(401, 'Provider ID not found');
+    }
+
+    // Import here to avoid circular dependency
+    const { providerOpsService } = await import('../services/providerOps.service');
+
+    const status = await providerOpsService.getOnboardingStatus(providerId);
+
+    res.json({
+      success: true,
+      data: status
+    });
+  } catch (error: any) {
+    throw new ApiError(500, 'Failed to fetch onboarding status', error.message);
+  }
+});
+
+/**
+ * Get provider's own verification status
+ * GET /api/provider/verification
+ */
+export const getProviderVerification = asyncHandler(async (req: Request, res: Response) => {
+  try {
+    // Use authenticated user, or allow query param for admin fallback
+    let providerId = (req.user as any)._id?.toString();
+    if (!providerId && req.query.providerId) {
+      providerId = req.query.providerId as string;
+    }
+
+    if (!providerId) {
+      throw new ApiError(401, 'Provider ID not found');
+    }
+
+    // Import here to avoid circular dependency
+    const { providerOpsService } = await import('../services/providerOps.service');
+
+    const documentStatus = await providerOpsService.getDocumentVerificationStatus(providerId);
+
+    res.json({
+      success: true,
+      data: documentStatus
+    });
+  } catch (error: any) {
+    throw new ApiError(500, 'Failed to fetch verification status', error.message);
+  }
+});
+
+/**
+ * Upload verification document
+ * POST /api/provider/verification/documents
+ */
+export const uploadVerificationDocument = asyncHandler(async (req: Request, res: Response) => {
+  const providerId = (req.user as any)._id;
+
+  const { documentType, documentUrl } = req.body;
+
+  if (!documentType || !documentUrl) {
+    throw new ApiError(400, 'Document type and URL are required');
+  }
+
+  const providerProfile = await ProviderProfile.findOne({ userId: providerId });
+  if (!providerProfile) {
+    throw new ApiError(404, 'Provider profile not found');
+  }
+
+  // Initialize verificationStatus if not exists
+  if (!providerProfile.verificationStatus) {
+    providerProfile.verificationStatus = {
+      identity: { status: 'pending', documents: [] },
+      business: { status: 'pending', documents: [] },
+      insurance: { status: 'pending', documents: [] },
+      background: { status: 'pending' },
+    } as any;
+  }
+
+  // Add document to appropriate category
+  const category = documentType.includes('id') || documentType.includes('passport') || documentType.includes('license')
+    ? 'identity'
+    : documentType.includes('business') || documentType.includes('license') || documentType.includes('certificate')
+    ? 'business'
+    : 'insurance';
+
+  if (providerProfile.verificationStatus[category as keyof typeof providerProfile.verificationStatus]) {
+    const catStatus = providerProfile.verificationStatus[category as keyof typeof providerProfile.verificationStatus] as any;
+    if (!catStatus.documents) catStatus.documents = [];
+    catStatus.documents.push({
+      type: documentType,
+      url: documentUrl,
+      status: 'pending',
+      uploadedAt: new Date(),
+    });
+    catStatus.uploadedAt = new Date();
+    catStatus.status = 'submitted';
+  }
+
+  await providerProfile.save();
+
+  res.json({
+    success: true,
+    message: 'Document uploaded successfully',
+    data: {
+      documentType,
+      url: documentUrl,
+    },
+  });
+});
+
+/**
+ * Submit verification for review
+ * POST /api/provider/verification/submit
+ */
+export const submitVerification = asyncHandler(async (req: Request, res: Response) => {
+  const providerId = (req.user as any)._id;
+
+  const providerProfile = await ProviderProfile.findOne({ userId: providerId });
+  if (!providerProfile) {
+    throw new ApiError(404, 'Provider profile not found');
+  }
+
+  // Check if required documents are uploaded
+  const identityDocs = providerProfile.verificationStatus?.identity?.documents?.length || 0;
+  if (identityDocs === 0) {
+    throw new ApiError(400, 'Please upload identity verification documents before submitting');
+  }
+
+  // Update verification status
+  if (providerProfile.verificationStatus) {
+    providerProfile.verificationStatus.identity.status = 'pending';
+    providerProfile.verificationStatus.business.status = 'pending';
+    providerProfile.verificationStatus.overall = 'in_progress';
+  }
+
+  await providerProfile.save();
+
+  res.json({
+    success: true,
+    message: 'Verification submitted for review. You will be notified once the review is complete.',
+  });
+});
+
+// ===================================
+// PORTFOLIO MANAGEMENT
+// ===================================
+
+/**
+ * Get all portfolio items for the authenticated provider
+ * GET /api/provider/portfolio
+ */
+export const getPortfolioItems = asyncHandler(async (req: Request, res: Response) => {
+  const providerId = (req.user as any)._id;
+
+  const providerProfile = await ProviderProfile.findOne({ userId: providerId });
+  if (!providerProfile) {
+    throw new ApiError(404, 'Provider profile not found');
+  }
+
+  const featuredItems = providerProfile.portfolio?.featured || [];
+
+  res.json({
+    success: true,
+    data: featuredItems,
+  });
+});
+
+/**
+ * Create a new portfolio item
+ * POST /api/provider/portfolio
+ */
+export const createPortfolioItem = asyncHandler(async (req: Request, res: Response) => {
+  const providerId = (req.user as any)._id;
+  const { title, description, category, images, tags, clientTestimonial, isVisible = true } = req.body;
+
+  if (!title) {
+    throw new ApiError(400, 'Title is required');
+  }
+
+  const providerProfile = await ProviderProfile.findOne({ userId: providerId });
+  if (!providerProfile) {
+    throw new ApiError(404, 'Provider profile not found');
+  }
+
+  // Initialize portfolio if not exists
+  if (!providerProfile.portfolio) {
+    providerProfile.portfolio = { featured: [], certifications: [], awards: [] };
+  }
+
+  // Process images if files were uploaded
+  let processedImages = images || [];
+  if (req.files && Array.isArray(req.files)) {
+    const uploadedImages = (req.files as Express.Multer.File[]).map(file => ({
+      url: (file as any).path || (file as any).secure_url || file.filename,
+      caption: '',
+    }));
+    processedImages = [...uploadedImages, ...processedImages];
+  }
+
+  const newItem = {
+    _id: new mongoose.Types.ObjectId(),
+    title,
+    description: description || '',
+    category: category || 'Other',
+    images: processedImages,
+    tags: tags || [],
+    clientTestimonial: clientTestimonial || undefined,
+    isVisible,
+    createdAt: new Date(),
+  };
+
+  providerProfile.portfolio.featured.unshift(newItem as any);
+  await providerProfile.save();
+
+  res.status(201).json({
+    success: true,
+    data: newItem,
+    message: 'Portfolio item created successfully',
+  });
+});
+
+/**
+ * Update an existing portfolio item
+ * PUT /api/provider/portfolio/:itemId
+ */
+export const updatePortfolioItem = asyncHandler(async (req: Request, res: Response) => {
+  const providerId = (req.user as any)._id;
+  const { itemId } = req.params;
+  const { title, description, category, images, tags, clientTestimonial, isVisible } = req.body;
+
+  const providerProfile = await ProviderProfile.findOne({ userId: providerId });
+  if (!providerProfile) {
+    throw new ApiError(404, 'Provider profile not found');
+  }
+
+  const itemIndex = providerProfile.portfolio?.featured.findIndex(
+    (item: any) => item._id?.toString() === itemId || item._id === itemId
+  );
+
+  if (itemIndex === -1 || itemIndex === undefined) {
+    throw new ApiError(404, 'Portfolio item not found');
+  }
+
+  // Update fields if provided
+  if (title) providerProfile.portfolio.featured[itemIndex].title = title;
+  if (description !== undefined) providerProfile.portfolio.featured[itemIndex].description = description;
+  if (category) providerProfile.portfolio.featured[itemIndex].category = category;
+  if (tags) providerProfile.portfolio.featured[itemIndex].tags = tags;
+  if (clientTestimonial !== undefined) providerProfile.portfolio.featured[itemIndex].clientTestimonial = clientTestimonial;
+  if (isVisible !== undefined) providerProfile.portfolio.featured[itemIndex].isVisible = isVisible;
+
+  // Merge images if provided
+  if (images) {
+    providerProfile.portfolio.featured[itemIndex].images = images;
+  }
+
+  await providerProfile.save();
+
+  res.json({
+    success: true,
+    data: providerProfile.portfolio.featured[itemIndex],
+    message: 'Portfolio item updated successfully',
+  });
+});
+
+/**
+ * Delete a portfolio item
+ * DELETE /api/provider/portfolio/:itemId
+ */
+export const deletePortfolioItem = asyncHandler(async (req: Request, res: Response) => {
+  const providerId = (req.user as any)._id;
+  const { itemId } = req.params;
+
+  const providerProfile = await ProviderProfile.findOne({ userId: providerId });
+  if (!providerProfile) {
+    throw new ApiError(404, 'Provider profile not found');
+  }
+
+  const initialLength = providerProfile.portfolio?.featured?.length || 0;
+  providerProfile.portfolio.featured = providerProfile.portfolio.featured.filter(
+    (item: any) => item._id?.toString() !== itemId && item._id !== itemId
+  );
+
+  if (providerProfile.portfolio.featured.length === initialLength) {
+    throw new ApiError(404, 'Portfolio item not found');
+  }
+
+  await providerProfile.save();
+
+  res.json({
+    success: true,
+    message: 'Portfolio item deleted successfully',
+  });
+});
+
+/**
+ * Add images to an existing portfolio item
+ * PATCH /api/provider/portfolio/:itemId/images
+ */
+export const addPortfolioImage = asyncHandler(async (req: Request, res: Response) => {
+  const providerId = (req.user as any)._id;
+  const { itemId } = req.params;
+
+  const providerProfile = await ProviderProfile.findOne({ userId: providerId });
+  if (!providerProfile) {
+    throw new ApiError(404, 'Provider profile not found');
+  }
+
+  const item = providerProfile.portfolio?.featured.find(
+    (i: any) => i._id?.toString() === itemId || i._id === itemId
+  );
+
+  if (!item) {
+    throw new ApiError(404, 'Portfolio item not found');
+  }
+
+  // Process uploaded files
+  if (req.files && Array.isArray(req.files)) {
+    const newImages = (req.files as Express.Multer.File[]).map(file => ({
+      url: (file as any).path || (file as any).secure_url || file.filename,
+      caption: '',
+    }));
+    item.images.push(...newImages);
+  }
+
+  await providerProfile.save();
+
+  res.json({
+    success: true,
+    data: item.images,
+    message: 'Image added successfully',
+  });
+});
+
+/**
+ * Remove an image from a portfolio item
+ * DELETE /api/provider/portfolio/:itemId/images/:imageId
+ */
+export const removePortfolioImage = asyncHandler(async (req: Request, res: Response) => {
+  const providerId = (req.user as any)._id;
+  const { itemId, imageId } = req.params;
+
+  const providerProfile = await ProviderProfile.findOne({ userId: providerId });
+  if (!providerProfile) {
+    throw new ApiError(404, 'Provider profile not found');
+  }
+
+  const item = providerProfile.portfolio?.featured.find(
+    (i: any) => i._id?.toString() === itemId || i._id === itemId
+  );
+
+  if (!item) {
+    throw new ApiError(404, 'Portfolio item not found');
+  }
+
+  const initialLength = item.images?.length || 0;
+  item.images = (item.images || []).filter((img: any) => {
+    const imgId = img._id?.toString() || img.url || String(img);
+    return imgId !== imageId;
+  });
+
+  if (item.images.length === initialLength) {
+    throw new ApiError(404, 'Image not found');
+  }
+
+  await providerProfile.save();
+
+  res.json({
+    success: true,
+    data: item.images,
+    message: 'Image removed successfully',
+  });
+});
+
+// ===========================================
+// PROVIDER SETTINGS
+// ===========================================
+
+/**
+ * Get provider settings
+ * GET /api/provider/settings
+ */
+export const getProviderSettings = asyncHandler(async (req: Request, res: Response) => {
+  const providerId = (req.user as any)._id;
+
+  const providerProfile = await ProviderProfile.findOne({ userId: providerId });
+  if (!providerProfile) {
+    throw new ApiError(404, 'Provider profile not found');
+  }
+
+  const settings = providerProfile.settings as any || {};
+  const businessSettings = {
+    autoAcceptBookings: settings.autoAcceptBookings || false,
+    instantBookingEnabled: settings.instantBookingEnabled || false,
+    cancellationPolicyHours: settings.cancellationPolicy?.freeUntilHours || 24,
+  };
+  const privacySettings = {
+    showEmail: settings.privacySettings?.showEmail ?? false,
+    showPhone: settings.privacySettings?.showPhoneNumber ?? true,
+    showReviewsPublicly: true,
+  };
+
+  res.json({
+    success: true,
+    data: {
+      businessSettings,
+      locationInfo: providerProfile.locationInfo || {},
+      privacySettings,
+    },
+  });
+});
+
+/**
+ * Update provider settings
+ * PATCH /api/provider/settings
+ */
+export const updateProviderSettings = asyncHandler(async (req: Request, res: Response) => {
+  const providerId = (req.user as any)._id;
+  const {
+    businessSettings,
+    locationInfo,
+    privacySettings,
+  } = req.body;
+
+  const providerProfile = await ProviderProfile.findOne({ userId: providerId });
+  if (!providerProfile) {
+    throw new ApiError(404, 'Provider profile not found');
+  }
+
+  // Initialize settings if not exists
+  const settings = (providerProfile.settings as any) || {};
+
+  // Update business settings
+  if (businessSettings) {
+    if (businessSettings.autoAcceptBookings !== undefined) {
+      settings.autoAcceptBookings = businessSettings.autoAcceptBookings;
+    }
+    if (businessSettings.cancellationPolicyHours !== undefined) {
+      settings.cancellationPolicy = settings.cancellationPolicy || {};
+      settings.cancellationPolicy.freeUntilHours = businessSettings.cancellationPolicyHours;
+    }
+  }
+
+  // Update location info
+  if (locationInfo) {
+    const merged = {
+      ...providerProfile.locationInfo,
+      ...locationInfo,
+    };
+    if (locationInfo.serviceAreas !== undefined) {
+      merged.serviceAreas = normalizeServiceAreas(locationInfo.serviceAreas) as any;
+    }
+    providerProfile.locationInfo = merged;
+  }
+
+  sanitizeProviderGeo(providerProfile);
+  providerProfile.markModified('locationInfo');
+
+  // Update privacy settings
+  if (privacySettings) {
+    settings.privacySettings = settings.privacySettings || {};
+    if (privacySettings.showEmail !== undefined) {
+      settings.privacySettings.showEmail = privacySettings.showEmail;
+    }
+    if (privacySettings.showPhone !== undefined) {
+      settings.privacySettings.showPhoneNumber = privacySettings.showPhone;
+    }
+  }
+
+  providerProfile.settings = settings;
+
+  await providerProfile.save();
+
+  res.json({
+    success: true,
+    message: 'Settings updated successfully',
+    data: {
+      businessSettings: {
+        autoAcceptBookings: settings.autoAcceptBookings || false,
+        instantBookingEnabled: settings.instantBookingEnabled || false,
+        cancellationPolicyHours: settings.cancellationPolicy?.freeUntilHours || 24,
+      },
+      locationInfo: providerProfile.locationInfo,
+      privacySettings: {
+        showEmail: settings.privacySettings?.showEmail ?? false,
+        showPhone: settings.privacySettings?.showPhoneNumber ?? true,
+        showReviewsPublicly: true,
+      },
+    },
+  });
 });

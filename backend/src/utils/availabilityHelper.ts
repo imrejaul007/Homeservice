@@ -7,6 +7,7 @@ interface ValidateSlotParams {
   scheduledDate: string | Date;
   scheduledTime: string;
   serviceDurationMinutes: number;
+  bufferTimeMinutes?: number; // Buffer time between bookings
   session?: ClientSession; // Optional session for transaction support
 }
 
@@ -29,9 +30,15 @@ export async function validateProviderSlotAvailability({
   scheduledDate,
   scheduledTime,
   serviceDurationMinutes,
+  bufferTimeMinutes = 0,
   session
 }: ValidateSlotParams): Promise<ValidateSlotResult> {
   const providerProfile = await ProviderProfile.findOne({ userId: providerId });
+
+  // Use provider's buffer time if not explicitly provided
+  const effectiveBufferTime = bufferTimeMinutes > 0
+    ? bufferTimeMinutes
+    : (providerProfile?.availability?.bufferTime || 0);
 
   if (!providerProfile?.availability?.schedule) {
     return {
@@ -74,7 +81,7 @@ export async function validateProviderSlotAvailability({
 
   // Check if requested time falls within an active time slot
   const requestedMinutes = timeToMinutes(scheduledTime);
-  const requestedEndMinutes = requestedMinutes + serviceDurationMinutes;
+  const requestedEndMinutes = requestedMinutes + serviceDurationMinutes + effectiveBufferTime;
 
   const isWithinTimeSlot = daySchedule.timeSlots.some((slot: any) => {
     if (!slot.startTime || !slot.endTime) return false;
@@ -99,7 +106,7 @@ export async function validateProviderSlotAvailability({
         isValid: false,
         errorMessage: 'This time slot is no longer available for today',
         errorCode: 'PAST_SLOT',
-        availableSlots: generateAvailableSlots(daySchedule.timeSlots, serviceDurationMinutes, currentMinutes + bufferMinutes, isToday)
+        availableSlots: generateAvailableSlots(daySchedule.timeSlots, serviceDurationMinutes, currentMinutes + bufferMinutes, isToday, effectiveBufferTime)
       };
     }
   }
@@ -110,7 +117,7 @@ export async function validateProviderSlotAvailability({
       isValid: false,
       errorMessage: 'Provider is not available at the requested time',
       errorCode: 'NOT_IN_SLOT',
-      availableSlots: generateAvailableSlots(daySchedule.timeSlots, serviceDurationMinutes, minCutoff, isToday)
+      availableSlots: generateAvailableSlots(daySchedule.timeSlots, serviceDurationMinutes, minCutoff, isToday, effectiveBufferTime)
     };
   }
 
@@ -133,7 +140,8 @@ export async function validateProviderSlotAvailability({
 
   const conflict = existingBookings.find(booking => {
     const bookingStart = timeToMinutes(booking.scheduledTime);
-    const bookingEnd = bookingStart + booking.duration;
+    // Include buffer time when checking for conflicts
+    const bookingEnd = bookingStart + booking.duration + effectiveBufferTime;
     return requestedMinutes < bookingEnd && requestedEndMinutes > bookingStart;
   });
 
@@ -152,9 +160,11 @@ function generateAvailableSlots(
   timeSlots: any[],
   durationMinutes: number,
   minCutoffMinutes: number,
-  filterPast: boolean
+  filterPast: boolean,
+  bufferTimeMinutes: number = 0
 ): string[] {
   const slots: string[] = [];
+  const totalDuration = durationMinutes + bufferTimeMinutes;
 
   for (const slot of timeSlots) {
     if (!slot.startTime || !slot.endTime) continue;
@@ -164,7 +174,8 @@ function generateAvailableSlots(
     const slotStart = timeToMinutes(slot.startTime);
     const slotEnd = timeToMinutes(slot.endTime);
 
-    for (let minutes = slotStart; minutes + durationMinutes <= slotEnd; minutes += 30) {
+    // Generate slots with buffer time included
+    for (let minutes = slotStart; minutes + totalDuration <= slotEnd; minutes += 30) {
       if (filterPast && minutes < minCutoffMinutes) continue;
       const h = Math.floor(minutes / 60);
       const m = minutes % 60;

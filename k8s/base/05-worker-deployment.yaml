@@ -1,0 +1,155 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nilin-worker
+  namespace: nilin
+  labels:
+    app: nilin-worker
+    tier: backend
+    role: worker
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: nilin-worker
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: nilin-worker
+        tier: backend
+        role: worker
+    spec:
+      serviceAccountName: nilin-worker
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: worker
+          image: nilin/api:latest
+          imagePullPolicy: Always
+          command: ["node", "dist/worker.js"]
+          envFrom:
+            - configMapRef:
+                name: nilin-worker-config
+            - secretRef:
+                name: nilin-secrets
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: 2000m
+              memory: 2Gi
+          livenessProbe:
+            exec:
+              command:
+                - node
+                - scripts/healthcheck.js
+                - worker
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 50
+              preference:
+                matchExpressions:
+                  - key: node-type
+                    operator: In
+                    values:
+                      - worker
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nilin-scheduler
+  namespace: nilin
+  labels:
+    app: nilin-scheduler
+    tier: backend
+    role: scheduler
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: nilin-scheduler
+  template:
+    metadata:
+      labels:
+        app: nilin-scheduler
+        tier: backend
+        role: scheduler
+    spec:
+      serviceAccountName: nilin-scheduler
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: scheduler
+          image: nilin/api:latest
+          imagePullPolicy: Always
+          command: ["node", "dist/scheduler.js"]
+          envFrom:
+            - configMapRef:
+                name: nilin-worker-config
+            - secretRef:
+                name: nilin-secrets
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            exec:
+              command:
+                - node
+                - scripts/healthcheck.js
+                - scheduler
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

@@ -19,14 +19,28 @@ const Breadcrumb: React.FC<BreadcrumbProps> = ({ items, className = '' }) => {
   const { user, isAuthenticated } = useAuthStore();
 
   // Auto-generate breadcrumbs if not provided
+  const getHomeHref = (): string => {
+    if (!isAuthenticated || !user?.role) return '/';
+    switch (user.role) {
+      case 'provider':
+        return '/provider/dashboard';
+      case 'admin':
+        return '/admin/dashboard';
+      case 'customer':
+        return '/customer/dashboard';
+      default:
+        return '/';
+    }
+  };
+
   const generateBreadcrumbs = (): BreadcrumbItem[] => {
     const pathSegments = location.pathname.split('/').filter(Boolean);
     const breadcrumbs: BreadcrumbItem[] = [];
 
-    // Always start with Home
+    const homeHref = getHomeHref();
     breadcrumbs.push({
-      label: 'Home',
-      href: '/'
+      label: homeHref === '/' ? 'Home' : 'Dashboard',
+      href: homeHref,
     });
 
     // Generate breadcrumbs based on current path
@@ -49,7 +63,13 @@ const Breadcrumb: React.FC<BreadcrumbProps> = ({ items, className = '' }) => {
           label = 'Dashboard';
           break;
         case 'bookings':
-          label = 'Bookings';
+          label =
+            user?.role === 'provider' && location.pathname.startsWith('/provider/bookings')
+              ? 'Service Requests'
+              : 'Bookings';
+          break;
+        case 'ads':
+          label = 'Ads';
           break;
         case 'profile':
           label = 'Profile';

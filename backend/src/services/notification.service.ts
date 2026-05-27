@@ -1,5 +1,173 @@
 import BookingNotification from '../models/bookingNotification.model';
 import User from '../models/user.model';
+import { send as emailSend } from './email.service';
+import { smsService } from './sms.service';
+import { withRetry } from '../utils/retry.util';
+import admin from 'firebase-admin';
+import logger from '../utils/logger';
+import { ApiError, ERROR_CODES } from '../utils/ApiError';
+import { createCircuitBreaker, CIRCUIT_NAMES } from './circuitBreaker.service';
+import { cache } from '../config/redis';
+
+// Circuit breaker for external notification services
+const pushCircuitBreaker = createCircuitBreaker(CIRCUIT_NAMES.NOTIFICATION || 'notification', {
+  failureThreshold: 5,
+  resetTimeout: 60000, // 1 minute before attempting reset
+  halfOpenMaxAttempts: 2,
+});
+
+// ============================================
+// Firebase Admin SDK Configuration
+// ============================================
+const initializeFirebaseAdmin = (): admin.app.App | null => {
+  const serviceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH;
+  const projectId = process.env.FIREBASE_PROJECT_ID;
+
+  if (!serviceAccountPath && !process.env.FIREBASE_SERVICE_ACCOUNT) {
+    logger.info('Firebase Admin SDK not configured - push notifications will be skipped', {
+      context: 'NotificationService',
+      action: 'FIREBASE_NOT_CONFIGURED',
+    });
+    logger.info('Set FIREBASE_SERVICE_ACCOUNT_PATH or FIREBASE_SERVICE_ACCOUNT_JSON to enable', {
+      context: 'NotificationService',
+      action: 'FIREBASE_CONFIG_HINT',
+    });
+    return null;
+  }
+
+  try {
+    // Initialize Firebase Admin with service account
+    let app: admin.app.App;
+
+    if (serviceAccountPath) {
+      app = admin.initializeApp({
+        credential: admin.credential.cert(serviceAccountPath),
+      });
+    } else if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+      const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+      app = admin.initializeApp({
+        credential: admin.credential.cert(serviceAccount),
+      });
+    } else {
+      return null;
+    }
+
+    logger.info('Firebase Admin SDK initialized successfully', {
+      context: 'NotificationService',
+      action: 'FIREBASE_INIT_SUCCESS',
+    });
+    return app;
+  } catch (error) {
+    logger.error('Failed to initialize Firebase Admin SDK', {
+      context: 'NotificationService',
+      action: 'FIREBASE_INIT_FAILED',
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+};
+
+const firebaseApp = initializeFirebaseAdmin();
+
+// ============================================
+// Rate Limiting Configuration
+// ============================================
+
+// FIX: Use Redis for rate limiting instead of in-memory Map
+// In-memory cache kept as fallback only
+const userNotificationCache = new Map<string, number>();
+const NOTIFICATION_COOLDOWN = 60000; // 1 minute cooldown between notifications per user
+
+/**
+ * Check if a notification can be sent to a user (rate limiting)
+ * Returns true if user is not in cooldown period
+ * FIX: Uses Redis for distributed rate limiting
+ */
+const canSendNotification = async (userId: string): Promise<boolean> => {
+  const cacheKey = `notification:rate:${userId}`;
+
+  // Try Redis first for distributed rate limiting
+  try {
+    const redisClient = (cache as any).client;
+    if (redisClient) {
+      const exists = await redisClient.exists(cacheKey);
+      if (exists) {
+        logger.debug('Notification rate limited (Redis)', {
+          context: 'NotificationService',
+          action: 'RATE_LIMITED',
+          userId,
+        });
+        return false;
+      }
+      // Set rate limit key with expiration
+      await redisClient.set(cacheKey, '1', 'EX', Math.ceil(NOTIFICATION_COOLDOWN / 1000));
+      return true;
+    }
+  } catch (error) {
+    logger.warn('Redis rate limit check failed, using in-memory fallback', {
+      userId,
+      error: (error as Error).message,
+    });
+  }
+
+  // Fallback to in-memory cache
+  const lastSent = userNotificationCache.get(userId) || 0;
+  const now = Date.now();
+
+  if (now - lastSent < NOTIFICATION_COOLDOWN) {
+    logger.debug('Notification rate limited (memory)', {
+      context: 'NotificationService',
+      action: 'RATE_LIMITED',
+      userId,
+      remainingMs: Math.ceil((NOTIFICATION_COOLDOWN - (now - lastSent))),
+    });
+    return false;
+  }
+
+  userNotificationCache.set(userId, now);
+  return true;
+};
+
+/**
+ * Get remaining cooldown time for a user in milliseconds
+ */
+const getRemainingCooldown = async (userId: string): Promise<number> => {
+  const cacheKey = `notification:rate:${userId}`;
+
+  // Try Redis first
+  try {
+    const redisClient = (cache as any).client;
+    if (redisClient) {
+      const ttl = await redisClient.ttl(cacheKey);
+      if (ttl > 0) {
+        return ttl * 1000;
+      }
+    }
+  } catch (error) {
+    // Fallback to memory
+  }
+
+  const lastSent = userNotificationCache.get(userId) || 0;
+  const elapsed = Date.now() - lastSent;
+  return Math.max(0, NOTIFICATION_COOLDOWN - elapsed);
+};
+
+/**
+ * Cleanup old entries from in-memory cache
+ */
+const cleanupRateLimitCache = () => {
+  const now = Date.now();
+  const maxAge = NOTIFICATION_COOLDOWN * 2; // Clean entries older than 2x cooldown
+
+  for (const [userId, timestamp] of userNotificationCache.entries()) {
+    if (now - timestamp > maxAge) {
+      userNotificationCache.delete(userId);
+    }
+  }
+};
+
+// Run cleanup every 5 minutes
+setInterval(cleanupRateLimitCache, 300000);
 
 // ============================================
 // Types
@@ -159,12 +327,25 @@ const NOTIFICATION_TEMPLATES: Record<NotificationType, { customer: { title: stri
 // NotificationService Class
 // ============================================
 
+const MAX_NOTIFICATIONS_PER_USER = 100;
+
 export class NotificationService {
   // ========================================
   // In-App Notifications
   // ========================================
 
   async createNotification(data: NotificationData): Promise<any> {
+    // Check rate limit for this user
+    if (!(await canSendNotification(data.recipientId))) {
+      logger.debug('Skipping notification due to rate limit', {
+        context: 'NotificationService',
+        action: 'RATE_LIMITED',
+        type: data.type,
+        recipientId: data.recipientId,
+      });
+      return null;
+    }
+
     const notification = new BookingNotification({
       recipientId: data.recipientId,
       type: data.type,
@@ -177,6 +358,16 @@ export class NotificationService {
     });
 
     await notification.save();
+
+    // FIX: Mark in-app channel as sent after successful save
+    await BookingNotification.findByIdAndUpdate(notification._id, {
+      'channels.inApp.sent': true,
+      'channels.inApp.sentAt': new Date(),
+    });
+
+    // Prune old notifications to maintain bounded storage
+    await this.pruneOldNotifications(data.recipientId);
+
     return notification;
   }
 
@@ -186,6 +377,18 @@ export class NotificationService {
     notificationType: NotificationType,
     metadata: Record<string, any>
   ): Promise<any> {
+    // Check rate limit for this user
+    // FIX: Added await to properly wait for async rate limit check
+    if (!await canSendNotification(recipientId)) {
+      logger.debug('Skipping booking notification due to rate limit', {
+        context: 'NotificationService',
+        action: 'BOOKING_NOTIFICATION_RATE_LIMITED',
+        notificationType,
+        recipientId,
+      });
+      return null;
+    }
+
     const template = NOTIFICATION_TEMPLATES[notificationType];
 
     // Determine recipient role from metadata
@@ -202,6 +405,16 @@ export class NotificationService {
     });
 
     await notification.save();
+
+    // FIX: Mark in-app channel as sent after successful save
+    await BookingNotification.findByIdAndUpdate(notification._id, {
+      'channels.inApp.sent': true,
+      'channels.inApp.sentAt': new Date(),
+    });
+
+    // Prune old notifications to maintain bounded storage
+    await this.pruneOldNotifications(recipientId);
+
     return notification;
   }
 
@@ -212,27 +425,63 @@ export class NotificationService {
     notificationType: NotificationType,
     metadata: Record<string, any>
   ): Promise<void> {
-    const notifications: Promise<any>[] = [];
+    const template = NOTIFICATION_TEMPLATES[notificationType];
+    const notificationsToInsert: any[] = [];
 
     // Customer notification
     if (customerId) {
-      notifications.push(
-        this.createBookingNotification(bookingId, customerId, notificationType, {
-          ...metadata,
-          isProvider: false,
-        })
-      );
+      notificationsToInsert.push({
+        bookingId,
+        recipientId: customerId,
+        type: notificationType,
+        title: template.customer.title,
+        message: template.customer.message,
+        metadata: this.formatMetadata(notificationType, { ...metadata, isProvider: false }),
+        channels: ['in_app'],
+      });
     }
 
     // Provider notification
-    notifications.push(
-      this.createBookingNotification(bookingId, providerId, notificationType, {
-        ...metadata,
-        isProvider: true,
-      })
-    );
+    notificationsToInsert.push({
+      bookingId,
+      recipientId: providerId,
+      type: notificationType,
+      title: template.provider.title,
+      message: template.provider.message,
+      metadata: this.formatMetadata(notificationType, { ...metadata, isProvider: true }),
+      channels: ['in_app'],
+    });
 
-    await Promise.allSettled(notifications);
+    // Bulk insert all notifications at once
+    if (notificationsToInsert.length > 0) {
+      try {
+        const insertedNotifications = await BookingNotification.insertMany(notificationsToInsert, { ordered: false });
+
+        // FIX: Mark in-app channel as sent for all inserted notifications
+        const insertedIds = insertedNotifications.map((n: any) => n._id);
+        await BookingNotification.updateMany(
+          { _id: { $in: insertedIds } },
+          {
+            $set: {
+              'channels.inApp.sent': true,
+              'channels.inApp.sentAt': new Date(),
+            },
+          }
+        );
+      } catch (error) {
+        logger.error('Bulk notification insert failed', {
+          context: 'NotificationService',
+          action: 'BULK_INSERT_FAILED',
+          bookingId,
+          recipientCount: notificationsToInsert.length,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    // Prune old notifications for each recipient
+    const recipientIds = notificationsToInsert.map(n => n.recipientId);
+    await Promise.all(recipientIds.map(recipientId => this.pruneOldNotifications(recipientId)));
   }
 
   // ========================================
@@ -309,62 +558,357 @@ export class NotificationService {
     await BookingNotification.deleteMany({ recipientId: userId });
   }
 
-  // ========================================
-  // Email Notifications
-  // ========================================
+  /**
+   * Prune old notifications to maintain bounded storage (max 100 per user)
+   * Deletes oldest notifications first to stay under the limit
+   */
+  private async pruneOldNotifications(userId: string): Promise<void> {
+    try {
+      const count = await BookingNotification.countDocuments({ recipientId: userId });
+      if (count > MAX_NOTIFICATIONS_PER_USER) {
+        // Find notifications to delete (oldest ones beyond the limit)
+        const notificationsToDelete = await BookingNotification.find({ recipientId: userId })
+          .sort({ createdAt: 1 }) // Oldest first
+          .skip(MAX_NOTIFICATIONS_PER_USER)
+          .select('_id')
+          .limit(count - MAX_NOTIFICATIONS_PER_USER);
 
-  async sendEmail(data: EmailData): Promise<void> {
-    // This would integrate with your email service
-    // For now, just log the email
-    console.log(`[Email] To: ${data.to}`);
-    console.log(`[Email] Subject: ${data.subject}`);
-    console.log(`[Email] Template: ${data.template}`);
-
-    // In production, you would call your email service here:
-    // await emailService.send(data);
-  }
-
-  async sendBulkEmail(userIds: string[], data: Omit<EmailData, 'to'>): Promise<void> {
-    const users = await User.find({ _id: { $in: userIds }, 'communicationPreferences.email.marketing': true });
-
-    for (const user of users) {
-      await this.sendEmail({
-        ...data,
-        to: user.email,
+        const idsToDelete = notificationsToDelete.map(n => n._id);
+        await BookingNotification.deleteMany({ _id: { $in: idsToDelete } });
+        logger.debug('Pruned old notifications', {
+          context: 'NotificationService',
+          action: 'PRUNE_OLD_NOTIFICATIONS',
+          userId,
+          prunedCount: idsToDelete.length,
+        });
+      }
+    } catch (error) {
+      logger.error('Failed to prune old notifications', {
+        context: 'NotificationService',
+        action: 'PRUNE_FAILED',
+        userId,
+        error: error instanceof Error ? error.message : String(error),
       });
     }
   }
 
   // ========================================
-  // Push Notifications
+  // Email Notifications
+  // ========================================
+
+  async sendEmail(data: EmailData, notificationType: NotificationType = 'promotion'): Promise<void> {
+    // FIX: Check user email preferences before sending
+    // Need to find user by email to check preferences
+    const user = await User.findOne({ email: data.to });
+    if (user && !(await this.shouldSendToChannel(user._id.toString(), 'email', notificationType))) {
+      logger.debug('Email skipped - user opted out', {
+        context: 'NotificationService',
+        action: 'USER_OPTED_OUT_EMAIL',
+        to: data.to,
+        notificationType,
+      });
+      return;
+    }
+
+    const success = await emailSend(data.to, data.subject, data.template);
+    if (!success) {
+      logger.error('Failed to send email', {
+        context: 'NotificationService',
+        action: 'EMAIL_SEND_FAILED',
+        to: data.to,
+        subject: data.subject,
+      });
+    }
+  }
+
+  async sendBulkEmail(userIds: string[], data: Omit<EmailData, 'to'>): Promise<void> {
+    const users = await User.find({ _id: { $in: userIds }, 'communicationPreferences.email.marketing': true });
+
+    const promises = users.map(user =>
+      this.sendEmail({
+        ...data,
+        to: user.email,
+      }).catch(err => {
+        logger.error('Failed to send bulk email', {
+          context: 'NotificationService',
+          action: 'BULK_EMAIL_FAILED',
+          to: user.email,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      })
+    );
+
+    await Promise.allSettled(promises);
+  }
+
+  // ========================================
+  // Push Notifications (FCM)
   // ========================================
 
   async sendPushNotification(
     userId: string,
     title: string,
     body: string,
-    _data?: Record<string, any>
-  ): Promise<void> {
-    // This would integrate with FCM, APNs, or a service like OneSignal
-    console.log(`[Push] User: ${userId}`);
-    console.log(`[Push] Title: ${title}`);
-    console.log(`[Push] Body: ${body}`);
+    data?: Record<string, any>,
+    notificationType: NotificationType = 'booking_reminder'
+  ): Promise<boolean> {
+    if (!firebaseApp) {
+      logger.debug('Firebase not configured - skipping push', {
+        context: 'NotificationService',
+        action: 'FIREBASE_NOT_CONFIGURED',
+        userId,
+        title,
+        body,
+      });
+      return false;
+    }
 
-    // In production, you would call your push notification service here:
-    // await pushService.send(userId, { title, body, data });
+    // FIX: Check user push preferences before sending
+    if (!(await this.shouldSendToChannel(userId, 'push', notificationType))) {
+      logger.debug('Push notification skipped - user opted out', {
+        context: 'NotificationService',
+        action: 'USER_OPTED_OUT_PUSH',
+        userId,
+        notificationType,
+      });
+      return false;
+    }
+
+    try {
+      const result = await pushCircuitBreaker.execute(
+        async () => {
+          const retryResult = await withRetry(
+            async () => {
+              // Get user's device tokens from the database
+              const user = await User.findById(userId).select('deviceTokens firstName');
+              if (!user) {
+                logger.warn('Push notification skipped - user not found', {
+                  context: 'NotificationService',
+                  action: 'USER_NOT_FOUND',
+                  userId,
+                });
+                return false;
+              }
+
+              const activeTokens = user.deviceTokens?.filter((t: any) => t.isActive) || [];
+              if (activeTokens.length === 0) {
+                logger.debug('No active device tokens for user', {
+                  context: 'NotificationService',
+                  action: 'NO_TOKENS',
+                  userId,
+                });
+                return false;
+              }
+
+              const messaging = admin.messaging(firebaseApp);
+              const tokens = activeTokens.map((t: any) => t.token);
+
+              // Send to all device tokens
+              const response = await messaging.sendEachForMulticast({
+                notification: {
+                  title,
+                  body,
+                },
+                data: {
+                  ...data,
+                  userId,
+                  clickAction: data?.actionUrl || 'OPEN_APP',
+                },
+                tokens,
+              });
+
+              // Handle failures
+              const failures = response.failureCount;
+              if (failures > 0) {
+                logger.debug('Push notification completed with failures', {
+                  context: 'NotificationService',
+                  action: 'PUSH_COMPLETED_WITH_FAILURES',
+                  userId,
+                  totalDevices: activeTokens.length,
+                  failures,
+                });
+                response.responses.forEach((resp, idx) => {
+                  if (!resp.success) {
+                    const errorCode = resp.error?.code;
+                    // Remove invalid tokens
+                    if (errorCode === 'messaging/registration-token-not-registered' ||
+                        errorCode === 'messaging/invalid-registration-token') {
+                      user.deviceTokens?.splice(idx, 1);
+                    }
+                  }
+                });
+                await user.save();
+              }
+
+              logger.debug('Push notification sent successfully', {
+                context: 'NotificationService',
+                action: 'PUSH_SUCCESS',
+                userId,
+                successCount: response.successCount,
+                totalDevices: activeTokens.length,
+              });
+              return response.successCount > 0;
+            },
+            { maxAttempts: 3, initialDelayMs: 1000 }
+          );
+
+          if (!retryResult.success) {
+            throw retryResult.error || new Error('Push notification failed after retries');
+          }
+          return retryResult.result;
+        },
+        async () => {
+          // Circuit breaker fallback: log for manual retry
+          logger.warn('Push notification circuit breaker fallback', {
+            context: 'NotificationService',
+            action: 'PUSH_CIRCUIT_BREAKER_FALLBACK',
+            userId,
+            title,
+          });
+          return false;
+        }
+      );
+
+      return result ?? false;
+    } catch (error) {
+      logger.error('Failed to send push notification via circuit breaker', {
+        context: 'NotificationService',
+        action: 'PUSH_CIRCUIT_BREAKER_ERROR',
+        userId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
+  }
+
+  /**
+   * Send push notification to multiple users
+   */
+  async sendBulkPushNotification(
+    userIds: string[],
+    title: string,
+    body: string,
+    data?: Record<string, any>
+  ): Promise<{ sent: number; failed: number }> {
+    const results = await Promise.allSettled(
+      userIds.map(userId => this.sendPushNotification(userId, title, body, data))
+    );
+
+    let sent = 0;
+    let failed = 0;
+
+    results.forEach(result => {
+      if (result.status === 'fulfilled' && result.value) {
+        sent++;
+      } else {
+        failed++;
+      }
+    });
+
+    return { sent, failed };
+  }
+
+  /**
+   * Register a device token for push notifications
+   */
+  async registerDeviceToken(
+    userId: string,
+    token: string,
+    platform: 'ios' | 'android' | 'web',
+    deviceId?: string
+  ): Promise<void> {
+    const user = await User.findById(userId);
+    if (!user) {
+      throw ApiError.notFound('User not found', ERROR_CODES.USER_NOT_FOUND);
+    }
+
+    // Check if token already exists
+    const existingTokenIndex = user.deviceTokens?.findIndex((t: any) => t.token === token);
+
+    if (existingTokenIndex !== undefined && existingTokenIndex >= 0) {
+      // Update existing token
+      user.deviceTokens[existingTokenIndex].lastUsed = new Date();
+      user.deviceTokens[existingTokenIndex].isActive = true;
+    } else {
+      // Add new token
+      if (!user.deviceTokens) {
+        user.deviceTokens = [];
+      }
+      user.deviceTokens.push({
+        token,
+        platform,
+        deviceId,
+        addedAt: new Date(),
+        lastUsed: new Date(),
+        isActive: true,
+      });
+    }
+
+    await user.save();
+  }
+
+  /**
+   * Remove a device token (e.g., on logout)
+   */
+  async removeDeviceToken(userId: string, token: string): Promise<void> {
+    await User.findByIdAndUpdate(userId, {
+      $pull: { deviceTokens: { token } },
+    });
   }
 
   // ========================================
-  // SMS Notifications
+  // SMS Notifications (Delegated to SmsService)
+  // Note: SMS logic has been extracted to sms.service.ts for better separation of concerns
+  // including delivery receipts, STOP/unsubscribe handling, and DLQ management
   // ========================================
 
-  async sendSms(phoneNumber: string, message: string): Promise<void> {
-    // This would integrate with Twilio or similar
-    console.log(`[SMS] To: ${phoneNumber}`);
-    console.log(`[SMS] Message: ${message}`);
+  /**
+   * Send SMS message
+   * @deprecated Use smsService.send() directly for full functionality
+   * Note: Preference checking is done in smsService.send() via checkSmsOptOut()
+   * This wrapper adds explicit preference checking for better logging
+   */
+  async sendSms(
+    phoneNumber: string,
+    message: string,
+    notificationType: NotificationType = 'booking_reminder'
+  ): Promise<boolean> {
+    // FIX: Check user SMS preferences before sending
+    // Find user by phone to check preferences
+    const cleanedPhone = phoneNumber.replace(/[^\d+]/g, '');
+    const user = await User.findOne({ phone: cleanedPhone });
+    if (user && !(await this.shouldSendToChannel(user._id.toString(), 'sms', notificationType))) {
+      logger.debug('SMS skipped - user opted out', {
+        context: 'NotificationService',
+        action: 'USER_OPTED_OUT_SMS',
+        phoneNumber: cleanedPhone.slice(-4).padStart(cleanedPhone.length, '*'),
+        notificationType,
+      });
+      return false;
+    }
 
-    // In production, you would call your SMS service here:
-    // await smsService.send(phoneNumber, message);
+    const result = await smsService.send(phoneNumber, message);
+    return result.success;
+  }
+
+  /**
+   * Send SMS notification for booking events
+   * @deprecated Use smsService.sendBookingSms() directly for full functionality
+   */
+  async sendBookingSms(
+    phoneNumber: string,
+    bookingNumber: string,
+    eventType: 'confirmed' | 'reminder' | 'cancelled' | 'completed'
+  ): Promise<boolean> {
+    return smsService.sendBookingSms(phoneNumber, bookingNumber, eventType);
+  }
+
+  /**
+   * Send OTP via SMS for phone verification
+   * @deprecated Use smsService.sendOtp() directly for full functionality
+   */
+  async sendOtp(phoneNumber: string, otp: string): Promise<boolean> {
+    return smsService.sendOtp(phoneNumber, otp);
   }
 
   // ========================================
@@ -380,8 +924,12 @@ export class NotificationService {
   ): Promise<void> {
     // This would typically use a job queue like Bull/BullMQ
     // For now, just log the scheduled notification
-    console.log(`[Scheduled] Booking reminder scheduled for ${reminderTime}`);
-    console.log(`[Scheduled] Booking ID: ${bookingId}`);
+    logger.info('Booking reminder scheduled', {
+      context: 'NotificationService',
+      action: 'REMINDER_SCHEDULED',
+      bookingId,
+      reminderTime: reminderTime.toISOString(),
+    });
 
     // In production with BullMQ:
     // await reminderQueue.add(
@@ -389,6 +937,66 @@ export class NotificationService {
     //   { bookingId, customerId, providerId, metadata },
     //   { runAt: reminderTime }
     // );
+  }
+
+  // ========================================
+  // User Preference Checks
+  // ========================================
+
+  /**
+   * Check if a notification should be sent via a specific channel based on user preferences
+   * FIX: This method was not being called before - now integrated into all send methods
+   */
+  private async shouldSendToChannel(
+    userId: string,
+    channel: 'email' | 'sms' | 'push',
+    notificationType: NotificationType
+  ): Promise<boolean> {
+    const user = await User.findById(userId).select('communicationPreferences');
+    if (!user) {
+      // If user not found, default to allowing notification
+      return true;
+    }
+
+    const prefs = user.communicationPreferences;
+    const channelPrefs = prefs?.[channel];
+
+    // Default to allowing if no preferences set
+    if (!channelPrefs) {
+      return true;
+    }
+
+    // Map notification types to preference categories
+    switch (notificationType) {
+      case 'booking_request':
+        // booking_request always allowed (core functionality)
+        return true;
+
+      case 'booking_confirmed':
+      case 'booking_cancelled':
+      case 'booking_rejected':
+      case 'review_received':
+        return channelPrefs.bookingUpdates ?? true;
+
+      case 'booking_started':
+      case 'booking_completed':
+        return channelPrefs.bookingUpdates ?? true;
+
+      case 'booking_reminder':
+        return channelPrefs.reminders ?? true;
+
+      case 'message_received':
+        return (channelPrefs as any).newMessages ?? true;
+
+      case 'promotion':
+        return channelPrefs.promotions ?? false;
+
+      case 'loyalty_update':
+        return (channelPrefs as any).loyaltyUpdates ?? true;
+
+      default:
+        return true;
+    }
   }
 
   // ========================================
@@ -436,7 +1044,7 @@ export class NotificationService {
     const user = await User.findById(userId);
 
     if (!user) {
-      throw new Error('User not found');
+      throw ApiError.notFound('User not found', ERROR_CODES.USER_NOT_FOUND);
     }
 
     const prefs = user.communicationPreferences;
@@ -458,12 +1066,94 @@ export class NotificationService {
 
   async updateNotificationPreferences(
     userId: string,
-    _updates: Partial<Record<NotificationType, boolean>>
+    updates: Partial<Record<NotificationType, boolean>>
   ): Promise<void> {
-    // This would update the user's communication preferences
-    console.log(`[Preferences] Updating notification preferences for user ${userId}`);
+    if (!userId || !updates) {
+      throw ApiError.badRequest('User ID and updates are required', [], ERROR_CODES.MISSING_REQUIRED_FIELD);
+    }
+
+    const user = await User.findById(userId);
+    if (!user) {
+      throw ApiError.notFound('User not found', ERROR_CODES.USER_NOT_FOUND);
+    }
+
+    // Map notification types to preference categories
+    const preferenceUpdates: Record<string, any> = {};
+
+    // Email preferences
+    if ('promotion' in updates) {
+      preferenceUpdates['communicationPreferences.email.promotions'] = updates.promotion;
+    }
+    if (updates.booking_request || updates.booking_confirmed || updates.booking_cancelled ||
+        updates.booking_rejected || updates.review_received) {
+      preferenceUpdates['communicationPreferences.email.bookingUpdates'] =
+        updates.booking_confirmed ?? updates.booking_cancelled ?? true;
+    }
+    if (updates.booking_reminder) {
+      preferenceUpdates['communicationPreferences.email.reminders'] = updates.booking_reminder;
+    }
+    if (updates.review_received) {
+      preferenceUpdates['communicationPreferences.email.bookingUpdates'] = updates.review_received;
+    }
+
+    // SMS preferences
+    if (updates.booking_confirmed || updates.booking_cancelled) {
+      preferenceUpdates['communicationPreferences.sms.bookingUpdates'] =
+        updates.booking_confirmed ?? updates.booking_cancelled ?? true;
+    }
+    if (updates.booking_reminder) {
+      preferenceUpdates['communicationPreferences.sms.reminders'] = updates.booking_reminder;
+    }
+    if (updates.promotion) {
+      preferenceUpdates['communicationPreferences.sms.promotions'] = updates.promotion;
+    }
+
+    // Push preferences
+    if (updates.booking_started || updates.booking_completed) {
+      preferenceUpdates['communicationPreferences.push.bookingUpdates'] =
+        updates.booking_started ?? updates.booking_completed ?? true;
+    }
+    if (updates.booking_reminder) {
+      preferenceUpdates['communicationPreferences.push.reminders'] = updates.booking_reminder;
+    }
+    if (updates.message_received) {
+      preferenceUpdates['communicationPreferences.push.newMessages'] = updates.message_received;
+    }
+    if (updates.promotion) {
+      preferenceUpdates['communicationPreferences.push.promotions'] = updates.promotion;
+    }
+
+    if (Object.keys(preferenceUpdates).length > 0) {
+      await User.findByIdAndUpdate(userId, { $set: preferenceUpdates });
+      logger.info('Updated notification preferences', {
+        context: 'NotificationService',
+        action: 'PREFERENCES_UPDATED',
+        userId,
+        changes: Object.keys(preferenceUpdates),
+      });
+    } else {
+      logger.debug('No preference updates provided', {
+        context: 'NotificationService',
+        action: 'NO_PREFERENCE_UPDATES',
+        userId,
+      });
+    }
+  }
+
+  /**
+   * Get unsubscribe URL for email marketing
+   * FIX: Now uses HMAC-signed tokens from email.service to prevent token forgery
+   * Previous implementation used plain base64 encoding (security vulnerability)
+   */
+  getUnsubscribeUrl(userId: string, emailType: 'marketing' | 'promotions' | 'newsletters' = 'marketing'): string {
+    // Import the secure implementation from email.service
+    const { getUnsubscribeUrl: secureGetUnsubscribeUrl } = require('./email.service');
+    return secureGetUnsubscribeUrl(userId, emailType);
   }
 }
 
 // Export singleton instance
 export const notificationService = new NotificationService();
+
+// Export rate limiting utilities for external use
+export { canSendNotification, getRemainingCooldown };

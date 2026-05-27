@@ -3,8 +3,40 @@ import User from '../models/user.model';
 import authMiddleware from '../middleware/auth.middleware';
 import { asyncHandler } from '../utils/asyncHandler';
 import Joi from 'joi';
+import { ApiError, ERROR_CODES } from '../utils/ApiError';
+import logger from '../utils/logger';
+import { notificationAnalyticsService } from '../services/notificationAnalytics.service';
 
 const router = Router();
+
+// ============================================
+// Validation Schemas
+// ============================================
+
+const registerDeviceSchema = Joi.object({
+  deviceToken: Joi.string().required().min(1).messages({
+    'string.empty': 'deviceToken is required',
+    'any.required': 'deviceToken is required',
+  }),
+  platform: Joi.string().required().valid('ios', 'android', 'web').messages({
+    'any.only': 'platform must be one of: ios, android, web',
+    'any.required': 'platform is required',
+  }),
+});
+
+const unregisterDeviceSchema = Joi.object({
+  deviceToken: Joi.string().required().min(1).messages({
+    'string.empty': 'deviceToken is required',
+    'any.required': 'deviceToken is required',
+  }),
+});
+
+const notificationIdParamSchema = Joi.object({
+  notificationId: Joi.string().required().messages({
+    'string.empty': 'Notification ID is required',
+    'any.required': 'Notification ID is required',
+  }),
+});
 
 // ============================================
 // Validation Schemas
@@ -28,6 +60,12 @@ const updatePreferencesSchema = Joi.object({
     reminders: Joi.boolean(),
     newMessages: Joi.boolean(),
     promotions: Joi.boolean(),
+  }),
+  quietHours: Joi.object({
+    enabled: Joi.boolean(),
+    startTime: Joi.string().pattern(/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/).message('Invalid time format, use HH:mm'),
+    endTime: Joi.string().pattern(/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/).message('Invalid time format, use HH:mm'),
+    timezone: Joi.string(),
   }),
   language: Joi.string().valid('en', 'ar', 'fr', 'es', 'de', 'zh'),
   timezone: Joi.string(),
@@ -55,6 +93,7 @@ const getPreferences = asyncHandler(async (req: Request, res: Response): Promise
       email: userDoc.communicationPreferences.email,
       sms: userDoc.communicationPreferences.sms,
       push: userDoc.communicationPreferences.push,
+      quietHours: userDoc.communicationPreferences.quietHours,
       language: userDoc.communicationPreferences.language,
       timezone: userDoc.communicationPreferences.timezone,
       currency: userDoc.communicationPreferences.currency,
@@ -107,6 +146,13 @@ const updatePreferences = asyncHandler(async (req: Request, res: Response): Prom
     };
   }
 
+  if (value.quietHours) {
+    userDoc.communicationPreferences.quietHours = {
+      ...userDoc.communicationPreferences.quietHours,
+      ...value.quietHours,
+    };
+  }
+
   if (value.language) {
     userDoc.communicationPreferences.language = value.language;
   }
@@ -128,6 +174,7 @@ const updatePreferences = asyncHandler(async (req: Request, res: Response): Prom
       email: userDoc.communicationPreferences.email,
       sms: userDoc.communicationPreferences.sms,
       push: userDoc.communicationPreferences.push,
+      quietHours: userDoc.communicationPreferences.quietHours,
       language: userDoc.communicationPreferences.language,
       timezone: userDoc.communicationPreferences.timezone,
       currency: userDoc.communicationPreferences.currency,
@@ -157,7 +204,7 @@ const getNotifications = asyncHandler(async (req: Request, res: Response) => {
 
   const userDoc = await User.findById(user._id);
   if (!userDoc) {
-    throw new Error('User not found');
+    throw ApiError.notFound('User not found', ERROR_CODES.USER_NOT_FOUND);
   }
 
   let notifications: Notification[] = (userDoc as any).notifications || [];
@@ -214,18 +261,22 @@ const getUnreadCount = asyncHandler(async (req: Request, res: Response): Promise
 // Mark notification as read
 const markAsRead = asyncHandler(async (req: Request, res: Response) => {
   const user = req.user as any;
-  const { notificationId } = req.params;
+  const { error, value } = notificationIdParamSchema.validate(req.params);
+  if (error) {
+    throw ApiError.badRequest(error.message, [], ERROR_CODES.VALIDATION_ERROR);
+  }
+  const { notificationId } = value;
 
   const userDoc = await User.findById(user._id);
   if (!userDoc) {
-    throw new Error('User not found');
+    throw ApiError.notFound('User not found', ERROR_CODES.USER_NOT_FOUND);
   }
 
   const notifications: Notification[] = (userDoc as any).notifications || [];
   const notification = notifications.find(n => n._id.toString() === notificationId);
 
   if (!notification) {
-    throw new Error('Notification not found');
+    throw ApiError.notFound('Notification not found', ERROR_CODES.NOT_FOUND);
   }
 
   notification.isRead = true;
@@ -246,7 +297,7 @@ const markAllAsRead = asyncHandler(async (req: Request, res: Response) => {
 
   const userDoc = await User.findById(user._id);
   if (!userDoc) {
-    throw new Error('User not found');
+    throw ApiError.notFound('User not found', ERROR_CODES.USER_NOT_FOUND);
   }
 
   const notifications: Notification[] = (userDoc as any).notifications || [];
@@ -271,18 +322,22 @@ const markAllAsRead = asyncHandler(async (req: Request, res: Response) => {
 // Delete notification
 const deleteNotification = asyncHandler(async (req: Request, res: Response) => {
   const user = req.user as any;
-  const { notificationId } = req.params;
+  const { error, value } = notificationIdParamSchema.validate(req.params);
+  if (error) {
+    throw ApiError.badRequest(error.message, [], ERROR_CODES.VALIDATION_ERROR);
+  }
+  const { notificationId } = value;
 
   const userDoc = await User.findById(user._id);
   if (!userDoc) {
-    throw new Error('User not found');
+    throw ApiError.notFound('User not found', ERROR_CODES.USER_NOT_FOUND);
   }
 
   const notifications: Notification[] = (userDoc as any).notifications || [];
   const index = notifications.findIndex(n => n._id.toString() === notificationId);
 
   if (index === -1) {
-    throw new Error('Notification not found');
+    throw ApiError.notFound('Notification not found', ERROR_CODES.NOT_FOUND);
   }
 
   notifications.splice(index, 1);
@@ -301,7 +356,7 @@ const deleteAllRead = asyncHandler(async (req: Request, res: Response) => {
 
   const userDoc = await User.findById(user._id);
   if (!userDoc) {
-    throw new Error('User not found');
+    throw ApiError.notFound('User not found', ERROR_CODES.USER_NOT_FOUND);
   }
 
   const notifications: Notification[] = (userDoc as any).notifications || [];
@@ -313,6 +368,176 @@ const deleteAllRead = asyncHandler(async (req: Request, res: Response) => {
   res.json({
     success: true,
     message: 'All read notifications deleted',
+  });
+});
+
+// ============================================
+// Analytics
+// ============================================
+
+// Track delivery
+const trackDelivery = asyncHandler(async (req: Request, res: Response) => {
+  const user = req.user as any;
+  const { notificationId, channel } = req.body;
+
+  await notificationAnalyticsService.trackDelivery(
+    notificationId,
+    user._id,
+    channel || 'in_app',
+    true
+  );
+
+  res.json({
+    success: true,
+    message: 'Delivery tracked',
+  });
+});
+
+// Track click
+const trackClick = asyncHandler(async (req: Request, res: Response) => {
+  const user = req.user as any;
+  const { notificationId, channel } = req.body;
+
+  await notificationAnalyticsService.trackClick(
+    notificationId,
+    user._id,
+    channel || 'in_app'
+  );
+
+  res.json({
+    success: true,
+    message: 'Click tracked',
+  });
+});
+
+// Track view
+const trackView = asyncHandler(async (req: Request, res: Response) => {
+  const user = req.user as any;
+  const { notificationId, channel } = req.body;
+
+  await notificationAnalyticsService.trackView(
+    notificationId,
+    user._id,
+    channel || 'in_app'
+  );
+
+  res.json({
+    success: true,
+    message: 'View tracked',
+  });
+});
+
+// Get analytics summary
+const getAnalyticsSummary = asyncHandler(async (req: Request, res: Response) => {
+  const user = req.user as any;
+
+  const analytics = await notificationAnalyticsService.getUserAnalytics(user._id);
+
+  res.json({
+    success: true,
+    data: {
+      totalSent: analytics.totalSent,
+      totalDelivered: analytics.totalDelivered,
+      totalClicked: analytics.totalClicked,
+      clickThroughRate: analytics.clickThroughRate,
+      byChannel: {
+        in_app: analytics.byChannel.in_app,
+        email: analytics.byChannel.email,
+        sms: analytics.byChannel.sms,
+        push: analytics.byChannel.push,
+      },
+      byType: analytics.byType,
+    },
+  });
+});
+
+// ============================================
+// Device Registration
+// ============================================
+
+const registerDevice = asyncHandler(async (req: Request, res: Response) => {
+  const { error, value } = registerDeviceSchema.validate(req.body);
+  if (error) {
+    return res.status(400).json({
+      success: false,
+      message: error.details[0].message,
+    });
+  }
+
+  const { deviceToken, platform } = value;
+  const userId = (req as any).user._id;
+
+  const userDoc = await User.findById(userId);
+  if (!userDoc) {
+    return res.status(404).json({
+      success: false,
+      message: 'User not found',
+    });
+  }
+
+  // Initialize deviceTokens array if it doesn't exist
+  if (!userDoc.deviceTokens) {
+    userDoc.deviceTokens = [];
+  }
+
+  // Check if token already exists and update, otherwise add
+  const existingTokenIndex = userDoc.deviceTokens.findIndex(
+    (dt: any) => dt.token === deviceToken
+  );
+
+  if (existingTokenIndex !== -1) {
+    // Update existing token
+    userDoc.deviceTokens[existingTokenIndex].platform = platform.toLowerCase();
+    userDoc.deviceTokens[existingTokenIndex].addedAt = new Date();
+  } else {
+    // Add new token
+    userDoc.deviceTokens.push({
+      token: deviceToken,
+      platform: platform.toLowerCase(),
+      addedAt: new Date(),
+      isActive: true,
+    });
+  }
+
+  await userDoc.save({ validateBeforeSave: false });
+
+  return res.json({
+    success: true,
+    message: 'Device registered successfully',
+  });
+});
+
+// Unregister device
+const unregisterDevice = asyncHandler(async (req: Request, res: Response) => {
+  const { error, value } = unregisterDeviceSchema.validate(req.body);
+  if (error) {
+    return res.status(400).json({
+      success: false,
+      message: error.details[0].message,
+    });
+  }
+
+  const { deviceToken } = value;
+  const userId = (req as any).user._id;
+
+  const userDoc = await User.findById(userId);
+  if (!userDoc) {
+    return res.status(404).json({
+      success: false,
+      message: 'User not found',
+    });
+  }
+
+  if (userDoc.deviceTokens) {
+    userDoc.deviceTokens = userDoc.deviceTokens.filter(
+      (dt: any) => dt.token !== deviceToken
+    );
+    await userDoc.save({ validateBeforeSave: false });
+  }
+
+  return res.json({
+    success: true,
+    message: 'Device unregistered successfully',
   });
 });
 
@@ -360,6 +585,38 @@ router.delete('/:notificationId',
 router.delete('/read/all',
   authMiddleware.authenticate,
   deleteAllRead
+);
+
+// Device registration routes
+router.post('/register-device',
+  authMiddleware.authenticate,
+  registerDevice
+);
+
+router.post('/unregister-device',
+  authMiddleware.authenticate,
+  unregisterDevice
+);
+
+// Analytics routes
+router.post('/analytics/delivery',
+  authMiddleware.authenticate,
+  trackDelivery
+);
+
+router.post('/analytics/click',
+  authMiddleware.authenticate,
+  trackClick
+);
+
+router.post('/analytics/view',
+  authMiddleware.authenticate,
+  trackView
+);
+
+router.get('/analytics/summary',
+  authMiddleware.authenticate,
+  getAnalyticsSummary
 );
 
 export default router;

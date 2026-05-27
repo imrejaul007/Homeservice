@@ -1,0 +1,157 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: nilin-redis
+  namespace: nilin
+  labels:
+    app: nilin-redis
+    tier: cache
+spec:
+  serviceName: nilin-redis-headless
+  replicas: 3
+  podManagementPolicy: Parallel
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: nilin-redis
+  template:
+    metadata:
+      labels:
+        app: nilin-redis
+        tier: cache
+    spec:
+      serviceAccountName: nilin-redis
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        fsGroup: 999
+      containers:
+        - name: redis
+          image: redis:7.2-alpine
+          imagePullPolicy: IfNotPresent
+          command:
+            - redis-server
+            - --requirepass
+            - $(REDIS_PASSWORD)
+            - --appendonly
+            - "yes"
+            - --appendfsync
+            - everysec
+            - --maxmemory
+            - 2gb
+            - --maxmemory-policy
+            - allkeys-lru
+            - --tcp-backlog
+            - "511"
+            - --timeout
+            - "0"
+            - --tcp-keepalive
+            - "300"
+            - --loglevel
+            - notice
+          ports:
+            - name: redis
+              containerPort: 6379
+              protocol: TCP
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: nilin-secrets
+                  key: REDIS_PASSWORD
+          resources:
+            requests:
+              cpu: 250m
+              memory: 1Gi
+            limits:
+              cpu: 1000m
+              memory: 3Gi
+          livenessProbe:
+            exec:
+              command:
+                - redis-cli
+                - --raw
+                - incr
+                - livenessProbe
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - redis-cli
+                - --raw
+                - ping
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: redis-data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: nilin-redis
+              topologyKey: kubernetes.io/hostname
+  volumeClaimTemplates:
+    - metadata:
+        name: redis-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: fast-ssd
+        resources:
+          requests:
+            storage: 10Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nilin-redis
+  namespace: nilin
+  labels:
+    app: nilin-redis
+    tier: cache
+spec:
+  type: ClusterIP
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+      protocol: TCP
+  selector:
+    app: nilin-redis
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nilin-redis-headless
+  namespace: nilin
+  labels:
+    app: nilin-redis
+    tier: cache
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+      protocol: TCP
+  selector:
+    app: nilin-redis

@@ -18,6 +18,14 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
     networks:
       - nilin-network
 
@@ -35,6 +43,14 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
     networks:
       - nilin-network
 
@@ -76,6 +92,22 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+      restart_policy:
+        condition: on-failure
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+        rollback_config:
+          parallelism: 1
     networks:
       - nilin-network
 
@@ -95,6 +127,47 @@ services:
       - "3000:80"
     depends_on:
       - backend
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+      restart_policy:
+        condition: on-failure
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+        rollback_config:
+          parallelism: 1
+    networks:
+      - nilin-network
+
+  # MongoDB Backup Service
+  backup:
+    image: mongo:7
+    container_name: nilin-backup
+    volumes:
+      - ./backend/scripts/backup.sh:/backup.sh:ro
+      - backups:/backups
+    environment:
+      - MONGODB_URI=mongodb://mongodb:27017/home_service_marketplace
+    entrypoint: ["/bin/bash", "/backup.sh"]
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
     networks:
       - nilin-network
 
@@ -105,3 +178,4 @@ networks:
 volumes:
   mongodb_data:
   redis_data:
+  backups:

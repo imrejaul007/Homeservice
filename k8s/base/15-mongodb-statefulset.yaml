@@ -1,0 +1,187 @@
+# MongoDB StatefulSet for NILIN
+# Production-grade configuration with persistence and monitoring
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mongodb
+  namespace: nilin
+  labels:
+    app: mongodb
+    tier: database
+spec:
+  serviceName: mongodb
+  replicas: 3
+  selector:
+    matchLabels:
+      app: mongodb
+  template:
+    metadata:
+      labels:
+        app: mongodb
+        tier: database
+    spec:
+      terminationGracePeriodSeconds: 60
+
+      # Anti-affinity for high availability
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - mongodb
+                topologyKey: kubernetes.io/hostname
+
+      containers:
+        - name: mongodb
+          image: mongo:6.0
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - containerPort: 27017
+              name: mongo
+
+          # Resource limits
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: 2000m
+              memory: 4Gi
+
+          # Health checks
+          livenessProbe:
+            exec:
+              command:
+                - mongosh
+                - --eval
+                - "db.adminCommand('ping')"
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          readinessProbe:
+            exec:
+              command:
+                - mongosh
+                - --eval
+                - "db.adminCommand('ping')"
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          # Volume mounts
+          volumeMounts:
+            - name: data
+              mountPath: /data/db
+            - name: config
+              mountPath: /config
+
+          env:
+            - name: MONGO_INITDB_ROOT_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: nilin-secrets
+                  key: MONGODB_USER
+            - name: MONGO_INITDB_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: nilin-secrets
+                  key: MONGODB_PASSWORD
+
+          # Security context
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999
+            fsGroup: 999
+
+      volumes:
+        - name: config
+          configMap:
+            name: mongodb-config
+
+  # Persistent volume claim template
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: fast-ssd
+        resources:
+          requests:
+            storage: 50Gi
+---
+# MongoDB Headless Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongodb
+  namespace: nilin
+  labels:
+    app: mongodb
+    tier: database
+spec:
+  clusterIP: None
+  selector:
+    app: mongodb
+  ports:
+    - port: 27017
+      targetPort: 27017
+      name: mongo
+---
+# MongoDB ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mongodb-config
+  namespace: nilin
+data:
+  mongodb.conf: |
+    # Storage
+    storage:
+      dbPath: /data/db
+      journal:
+        enabled: true
+      wiredTiger:
+        engineConfig:
+          cacheSizeGB: 2
+          journalCompressor: snappy
+        collectionConfig:
+          blockCompressor: snappy
+        indexConfig:
+          prefixCompression: true
+
+    # Replication
+    replication:
+      replSetName: rs0
+
+    # Sharding (for future use)
+    # sharding:
+    #   clusterRole: shardsvr
+
+    # Network
+    net:
+      port: 27017
+      bindIp: 0.0.0.0
+      maxIncomingConnections: 2000
+
+    # Operation Profiling
+    operationProfiling:
+      mode: slowOp
+      slowOpThresholdMs: 100
+
+    # Security
+    security:
+      authorization: enabled
+      javascriptEnabled: false
+
+    # Set Parameter
+    setParameter:
+      enableLocalhostAuthBypass: false

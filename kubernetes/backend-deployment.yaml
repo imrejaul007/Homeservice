@@ -1,0 +1,80 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nilin-api
+  labels:
+    app: nilin
+    component: api
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nilin
+      component: api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: nilin
+        component: api
+    spec:
+      containers:
+        - name: api
+          image: nilin/backend:latest
+          ports:
+            - containerPort: 10000
+              name: http
+          env:
+            - name: PORT
+              value: "10000"
+            - name: MONGODB_URI
+              valueFrom:
+                secretKeyRef:
+                  name: nilin-secrets
+                  key: mongodb-uri
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: nilin-secrets
+                  key: redis-url
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: nilin-secrets
+                  key: jwt-secret
+            - name: STRIPE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: nilin-secrets
+                  key: stripe-secret
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 10000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 10000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 10"]

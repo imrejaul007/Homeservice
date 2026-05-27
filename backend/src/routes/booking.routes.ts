@@ -19,6 +19,7 @@ import {
 import {
   getProviderAvailability,
   updateWeeklySchedule,
+  updateAvailabilitySettings,
   addDateOverride,
   removeDateOverride,
   blockTimePeriod,
@@ -74,6 +75,7 @@ router.patch('/bookings/:id/messages/read', authenticate, markMessagesAsRead);
 // Provider Availability Management
 router.get('/availability', authenticate, getProviderAvailability);
 router.put('/availability/schedule', authenticate, validateAvailabilityInput, updateWeeklySchedule);
+router.patch('/availability/settings', authenticate, updateAvailabilitySettings);
 router.post('/availability/override', authenticate, validateDateOverride, addDateOverride);
 router.delete('/availability/override/:date', authenticate, removeDateOverride);
 router.post('/availability/block', authenticate, validateBlockPeriod, blockTimePeriod);

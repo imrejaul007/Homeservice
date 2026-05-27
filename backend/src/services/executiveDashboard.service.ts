@@ -819,11 +819,14 @@ export class ExecutiveDashboardService {
       return {
         averageBookingValue: bookingMetrics[0]?.avgBookingValue || 0,
         averageServiceDuration: bookingMetrics[0]?.avgDuration || 0,
-        bookingLeadTime: 3, // Would require lead time calculation
-        providerUtilization: 65, // Would require provider availability data
+        // FIX: Removed hardcoded placeholder values
+        // These metrics require additional data collection and should be calculated from actual data
+        bookingLeadTime: 0, // Requires lead time tracking implementation
+        providerUtilization: 0, // Requires provider availability data
         customerSatisfaction: {
           averageRating: serviceMetrics[0]?.avgRating || 0,
-          responseRate: 95,
+          // FIX: responseRate should be calculated from actual provider response data
+          responseRate: 0, // Requires provider response tracking
           reviewRate: bookingMetrics[0]?.count > 0
             ? (bookingMetrics[0].reviewedBookings / bookingMetrics[0].count) * 100
             : 0,

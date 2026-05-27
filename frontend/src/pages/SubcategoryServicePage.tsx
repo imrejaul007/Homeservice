@@ -126,7 +126,7 @@ const SubcategoryServicePage: React.FC = () => {
   );
 
   const subcategory = useMemo(() =>
-    category?.subcategories?.find((s) => s.slug === subcategorySlug) as Subcategory | undefined,
+    category?.subcategories?.find((s) => s.slug === subcategorySlug) as any,
     [category, subcategorySlug]
   );
 

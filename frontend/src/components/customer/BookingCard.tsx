@@ -33,6 +33,7 @@ interface BookingCardProps {
   onView?: (bookingId: string) => void;
   onReschedule?: (bookingId: string) => void;
   onCancel?: (bookingId: string) => void;
+  isCancelling?: boolean;
 }
 
 const BookingCard: React.FC<BookingCardProps> = ({
@@ -40,7 +41,8 @@ const BookingCard: React.FC<BookingCardProps> = ({
   showActions = true,
   onView,
   onReschedule,
-  onCancel
+  onCancel,
+  isCancelling = false
 }) => {
   const navigate = useNavigate();
 
@@ -202,10 +204,20 @@ const BookingCard: React.FC<BookingCardProps> = ({
             {onCancel && (booking.status === 'pending' || booking.status === 'confirmed') && (
               <button
                 onClick={handleCancel}
-                className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors text-sm font-medium flex items-center gap-1"
+                disabled={isCancelling}
+                className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors text-sm font-medium flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <X className="h-4 w-4" />
-                Cancel
+                {isCancelling ? (
+                  <>
+                    <div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    Cancelling...
+                  </>
+                ) : (
+                  <>
+                    <X className="h-4 w-4" />
+                    Cancel
+                  </>
+                )}
               </button>
             )}
           </div>

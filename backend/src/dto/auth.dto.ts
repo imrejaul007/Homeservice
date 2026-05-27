@@ -53,6 +53,10 @@ export interface CustomerRegistrationDTO {
   address?: AddressDTO;
   communicationPreferences?: CommunicationPrefsDTO;
   referralCode?: string;
+  // Fraud detection fields (optional, populated by middleware)
+  ip?: string;
+  userAgent?: string;
+  acceptLanguage?: string;
 }
 
 export interface BusinessInfoDTO {

@@ -2,6 +2,7 @@ import mongoose, { Document, Model, Types } from 'mongoose';
 import User, { IUser } from '../models/user.model';
 import Booking, { IBooking } from '../models/booking.model';
 import Service from '../models/service.model';
+import { ApiError, ERROR_CODES } from '../utils/ApiError';
 
 // =============================================================================
 // NILIN AI Recommendation Service
@@ -641,7 +642,7 @@ class RecommendationService {
   ): Promise<DemandPrediction> {
     const service = await Service.findById(serviceId).lean();
     if (!service) {
-      throw new Error('Service not found');
+      throw ApiError.notFound('Service not found', ERROR_CODES.NOT_FOUND);
     }
 
     // Get historical booking data

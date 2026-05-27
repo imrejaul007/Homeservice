@@ -1,0 +1,59 @@
+        <motion>
+          <span className="inline-block px-2 py-0.5 bg-[#F8F6F4] text-[#6B6B6B] text-[10px] lg:text-xs font-medium rounded-md mb-1.5 lg:mb-2">
+            {service.category}
+          </span>
+
+          <h3 className="font-semibold text-[#2D2D2D] text-sm lg:text-base mb-1 lg:mb-2 line-clamp-2 leading-snug group-hover:text-[#D4A89A] transition-colors">
+            {displayTitle}
+          </h3>
+
+          {service.description && (
+            <p className="hidden lg:block text-sm text-[#6B6B6B] mb-3 line-clamp-2">
+              {service.description}
+            </p>
+          )}
+
+          {service.duration && (
+            <motion className="flex items-center gap-1 text-xs text-[#6B6B6B] mb-2 lg:hidden">
+              <Clock className="h-3.5 w-3.5 text-[#D4A89A]" />
+              <span>{service.duration} min</span>
+            </motion>
+          )}
+
+          <motion className="hidden lg:flex items-center gap-4 text-sm text-[#6B6B6B] mb-3">
+            {service.duration && (
+              <motion className="flex items-center gap-1.5">
+                <Clock className="h-4 w-4 text-[#D4A89A]" />
+                <span>{service.duration} min</span>
+              </motion>
+            )}
+            {service.provider?.location && (
+              <motion className="flex items-center gap-1.5 min-w-0">
+                <MapPin className="h-4 w-4 text-[#D4A89A] shrink-0" />
+                <span className="truncate">{service.provider.location}</span>
+              </motion>
+            )}
+          </motion>
+        </motion>
+
+        <motion className="flex items-center justify-between gap-2 pt-2 lg:pt-3 border-t border-[#E8E4E0] max-lg:mt-1">
+          <motion className="min-w-0">
+            {service.provider && (
+              <p className="text-[10px] lg:text-xs text-[#9B9B9B] mb-0.5 truncate hidden lg:block">by {service.provider.name}</p>
+            )}
+            <motion className="flex items-baseline gap-1 flex-wrap">
+              <span className="text-base lg:text-xl font-bold text-[#2D2D2D]">AED {displayPrice}</span>
+              <span className="text-[10px] lg:text-xs text-[#9B9B9B]">/ service</span>
+            </motion>
+          </motion>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              handleClick();
+            }}
+            className="shrink-0 px-3.5 py-2 lg:px-4 lg:py-2 bg-[#E8B4A8] text-white font-medium text-xs lg:text-sm rounded-lg hover:bg-[#D4A89A] active:scale-95 transition-all"
+          >
+            Book
+          </button>
+        </motion>

@@ -1,6 +1,7 @@
 import Coupon, { ICoupon } from '../models/coupon.model';
 import { OfferClaim } from '../models/offerClaim.model';
 import mongoose from 'mongoose';
+import logger from '../utils/logger';
 
 export interface OfferResponse {
   _id: string;
@@ -344,7 +345,11 @@ export class OfferService {
   async applyDiscount(claimId: string, bookingId: string): Promise<boolean> {
     const claim = await OfferClaim.findById(claimId);
     if (!claim) {
-      console.warn(`[Coupon] Claim not found for applyDiscount: ${claimId}`);
+      logger.warn('Coupon claim not found for applyDiscount', {
+        context: 'OfferService',
+        action: 'CLAIM_NOT_FOUND',
+        claimId,
+      });
       return false;
     }
 
@@ -354,7 +359,11 @@ export class OfferService {
     // Get the coupon to check current/max uses
     const coupon = await Coupon.findById(claim.offerId).select('_id maxUses currentUses');
     if (!coupon) {
-      console.warn(`[Coupon] Coupon not found for applyDiscount: ${claim.offerId}`);
+      logger.warn('Coupon not found for applyDiscount', {
+        context: 'OfferService',
+        action: 'COUPON_NOT_FOUND',
+        offerId: claim.offerId.toString(),
+      });
       return false;
     }
 
@@ -378,7 +387,11 @@ export class OfferService {
     );
 
     if (!result) {
-      console.warn(`[Coupon] Coupon exhausted during applyDiscount: ${coupon._id}`);
+      logger.warn('Coupon exhausted during applyDiscount', {
+        context: 'OfferService',
+        action: 'COUPON_EXHAUSTED',
+        couponId: coupon._id.toString(),
+      });
       return false;
     }
 
@@ -389,7 +402,13 @@ export class OfferService {
       usedInBookingId: bookingObjectId,
     });
 
-    console.log(`[Coupon] applyDiscount successful: claimId=${claimId}, couponId=${coupon._id}, new currentUses=${result.currentUses}`);
+    logger.info('Coupon applyDiscount successful', {
+      context: 'OfferService',
+      action: 'APPLY_DISCOUNT_SUCCESS',
+      claimId,
+      couponId: coupon._id.toString(),
+      newCurrentUses: result.currentUses,
+    });
     return true;
   }
 
@@ -402,7 +421,11 @@ export class OfferService {
 
     const coupon = await Coupon.findOne({ code: normalizedCode }).select('_id maxUses currentUses');
     if (!coupon) {
-      console.warn(`[Coupon] Coupon not found: ${normalizedCode}`);
+      logger.warn('Coupon not found for markCouponAsUsed', {
+        context: 'OfferService',
+        action: 'COUPON_NOT_FOUND',
+        couponCode: normalizedCode,
+      });
       return false;
     }
 
@@ -428,11 +451,22 @@ export class OfferService {
 
     if (!result) {
       // Coupon exhausted (currentUses >= maxUses) or not found
-      console.warn(`[Coupon] Coupon exhausted or concurrent use detected: ${normalizedCode}, currentUses: ${coupon.currentUses}, maxUses: ${coupon.maxUses}`);
+      logger.warn('Coupon exhausted or concurrent use detected', {
+        context: 'OfferService',
+        action: 'COUPON_EXHAUSTED_OR_CONCURRENT',
+        couponCode: normalizedCode,
+        currentUses: coupon.currentUses,
+        maxUses: coupon.maxUses,
+      });
       return false;
     }
 
-    console.log(`[Coupon] Atomically marked as used: ${normalizedCode}, new currentUses: ${result.currentUses}`);
+    logger.info('Coupon atomically marked as used', {
+      context: 'OfferService',
+      action: 'COUPON_MARKED_USED',
+      couponCode: normalizedCode,
+      newCurrentUses: result.currentUses,
+    });
 
     // Now update the claim - this is safe because we've already atomically reserved the coupon usage
     const claimUpdateResult = await OfferClaim.findOneAndUpdate(
@@ -452,7 +486,12 @@ export class OfferService {
 
     if (!claimUpdateResult) {
       // Claim not found in 'claimed' status - rollback the coupon usage
-      console.warn(`[Coupon] Claim not found for user ${userId}, rolling back coupon usage`);
+      logger.warn('Claim not found, rolling back coupon usage', {
+        context: 'OfferService',
+        action: 'CLAIM_ROLLBACK',
+        userId,
+        couponId: coupon._id.toString(),
+      });
       await Coupon.findByIdAndUpdate(coupon._id, {
         $inc: { currentUses: -1 },
         $pull: {

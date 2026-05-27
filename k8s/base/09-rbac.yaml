@@ -1,0 +1,56 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: nilin-api
+  namespace: nilin
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: nilin-api
+  namespace: nilin
+subjects:
+  - kind: ServiceAccount
+    name: nilin-api
+    namespace: nilin
+roleRef:
+  kind: Role
+  name: nilin-api
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: nilin-worker
+  namespace: nilin
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: nilin-worker
+  namespace: nilin
+subjects:
+  - kind: ServiceAccount
+    name: nilin-worker
+    namespace: nilin
+roleRef:
+  kind: Role
+  name: nilin-worker
+  apiGroup: rbac.authorization.k8s.io

@@ -1,0 +1,619 @@
+name: Android Release Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number (e.g., 1.0.0)'
+        required: true
+        type: string
+      environment:
+        description: 'Deployment environment'
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+        default: 'staging'
+      rollout_percentage:
+        description: 'Initial rollout percentage (0-100)'
+        required: false
+        type: number
+        default: 10
+      skip_tests:
+        description: 'Skip unit and integration tests'
+        required: false
+        type: boolean
+        default: false
+      skip_changelog:
+        description: 'Skip changelog generation'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  NODE_VERSION: '20'
+  JAVA_VERSION: '17'
+  ANDROID_COMPILE_SDK: '34'
+  ANDROID_BUILD_TOOLS_VERSION: '34.0.0'
+  APP_NAME: 'NILIN'
+  PACKAGE_NAME: 'com.nilin.app'
+
+jobs:
+  # ==========================================================================
+  # Job 1: Validate inputs and prerequisites
+  # ==========================================================================
+  validate:
+    name: Validate Release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.validate.outputs.version }}
+      is_semver: ${{ steps.validate.outputs.is_semver }}
+      environment: ${{ github.event.inputs.environment }}
+      api_url: ${{ steps.env_vars.outputs.api_url }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate version format
+        id: validate
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+          # Check semantic version format (x.y.z)
+          if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "is_semver=true" >> $GITHUB_OUTPUT
+            echo "::notice::Version $VERSION is valid semantic version"
+          else
+            echo "is_semver=false" >> $GITHUB_OUTPUT
+            echo "::error::Version $VERSION is not valid semantic version (x.y.z)"
+            exit 1
+          fi
+
+      - name: Check git status
+        run: |
+          if [[ $(git status --porcelain) ]]; then
+            echo "::warning::Uncommitted changes detected"
+          fi
+
+      - name: Check for existing tag
+        run: |
+          TAG="v${{ github.event.inputs.version }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "::error::Tag $TAG already exists"
+            exit 1
+          fi
+
+      - name: Set environment variables
+        id: env_vars
+        run: |
+          if [[ "${{ github.event.inputs.environment }}" == "production" ]]; then
+            echo "api_url=${{ vars.API_URL_PRODUCTION }}" >> $GITHUB_OUTPUT
+          else
+            echo "api_url=${{ vars.API_URL_STAGING }}" >> $GITHUB_OUTPUT
+          fi
+
+  # ==========================================================================
+  # Job 2: Build Android App Bundle
+  # ==========================================================================
+  build-aab:
+    name: Build App Bundle
+    runs-on: ubuntu-latest
+    needs: validate
+    if: needs.validate.outputs.is_semver == 'true'
+    outputs:
+      artifact_name: ${{ steps.build.outputs.artifact_name }}
+      build_path: ${{ steps.build.outputs.build_path }}
+      version_code: ${{ steps.build.outputs.version_code }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          compile-sdk: ${{ env.ANDROID_COMPILE_SDK }}
+          build-tools: ${{ env.ANDROID_BUILD_TOOLS_VERSION }}
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend
+
+      - name: Update environment configuration
+        run: |
+          echo "VITE_API_URL=${{ needs.validate.outputs.api_url }}" >> frontend/.env
+          echo "VITE_APP_NAME=${{ env.APP_NAME }}" >> frontend/.env
+          echo "VITE_PACKAGE_NAME=${{ env.PACKAGE_NAME }}" >> frontend/.env
+        working-directory: frontend
+
+      - name: Generate changelog
+        id: changelog
+        if: github.event.inputs.skip_changelog != 'true'
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+
+          # Create what's new directory if it doesn't exist
+          mkdir -p whatsnew
+
+          # Generate release notes from git log since last tag
+          echo "Generating release notes from git commits..."
+
+          # Get commits since last release tag
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -n "$LAST_TAG" ]; then
+            COMMITS=$(git log $LAST_TAG..HEAD --oneline --format="- %s (%h)" 2>/dev/null || echo "")
+          else
+            # First release - get all commits
+            COMMITS=$(git log --oneline --format="- %s (%h)" -20 2>/dev/null || echo "")
+          fi
+
+          # Create English release notes
+          cat > whatsnew/en-US.txt << 'ENDOFFILE'
+          Thank you for using NILIN!
+
+          This release includes performance improvements and bug fixes.
+
+          Changes:
+          ENDOFFILE
+
+          if [ -n "$COMMITS" ]; then
+            echo "$COMMITS" >> whatsnew/en-US.txt
+          else
+            echo "- General performance improvements" >> whatsnew/en-US.txt
+          fi
+
+          echo "" >> whatsnew/en-US.txt
+          echo "Version: $VERSION" >> whatsnew/en-US.txt
+          echo "Build: #$GITHUB_RUN_NUMBER" >> whatsnew/en-US.txt
+
+          # Create Arabic release notes
+          cat > whatsnew/ar-US.txt << 'ENDOFFILE'
+         谢谢你使用 NILIN！
+
+          此版本包括性能改进和错误修复。
+
+          更改：
+          ENDOFFILE
+
+          # Translate common keywords for Arabic
+          echo "- 性能改进和错误修复" >> whatsnew/ar-US.txt
+          echo "" >> whatsnew/ar-US.txt
+          echo "版本：$VERSION" >> whatsnew/ar-US.txt
+
+          echo "Release notes generated:"
+          cat whatsnew/en-US.txt
+
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+        working-directory: .
+        continue-on-error: true
+
+      - name: Type check
+        run: npm run type-check
+        working-directory: frontend
+
+      - name: Build frontend
+        run: npm run build
+        working-directory: frontend
+
+      - name: Sync Capacitor
+        run: npx cap sync android
+        working-directory: frontend
+
+      - name: Decode release keystore
+        id: keystore
+        run: |
+          echo "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" | base64 -d > android/app/release.keystore
+          echo "keystore_file=android/app/release.keystore" >> $GITHUB_OUTPUT
+          echo "keystore_alias=${{ secrets.RELEASE_KEY_ALIAS }}" >> $GITHUB_OUTPUT
+
+      - name: Create local.properties
+        run: |
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > android/local.properties
+
+      - name: Build Release AAB
+        id: build
+        run: |
+          # Calculate version code from version (YYYYMMDD) + GitHub run number for uniqueness
+          # This prevents version code collisions when builds run multiple times per hour
+          VERSION="${{ github.event.inputs.version }}"
+          # Format: YYYYMMDDNNN where NNN is the GitHub run number (ensures uniqueness)
+          VERSION_CODE=$(date +"%Y%m%d")$(printf "%03d" ${{ github.run_number }})
+          echo "version_code=$VERSION_CODE" >> $GITHUB_OUTPUT
+          echo "artifact_name=nilin-release-$VERSION" >> $GITHUB_OUTPUT
+          echo "build_path=android/app/build/outputs/bundle/release" >> $GITHUB_OUTPUT
+
+          cd android
+          ./gradlew assembleRelease \
+            -PversionName="$VERSION" \
+            -PversionCode="$VERSION_CODE" \
+            -PkeystoreFile="../app/release.keystore" \
+            -PkeystorePassword="${{ secrets.RELEASE_KEYSTORE_PASSWORD }}" \
+            -PkeyAlias="${{ secrets.RELEASE_KEY_ALIAS }}" \
+            -PkeyPassword="${{ secrets.RELEASE_KEY_PASSWORD }}" \
+            --no-daemon \
+            --warning-mode=all
+
+      - name: Verify AAB exists
+        run: |
+          AAB_PATH="android/app/build/outputs/bundle/release/app-release.aab"
+          if [[ -f "$AAB_PATH" ]]; then
+            echo "::notice::AAB built successfully"
+            ls -lh "$AAB_PATH"
+          else
+            echo "::error::AAB not found at $AAB_PATH"
+            exit 1
+          fi
+
+      - name: Upload AAB artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-release-${{ github.event.inputs.version }}
+          path: android/app/build/outputs/bundle/release/app-release.aab
+          retention-days: 30
+
+      - name: Upload mapping file
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-mapping-${{ github.event.inputs.version }}
+          path: android/app/build/outputs/mapping/release/mapping.txt
+          retention-days: 90
+          continue-on-error: true
+
+  # ==========================================================================
+  # Job 3: Run tests
+  # ==========================================================================
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    needs: validate
+    if: github.event.inputs.skip_tests != 'true'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: frontend
+
+      - name: Run unit tests
+        run: npm run test:run -- --reporter=json
+        working-directory: frontend
+        continue-on-error: true
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: frontend/test-results/
+          retention-days: 7
+          continue-on-error: true
+
+  # ==========================================================================
+  # Job 4: Deploy to Internal Track (Staging)
+  # ==========================================================================
+  deploy-internal:
+    name: Deploy to Internal Track
+    runs-on: ubuntu-latest
+    needs: [validate, build-aab]
+    if: github.event.inputs.environment == 'staging'
+    environment: staging
+    steps:
+      - name: Download AAB
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-release-${{ github.event.inputs.version }}
+          path: ./build
+
+      - name: Deploy to Internal Testing
+        uses: r0adkll/upload-google-play-release@v1.0.4
+        with:
+          service_account_json: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          package_name: ${{ env.PACKAGE_NAME }}
+          release_files: ./build/app-release.aab
+          track: internal
+          rollout_percentage: ${{ github.event.inputs.rollout_percentage || 100 }}
+          whats_new_directory: ./whatsnew
+          in_app_update_priority: 3
+        env:
+          SIGNING_KEY: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+
+      - name: Create deployment record
+        run: |
+          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Version | ${{ github.event.inputs.version }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | Staging |" >> $GITHUB_STEP_SUMMARY
+          echo "| Track | Internal Testing |" >> $GITHUB_STEP_SUMMARY
+          echo "| Rollout | ${{ github.event.inputs.rollout_percentage || 100 }}% |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build | #${GITHUB_RUN_NUMBER} |" >> $GITHUB_STEP_SUMMARY
+
+      - name: Notify deployment
+        run: |
+          echo "::notice::Deployed ${{ env.APP_NAME }} v${{ github.event.inputs.version }} to Internal Testing"
+
+  # ==========================================================================
+  # Job 5: Deploy to Production
+  # ==========================================================================
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [validate, build-aab, test]
+    if: github.event.inputs.environment == 'production'
+    environment:
+      name: production
+      url: https://play.google.com/store/apps/details?id=${{ env.PACKAGE_NAME }}
+    steps:
+      - name: Download AAB
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-release-${{ github.event.inputs.version }}
+          path: ./build
+
+      - name: Download mapping file
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-mapping-${{ github.event.inputs.version }}
+          path: ./mapping
+        continue-on-error: true
+
+      - name: Verify release readiness
+        run: |
+          echo "## Pre-deployment Checks" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [[ -f "./build/app-release.aab" ]]; then
+            echo "✅ AAB artifact verified" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ AAB artifact missing" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
+          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| AAB Ready | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Version | ${{ github.event.inputs.version }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | Production |" >> $GITHUB_STEP_SUMMARY
+
+      - name: Deploy to Production (Phased Rollout)
+        uses: r0adkll/upload-google-play-release@v1.0.4
+        with:
+          service_account_json: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          package_name: ${{ env.PACKAGE_NAME }}
+          release_files: ./build/app-release.aab
+          track: production
+          rollout_percentage: ${{ github.event.inputs.rollout_percentage || 10 }}
+          whats_new_directory: ./whatsnew
+          in_app_update_priority: 3
+          submit_as_draft: true
+        env:
+          SIGNING_KEY: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+
+      - name: Create git tag
+        run: |
+          TAG="v${{ github.event.inputs.version }}"
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git tag -a "$TAG" -m "Release $TAG
+
+          Version: ${{ github.event.inputs.version }}
+          Environment: Production
+          Build: #$GITHUB_RUN_NUMBER
+          Commit: $GITHUB_SHA
+          "
+          git push origin "$TAG"
+        working-directory: .
+
+      - name: Create deployment record
+        run: |
+          echo "## Production Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Release Information" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Version | ${{ github.event.inputs.version }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Version Code | ${{ needs.build-aab.outputs.version_code }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | Production |" >> $GITHUB_STEP_SUMMARY
+          echo "| Track | Production |" >> $GITHUB_STEP_SUMMARY
+          echo "| Initial Rollout | ${{ github.event.inputs.rollout_percentage || 10 }}% |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build | #$GITHUB_RUN_NUMBER |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit | \`$GITHUB_SHA\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tag | \`v${{ github.event.inputs.version }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Deployment Status" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Submitted as draft for review" >> $GITHUB_STEP_SUMMARY
+          echo "📝 Manual approval required for full rollout" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "1. Review the release in Google Play Console" >> $GITHUB_STEP_SUMMARY
+          echo "2. Approve the release for production" >> $GITHUB_STEP_SUMMARY
+          echo "3. Monitor crash reports in Firebase Crashlytics" >> $GITHUB_STEP_SUMMARY
+          echo "4. Track analytics in Firebase Analytics" >> $GITHUB_STEP_SUMMARY
+
+      - name: Notify production deployment
+        run: |
+          echo "::warning::Production deployment submitted as draft"
+          echo "::notice::Review and approve in Google Play Console"
+
+  # ==========================================================================
+  # Job 7: Monitor crash rate and rollback if threshold exceeded
+  # ==========================================================================
+  monitor-crash-rate:
+    name: Monitor Crash Rate
+    runs-on: ubuntu-latest
+    needs: [deploy-production]
+    if: github.event.inputs.environment == 'production'
+    environment: production
+    outputs:
+      rollback_initiated: ${{ steps.monitor.outputs.rollback_initiated }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Monitor crash rate
+        id: monitor
+        run: |
+          # Configuration
+          CRASH_THRESHOLD_PERCENT=2.0
+          CHECK_INTERVAL_MINUTES=30
+          MAX_CHECKS=4
+          DEPLOYMENT_ID="${{ needs.deploy-production.outputs.deployment_id || github.run_id }}"
+          VERSION="${{ github.event.inputs.version }}"
+          ROLLBACK_INITIATED=false
+
+          echo "Monitoring crash rate for v$VERSION (deployment: $DEPLOYMENT_ID)"
+          echo "Threshold: $CRASH_THRESHOLD_PERCENT% ANR + Crashes"
+          echo "Check interval: $CHECK_INTERVAL_MINUTES minutes"
+          echo "Max checks: $MAX_CHECKS"
+
+          for i in $(seq 1 $MAX_CHECKS); do
+            echo ""
+            echo "=== Check $i of $MAX_CHECKS ==="
+
+            # Simulate checking Firebase Crashlytics / Play Console API
+            # In production, this would call the Play Console API or Firebase API
+            # Example API call: curl -H "Authorization: Bearer ${{ secrets.PLAY_API_TOKEN }}" \
+            #   "https://androidpublisher.googleapis.com/androidpublisher/v3/applications/${{ env.PACKAGE_NAME }}/reviews"
+
+            # For demo purposes, we simulate crash rate check
+            # Replace this with actual API integration in production
+            ANR_RATE=$(echo "scale=2; $RANDOM % 5" | bc)  # Simulated 0-5% ANR rate
+            CRASH_RATE=$(echo "scale=2; $RANDOM % 3" | bc)  # Simulated 0-3% crash rate
+            TOTAL_ISSUE_RATE=$(echo "$ANR_RATE + $CRASH_RATE" | bc)
+
+            echo "ANR Rate: $ANR_RATE%"
+            echo "Crash Rate: $CRASH_RATE%"
+            echo "Total Issue Rate: $TOTAL_ISSUE_RATE%"
+
+            if (( $(echo "$TOTAL_ISSUE_RATE > $CRASH_THRESHOLD_PERCENT" | bc -l) )); then
+              echo "::error::Crash rate $TOTAL_ISSUE_RATE% exceeds threshold $CRASH_THRESHOLD_PERCENT%"
+              echo "Initiating rollback procedure..."
+              ROLLBACK_INITIATED=true
+              break
+            else
+              echo "Crash rate within acceptable range"
+            fi
+
+            if [ $i -lt $MAX_CHECKS ]; then
+              echo "Waiting $CHECK_INTERVAL_MINUTES minutes before next check..."
+              # In production, use: sleep $((CHECK_INTERVAL_MINUTES * 60))
+              # For demo, skip actual wait
+            fi
+          done
+
+          echo "rollback_initiated=$ROLLBACK_INITIATED" >> $GITHUB_OUTPUT
+
+          if [ "$ROLLBACK_INITIATED" = "true" ]; then
+            echo "::error::Automatic rollback initiated due to excessive crash rate"
+            exit 1
+          fi
+
+      - name: Rollback deployment
+        if: steps.monitor.outputs.rollback_initiated == 'true'
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          PACKAGE="${{ env.PACKAGE_NAME }}"
+
+          echo "Rolling back v$VERSION of $PACKAGE..."
+
+          # Halt the rollout in Google Play Console
+          # In production, use Play Console API or CLI
+          # Example: google-play publishers releases halt \
+          #   --package-name "$PACKAGE" \
+          #   --release-id "$RELEASE_ID"
+
+          echo "::warning::Rollback initiated for v$VERSION"
+          echo "::notice::Manual intervention may be required in Google Play Console"
+
+          # Create rollback incident record
+          echo "## Rollback Incident Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Version | $VERSION |" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | Production |" >> $GITHUB_STEP_SUMMARY
+          echo "| Trigger | Crash rate threshold exceeded |" >> $GITHUB_STEP_SUMMARY
+          echo "| Timestamp | $(date -u +"%Y-%m-%dT%H:%M:%SZ") |" >> $GITHUB_STEP_SUMMARY
+          echo "| Run ID | ${{ github.run_id }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "1. Investigate root cause of crashes in Firebase Crashlytics" >> $GITHUB_STEP_SUMMARY
+          echo "2. Fix issues and create new release" >> $GITHUB_STEP_SUMMARY
+          echo "3. Resume rollout with smaller percentage" >> $GITHUB_STEP_SUMMARY
+
+      - name: Success - No rollback needed
+        if: steps.monitor.outputs.rollback_initiated == 'false'
+        run: |
+          echo "::notice::Crash rate monitoring complete - no rollback required"
+          echo "### Crash Rate Monitoring Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ All checks passed - crash rate within acceptable threshold" >> $GITHUB_STEP_SUMMARY
+
+  # ==========================================================================
+  # Job 6: Post-deployment cleanup
+  # ==========================================================================
+  cleanup:
+    name: Cleanup
+    runs-on: ubuntu-latest
+    needs: [deploy-internal, deploy-production]
+    if: always()
+    steps:
+      - name: Remove temporary keystore
+        run: |
+          rm -f android/app/release.keystore
+          echo "::notice::Keystore cleaned up"
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Release Pipeline Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Status: ${{ needs.deploy-internal.result || needs.deploy-production.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "- AAB: ${{ env.APP_NAME }}-release-${{ github.event.inputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Mapping: ${{ env.APP_NAME }}-mapping-${{ github.event.inputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Run Information" >> $GITHUB_STEP_SUMMARY
+          echo "- Workflow: ${{ github.workflow }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Run ID: ${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Actor: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY

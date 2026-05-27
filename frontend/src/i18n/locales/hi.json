@@ -1,0 +1,59 @@
+{
+  "common": {
+    "app_name": "NILIN",
+    "loading": "लोड हो रहा है...",
+    "error": "कुछ गलत हो गया",
+    "retry": "पुनः प्रयास करें",
+    "cancel": "रद्द करें",
+    "confirm": "पुष्टि करें",
+    "save": "सहेजें",
+    "delete": "हटाएं",
+    "edit": "संपादित करें",
+    "back": "वापस",
+    "next": "अगला",
+    "search": "खोजें",
+    "no_results": "कोई परिणाम नहीं मिला",
+    "required_field": "यह फ़ील्ड आवश्यक है"
+  },
+  "auth": {
+    "login": "लॉग इन करें",
+    "register": "पंजीकरण करें",
+    "logout": "लॉग आउट करें",
+    "email": "ईमेल",
+    "password": "पासवर्ड",
+    "forgot_password": "पासवर्ड भूल गए?",
+    "dont_have_account": "खाता नहीं है?",
+    "already_have_account": "पहले से खाता है?"
+  },
+  "booking": {
+    "title": "सेवा बुक करें",
+    "select_service": "सेवा चुनें",
+    "select_provider": "प्रदाता चुनें",
+    "select_date": "तारीख चुनें",
+    "select_time": "समय चुनें",
+    "confirm_booking": "बुकिंग की पुष्टि करें",
+    "booking_confirmed": "बुकिंग की पुष्टि हो गई!",
+    "booking_number": "बुकिंग नंबर",
+    "status": {
+      "pending": "लंबित",
+      "confirmed": "पुष्टि हो गई",
+      "completed": "पूर्ण",
+      "cancelled": "रद्द"
+    }
+  },
+  "payment": {
+    "pay_now": "अभी भुगतान करें",
+    "wallet_balance": "वॉलेट बैलेंस",
+    "add_funds": "राशि जोड़ें",
+    "payment_method": "भुगतान विधि",
+    "card_number": "कार्ड नंबर",
+    "expiry": "समाप्ति",
+    "cvv": "CVV"
+  },
+  "errors": {
+    "network_error": "नेटवर्क त्रुटि। कृपया अपना कनेक्शन जांचें।",
+    "server_error": "सर्वर त्रुटि। कृपया बाद में पुनः प्रयास करें।",
+    "invalid_credentials": "अमान्य ईमेल या पासवर्ड।",
+    "session_expired": "आपका सत्र समाप्त हो गया। कृपया पुनः लॉग इन करें।"
+  }
+}

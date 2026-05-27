@@ -1,4 +1,5 @@
 import mongoose, { Document, Schema, Model } from 'mongoose';
+import { sanitizeProviderGeo } from '../utils/sanitizeProviderGeo';
 
 export interface IProviderProfile extends Document {
   userId: mongoose.Types.ObjectId;
@@ -143,6 +144,7 @@ export interface IProviderProfile extends Document {
       description?: string;
       category: string;
       images: Array<{
+        _id?: mongoose.Types.ObjectId;  // Add _id for image identification
         url: string;
         caption?: string;
         beforeAfter?: {
@@ -196,6 +198,7 @@ export interface IProviderProfile extends Document {
       date: Date;
       type: 'unavailable' | 'custom_hours' | 'special_pricing';
       reason?: string;
+      notes?: string;
       customHours?: {
         startTime: string;
         endTime: string;
@@ -253,6 +256,7 @@ export interface IProviderProfile extends Document {
     recentReviews: Array<{
       customerId: mongoose.Types.ObjectId;
       bookingId: mongoose.Types.ObjectId;
+      serviceId?: mongoose.Types.ObjectId;
       rating: number;
       title?: string;
       comment: string;
@@ -470,7 +474,7 @@ export interface IProviderProfile extends Document {
       showEmail: boolean;
     };
   };
-  
+
   // Audit fields
   isProfileComplete: boolean;
   completionPercentage: number;
@@ -657,6 +661,7 @@ const providerProfileSchema = new Schema<IProviderProfile>(
         description: { type: String, maxlength: 500 },
         category: { type: String, required: true },
         images: [{
+          _id: { type: Schema.Types.ObjectId, auto: true },
           url: { type: String, required: true },
           caption: String,
           beforeAfter: {
@@ -769,6 +774,7 @@ const providerProfileSchema = new Schema<IProviderProfile>(
         date: { type: Date, required: true },
         type: { type: String, enum: ['unavailable', 'custom_hours', 'special_pricing'], required: true },
         reason: String,
+        notes: String,
         customHours: {
           startTime: String,
           endTime: String
@@ -824,6 +830,7 @@ const providerProfileSchema = new Schema<IProviderProfile>(
       recentReviews: [{
         customerId: { type: Schema.Types.ObjectId, ref: 'User' },
         bookingId: { type: Schema.Types.ObjectId, ref: 'Booking' },
+        serviceId: { type: Schema.Types.ObjectId, ref: 'Service' },
         rating: { type: Number, required: true, min: 1, max: 5 },
         title: String,
         comment: { type: String, required: true },
@@ -1084,6 +1091,16 @@ providerProfileSchema.virtual('bookingCompletionRate').get(function() {
   const stats = this.analytics.bookingStats;
   if (stats.totalBookings === 0) return 0;
   return Math.round((stats.completedBookings / stats.totalBookings) * 100);
+});
+
+// Sanitize invalid GeoJSON before 2dsphere index validation
+providerProfileSchema.pre('save', function(next) {
+  try {
+    sanitizeProviderGeo(this);
+  } catch (err) {
+    return next(err as Error);
+  }
+  next();
 });
 
 // Pre-save middleware to calculate completion percentage

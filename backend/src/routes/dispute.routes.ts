@@ -11,6 +11,8 @@ import {
   DisputeFiltersDTO,
 } from '../services/dispute.service';
 import { refundService, CreateRefundDTO, ProcessRefundDTO } from '../services/refund.service';
+import { cache } from '../config/redis';
+import logger from '../utils/logger';
 
 const router = express.Router();
 
@@ -724,8 +726,23 @@ router.post(
         process.env.STRIPE_WEBHOOK_SECRET || ''
       );
     } catch (err: any) {
-      console.error('Stripe webhook signature verification failed:', err.message);
+      logger.error('Stripe webhook signature verification failed', {
+        error: err.message,
+        action: 'WEBHOOK_SIGNATURE_VERIFICATION_FAILED',
+      });
       throw new ApiError(400, 'Invalid Stripe signature');
+    }
+
+    // Idempotency check using Redis
+    const eventKey = `webhook:processed:${event.id}`;
+    const alreadyProcessed = await cache.get(eventKey);
+    if (alreadyProcessed) {
+      logger.info('Stripe webhook event already processed, skipping', {
+        eventId: event.id,
+        eventType: event.type,
+        action: 'WEBHOOK_IDEMPOTENT_SKIP',
+      });
+      return res.json({ received: true, duplicate: true });
     }
 
     // Handle refund events
@@ -733,7 +750,16 @@ router.post(
       await refundService.handleStripeWebhook(event);
     }
 
-    res.json({ received: true });
+    // Mark event as processed with 24 hour TTL
+    await cache.set(eventKey, JSON.stringify({ processed: true, timestamp: Date.now() }), 86400);
+
+    logger.info('Stripe webhook processed successfully', {
+      eventId: event.id,
+      eventType: event.type,
+      action: 'WEBHOOK_PROCESSED',
+    });
+
+    return res.json({ received: true });
   })
 );
 

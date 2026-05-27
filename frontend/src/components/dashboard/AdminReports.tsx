@@ -334,8 +334,8 @@ const AdminReports: React.FC = () => {
 
   // Data State
   const [overview, setOverview] = useState<AnalyticsOverview | null>(null);
-  const [revenueByDay, setRevenueByDay] = useState<Array<{ date: string; revenue: number; bookings: number }>>([]);
-  const [categoryRevenue, setCategoryRevenue] = useState<Array<{ category: string; revenue: number; percentage: number }>>([]);
+  const [revenueByDay, setRevenueByDay] = useState<Array<{ date: string; revenue: number; bookings: number; completed?: number; cancelled?: number }>>([]);
+  const [categoryRevenue, setCategoryRevenue] = useState<Array<{ name: string; value: number; percentage: number }>>([]);
   const [customers, setCustomers] = useState<{ totalCustomers: number; activeCustomers: number; newCustomersThisMonth: number } | null>(null);
   const [providers, setProviders] = useState<{ totalProviders: number; activeProviders: number; newProvidersThisMonth: number } | null>(null);
 
@@ -374,8 +374,11 @@ const AdminReports: React.FC = () => {
       const revenueResponse = await authService.get<{
         success: boolean;
         data: {
-          revenueByDay: Array<{ date: string; revenue: number; bookings: number }>;
-          revenueByCategory: Array<{ category: string; revenue: number; percentage: number }>;
+          revenueByDay: Array<{ date: string; revenue: number; bookings: number; completed?: number; cancelled?: number }>;
+          revenueByCategory: Array<{ name: string; value: number; percentage: number }>;
+          totalRevenue: number;
+          revenueThisMonth: number;
+          averageOrderValue: number;
         };
       }>(`/analytics/revenue?period=${period}`);
 
@@ -403,21 +406,47 @@ const AdminReports: React.FC = () => {
   };
 
   // Handle export
-  const handleExport = async (type: 'pdf' | 'csv' | 'excel') => {
+  const handleExport = async (type: 'pdf' | 'csv' | 'json') => {
     setIsExporting(true);
     try {
-      const response = await authService.get<{ success: boolean; data: { url: string } }>(
-        `/analytics/export/${type}?period=${period}`
-      );
+      const response = await authService.get<{
+        success: boolean;
+        data: unknown;
+        metadata?: { recordCount: number };
+      }>(`/analytics/export/${type}?period=${period}&format=bookings`);
 
-      if (response.success && response.data.url) {
-        // Create a temporary link to download the file
-        const link = document.createElement('a');
-        link.href = response.data.url;
-        link.download = `analytics-report-${period}.${type}`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+      if (response.success && response.data) {
+        // Backend returns the file directly based on type (csv, json, pdf)
+        // For JSON responses, we need to parse and create a downloadable file
+        if (type === 'json' || type === 'pdf') {
+          // Backend returns JSON data - convert to blob and download
+          const jsonStr = JSON.stringify(response.data, null, 2);
+          const blob = new Blob([jsonStr], { type: 'application/json' });
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = `analytics-report-${period}.json`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
+        } else if (type === 'csv') {
+          // For CSV, backend sends text/csv directly
+          // Re-fetch as blob to handle CSV format properly
+          const httpClient = authService.getHttpClient();
+          const csvResponse = await httpClient.get(`/analytics/export/csv?period=${period}&format=bookings`, {
+            responseType: 'blob',
+          });
+          const blob = new Blob([csvResponse.data], { type: 'text/csv' });
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = `analytics-report-${period}.csv`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
+        }
       }
     } catch (err) {
       console.error('Error exporting data:', err);
@@ -594,16 +623,16 @@ const AdminReports: React.FC = () => {
             </ResponsiveContainer>
             <div className="flex flex-col justify-center">
               {categoryRevenue.map((cat, index) => (
-                <div key={cat.category} className="flex items-center justify-between py-2 border-b border-nilin-border/30 last:border-0">
+                <div key={cat.name} className="flex items-center justify-between py-2 border-b border-nilin-border/30 last:border-0">
                   <div className="flex items-center">
                     <div
                       className="w-3 h-3 rounded-full mr-3"
                       style={{ backgroundColor: CHART_COLORS[index % CHART_COLORS.length] }}
                     ></div>
-                    <span className="text-sm text-nilin-charcoal font-sans">{cat.category}</span>
+                    <span className="text-sm text-nilin-charcoal font-sans">{cat.name}</span>
                   </div>
                   <span className="text-sm font-medium text-nilin-charcoal font-sans">
-                    AED {cat.revenue.toLocaleString()} ({cat.percentage}%)
+                    AED {cat.value.toLocaleString()} ({cat.percentage}%)
                   </span>
                 </div>
               ))}
@@ -1009,7 +1038,7 @@ const AdminReports: React.FC = () => {
       subtitle={`Analytics for ${user?.firstName || 'Admin'}`}
       showBreadcrumb={true}
       breadcrumbItems={[
-        { label: 'Dashboard', href: '/admin' },
+        { label: 'Dashboard', href: '/admin/dashboard' },
         { label: 'Reports', current: true }
       ]}
       headerActions={
@@ -1050,10 +1079,10 @@ const AdminReports: React.FC = () => {
                   Export as CSV
                 </button>
                 <button
-                  onClick={() => handleExport('excel')}
+                  onClick={() => handleExport('json')}
                   className="block w-full text-left px-4 py-2 text-sm text-nilin-charcoal hover:bg-nilin-blush/50 font-sans"
                 >
-                  Export as Excel
+                  Export as JSON
                 </button>
               </div>
             </div>

@@ -4,6 +4,81 @@ import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
 
 // ============================================
+// Helper Functions
+// ============================================
+
+const MAX_HISTORY = 100;
+const POINTS_EXPIRY_MONTHS = 24;
+
+/**
+ * Truncate points history to prevent unbounded growth.
+ * Called after every pointsHistory.push() operation.
+ */
+function truncatePointsHistory(loyaltySystem: any): void {
+  if (loyaltySystem.pointsHistory && loyaltySystem.pointsHistory.length > MAX_HISTORY) {
+    loyaltySystem.pointsHistory = loyaltySystem.pointsHistory.slice(-MAX_HISTORY);
+  }
+}
+
+/**
+ * Expire old points - callable by a scheduler (e.g., cron job).
+ * This function removes expired points from user balances.
+ */
+export const expireOldPoints = asyncHandler(async (_req: Request, res: Response) => {
+  const now = new Date();
+
+  // Find all users with expired points
+  const usersWithExpiredPoints = await User.find({
+    'loyaltySystem.pointsHistory': {
+      $elemMatch: {
+        expiresAt: { $lt: now },
+        amount: { $gt: 0 } // Only expire positive entries (earned, not spent)
+      }
+    }
+  });
+
+  let totalExpiredPoints = 0;
+  let usersProcessed = 0;
+
+  for (const user of usersWithExpiredPoints) {
+    const expiredEntries = user.loyaltySystem.pointsHistory.filter(
+      (entry: any) => entry.expiresAt && entry.expiresAt < now && entry.amount > 0
+    );
+
+    if (expiredEntries.length > 0) {
+      const expiredAmount = expiredEntries.reduce((sum: number, entry: any) => sum + entry.amount, 0);
+
+      // Deduct expired points from balance
+      user.loyaltySystem.coins = Math.max(0, user.loyaltySystem.coins - expiredAmount);
+
+      // Add expiry record to history
+      user.loyaltySystem.pointsHistory.push({
+        amount: -expiredAmount,
+        type: 'spent',
+        description: `Points expired after ${POINTS_EXPIRY_MONTHS} months`,
+        date: new Date(),
+      });
+
+      // Truncate if needed
+      truncatePointsHistory(user.loyaltySystem);
+
+      await user.save();
+      totalExpiredPoints += expiredAmount;
+      usersProcessed++;
+    }
+  }
+
+  res.json({
+    success: true,
+    message: `Expired points cleanup completed`,
+    data: {
+      usersProcessed,
+      totalExpiredPoints,
+    },
+  });
+});
+
+// ============================================
 // Get Loyalty Status
 // ============================================
 
@@ -258,6 +333,9 @@ export const redeemPoints = asyncHandler(async (req: Request, res: Response) => 
       totalEarned: 0,
       totalSpent: 0,
       pointsHistory: [],
+      processedJobIds: [],
+      firstBookingAwarded: false,
+      pendingRewards: [],
     };
   }
 
@@ -288,10 +366,8 @@ export const redeemPoints = asyncHandler(async (req: Request, res: Response) => 
   userDoc.loyaltySystem.pointsHistory = userDoc.loyaltySystem.pointsHistory || [];
   userDoc.loyaltySystem.pointsHistory.push(transactionRecord);
 
-  // Keep only last 100 history entries to prevent unbounded growth
-  if (userDoc.loyaltySystem.pointsHistory.length > 100) {
-    userDoc.loyaltySystem.pointsHistory = userDoc.loyaltySystem.pointsHistory.slice(-100);
-  }
+  // Truncate history to prevent unbounded growth
+  truncatePointsHistory(userDoc.loyaltySystem);
 
   await userDoc.save();
 
@@ -321,4 +397,5 @@ export default {
   getPointsHistory,
   getTierBenefits,
   redeemPoints,
+  expireOldPoints,
 };

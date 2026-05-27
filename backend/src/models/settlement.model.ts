@@ -515,7 +515,7 @@ settlementSchema.statics.generateSettlements = async function(
   const bookings = await Booking.find({
     status: 'completed',
     completedAt: { $gte: periodStart, $lte: periodEnd },
-    'payment.status': 'paid',
+    'payment.status': 'completed',
   }).populate('providerId');
 
   // Group bookings by provider

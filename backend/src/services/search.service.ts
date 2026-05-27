@@ -14,22 +14,656 @@ const escapeRegex = (str: string): string => {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 };
 
-// Default search ranking rules for Meilisearch
+// ============================================
+// LEVENSHTEIN DISTANCE & TYPO TOLERANCE
+// ============================================
+
+/**
+ * Calculate Levenshtein distance between two strings
+ * @param a - First string
+ * @param b - Second string
+ * @returns The edit distance between the two strings
+ */
+export const levenshteinDistance = (a: string, b: string): number => {
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+
+  const matrix: number[][] = [];
+
+  // Initialize first column
+  for (let i = 0; i <= b.length; i++) {
+    matrix[i] = [i];
+  }
+
+  // Initialize first row
+  for (let j = 0; j <= a.length; j++) {
+    matrix[0][j] = j;
+  }
+
+  // Fill in the rest of the matrix
+  for (let i = 1; i <= b.length; i++) {
+    for (let j = 1; j <= a.length; j++) {
+      if (b.charAt(i - 1) === a.charAt(j - 1)) {
+        matrix[i][j] = matrix[i - 1][j - 1];
+      } else {
+        matrix[i][j] = Math.min(
+          matrix[i - 1][j - 1] + 1, // substitution
+          matrix[i][j - 1] + 1,     // insertion
+          matrix[i - 1][j] + 1      // deletion
+        );
+      }
+    }
+  }
+
+  return matrix[b.length][a.length];
+};
+
+/**
+ * Get the similarity ratio between two strings (0-1)
+ * @param a - First string
+ * @param b - Second string
+ * @returns Similarity ratio (0 = completely different, 1 = identical)
+ */
+export const getSimilarityRatio = (a: string, b: string): number => {
+  const maxLen = Math.max(a.length, b.length);
+  if (maxLen === 0) return 1;
+  const distance = levenshteinDistance(a.toLowerCase(), b.toLowerCase());
+  return 1 - distance / maxLen;
+};
+
+/**
+ * Find suggestions for a misspelled query based on known terms
+ * @param query - The misspelled query
+ * @param knownTerms - Array of known terms to match against
+ * @param maxDistance - Maximum Levenshtein distance to consider (default: 2)
+ * @param minSimilarity - Minimum similarity ratio (default: 0.6)
+ * @returns Array of suggested corrections sorted by similarity
+ */
+export const findSuggestions = (
+  query: string,
+  knownTerms: string[],
+  maxDistance: number = 2,
+  minSimilarity: number = 0.6
+): Array<{ term: string; distance: number; similarity: number }> => {
+  if (!query || knownTerms.length === 0) return [];
+
+  const normalizedQuery = query.toLowerCase().trim();
+  const suggestions: Array<{ term: string; distance: number; similarity: number }> = [];
+
+  for (const term of knownTerms) {
+    const normalizedTerm = term.toLowerCase();
+
+    // Skip exact matches
+    if (normalizedTerm === normalizedQuery) continue;
+
+    const distance = levenshteinDistance(normalizedQuery, normalizedTerm);
+    const similarity = getSimilarityRatio(normalizedQuery, normalizedTerm);
+
+    // Include if within max distance or meets similarity threshold
+    if (distance <= maxDistance || similarity >= minSimilarity) {
+      suggestions.push({ term, distance, similarity });
+    }
+  }
+
+  // Sort by similarity (descending), then by distance (ascending)
+  return suggestions
+    .sort((a, b) => b.similarity - a.similarity || a.distance - b.distance)
+    .slice(0, 5);
+};
+
+// ============================================
+// SYNONYM HANDLING
+// ============================================
+
+/**
+ * Synonym dictionary for common search terms
+ * Key: canonical form, Value: array of synonyms
+ */
+export const SYNONYM_DICTIONARY: Record<string, string[]> = {
+  // General terms
+  'cleaning': ['housekeeping', 'maid', 'house cleaner', 'domestic cleaning', 'home cleaning'],
+  'plumbing': ['plumber', 'pipe', 'drain', 'water', 'leak', 'bathroom'],
+  'electrical': ['electrician', 'wiring', 'power', 'lights', 'switch', 'outlet'],
+  'painting': ['paint', 'wall painting', 'interior painting', 'exterior painting', 'paint job'],
+  'carpentry': ['carpenter', 'wood', 'furniture', 'woodwork', 'cabinet'],
+  'gardening': ['landscaping', 'lawn', 'yard', 'plants', 'garden maintenance', 'grass'],
+  'pest control': ['pest', 'bugs', 'insects', 'rodents', 'termites', 'exterminator'],
+  'moving': ['relocation', 'movers', 'packers', 'shift', 'transport'],
+  'repair': ['fix', 'maintenance', 'restore', 'handyman'],
+  'installation': ['install', 'setup', 'mount', 'assemble'],
+
+  // Home services
+  'ac': ['air conditioning', 'air conditioner', 'cooling', 'hvac', 'split ac', 'duct'],
+  'appliance': ['fridge', 'refrigerator', 'washer', 'dryer', 'dishwasher', 'oven'],
+  'car wash': ['car cleaning', 'vehicle wash', 'auto detailing', 'auto wash'],
+  'salon': ['beauty', 'hair', 'spa', 'nails', 'makeup', 'styling'],
+  'massage': ['massage therapy', 'spa treatment', 'relaxation', 'therapeutic massage'],
+
+  // Common misspellings/variations
+  'air conditioning': ['ac', 'air conditiong', 'air conditioning service'],
+  'house cleaning': ['house keeping', 'house cleanin', 'home cleaning service'],
+  'plumbing service': ['plumbin', 'plumbng', 'plummer'],
+  'electrician': ['electrican', 'electritian', 'electrical service'],
+  'carpenter': ['carpentar', 'carpender', 'wood worker'],
+
+  // Time-based
+  'hourly': ['per hour', 'hour', 'regular'],
+  'emergency': ['urgent', 'immediate', '24/7', 'same day'],
+  'regular': ['routine', 'scheduled', 'periodic', 'maintenance'],
+
+  // Quality descriptors
+  'professional': ['pro', 'expert', 'skilled', 'certified', 'qualified'],
+  'affordable': ['cheap', 'budget', 'reasonable', 'economical', 'low cost'],
+  'quality': ['best', 'top', 'premium', 'high quality', 'excellent'],
+};
+
+/**
+ * Reverse synonym map for quick lookup (synonym -> canonical)
+ */
+const REVERSE_SYNONYM_MAP: Map<string, string> = new Map();
+
+/**
+ * Initialize the reverse synonym map
+ */
+const initializeSynonymMap = (): void => {
+  if (REVERSE_SYNONYM_MAP.size > 0) return;
+
+  for (const [canonical, synonyms] of Object.entries(SYNONYM_DICTIONARY)) {
+    // Map each synonym to its canonical form
+    for (const synonym of synonyms) {
+      REVERSE_SYNONYM_MAP.set(synonym.toLowerCase(), canonical);
+    }
+  }
+};
+
+/**
+ * Expand query by adding synonyms
+ * @param query - Original search query
+ * @returns Expanded query with synonyms
+ */
+export const expandQueryWithSynonyms = (query: string): string[] => {
+  initializeSynonymMap();
+
+  if (!query) return [query];
+
+  const normalizedQuery = query.toLowerCase().trim();
+  const expandedQueries: string[] = [query]; // Keep original
+
+  // Check for exact matches in reverse map
+  const canonicalForm = REVERSE_SYNONYM_MAP.get(normalizedQuery);
+  if (canonicalForm) {
+    expandedQueries.push(canonicalForm);
+  }
+
+  // Check each word in the query
+  const words = normalizedQuery.split(/\s+/);
+  for (const word of words) {
+    const canonical = REVERSE_SYNONYM_MAP.get(word);
+    if (canonical && canonical !== word) {
+      expandedQueries.push(canonical);
+    }
+  }
+
+  // Check for phrase matches (multi-word synonyms)
+  for (const [canonical, synonyms] of Object.entries(SYNONYM_DICTIONARY)) {
+    for (const synonym of synonyms) {
+      if (normalizedQuery.includes(synonym.toLowerCase())) {
+        const expanded = normalizedQuery.replace(synonym.toLowerCase(), canonical);
+        if (expanded !== normalizedQuery) {
+          expandedQueries.push(expanded);
+        }
+      }
+    }
+  }
+
+  return Array.from(new Set(expandedQueries));
+};
+
+/**
+ * Get all searchable terms from the database for typo tolerance
+ * This is cached for performance
+ */
+let cachedSearchTerms: string[] | null = null;
+let cacheTimestamp: number = 0;
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Refresh the cached search terms
+ */
+export const refreshSearchTermsCache = async (): Promise<void> => {
+  try {
+    const [services, categories] = await Promise.all([
+      Service.find({ isActive: true }, { name: 1, tags: 1, category: 1 }).lean(),
+      ServiceCategory.find({ isActive: { $ne: false } }, { name: 1 }).lean(),
+    ]);
+
+    const terms = new Set<string>();
+
+    // Add service names
+    for (const service of services) {
+      if (service.name) terms.add(service.name);
+      if (service.category) terms.add(service.category);
+      if (service.tags) {
+        for (const tag of service.tags) {
+          terms.add(tag);
+        }
+      }
+    }
+
+    // Add category names
+    for (const category of categories) {
+      if (category.name) terms.add(category.name);
+    }
+
+    // Add canonical forms from synonym dictionary
+    for (const canonical of Object.keys(SYNONYM_DICTIONARY)) {
+      terms.add(canonical);
+    }
+
+    cachedSearchTerms = Array.from(terms);
+    cacheTimestamp = Date.now();
+
+    logger.debug(`Refreshed search terms cache: ${cachedSearchTerms.length} terms`);
+  } catch (error) {
+    logger.error('Failed to refresh search terms cache:', error);
+  }
+};
+
+/**
+ * Get cached search terms, refreshing if stale
+ */
+const getSearchTerms = async (): Promise<string[]> => {
+  if (!cachedSearchTerms || Date.now() - cacheTimestamp > CACHE_TTL_MS) {
+    await refreshSearchTermsCache();
+  }
+  return cachedSearchTerms || [];
+};
+
+// ============================================
+// SEARCH ANALYTICS
+// ============================================
+
+/**
+ * Search analytics data structure
+ */
+interface SearchAnalytics {
+  totalSearches: number;
+  zeroResultSearches: number;
+  refinementCount: number;
+  averageClickPosition: number;
+  topQueries: Array<{ query: string; count: number }>;
+  zeroResultQueries: Array<{ query: string; count: number; timestamp: number }>;
+  queryRefinements: Array<{ original: string; refined: string; timestamp: number }>;
+}
+
+/**
+ * In-memory search analytics (in production, use Redis or a dedicated analytics DB)
+ */
+const searchAnalytics: SearchAnalytics = {
+  totalSearches: 0,
+  zeroResultSearches: 0,
+  refinementCount: 0,
+  averageClickPosition: 0,
+  topQueries: [],
+  zeroResultQueries: [],
+  queryRefinements: [],
+};
+
+/**
+ * Track a search query
+ * @param query - The search query
+ * @param resultCount - Number of results returned
+ * @param previousQuery - Previous query if this is a refinement (optional)
+ */
+export const trackSearch = (
+  query: string,
+  resultCount: number,
+  previousQuery?: string
+): void => {
+  if (!query) return;
+
+  const normalizedQuery = query.toLowerCase().trim();
+
+  // Update total searches
+  searchAnalytics.totalSearches++;
+
+  // Track top queries
+  const topQuery = searchAnalytics.topQueries.find(q => q.query === normalizedQuery);
+  if (topQuery) {
+    topQuery.count++;
+  } else {
+    searchAnalytics.topQueries.push({ query: normalizedQuery, count: 1 });
+    // Keep only top 100 queries
+    if (searchAnalytics.topQueries.length > 100) {
+      searchAnalytics.topQueries.sort((a, b) => b.count - a.count);
+      searchAnalytics.topQueries = searchAnalytics.topQueries.slice(0, 100);
+    }
+  }
+
+  // Track zero-result searches
+  if (resultCount === 0) {
+    searchAnalytics.zeroResultSearches++;
+
+    const zeroResult = searchAnalytics.zeroResultQueries.find(q => q.query === normalizedQuery);
+    if (zeroResult) {
+      zeroResult.count++;
+    } else {
+      searchAnalytics.zeroResultQueries.push({
+        query: normalizedQuery,
+        count: 1,
+        timestamp: Date.now(),
+      });
+
+      // Log zero-result search for investigation
+      logger.info('Zero-result search detected', {
+        query: normalizedQuery,
+        timestamp: new Date().toISOString(),
+      });
+
+      // Keep only recent 500 zero-result queries
+      if (searchAnalytics.zeroResultQueries.length > 500) {
+        searchAnalytics.zeroResultQueries.sort((a, b) => b.timestamp - a.timestamp);
+        searchAnalytics.zeroResultQueries = searchAnalytics.zeroResultQueries.slice(0, 500);
+      }
+    }
+  }
+
+  // Track query refinements (user modified their search)
+  if (previousQuery && previousQuery.toLowerCase().trim() !== normalizedQuery) {
+    searchAnalytics.refinementCount++;
+
+    searchAnalytics.queryRefinements.push({
+      original: previousQuery.toLowerCase().trim(),
+      refined: normalizedQuery,
+      timestamp: Date.now(),
+    });
+
+    // Log refinement pattern
+    logger.debug('Search refinement', {
+      from: previousQuery,
+      to: normalizedQuery,
+    });
+
+    // Keep only recent 1000 refinements
+    if (searchAnalytics.queryRefinements.length > 1000) {
+      searchAnalytics.queryRefinements.sort((a, b) => b.timestamp - a.timestamp);
+      searchAnalytics.queryRefinements = searchAnalytics.queryRefinements.slice(0, 1000);
+    }
+  }
+};
+
+/**
+ * Get search analytics summary
+ */
+export const getSearchAnalytics = (): SearchAnalytics => {
+  return { ...searchAnalytics };
+};
+
+/**
+ * Analyze refinement patterns
+ * @returns Analysis of how users refine their searches
+ */
+export const analyzeRefinementPatterns = (): {
+  commonRefinements: Array<{ from: string; to: string; count: number }>;
+  averageRefinementsPerSession: number;
+  mostAbandonedQueryPattern: string | null;
+} => {
+  const refinementCounts = new Map<string, number>();
+
+  for (const ref of searchAnalytics.queryRefinements) {
+    const key = `${ref.original} -> ${ref.refined}`;
+    refinementCounts.set(key, (refinementCounts.get(key) || 0) + 1);
+  }
+
+  const commonRefinements = Array.from(refinementCounts.entries())
+    .map(([key, count]) => {
+      const [from, to] = key.split(' -> ');
+      return { from, to, count };
+    })
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 10);
+
+  // Calculate abandoned query patterns (queries that lead to zero results)
+  const abandonedPatterns = searchAnalytics.zeroResultQueries
+    .filter(z => {
+      // Check if this query was later refined
+      return !searchAnalytics.queryRefinements.some(
+        r => r.original === z.query && r.refined !== z.query
+      );
+    })
+    .map(z => z.query);
+
+  return {
+    commonRefinements,
+    averageRefinementsPerSession: searchAnalytics.totalSearches > 0
+      ? searchAnalytics.refinementCount / Math.ceil(searchAnalytics.totalSearches / 10)
+      : 0,
+    mostAbandonedQueryPattern: abandonedPatterns.length > 0
+      ? abandonedPatterns.sort((a, b) => {
+          const countA = searchAnalytics.zeroResultQueries.find(z => z.query === a)?.count || 0;
+          const countB = searchAnalytics.zeroResultQueries.find(z => z.query === b)?.count || 0;
+          return countB - countA;
+        })[0]
+      : null,
+  };
+};
+
+// ============================================
+// GEO-SEARCH FALLBACK
+// ============================================
+
+/**
+ * Search options with geo-location support
+ */
+export interface GeoSearchOptions extends SearchOptions {
+  latitude?: number;
+  longitude?: number;
+  radiusKm?: number;
+}
+
+/**
+ * Search results with geo-distance
+ */
+export interface GeoSearchResults extends SearchResults {
+  centerPoint?: {
+    latitude: number;
+    longitude: number;
+  };
+  geoFallbackTriggered?: boolean;
+  geoResults?: any[];
+  textQuery?: string;
+}
+
+/**
+ * Fallback geo search using MongoDB $geoWithin when Meilisearch is unavailable
+ * @param query - Search query
+ * @param options - Search options including geo parameters
+ * @returns Search results with distance information
+ */
+const geoFallbackSearch = async (
+  query: string,
+  options: GeoSearchOptions = {}
+): Promise<GeoSearchResults> => {
+  const startTime = Date.now();
+
+  try {
+    const {
+      limit = 20,
+      offset = 0,
+      category,
+      minPrice,
+      maxPrice,
+      minRating,
+      latitude,
+      longitude,
+      radiusKm = 25, // Default 25km radius
+      tags,
+    } = options;
+
+    const searchQuery: any = {
+      isActive: true,
+    };
+
+    // Text search if query provided
+    if (query) {
+      const escapedQuery = escapeRegex(query);
+      searchQuery.$or = [
+        { name: { $regex: escapedQuery, $options: 'i' } },
+        { description: { $regex: escapedQuery, $options: 'i' } },
+        { category: { $regex: escapedQuery, $options: 'i' } },
+        { tags: { $regex: escapedQuery, $options: 'i' } },
+      ];
+    }
+
+    // Apply filters
+    if (category) searchQuery.category = category;
+    if (minPrice !== undefined) searchQuery['price.amount'] = { $gte: minPrice };
+    if (maxPrice !== undefined) {
+      searchQuery['price.amount'] = {
+        ...searchQuery['price.amount'],
+        $lte: maxPrice,
+      };
+    }
+    if (minRating !== undefined) searchQuery['rating.average'] = { $gte: minRating };
+    if (tags && tags.length > 0) {
+      searchQuery.tags = { $in: tags };
+    }
+
+    let queryBuilder = Service.find(searchQuery);
+
+    // Apply geo-filter if coordinates provided
+    if (latitude !== undefined && longitude !== undefined) {
+      queryBuilder = Service.find({
+        ...searchQuery,
+        location: {
+          $geoWithin: {
+            $centerSphere: [
+              [longitude, latitude], // [lng, lat] for MongoDB
+              radiusKm / 6378.1, // Convert km to radians (Earth radius = 6378.1 km)
+            ],
+          },
+        },
+      });
+    }
+
+    // Execute query with sorting and pagination
+    const [services, total] = await Promise.all([
+      queryBuilder
+        .skip(offset)
+        .limit(limit)
+        .select({
+          name: 1,
+          description: 1,
+          category: 1,
+          subcategory: 1,
+          price: 1,
+          rating: 1,
+          location: 1,
+          images: 1,
+          tags: 1,
+          providerId: 1,
+        })
+        .lean(),
+      Service.countDocuments(searchQuery),
+    ]);
+
+    // Calculate distances for services that have coordinates
+    const resultsWithDistance = services.map((service: any) => {
+      if (
+        latitude !== undefined &&
+        longitude !== undefined &&
+        service.location?.coordinates
+      ) {
+        const [svcLng, svcLat] = service.location.coordinates;
+        const distance = calculateHaversineDistance(
+          latitude,
+          longitude,
+          svcLat,
+          svcLng
+        );
+        return { ...service, distance };
+      }
+      return { ...service, distance: null };
+    });
+
+    // Sort by distance if geo coordinates provided
+    if (latitude !== undefined && longitude !== undefined) {
+      resultsWithDistance.sort((a: any, b: any) => (a.distance || Infinity) - (b.distance || Infinity));
+    }
+
+    return {
+      hits: resultsWithDistance,
+      estimatedTotalHits: total,
+      processingTimeMs: Date.now() - startTime,
+      query,
+      centerPoint:
+        latitude !== undefined && longitude !== undefined
+          ? { latitude, longitude }
+          : undefined,
+    };
+  } catch (error) {
+    logger.error('Geo fallback search failed:', error);
+    return {
+      hits: [],
+      estimatedTotalHits: 0,
+      processingTimeMs: Date.now() - startTime,
+      query,
+    };
+  }
+};
+
+/**
+ * Calculate Haversine distance between two points
+ * @param lat1 - Latitude of point 1
+ * @param lon1 - Longitude of point 1
+ * @param lat2 - Latitude of point 2
+ * @param lon2 - Longitude of point 2
+ * @returns Distance in kilometers
+ */
+const calculateHaversineDistance = (
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number
+): number => {
+  const R = 6378.1; // Earth's radius in km
+  const dLat = toRadians(lat2 - lat1);
+  const dLon = toRadians(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRadians(lat1)) *
+      Math.cos(toRadians(lat2)) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+};
+
+const toRadians = (degrees: number): number => degrees * (Math.PI / 180);
+
+// ============================================
+// DEFAULT SEARCH RANKING RULES
+// ============================================
+
 const DEFAULT_RANKING_RULES = [
+  'providerTrustScore:desc',
   'words',
   'typo',
   'proximity',
   'attribute',
   'sort',
   'exactness',
-  'provider.trustScore:desc',
 ];
 
-// Search options interface
+// ============================================
+// SEARCH OPTIONS INTERFACES
+// ============================================
+
 export interface SearchOptions {
   limit?: number;
   offset?: number;
   category?: string;
+  subcategory?: string;
   minPrice?: number;
   maxPrice?: number;
   minRating?: number;
@@ -38,14 +672,23 @@ export interface SearchOptions {
   tags?: string[];
 }
 
-// Search results interface
+// ============================================
+// SEARCH RESULTS INTERFACE
+// ============================================
+
 export interface SearchResults {
   hits: any[];
   estimatedTotalHits: number;
   processingTimeMs: number;
   query: string;
   facetDistribution?: Record<string, Record<string, number>>;
+  didYouMean?: string[];
+  correctionApplied?: boolean;
 }
+
+// ============================================
+// MEILISEARCH INDEX INITIALIZATION
+// ============================================
 
 /**
  * Initialize Meilisearch indexes with proper configuration
@@ -88,7 +731,7 @@ export const initializeIndexes = async (): Promise<void> => {
       }
     }
 
-    // Configure services index
+    // Configure services index with enhanced typo tolerance
     const servicesIndex = client.index(INDEXES.SERVICES);
     await servicesIndex.updateSettings({
       searchableAttributes: [
@@ -103,7 +746,7 @@ export const initializeIndexes = async (): Promise<void> => {
         'category',
         'subcategory',
         'isActive',
-        'price.amount',
+        'pricing.basePrice',
         'rating.average',
         'provider.id',
         'tags',
@@ -123,6 +766,8 @@ export const initializeIndexes = async (): Promise<void> => {
           twoTypos: 8,
         },
       },
+      // Enable synonyms in Meilisearch
+      synonyms: SYNONYM_DICTIONARY,
     });
 
     // Configure providers index
@@ -169,6 +814,10 @@ export const initializeIndexes = async (): Promise<void> => {
   }
 };
 
+// ============================================
+// INDEXING FUNCTIONS
+// ============================================
+
 /**
  * Index a single service in Meilisearch
  */
@@ -201,6 +850,7 @@ export const indexService = async (service: any): Promise<void> => {
       isActive: service.isActive,
       createdAt: new Date(service.createdAt).getTime(),
       updatedAt: new Date(service.updatedAt).getTime(),
+      providerTrustScore: service.providerTrustScore || 0,
     };
 
     await client.index(INDEXES.SERVICES).addDocuments([document]);
@@ -271,18 +921,35 @@ export const indexCategory = async (category: any): Promise<void> => {
   }
 };
 
+// ============================================
+// MAIN SEARCH FUNCTIONS
+// ============================================
+
 /**
- * Search services using Meilisearch
+ * Search services using Meilisearch with typo tolerance and synonym support
  */
 export const searchServices = async (
   query: string,
-  options: SearchOptions = {}
+  options: SearchOptions = {},
+  previousQuery?: string
 ): Promise<SearchResults> => {
+  const startTime = Date.now();
+
+  // Track search for analytics
+  trackSearch(query, 0, previousQuery);
+
+  // Apply synonym expansion first
+  const expandedQueries = expandQueryWithSynonyms(query);
+  const primaryQuery = expandedQueries[0];
+
+  // Try Meilisearch first
   const client = await getMeiliClient();
 
-  // Fallback to MongoDB if Meilisearch not available
   if (!client) {
-    return fallbackSearch(query, options);
+    // Fallback to MongoDB if Meilisearch not available
+    const results = await fallbackSearch(primaryQuery, options);
+    trackSearch(query, results.estimatedTotalHits, previousQuery);
+    return results;
   }
 
   try {
@@ -326,7 +993,7 @@ export const searchServices = async (
       }
     }
 
-    const searchResult = await client.index(INDEXES.SERVICES).search(query, {
+    const searchResult = await client.index(INDEXES.SERVICES).search(primaryQuery, {
       limit,
       offset,
       filter: filters.join(' AND '),
@@ -334,21 +1001,66 @@ export const searchServices = async (
       attributesToHighlight: ['name', 'description'],
     });
 
+    // Check if we got results, if not try synonym-expanded queries
+    let finalResult = searchResult;
+    let correctionApplied = false;
+    let didYouMean: string[] | undefined;
+
+    if (searchResult.estimatedTotalHits === 0 && expandedQueries.length > 1) {
+      // Try each expanded query
+      for (let i = 1; i < expandedQueries.length; i++) {
+        const altQuery = expandedQueries[i];
+        const altResult = await client.index(INDEXES.SERVICES).search(altQuery, {
+          limit,
+          offset,
+          filter: filters.join(' AND '),
+          sort,
+          attributesToHighlight: ['name', 'description'],
+        });
+
+        if (altResult.estimatedTotalHits > 0) {
+          finalResult = altResult;
+          correctionApplied = true;
+          didYouMean = [altQuery];
+          logger.info(`Search corrected: "${primaryQuery}" -> "${altQuery}"`);
+          break;
+        }
+      }
+    }
+
+    // If still no results, generate "Did you mean?" suggestions using Levenshtein
+    if (finalResult.estimatedTotalHits === 0) {
+      const knownTerms = await getSearchTerms();
+      const suggestions = findSuggestions(primaryQuery, knownTerms);
+
+      if (suggestions.length > 0) {
+        didYouMean = suggestions.map(s => s.term);
+        logger.info(`No results for "${primaryQuery}", suggestions: ${didYouMean.join(', ')}`);
+      }
+    }
+
+    // Update analytics with actual result count
+    trackSearch(query, finalResult.estimatedTotalHits || 0, previousQuery);
+
     return {
-      hits: searchResult.hits,
-      estimatedTotalHits: searchResult.estimatedTotalHits || 0,
-      processingTimeMs: searchResult.processingTimeMs,
-      query: searchResult.query,
-      facetDistribution: searchResult.facetDistribution,
+      hits: finalResult.hits || [],
+      estimatedTotalHits: finalResult.estimatedTotalHits || 0,
+      processingTimeMs: finalResult.processingTimeMs || Date.now() - startTime,
+      query: finalResult.query || primaryQuery,
+      facetDistribution: finalResult.facetDistribution,
+      didYouMean,
+      correctionApplied,
     };
   } catch (error) {
     logger.error('Meilisearch search failed, using fallback:', error);
-    return fallbackSearch(query, options);
+    const results = await fallbackSearch(primaryQuery, options);
+    trackSearch(query, results.estimatedTotalHits, previousQuery);
+    return results;
   }
 };
 
 /**
- * Get search suggestions using Meilisearch
+ * Get search suggestions with typo tolerance
  */
 export const getSearchSuggestions = async (
   query: string,
@@ -357,7 +1069,8 @@ export const getSearchSuggestions = async (
   const client = await getMeiliClient();
 
   if (!client) {
-    return [];
+    // Fallback to MongoDB suggestions
+    return getMongoSuggestions(query, limit);
   }
 
   try {
@@ -367,14 +1080,292 @@ export const getSearchSuggestions = async (
     });
 
     const suggestions: string[] = searchResult.hits.map(
-      (hit: any) => hit.name as string
+      (hit: any) => hit.title as string
     );
-    return [...new Set<string>(suggestions)];
+
+    // If no results, try Levenshtein-based suggestions
+    if (suggestions.length === 0 && query.length >= 2) {
+      const knownTerms = await getSearchTerms();
+      const typoSuggestions = findSuggestions(query, knownTerms);
+      return typoSuggestions.map(s => s.term);
+    }
+
+    return Array.from(new Set<string>(suggestions));
   } catch (error) {
     logger.error('Failed to get search suggestions:', error);
+    return getMongoSuggestions(query, limit);
+  }
+};
+
+/**
+ * Get suggestions from MongoDB fallback
+ */
+const getMongoSuggestions = async (
+  query: string,
+  limit: number
+): Promise<string[]> => {
+  if (!query) return [];
+
+  try {
+    const escapedQuery = escapeRegex(query);
+    const services = await Service.find({
+      isActive: true,
+      name: { $regex: escapedQuery, $options: 'i' },
+    })
+      .select('name')
+      .limit(limit)
+      .lean();
+
+    return services.map(s => s.name).filter(Boolean);
+  } catch (error) {
+    logger.error('Failed to get MongoDB suggestions:', error);
     return [];
   }
 };
+
+// ============================================
+// GEO-SEARCH FUNCTIONS
+// ============================================
+
+/**
+ * Search services with geo-filtering
+ * MANDATORY GEO FALLBACK: When text search returns <3 results, always trigger geo search
+ */
+export const searchServicesWithGeo = async (
+  query: string,
+  options: GeoSearchOptions = {},
+  previousQuery?: string
+): Promise<GeoSearchResults> => {
+  const client = await getMeiliClient();
+
+  // Track search
+  trackSearch(query, 0, previousQuery);
+
+  // Apply synonym expansion
+  const expandedQueries = expandQueryWithSynonyms(query);
+  const primaryQuery = expandedQueries[0];
+
+  const {
+    limit = 20,
+    offset = 0,
+    category,
+    minPrice,
+    maxPrice,
+    minRating,
+    sortBy,
+    latitude,
+    longitude,
+    radiusKm = 50, // Default 50km radius for geo fallback
+    tags,
+  } = options;
+
+  let textSearchResults: any[] = [];
+  let textTotalHits = 0;
+  let meilisearchAvailable = false;
+
+  // If Meilisearch is available, try it first
+  if (client) {
+    try {
+      meilisearchAvailable = true;
+
+      // Build filters
+      const filters: string[] = ['isActive = true'];
+      if (category) filters.push(`category = "${category}"`);
+      if (minPrice !== undefined) filters.push(`pricing.basePrice >= ${minPrice}`);
+      if (maxPrice !== undefined) filters.push(`pricing.basePrice <= ${maxPrice}`);
+      if (minRating !== undefined) filters.push(`rating.average >= ${minRating}`);
+      if (tags && tags.length > 0) {
+        filters.push(`tags IN [${tags.map(t => `"${t}"`).join(', ')}]`);
+      }
+
+      // Build sort
+      let sort: string[] | undefined;
+      if (sortBy) {
+        switch (sortBy) {
+          case 'rating':
+            sort = ['rating.average:desc'];
+            break;
+          case 'price_asc':
+            sort = ['pricing.basePrice:asc'];
+            break;
+          case 'price_desc':
+            sort = ['pricing.basePrice:desc'];
+            break;
+          case 'popular':
+            sort = ['totalBookings:desc'];
+            break;
+        }
+      }
+
+      const searchResult = await client.index(INDEXES.SERVICES).search(primaryQuery, {
+        limit,
+        offset,
+        filter: filters.join(' AND '),
+        sort,
+        attributesToHighlight: ['name', 'description'],
+      });
+
+      textSearchResults = searchResult.hits || [];
+      textTotalHits = searchResult.estimatedTotalHits || 0;
+
+      trackSearch(query, textTotalHits, previousQuery);
+
+      // If text search has sufficient results (>= 3), return immediately
+      if (textTotalHits >= 3) {
+        return {
+          hits: textSearchResults,
+          estimatedTotalHits: textTotalHits,
+          processingTimeMs: searchResult.processingTimeMs,
+          query: searchResult.query || primaryQuery,
+          facetDistribution: searchResult.facetDistribution,
+          centerPoint:
+            latitude !== undefined && longitude !== undefined
+              ? { latitude, longitude }
+              : undefined,
+        };
+      }
+    } catch (error) {
+      logger.error('Meilisearch geo search failed, using fallback:', error);
+    }
+  }
+
+  // MANDATORY GEO FALLBACK: If text search returned < 3 results OR Meilisearch unavailable
+  // Always search by service location, ignoring text query for geo matching
+  const LOW_TEXT_RESULTS_THRESHOLD = 3;
+
+  if (textTotalHits < LOW_TEXT_RESULTS_THRESHOLD || !meilisearchAvailable) {
+    logger.info('Triggering mandatory geo fallback search', {
+      query,
+      textHits: textTotalHits,
+      meilisearchAvailable,
+      action: 'GEO_FALLBACK_TRIGGERED',
+    });
+
+    // Perform geo-only search to find nearby services
+    const geoResults = await performGeoSearch(options, limit, offset, category, minPrice, maxPrice, minRating, tags);
+
+    // If we had some text results, include them too
+    const combinedHits = [...textSearchResults];
+
+    // Add geo results that aren't already in text results
+    const textIds = new Set(textSearchResults.map((h: any) => h.id));
+    for (const geoHit of geoResults.hits) {
+      if (!textIds.has(geoHit.id)) {
+        combinedHits.push(geoHit);
+      }
+    }
+
+    trackSearch(query, combinedHits.length, previousQuery);
+
+    return {
+      hits: combinedHits,
+      estimatedTotalHits: combinedHits.length,
+      processingTimeMs: geoResults.processingTimeMs || 0,
+      query: primaryQuery,
+      geoFallbackTriggered: true,
+      geoResults: geoResults.hits,
+      textQuery: textTotalHits < LOW_TEXT_RESULTS_THRESHOLD ? query : undefined,
+      centerPoint:
+        latitude !== undefined && longitude !== undefined
+          ? { latitude, longitude }
+          : undefined,
+    };
+  }
+
+  // Fallback to MongoDB geo search
+  const results = await geoFallbackSearch(query, options);
+  trackSearch(query, results.estimatedTotalHits, previousQuery);
+  return results;
+};
+
+/**
+ * Perform geo-only search to find nearby services
+ * Uses service's registered location coordinates, not user's location
+ */
+async function performGeoSearch(
+  options: GeoSearchOptions,
+  limit: number,
+  offset: number,
+  category?: string,
+  minPrice?: number,
+  maxPrice?: number,
+  minRating?: number,
+  tags?: string[]
+): Promise<{ hits: any[]; processingTimeMs: number }> {
+  const startTime = Date.now();
+  const { latitude, longitude, radiusKm = 50 } = options;
+
+  if (latitude === undefined || longitude === undefined) {
+    return { hits: [], processingTimeMs: Date.now() - startTime };
+  }
+
+  try {
+    // Build filter query
+    const searchQuery: any = {
+      isActive: true,
+    };
+
+    if (category) searchQuery.category = category;
+    if (minPrice !== undefined) searchQuery['price.amount'] = { $gte: minPrice };
+    if (maxPrice !== undefined) {
+      searchQuery['price.amount'] = {
+        ...searchQuery['price.amount'],
+        $lte: maxPrice,
+      };
+    }
+    if (minRating !== undefined) searchQuery['rating.average'] = { $gte: minRating };
+    if (tags && tags.length > 0) {
+      searchQuery.tags = { $in: tags };
+    }
+
+    // Add geo filter - find services within radius of user's location
+    searchQuery.location = {
+      $geoWithin: {
+        $centerSphere: [
+          [longitude, latitude],
+          radiusKm / 6378.1, // Convert km to radians
+        ],
+      },
+    };
+
+    const services = await Service.find(searchQuery)
+      .skip(offset)
+      .limit(limit)
+      .lean();
+
+    // Calculate distance for each service
+    const servicesWithDistance = services.map((service: any) => {
+      if (service.location?.coordinates) {
+        const [svcLng, svcLat] = service.location.coordinates;
+        const distance = calculateHaversineDistance(
+          latitude,
+          longitude,
+          svcLat,
+          svcLng
+        );
+        return { ...service, distance: Math.round(distance * 100) / 100 };
+      }
+      return { ...service, distance: null };
+    });
+
+    // Sort by distance
+    servicesWithDistance.sort((a: any, b: any) =>
+      (a.distance || Infinity) - (b.distance || Infinity)
+    );
+
+    return {
+      hits: servicesWithDistance,
+      processingTimeMs: Date.now() - startTime,
+    };
+  } catch (error) {
+    logger.error('Geo search failed:', error);
+    return { hits: [], processingTimeMs: Date.now() - startTime };
+  }
+}
+
+// ============================================
+// FALLBACK SEARCH (MONGODB)
+// ============================================
 
 /**
  * Fallback search using MongoDB when Meilisearch is unavailable
@@ -393,6 +1384,7 @@ const fallbackSearch = async (
       minPrice,
       maxPrice,
       minRating,
+      tags,
     } = options;
 
     const searchQuery: any = {
@@ -411,22 +1403,38 @@ const fallbackSearch = async (
 
     if (category) searchQuery.category = category;
     if (minPrice !== undefined) searchQuery['price.amount'] = { $gte: minPrice };
-    if (maxPrice !== undefined) searchQuery['price.amount'] = { ...searchQuery['price.amount'], $lte: maxPrice };
-    if (minRating !== undefined) searchQuery['rating.average'] = { $gte: minRating };
+    if (maxPrice !== undefined)
+      searchQuery['price.amount'] = {
+        ...searchQuery['price.amount'],
+        $lte: maxPrice,
+      };
+    if (minRating !== undefined)
+      searchQuery['rating.average'] = { $gte: minRating };
+    if (tags && tags.length > 0) {
+      searchQuery.tags = { $in: tags };
+    }
 
     const [services, total] = await Promise.all([
-      Service.find(searchQuery)
-        .skip(offset)
-        .limit(limit)
-        .lean(),
+      Service.find(searchQuery).skip(offset).limit(limit).lean(),
       Service.countDocuments(searchQuery),
     ]);
+
+    // Try Levenshtein suggestions if no results
+    let didYouMean: string[] | undefined;
+    if (total === 0 && query.length >= 2) {
+      const knownTerms = await getSearchTerms();
+      const suggestions = findSuggestions(query, knownTerms);
+      if (suggestions.length > 0) {
+        didYouMean = suggestions.map(s => s.term);
+      }
+    }
 
     return {
       hits: services,
       estimatedTotalHits: total,
       processingTimeMs: Date.now() - startTime,
       query,
+      didYouMean,
     };
   } catch (error) {
     logger.error('Fallback search failed:', error);
@@ -438,6 +1446,10 @@ const fallbackSearch = async (
     };
   }
 };
+
+// ============================================
+// REINDEXING FUNCTIONS
+// ============================================
 
 /**
  * Reindex all services
@@ -478,9 +1490,8 @@ export const reindexAllServices = async (): Promise<void> => {
       isActive: service.isActive,
       createdAt: new Date(service.createdAt).getTime(),
       updatedAt: new Date(service.updatedAt).getTime(),
+      providerTrustScore: service.providerTrustScore || 0,
     }));
-
-    // Batch add documents
     const batchSize = 100;
     for (let i = 0; i < documents.length; i += batchSize) {
       const batch = documents.slice(i, i + batchSize);
@@ -488,6 +1499,9 @@ export const reindexAllServices = async (): Promise<void> => {
     }
 
     logger.info(`Reindexed ${documents.length} services in Meilisearch`);
+
+    // Refresh the search terms cache after reindexing
+    await refreshSearchTermsCache();
   } catch (error) {
     logger.error('Failed to reindex services:', error);
   }
@@ -563,10 +1577,17 @@ export const reindexAllCategories = async (): Promise<void> => {
     await client.index(INDEXES.CATEGORIES).addDocuments(documents);
 
     logger.info(`Reindexed ${documents.length} categories in Meilisearch`);
+
+    // Refresh the search terms cache after reindexing
+    await refreshSearchTermsCache();
   } catch (error) {
     logger.error('Failed to reindex categories:', error);
   }
 };
+
+// ============================================
+// STATISTICS
+// ============================================
 
 /**
  * Get search engine statistics
@@ -623,9 +1644,23 @@ export default {
   indexProvider,
   indexCategory,
   searchServices,
+  searchServicesWithGeo,
   getSearchSuggestions,
   reindexAllServices,
   reindexAllProviders,
   reindexAllCategories,
   getSearchStats,
+  // Export analytics functions
+  trackSearch,
+  getSearchAnalytics,
+  analyzeRefinementPatterns,
+  // Export typo tolerance functions
+  levenshteinDistance,
+  getSimilarityRatio,
+  findSuggestions,
+  // Export synonym functions
+  expandQueryWithSynonyms,
+  SYNONYM_DICTIONARY,
+  // Export cache refresh
+  refreshSearchTermsCache,
 };

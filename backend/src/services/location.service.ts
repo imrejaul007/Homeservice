@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import Service from '../models/service.model';
 import ProviderProfile from '../models/providerProfile.model';
+import { ApiError, ERROR_CODES } from '../utils/ApiError';
 import logger from '../utils/logger';
 import { getOrSet } from './cache.service';
 import { CACHE_KEYS } from './cache.service';
@@ -194,7 +195,7 @@ export const getProviderCoverage = async (providerId: string): Promise<{
     const provider = await ProviderProfile.findOne({ userId: providerId });
 
     if (!provider || !provider.locationInfo?.primaryAddress?.coordinates) {
-      throw new Error('Provider location not found');
+      throw ApiError.notFound('Provider location not found', ERROR_CODES.NOT_FOUND);
     }
 
     // Extract coordinates from GeoJSON format: { type: 'Point', coordinates: [lng, lat] }

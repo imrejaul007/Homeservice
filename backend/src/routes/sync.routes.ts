@@ -12,6 +12,7 @@ import Booking from '../models/booking.model';
 import Service from '../models/service.model';
 import ServiceCategory from '../models/serviceCategory.model';
 import BookingNotification from '../models/bookingNotification.model';
+import { ApiError, ERROR_CODES } from '../utils/ApiError';
 
 const router = Router();
 
@@ -150,7 +151,7 @@ router.post(
                 await booking.save();
                 serverId = booking._id.toString();
               } else {
-                throw new Error('Booking not found or not authorized');
+                throw ApiError.notFound('Booking not found or not authorized', ERROR_CODES.NOT_FOUND);
               }
               break;
             }
@@ -166,7 +167,7 @@ router.post(
               if (updated) {
                 serverId = updated._id.toString();
               } else {
-                throw new Error('Booking not found or not authorized');
+                throw ApiError.notFound('Booking not found or not authorized', ERROR_CODES.NOT_FOUND);
               }
               break;
             }
@@ -176,7 +177,7 @@ router.post(
               break;
             }
             default:
-              throw new Error('Unknown action type');
+              throw ApiError.badRequest('Unknown action type');
           }
 
           results.push({

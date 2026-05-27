@@ -641,7 +641,7 @@ export const useAuthStore = create<AuthState>()(
                   refreshToken: tokens.refreshToken
                 });
 
-                const newTokens = response.data.tokens;
+                const newTokens = response.tokens;
                 set((state) => {
                   state.tokens = newTokens;
                 });

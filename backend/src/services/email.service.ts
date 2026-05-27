@@ -1,7 +1,11 @@
 import { Resend } from 'resend';
 import * as nodemailer from 'nodemailer';
+import crypto from 'crypto';
 import { ApiError } from '../utils/ApiError';
 import logger from '../utils/logger';
+import { withCircuitBreaker, createCircuitBreaker } from './circuitBreaker.service';
+import { withRetry, retryConfigs } from '../utils/retry.util';
+import User from '../models/user.model';
 
 // Email templates
 interface EmailTemplate {
@@ -9,6 +13,36 @@ interface EmailTemplate {
   html: string;
   text?: string;
 }
+
+// ============================================
+// XSS Sanitization for Email Templates
+// ============================================
+
+/**
+ * Escape HTML special characters for safe email template interpolation.
+ * Prevents XSS when user-provided data is rendered in HTML emails.
+ */
+const escapeHtml = (str: string | undefined | null): string => {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+};
+
+/**
+ * Sanitize a value for use in plain text email content.
+ * Strips all HTML tags to prevent any injection.
+ */
+const sanitizeForText = (str: string | undefined | null): string => {
+  if (!str) return '';
+  return String(str)
+    .replace(/<[^>]*>/g, '')
+    .replace(/&/g, ' and ')
+    .replace(/[<>]/g, '');
+};
 
 // ============================================
 // SMTP Configuration (Nodemailer)
@@ -66,6 +100,75 @@ if (!FRONTEND_URL && process.env.NODE_ENV === 'production') {
 // Use empty string as fallback only in development (will log warning when used)
 const FRONTEND_URL_FALLBACK = FRONTEND_URL || '';
 
+// Email circuit breaker
+const emailCircuitBreaker = createCircuitBreaker('email-service', {
+  failureThreshold: 10,
+  resetTimeout: 60000,
+  halfOpenMaxAttempts: 3,
+});
+
+// Email queue for failed emails
+interface QueuedEmail {
+  to: string;
+  subject: string;
+  html: string;
+  attempt: number;
+  lastAttempt: Date;
+  error?: string;
+}
+
+const failedEmailQueue: QueuedEmail[] = [];
+const EMAIL_QUEUE_MAX_SIZE = 1000;
+const EMAIL_RETRY_INTERVAL = 5 * 60 * 1000; // 5 minutes
+
+export const queueFailedEmail = async (email: Omit<QueuedEmail, 'attempt' | 'lastAttempt'>): Promise<void> => {
+  if (failedEmailQueue.length >= EMAIL_QUEUE_MAX_SIZE) {
+    logger.warn('Email queue full, dropping email', { to: email.to, subject: email.subject });
+    return;
+  }
+
+  failedEmailQueue.push({
+    ...email,
+    attempt: 0,
+    lastAttempt: new Date(),
+  });
+
+  logger.info('Email queued for retry', { to: email.to, subject: email.subject });
+};
+
+const processEmailQueue = async (): Promise<void> => {
+  if (failedEmailQueue.length === 0) return;
+
+  const email = failedEmailQueue[0];
+
+  try {
+    const result = await withRetry(
+      () => sendEmailInternal(email.to, email.subject, email.html),
+      retryConfigs.quick
+    );
+
+    if (result.success) {
+      failedEmailQueue.shift();
+      logger.info('Queued email sent successfully', { to: email.to });
+    } else {
+      email.attempt++;
+      email.lastAttempt = new Date();
+      email.error = result.error?.message;
+
+      if (email.attempt >= 3) {
+        logger.error('Email permanently failed', { to: email.to, attempts: email.attempt });
+        failedEmailQueue.shift();
+        // Could notify admin or save to database for later review
+      }
+    }
+  } catch (error) {
+    logger.error('Failed to process queued email', { error });
+  }
+};
+
+// Process queue every 5 minutes
+setInterval(processEmailQueue, EMAIL_RETRY_INTERVAL);
+
 // NILIN Brand Colors
 const BRAND_COLORS = {
   primary: '#E11D48',      // Rose/Rose-600 (coral theme)
@@ -86,19 +189,256 @@ const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000;
 
 // ============================================
-// Base email function with retry support
+// Unsubscribe Link Configuration
 // ============================================
-const sendEmail = async (
+
+// HMAC key for signing unsubscribe tokens - should be set via environment variable
+const UNSUBSCRIBE_SECRET = process.env.UNSUBSCRIBE_SECRET || process.env.CSRF_SECRET || 'default-unsubscribe-secret';
+
+/**
+ * Generate an unsubscribe URL for marketing emails
+ * FIX: Now uses HMAC signing to prevent token forgery
+ * Attackers can no longer craft valid unsubscribe tokens for arbitrary users
+ */
+const generateUnsubscribeToken = (userId: string, emailType: string): string => {
+  const timestamp = Date.now();
+  const payload = JSON.stringify({ userId, emailType, timestamp });
+  const payloadBase64 = Buffer.from(payload).toString('base64url');
+
+  // Create HMAC signature to prevent token forgery
+  const signature = crypto
+    .createHmac('sha256', UNSUBSCRIBE_SECRET)
+    .update(payloadBase64)
+    .digest('base64url');
+
+  // Token format: payload.signature (both base64url encoded)
+  return `${payloadBase64}.${signature}`;
+};
+
+/**
+ * Validate an unsubscribe token and extract the user ID
+ * Returns null if token is invalid or expired (24 hour validity)
+ * @param token The unsubscribe token from URL
+ * @returns Object with userId and emailType if valid, null otherwise
+ */
+const validateUnsubscribeToken = (token: string): { userId: string; emailType: string } | null => {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 2) {
+      logger.warn('Invalid unsubscribe token format', { action: 'UNSUBSCRIBE_INVALID_FORMAT' });
+      return null;
+    }
+
+    const [payloadBase64, providedSignature] = parts;
+
+    // Verify HMAC signature to prevent token forgery
+    const expectedSignature = crypto
+      .createHmac('sha256', UNSUBSCRIBE_SECRET)
+      .update(payloadBase64)
+      .digest('base64url');
+
+    // Use timing-safe comparison to prevent timing attacks
+    const signatureBuffer = Buffer.from(providedSignature, 'base64url');
+    const expectedBuffer = Buffer.from(expectedSignature, 'base64url');
+
+    if (signatureBuffer.length !== expectedBuffer.length ||
+        !crypto.timingSafeEqual(signatureBuffer, expectedBuffer)) {
+      logger.warn('Invalid unsubscribe token signature', { action: 'UNSUBSCRIBE_INVALID_SIGNATURE' });
+      return null;
+    }
+
+    // Decode and validate payload
+    const payload = JSON.parse(Buffer.from(payloadBase64, 'base64url').toString());
+
+    // Check expiration (24 hours)
+    const TOKEN_VALIDITY_MS = 24 * 60 * 60 * 1000;
+    if (Date.now() - payload.timestamp > TOKEN_VALIDITY_MS) {
+      logger.warn('Expired unsubscribe token', {
+        action: 'UNSUBSCRIBE_TOKEN_EXPIRED',
+        age: Date.now() - payload.timestamp
+      });
+      return null;
+    }
+
+    return { userId: payload.userId, emailType: payload.emailType };
+  } catch (error) {
+    logger.error('Error validating unsubscribe token', {
+      action: 'UNSUBSCRIBE_VALIDATION_ERROR',
+      error: error instanceof Error ? error.message : String(error)
+    });
+    return null;
+  }
+};
+
+/**
+ * Get unsubscribe URL for a specific email type
+ */
+const getUnsubscribeUrl = (userId: string, emailType: 'marketing' | 'promotions' | 'newsletters' = 'marketing'): string => {
+  const baseUrl = process.env.FRONTEND_URL || process.env.CLIENT_URL || 'https://nilin.com';
+  const token = generateUnsubscribeToken(userId, emailType);
+  return `${baseUrl}/unsubscribe?token=${token}&type=${emailType}`;
+};
+
+/**
+ * Validate unsubscribe token - exported for use by unsubscribe API endpoint
+ * @param token The token from unsubscribe URL
+ * @returns User ID and email type if valid, null otherwise
+ */
+export const validateUnsubscribeTokenFromUrl = (token: string): { userId: string; emailType: string } | null => {
+  return validateUnsubscribeToken(token);
+};
+
+/**
+ * Generate standard email footer with unsubscribe link for marketing emails
+ */
+const getMarketingFooter = (userId: string): string => {
+  const unsubscribeUrl = getUnsubscribeUrl(userId, 'marketing');
+  return `
+    <tr>
+      <td style="padding: 24px; background: ${BRAND_COLORS.background}; text-align: center;">
+        <p style="margin: 0 0 8px; color: ${BRAND_COLORS.textLight}; font-size: 12px;">
+          &copy; ${new Date().getFullYear()} NILIN. All rights reserved.<br>
+          <span style="color: ${BRAND_COLORS.primary};">Transforming home services, one booking at a time.</span>
+        </p>
+        <p style="margin: 16px 0 0; font-size: 12px;">
+          <a href="${unsubscribeUrl}" style="color: ${BRAND_COLORS.textLight}; text-decoration: underline;">Unsubscribe from marketing emails</a>
+          |
+          <a href="${process.env.FRONTEND_URL || process.env.CLIENT_URL || ''}/preferences" style="color: ${BRAND_COLORS.textLight}; text-decoration: underline;">Manage preferences</a>
+        </p>
+      </td>
+    </tr>
+  `;
+};
+
+/**
+ * Generate plain text unsubscribe footer
+ */
+const getMarketingFooterText = (userId: string): string => {
+  const unsubscribeUrl = getUnsubscribeUrl(userId, 'marketing');
+  return `
+    &copy; ${new Date().getFullYear()} NILIN. All rights reserved.
+
+    To unsubscribe from marketing emails: ${unsubscribeUrl}
+    Manage your preferences: ${process.env.FRONTEND_URL || process.env.CLIENT_URL || ''}/preferences
+  `;
+};
+
+// Batch email configuration
+const BATCH_SIZE = 25;
+const BATCH_DELAY_MS = 1000;
+
+// Email data interface for batch sending
+interface BatchEmailData {
+  to: string;
+  subject: string;
+  html: string;
+  text?: string;
+}
+
+// ============================================
+// Simple send function for general use
+// ============================================
+
+export const send = async (to: string, subject: string, html: string): Promise<boolean> => {
+  try {
+    const result = await sendEmail(to, subject, html);
+    return result.success;
+  } catch (error) {
+    logger.error('[Email] Send failed:', error);
+    return false;
+  }
+};
+
+// ============================================
+// Batch Email Sending
+// ============================================
+
+/**
+ * Send batch emails with rate limiting
+ * Processes emails in batches of BATCH_SIZE with delay between batches
+ */
+export const sendBatch = async (emails: BatchEmailData[]): Promise<{ sent: number; failed: number }> => {
+  let sent = 0;
+  let failed = 0;
+
+  logger.info('[Email] Starting batch send', {
+    total: emails.length,
+    batchSize: BATCH_SIZE,
+    action: 'BATCH_SEND_START',
+  });
+
+  for (let i = 0; i < emails.length; i += BATCH_SIZE) {
+    const batch = emails.slice(i, i + BATCH_SIZE);
+
+    // Process batch in parallel
+    const results = await Promise.allSettled(
+      batch.map(email => sendEmail(email.to, email.subject, email.html, email.text))
+    );
+
+    // Count results
+    results.forEach((result, index) => {
+      if (result.status === 'fulfilled' && result.value.success) {
+        sent++;
+        logger.debug('[Email] Batch item sent', {
+          to: batch[index].to,
+          subject: batch[index].subject,
+          action: 'BATCH_ITEM_SENT',
+        });
+      } else if (result.status === 'fulfilled' && !result.value.success) {
+        // Promise resolved but email sending failed (queued)
+        failed++;
+        logger.warn('[Email] Batch item failed or queued', {
+          to: batch[index].to,
+          subject: batch[index].subject,
+          action: 'BATCH_ITEM_FAILED',
+        });
+      } else {
+        failed++;
+        const errorMsg = result.status === 'rejected' ? (result as PromiseRejectedResult).reason?.message : 'Unknown error';
+        logger.warn('[Email] Batch item failed', {
+          to: batch[index].to,
+          subject: batch[index].subject,
+          error: errorMsg,
+          action: 'BATCH_ITEM_FAILED',
+        });
+      }
+    });
+
+    logger.info('[Email] Batch processed', {
+      batchIndex: Math.floor(i / BATCH_SIZE) + 1,
+      processedInBatch: batch.length,
+      sent,
+      failed,
+      action: 'BATCH_PROCESSED',
+    });
+
+    // Rate limit delay between batches (but not after the last batch)
+    if (i + BATCH_SIZE < emails.length) {
+      await new Promise(resolve => setTimeout(resolve, BATCH_DELAY_MS));
+    }
+  }
+
+  logger.info('[Email] Batch send complete', {
+    total: emails.length,
+    sent,
+    failed,
+    action: 'BATCH_SEND_COMPLETE',
+  });
+
+  return { sent, failed };
+};
+
+// ============================================
+// Base email function with retry support and circuit breaker
+// ============================================
+
+// Internal email function that does the actual sending
+const sendEmailInternal = async (
   to: string,
   subject: string,
   html: string,
   text?: string
-): Promise<void> => {
-  // Log email in development
-  if (process.env.NODE_ENV !== 'production') {
-    logger.info('Email would be sent', { to, subject, preview: html.substring(0, 200) });
-  }
-
+): Promise<{ messageId: string }> => {
   // Check if either SMTP or Resend is configured
   const hasSmtp = smtpTransporter !== null;
   const hasResend = resend !== null;
@@ -106,30 +446,42 @@ const sendEmail = async (
   if (!hasSmtp && !hasResend) {
     logger.warn('Email service not configured - skipping email', { to, subject });
     logger.info('Configure SMTP_HOST, SMTP_USER, SMTP_PASS or RESEND_API_KEY to enable emails');
-    return;
+    return { messageId: 'not-configured' };
   }
 
   let lastError: Error | null = null;
 
-  // Try SMTP first if available, then fall back to Resend
-  const methods = hasSmtp
-    ? [
-        async () => {
-          const info = await smtpTransporter!.sendMail({
-            from: `"${FROM_NAME}" <${FROM_EMAIL}>`,
-            to,
-            subject,
-            html,
-            text: text || html.replace(/<[^>]*>/g, ''),
-          });
-          return { messageId: info.messageId || 'unknown' };
-        },
-      ]
-    : [];
+  // Try SMTP first if available
+  if (hasSmtp) {
+    try {
+      const info: nodemailer.SentMessageInfo = await smtpTransporter!.sendMail({
+        from: `"${FROM_NAME}" <${FROM_EMAIL}>`,
+        to,
+        subject,
+        html,
+        text: text || html.replace(/<[^>]*>/g, ''),
+      });
+      logger.info('Email sent successfully via SMTP', {
+        to,
+        subject,
+        messageId: info.messageId || 'unknown',
+        action: 'EMAIL_SENT',
+      });
+      return { messageId: info.messageId || 'unknown' };
+    } catch (error) {
+      lastError = error as Error;
+      logger.warn('SMTP send failed, trying Resend', {
+        to,
+        subject,
+        error: lastError.message,
+        action: 'SMTP_FAILED_TRY_RESEND',
+      });
+    }
+  }
 
-  // Add Resend as fallback if available
+  // Try Resend as fallback
   if (hasResend) {
-    methods.push(async () => {
+    try {
       const result = await resend!.emails.send({
         from: `${FROM_NAME} <${FROM_EMAIL}>`,
         to: [to],
@@ -138,59 +490,70 @@ const sendEmail = async (
         text: text || html.replace(/<[^>]*>/g, ''),
       });
       if (result.error) {
-        throw new Error(result.error.message);
+        throw ApiError.internal(result.error.message);
       }
+      logger.info('Email sent successfully via Resend', {
+        to,
+        subject,
+        messageId: result.data?.id || 'unknown',
+        action: 'EMAIL_SENT',
+      });
       return { messageId: result.data?.id || 'unknown' };
-    });
-  }
-
-  // Try each method in order
-  for (const sendMethod of methods) {
-    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-      try {
-        const result = await sendMethod();
-
-        logger.info('Email sent successfully', {
-          to,
-          subject,
-          messageId: result.messageId,
-          attempt,
-          action: 'EMAIL_SENT',
-        });
-
-        return;
-      } catch (error: any) {
-        lastError = error;
-        logger.warn('Email send attempt failed', {
-          to,
-          subject,
-          attempt,
-          maxRetries: MAX_RETRIES,
-          error: error.message,
-          action: 'EMAIL_RETRY',
-        });
-
-        if (attempt < MAX_RETRIES) {
-          await new Promise(resolve => setTimeout(resolve, RETRY_DELAY * attempt));
-        }
-      }
+    } catch (error) {
+      lastError = error as Error;
+      logger.warn('Resend send failed', {
+        to,
+        subject,
+        error: lastError.message,
+        action: 'RESEND_FAILED',
+      });
     }
   }
 
-  logger.error('Failed to send email after all retries', {
-    to,
-    subject,
-    error: lastError?.message,
-    action: 'EMAIL_FAILED',
-  });
+  throw ApiError.internal(lastError?.message || 'All email methods failed');
+};
 
-  // Don't throw - we want email failures to be non-blocking
-  // throw new ApiError(500, 'Failed to send email after multiple attempts');
+// Public sendEmail function with circuit breaker and retry
+export const sendEmail = async (
+  to: string,
+  subject: string,
+  html: string,
+  text?: string
+): Promise<{ success: boolean; messageId?: string }> => {
+  // Log email in development
+  if (process.env.NODE_ENV !== 'production') {
+    logger.info('Email would be sent', { to, subject, preview: html.substring(0, 200) });
+    return { success: true, messageId: 'dev-mode' };
+  }
+
+  // Wrap with circuit breaker
+  return withCircuitBreaker(
+    'email-service',
+    async () => {
+      const retryResult = await withRetry(
+        () => sendEmailInternal(to, subject, html, text),
+        retryConfigs.quick
+      );
+
+      if (retryResult.success) {
+        return { success: true, messageId: retryResult.result?.messageId };
+      } else {
+        throw retryResult.error || new Error('Email send failed');
+      }
+    },
+    async () => {
+      // FALLBACK: Queue the email
+      logger.warn('Email service unavailable, queueing email', { to, subject });
+      await queueFailedEmail({ to, subject, html });
+      return { success: true, messageId: 'queued' };
+    }
+  );
 };
 
 // Email verification template with NILIN branding
 const getVerificationEmailTemplate = (firstName: string, verificationToken: string, to?: string): EmailTemplate => {
   const verificationUrl = `${FRONTEND_URL}/verify-email/${verificationToken}`;
+  const safeFirstName = escapeHtml(firstName);
 
   return {
     subject: 'Verify Your Email Address - NILIN',
@@ -214,7 +577,7 @@ const getVerificationEmailTemplate = (firstName: string, verificationToken: stri
           <!-- Content -->
           <tr>
             <td style="padding: 32px 24px;">
-              <h2 style="margin: 0 0 16px; color: ${BRAND_COLORS.text}; font-size: 24px;">Hi ${firstName}!</h2>
+              <h2 style="margin: 0 0 16px; color: ${BRAND_COLORS.text}; font-size: 24px;">Hi ${safeFirstName}!</h2>
               <p style="margin: 0 0 24px; color: ${BRAND_COLORS.textLight}; font-size: 16px; line-height: 1.6;">
                 Thank you for joining NILIN! To complete your registration and start booking home services, please verify your email address.
               </p>
@@ -268,9 +631,16 @@ const getVerificationEmailTemplate = (firstName: string, verificationToken: stri
 };
 
 // Welcome email template
-const getWelcomeEmailTemplate = (firstName: string, role: string, to?: string): EmailTemplate => {
+const getWelcomeEmailTemplate = (firstName: string, role: string, to?: string, userId?: string): EmailTemplate => {
   const dashboardUrl = `${FRONTEND_URL_FALLBACK || FRONTEND_URL}/${role}/dashboard`;
-  
+  const safeFirstName = escapeHtml(firstName);
+  const safeRole = escapeHtml(role);
+  const unsubscribeSection = userId ? `
+    <p style="margin: 16px 0 0; font-size: 12px; color: #666;">
+      <a href="${getUnsubscribeUrl(userId, 'newsletters')}" style="color: #666;">Unsubscribe from newsletters</a>
+    </p>
+  ` : '';
+
   const roleSpecificContent = {
     customer: {
       title: 'Welcome to Your New Home Service Experience! 🎉',
@@ -336,22 +706,22 @@ const getWelcomeEmailTemplate = (firstName: string, role: string, to?: string): 
           <h1>${content.title}</h1>
         </div>
         <div class="content">
-          <h2>Hi ${firstName}! 🎉</h2>
+          <h2>Hi ${safeFirstName}! 🎉</h2>
           <p>Your email has been verified and your account is now active! We're thrilled to have you join our community.</p>
-          
+
           <div class="benefits">
             <h3>Here's what you can do now:</h3>
             <ul>
               ${content.benefits.map(benefit => `<li>${benefit}</li>`).join('')}
             </ul>
           </div>
-          
+
           <div style="text-align: center;">
             <a href="${dashboardUrl}" class="button">${content.cta}</a>
           </div>
-          
+
           <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
-          
+
           <h3>Need Help? 🤝</h3>
           <p>Our support team is here to help you get started:</p>
           <ul>
@@ -360,8 +730,9 @@ const getWelcomeEmailTemplate = (firstName: string, role: string, to?: string): 
             <li>📞 Phone: 1-800-HOME-SVC</li>
             <li>📱 Download our mobile app for iOS and Android</li>
           </ul>
-          
+
           <p>Welcome aboard! We can't wait to see what amazing experiences await you.</p>
+          ${unsubscribeSection}
         </div>
         <div class="footer">
           <p>© ${new Date().getFullYear()} Home Service Platform. All rights reserved.</p>
@@ -448,11 +819,12 @@ export const sendVerificationEmail = async (
 };
 
 export const sendWelcomeEmail = async (
-  email: string, 
-  firstName: string, 
-  role: string
+  email: string,
+  firstName: string,
+  role: string,
+  userId?: string
 ): Promise<void> => {
-  const template = getWelcomeEmailTemplate(firstName, role, email);
+  const template = getWelcomeEmailTemplate(firstName, role, email, userId);
   await sendEmail(email, template.subject, template.html);
 };
 
@@ -722,10 +1094,18 @@ const getNewBookingRequestTemplate = (firstName: string, booking: any): EmailTem
 };
 
 const getBookingConfirmationTemplate = (firstName: string, booking: any): EmailTemplate => {
-  const viewBookingUrl = `${FRONTEND_URL_FALLBACK || FRONTEND_URL}/bookings/${booking.bookingNumber}`;
+  const safeFirstName = escapeHtml(firstName);
+  const safeServiceName = escapeHtml(booking?.serviceName || 'Service');
+  const safeBookingNumber = escapeHtml(booking?.bookingNumber || '');
+  const safeProviderName = escapeHtml(booking?.providerName || '');
+  const safeScheduledDate = escapeHtml(booking?.scheduledDate || '');
+  const safeScheduledTime = escapeHtml(booking?.scheduledTime || '');
+  const safeLocation = escapeHtml(booking?.location || '');
+  const safeProviderNotes = booking?.providerNotes ? escapeHtml(booking.providerNotes) : '';
+  const viewBookingUrl = `${FRONTEND_URL_FALLBACK || FRONTEND_URL}/bookings/${safeBookingNumber}`;
 
   return {
-    subject: `Booking Confirmed! ${booking.serviceName} on ${booking.scheduledDate}`,
+    subject: `Booking Confirmed! ${safeServiceName} on ${safeScheduledDate}`,
     html: `
       <!DOCTYPE html>
       <html lang="en">
@@ -749,7 +1129,7 @@ const getBookingConfirmationTemplate = (firstName: string, booking: any): EmailT
           <p>Your appointment is all set</p>
         </div>
         <div class="content">
-          <h2>Great news, ${firstName}! ✨</h2>
+          <h2>Great news, ${safeFirstName}! ✨</h2>
           <p>Your booking has been confirmed by the provider. Your appointment is scheduled and ready to go!</p>
 
           <div class="booking-card">
@@ -757,14 +1137,14 @@ const getBookingConfirmationTemplate = (firstName: string, booking: any): EmailT
               <h3>Confirmed Appointment</h3>
               <span class="status-badge">✅ Confirmed</span>
             </div>
-            <p><strong>📋 Booking #:</strong> ${booking.bookingNumber}</p>
-            <p><strong>🏠 Service:</strong> ${booking.serviceName}</p>
-            <p><strong>👤 Provider:</strong> ${booking.providerName}</p>
-            <p><strong>📅 Date & Time:</strong> ${booking.scheduledDate} at ${booking.scheduledTime}</p>
-            <p><strong>⏱️ Duration:</strong> ${booking.duration} minutes</p>
-            <p><strong>📍 Location:</strong> ${booking.location}</p>
-            <p><strong>💰 Total Cost:</strong> ${booking.currency} ${booking.totalAmount}</p>
-            ${booking.providerNotes ? `<p><strong>📝 Provider Notes:</strong> ${booking.providerNotes}</p>` : ''}
+            <p><strong>📋 Booking #:</strong> ${safeBookingNumber}</p>
+            <p><strong>🏠 Service:</strong> ${safeServiceName}</p>
+            <p><strong>👤 Provider:</strong> ${safeProviderName}</p>
+            <p><strong>📅 Date & Time:</strong> ${safeScheduledDate} at ${safeScheduledTime}</p>
+            <p><strong>⏱️ Duration:</strong> ${escapeHtml(booking?.duration)} minutes</p>
+            <p><strong>📍 Location:</strong> ${safeLocation}</p>
+            <p><strong>💰 Total Cost:</strong> ${escapeHtml(booking?.currency)} ${escapeHtml(booking?.totalAmount)}</p>
+            ${safeProviderNotes ? `<p><strong>📝 Provider Notes:</strong> ${safeProviderNotes}</p>` : ''}
           </div>
 
           <div style="text-align: center;">
@@ -817,59 +1197,113 @@ export const sendLoyaltyPointsEmail = async (
   firstName: string,
   pointsEarned: number,
   totalPoints: number,
-  reason: string
+  reason: string,
+  userId?: string
 ): Promise<void> => {
   const subject = `You earned ${pointsEarned} loyalty coins! 🪙`;
-  const html = `
-    <h2>Congratulations ${firstName}! 🎉</h2>
-    <p>You just earned <strong>${pointsEarned} loyalty coins</strong> for: ${reason}</p>
-    <div style="background: #f0f8ff; padding: 20px; border-radius: 8px; margin: 20px 0; text-align: center;">
-      <h3>Your Loyalty Balance</h3>
-      <p style="font-size: 24px; color: #667eea;"><strong>${totalPoints} coins</strong></p>
+  const unsubscribeSection = userId ? `
+    <div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid #E5E7EB;">
+      <p style="margin: 0; font-size: 12px; color: ${BRAND_COLORS.textLight};">
+        <a href="${getUnsubscribeUrl(userId, 'marketing')}" style="color: ${BRAND_COLORS.textLight};">Unsubscribe from marketing emails</a>
+      </p>
     </div>
-    <p>Use your coins to get discounts on future bookings!</p>
+  ` : '';
+
+  const html = `
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Loyalty Points</title>
+    </head>
+    <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: ${BRAND_COLORS.background};">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width: 600px; margin: 0 auto; background-color: ${BRAND_COLORS.white}; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
+        <tr>
+          <td style="background: linear-gradient(135deg, ${BRAND_COLORS.primary} 0%, ${BRAND_COLORS.primaryDark} 100%); padding: 32px 24px; text-align: center;">
+            <h1 style="margin: 0; font-size: 28px; font-weight: 700; color: ${BRAND_COLORS.white}; letter-spacing: -0.5px;">NILIN</h1>
+            <p style="margin: 8px 0 0; color: rgba(255,255,255,0.9); font-size: 14px;">Loyalty Rewards</p>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 32px 24px;">
+            <h2 style="margin: 0 0 16px; color: ${BRAND_COLORS.text}; font-size: 24px;">Congratulations ${firstName}! 🎉</h2>
+            <p style="margin: 0 0 24px; color: ${BRAND_COLORS.textLight}; font-size: 16px; line-height: 1.6;">
+              You just earned <strong style="color: ${BRAND_COLORS.primary};">${pointsEarned} loyalty coins</strong> for: ${reason}
+            </p>
+
+            <div style="background: linear-gradient(135deg, ${BRAND_COLORS.primaryLight} 0%, ${BRAND_COLORS.background} 100%); padding: 24px; border-radius: 12px; margin: 24px 0; text-align: center;">
+              <h3 style="margin: 0 0 8px; color: ${BRAND_COLORS.text}; font-size: 14px; text-transform: uppercase; letter-spacing: 1px;">Your Loyalty Balance</h3>
+              <p style="margin: 0; font-size: 32px; color: ${BRAND_COLORS.primary}; font-weight: 700;">${totalPoints} coins</p>
+            </div>
+
+            <p style="margin: 0 0 24px; color: ${BRAND_COLORS.text}; font-size: 16px; line-height: 1.6;">
+              Use your coins to get discounts on future bookings!
+            </p>
+
+            <div style="text-align: center;">
+              <a href="${process.env.FRONTEND_URL || ''}/loyalty" style="display: inline-block; padding: 14px 32px; background: ${BRAND_COLORS.primary}; color: ${BRAND_COLORS.white}; text-decoration: none; font-weight: 600; font-size: 16px; border-radius: 8px;">View Your Rewards</a>
+            </div>
+            ${unsubscribeSection}
+          </td>
+        </tr>
+      </table>
+    </body>
+    </html>
   `;
-  
+
   await sendEmail(email, subject, html);
 };
 
 // Add the remaining template functions
 const getBookingAcceptedTemplate = (firstName: string, booking: any): EmailTemplate => {
+  const safeFirstName = escapeHtml(firstName);
+  const safeServiceName = escapeHtml(booking?.serviceName || 'Service');
   return {
-    subject: `Booking Accepted - ${booking.serviceName}`,
-    html: `<h2>Hi ${firstName}!</h2><p>You have successfully accepted the booking request for ${booking.serviceName}.</p>`,
-    text: `Hi ${firstName}! You have accepted the booking request for ${booking.serviceName}.`
+    subject: `Booking Accepted - ${safeServiceName}`,
+    html: `<h2>Hi ${safeFirstName}!</h2><p>You have successfully accepted the booking request for ${safeServiceName}.</p>`,
+    text: `Hi ${safeFirstName}! You have accepted the booking request for ${safeServiceName}.`
   };
 };
 
 const getBookingCancelledTemplate = (firstName: string, booking: any, isProvider: boolean = false): EmailTemplate => {
+  const safeFirstName = escapeHtml(firstName);
+  const safeServiceName = escapeHtml(booking?.serviceName || 'Service');
+  const safeBookingNumber = escapeHtml(booking?.bookingNumber || '');
   const title = isProvider ? 'Booking Cancelled by Customer' : 'Booking Cancelled';
   return {
-    subject: `${title} - ${booking.serviceName}`,
-    html: `<h2>Hi ${firstName}!</h2><p>Booking ${booking.bookingNumber} for ${booking.serviceName} has been cancelled.</p>`,
-    text: `Hi ${firstName}! Booking ${booking.bookingNumber} has been cancelled.`
+    subject: `${title} - ${safeServiceName}`,
+    html: `<h2>Hi ${safeFirstName}!</h2><p>Booking ${safeBookingNumber} for ${safeServiceName} has been cancelled.</p>`,
+    text: `Hi ${safeFirstName}! Booking ${safeBookingNumber} has been cancelled.`
   };
 };
 
 const getBookingRejectedTemplate = (firstName: string, booking: any): EmailTemplate => {
+  const safeFirstName = escapeHtml(firstName);
+  const safeServiceName = escapeHtml(booking?.serviceName || 'Service');
   return {
-    subject: `Booking Request Declined - ${booking.serviceName}`,
-    html: `<h2>Hi ${firstName}!</h2><p>Unfortunately, your booking request for ${booking.serviceName} has been declined.</p>`,
-    text: `Hi ${firstName}! Your booking request for ${booking.serviceName} has been declined.`
+    subject: `Booking Request Declined - ${safeServiceName}`,
+    html: `<h2>Hi ${safeFirstName}!</h2><p>Unfortunately, your booking request for ${safeServiceName} has been declined.</p>`,
+    text: `Hi ${safeFirstName}! Your booking request for ${safeServiceName} has been declined.`
   };
 };
 
 const getBookingCompletedTemplate = (firstName: string, booking: any, isProvider: boolean = false): EmailTemplate => {
+  const safeFirstName = escapeHtml(firstName);
+  const safeServiceName = escapeHtml(booking?.serviceName || 'Service');
   const title = isProvider ? 'Service Completed Successfully' : 'Service Completed - Please Review';
   return {
-    subject: `${title} - ${booking.serviceName}`,
-    html: `<h2>Hi ${firstName}!</h2><p>The service ${booking.serviceName} has been completed successfully.</p>`,
-    text: `Hi ${firstName}! The service ${booking.serviceName} has been completed.`
+    subject: `${title} - ${safeServiceName}`,
+    html: `<h2>Hi ${safeFirstName}!</h2><p>The service ${safeServiceName} has been completed successfully.</p>`,
+    text: `Hi ${safeFirstName}! The service ${safeServiceName} has been completed.`
   };
 };
 
 const getBookingReminderTemplate = (firstName: string, booking: any): EmailTemplate => {
-  const viewBookingUrl = `${FRONTEND_URL_FALLBACK || FRONTEND_URL}/bookings/${booking.bookingNumber}`;
+  const safeFirstName = escapeHtml(firstName);
+  const safeServiceName = escapeHtml(booking?.serviceName || 'Service');
+  const safeBookingNumber = escapeHtml(booking?.bookingNumber || '');
+  const viewBookingUrl = `${FRONTEND_URL_FALLBACK || FRONTEND_URL}/bookings/${safeBookingNumber}`;
 
   return {
     subject: `Reminder: Your ${booking.serviceName} appointment is tomorrow!`,
@@ -899,21 +1333,21 @@ const getBookingReminderTemplate = (firstName: string, booking: any): EmailTempl
 
               <h2 style="margin: 0 0 16px; color: ${BRAND_COLORS.text}; font-size: 24px; text-align: center;">Don't forget your appointment!</h2>
               <p style="margin: 0 0 24px; color: ${BRAND_COLORS.textLight}; font-size: 16px; text-align: center;">
-                Hi ${firstName}, this is a friendly reminder about your upcoming appointment tomorrow.
+                Hi ${safeFirstName}, this is a friendly reminder about your upcoming appointment tomorrow.
               </p>
 
               <!-- Booking Card -->
               <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background: ${BRAND_COLORS.background}; border-radius: 12px; padding: 24px; margin: 24px 0;">
                 <tr>
                   <td>
-                    <h3 style="margin: 0 0 16px; color: ${BRAND_COLORS.primary}; font-size: 18px;">${booking.serviceName}</h3>
+                    <h3 style="margin: 0 0 16px; color: ${BRAND_COLORS.primary}; font-size: 18px;">${escapeHtml(booking.serviceName)}</h3>
                     <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
                       <tr>
                         <td style="padding: 8px 0; border-bottom: 1px solid #E5E7EB;">
                           <span style="color: ${BRAND_COLORS.textLight};">Date</span>
                         </td>
                         <td style="padding: 8px 0; border-bottom: 1px solid #E5E7EB; text-align: right;">
-                          <strong style="color: ${BRAND_COLORS.text};">${booking.scheduledDate}</strong>
+                          <strong style="color: ${BRAND_COLORS.text};">${escapeHtml(booking.scheduledDate)}</strong>
                         </td>
                       </tr>
                       <tr>
@@ -921,7 +1355,7 @@ const getBookingReminderTemplate = (firstName: string, booking: any): EmailTempl
                           <span style="color: ${BRAND_COLORS.textLight};">Time</span>
                         </td>
                         <td style="padding: 8px 0; border-bottom: 1px solid #E5E7EB; text-align: right;">
-                          <strong style="color: ${BRAND_COLORS.text};">${booking.scheduledTime}</strong>
+                          <strong style="color: ${BRAND_COLORS.text};">${escapeHtml(booking.scheduledTime)}</strong>
                         </td>
                       </tr>
                       <tr>
@@ -929,7 +1363,7 @@ const getBookingReminderTemplate = (firstName: string, booking: any): EmailTempl
                           <span style="color: ${BRAND_COLORS.textLight};">Provider</span>
                         </td>
                         <td style="padding: 8px 0; border-bottom: 1px solid #E5E7EB; text-align: right;">
-                          <strong style="color: ${BRAND_COLORS.text};">${booking.providerName}</strong>
+                          <strong style="color: ${BRAND_COLORS.text};">${escapeHtml(booking.providerName)}</strong>
                         </td>
                       </tr>
                       <tr>
@@ -937,7 +1371,7 @@ const getBookingReminderTemplate = (firstName: string, booking: any): EmailTempl
                           <span style="color: ${BRAND_COLORS.textLight};">Location</span>
                         </td>
                         <td style="padding: 8px 0; text-align: right;">
-                          <strong style="color: ${BRAND_COLORS.text};">${booking.location}</strong>
+                          <strong style="color: ${BRAND_COLORS.text};">${escapeHtml(booking.location)}</strong>
                         </td>
                       </tr>
                     </table>
@@ -1763,6 +2197,69 @@ const getProviderRejectionTemplate = (
   };
 };
 
+// ============================================
+// Unsubscribe Handler
+// ============================================
+
+interface UnsubscribePayload {
+  userId: string;
+  emailType: 'marketing' | 'promotions' | 'newsletters';
+  timestamp: number;
+}
+
+/**
+ * Process an unsubscribe token and update user preferences
+ * Returns the userId if successful, null if invalid
+ */
+export const processUnsubscribeToken = async (token: string): Promise<{
+  success: boolean;
+  userId?: string;
+  emailType?: string;
+  error?: string;
+}> => {
+  try {
+    // Decode the token
+    const decoded = Buffer.from(token, 'base64url').toString('utf-8');
+    const payload: UnsubscribePayload = JSON.parse(decoded);
+
+    // Validate payload structure
+    if (!payload.userId || !payload.emailType) {
+      return { success: false, error: 'Invalid token format' };
+    }
+
+    // Check token age (max 7 days)
+    const maxAge = 7 * 24 * 60 * 60 * 1000; // 7 days in ms
+    if (Date.now() - payload.timestamp > maxAge) {
+      return { success: false, error: 'Token expired' };
+    }
+
+    // Update user preferences based on email type
+    const user = await User.findById(payload.userId);
+    if (!user) {
+      return { success: false, error: 'User not found' };
+    }
+
+    // Set the appropriate preference to false
+    const prefPath = `communicationPreferences.${payload.emailType}`;
+    await User.findByIdAndUpdate(payload.userId, { $set: { [prefPath]: false } });
+
+    logger.info('User unsubscribed from email type', {
+      userId: payload.userId,
+      emailType: payload.emailType,
+      action: 'UNSUBSCRIBE_SUCCESS',
+    });
+
+    return {
+      success: true,
+      userId: payload.userId,
+      emailType: payload.emailType,
+    };
+  } catch (error) {
+    logger.error('Failed to process unsubscribe token', { error, token });
+    return { success: false, error: 'Invalid or expired token' };
+  }
+};
+
 export default {
   // Auth emails
   sendVerificationEmail,
@@ -1791,4 +2288,7 @@ export default {
 
   // Loyalty emails
   sendLoyaltyPointsEmail,
+
+  // Batch sending
+  sendBatch,
 };

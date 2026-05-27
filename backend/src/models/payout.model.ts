@@ -1,5 +1,6 @@
 import mongoose, { Document, Schema, Model } from 'mongoose';
 import { Types } from 'mongoose';
+import { ApiError, ERROR_CODES } from '../utils/ApiError';
 
 export interface IPayout extends Document {
   _id: Types.ObjectId;
@@ -351,7 +352,7 @@ payoutSchema.methods.markAsCompleted = async function(
 // Cancel payout
 payoutSchema.methods.cancel = async function(reason: string, cancelledBy?: Types.ObjectId): Promise<void> {
   if (!this.canBeCancelled) {
-    throw new Error('Payout cannot be cancelled in current status');
+    throw ApiError.badRequest('Payout cannot be cancelled in current status', [], ERROR_CODES.INVALID_INPUT);
   }
   this.status = 'cancelled';
   this.notes = reason;

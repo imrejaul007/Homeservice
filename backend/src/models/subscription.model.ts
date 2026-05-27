@@ -249,10 +249,10 @@ subscriptionSchema.pre('save', function(next) {
 });
 
 // Indexes for query optimization
+// Note: stripeSubscriptionId has index: true on field, stripePriceId is indexed via sparse index below
 subscriptionSchema.index({ providerId: 1, status: 1 });
 subscriptionSchema.index({ status: 1, nextBillingDate: 1 });
 subscriptionSchema.index({ status: 1, currentPeriodEnd: 1 });
-subscriptionSchema.index({ stripeSubscriptionId: 1 }, { sparse: true });
 subscriptionSchema.index({ 'usage.bookingsThisPeriod': 1 });
 
 // Compound index for finding subscriptions needing renewal

@@ -1,7 +1,8 @@
-import React from 'react';
-import { Star, MapPin, Clock, DollarSign, User, Heart, Share2, Eye } from 'lucide-react';
+import React, { useState } from 'react';
+import { Star, MapPin, Clock, DollarSign, User, Heart, Share2, Eye, Loader2 } from 'lucide-react';
 import type { Service } from '@/types/search';
 import { cn, formatPrice, formatDistance, truncateText } from '@/lib/utils';
+import { toast } from 'react-hot-toast';
 
 interface ServiceCardProps {
   service: Service;
@@ -10,9 +11,10 @@ interface ServiceCardProps {
   showDistance?: boolean;
   onServiceClick?: (service: Service) => void;
   onProviderClick?: (providerId: string) => void;
-  onFavorite?: (serviceId: string) => void;
+  onFavorite?: (serviceId: string) => Promise<void>;
   onShare?: (service: Service) => void;
   isFavorited?: boolean;
+  isFavoriteLoading?: boolean;
 }
 
 const ServiceCard: React.FC<ServiceCardProps> = ({
@@ -25,7 +27,10 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
   onFavorite,
   onShare,
   isFavorited = false,
+  isFavoriteLoading = false,
 }) => {
+  const [isFavoriting, setIsFavoriting] = useState(false);
+
   const handleClick = () => {
     onServiceClick?.(service);
   };
@@ -35,9 +40,18 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
     onProviderClick?.(service.providerId);
   };
 
-  const handleFavorite = (e: React.MouseEvent) => {
+  const handleFavorite = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    onFavorite?.(service._id);
+    if (isFavoriting || isFavoriteLoading) return;
+
+    setIsFavoriting(true);
+    try {
+      await onFavorite?.(service._id);
+    } catch (err: any) {
+      toast.error(err.response?.data?.message || 'Failed to update favorites');
+    } finally {
+      setIsFavoriting(false);
+    }
   };
 
   const handleShare = (e: React.MouseEvent) => {
@@ -110,14 +124,20 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
         <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
           <button
             onClick={handleFavorite}
+            disabled={isFavoriting || isFavoriteLoading}
             className={cn(
               'p-2 rounded-full shadow-sm backdrop-blur-sm transition-colors',
               isFavorited
                 ? 'bg-red-100 text-red-600'
-                : 'bg-white/80 text-gray-600 hover:bg-white'
+                : 'bg-white/80 text-gray-600 hover:bg-white',
+              (isFavoriting || isFavoriteLoading) && 'opacity-50 cursor-not-allowed'
             )}
           >
-            <Heart className={cn('h-4 w-4', isFavorited && 'fill-current')} />
+            {isFavoriting || isFavoriteLoading ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Heart className={cn('h-4 w-4', isFavorited && 'fill-current')} />
+            )}
           </button>
           <button
             onClick={handleShare}

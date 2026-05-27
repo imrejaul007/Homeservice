@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { demoService } from '../services/demoService';
 import { asyncHandler } from '../utils/asyncHandler';
 import { ApiError } from '../utils/ApiError';
+import logger from '../utils/logger';
 
 // ============================================
 // Demo Configuration
@@ -236,7 +237,12 @@ export const completeStep = asyncHandler(async (req: Request, res: Response) => 
   const { sessionId, stepOrder } = req.body;
 
   // Log step completion
-  console.log(`[Demo] Session ${sessionId} completed step ${stepOrder}`);
+  logger.info('Demo step completed', {
+    context: 'DemoController',
+    action: 'DEMO_STEP_COMPLETED',
+    sessionId,
+    stepOrder,
+  });
 
   res.json({
     success: true,
@@ -273,7 +279,13 @@ export const recordInteraction = asyncHandler(async (req: Request, res: Response
   const { sessionId, interaction } = req.body;
 
   // Log interaction
-  console.log(`[Demo] Session ${sessionId} interaction:`, interaction);
+  logger.debug('Demo interaction recorded', {
+    context: 'DemoController',
+    action: 'DEMO_INTERACTION_RECORDED',
+    sessionId,
+    interactionType: interaction?.type,
+    interactionData: interaction,
+  });
 
   res.json({
     success: true,

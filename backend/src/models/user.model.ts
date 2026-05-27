@@ -7,6 +7,9 @@ export type UserRole = 'customer' | 'provider' | 'admin';
 export type AccountStatus = 'active' | 'suspended' | 'pending_verification' | 'deactivated';
 
 export interface IUser extends Document {
+  // Multi-tenant
+  tenantId?: mongoose.Types.ObjectId;
+
   // Basic Info
   firstName: string;
   lastName: string;
@@ -14,7 +17,11 @@ export interface IUser extends Document {
   password: string;
   phone?: string;
   role: UserRole;
-  
+
+  // Admin Invite Tracking (Task #66)
+  adminInviteAcceptedAt?: Date;
+  invitedBy?: mongoose.Types.ObjectId;
+
   // Profile & Social Fields
   avatar?: string;
   bio?: string;
@@ -66,7 +73,22 @@ export interface IUser extends Document {
       type: 'earned' | 'spent' | 'bonus' | 'referral';
       description: string;
       date: Date;
+      expiresAt?: Date; // Points expire 24 months from earning
       relatedBooking?: mongoose.Types.ObjectId;
+    }>;
+    // Track processed job IDs to prevent duplicate awards (idempotency)
+    processedJobIds: string[];
+    // Track first booking bonus award status
+    firstBookingAwarded: boolean;
+    // FIX: Store pending rewards until first booking completion
+    pendingRewards: Array<{
+      type: 'welcome_bonus' | 'referral_bonus';
+      amount: number;
+      description?: string;
+      status: 'pending' | 'awarded' | 'expired';
+      referrerId?: mongoose.Types.ObjectId;
+      createdAt: Date;
+      awardedAt?: Date;
     }>;
   };
   
@@ -89,6 +111,12 @@ export interface IUser extends Document {
       reminders: boolean;
       newMessages: boolean;
       promotions: boolean;
+    };
+    quietHours: {
+      enabled: boolean;
+      startTime: string; // HH:mm format
+      endTime: string;   // HH:mm format
+      timezone: string;
     };
     language: string;
     timezone: string;
@@ -176,7 +204,9 @@ export interface IUser extends Document {
   loginAttempts: number;
   lockUntil?: Date;
   passwordChangedAt?: Date;
-  
+  // FIX: Password history for preventing reuse
+  passwordHistory: string[];
+
   // Tokens
   resetPasswordToken?: string;
   resetPasswordExpire?: Date;
@@ -185,8 +215,9 @@ export interface IUser extends Document {
   refreshTokens: string[];
   tokenVersion?: number;
 
-  // Sessions (login history)
+  // Sessions (login history) - 30 day TTL
   sessions: Array<{
+    sessionId: string;
     token: string;
     device: string;
     browser?: string;
@@ -196,7 +227,23 @@ export interface IUser extends Document {
     userAgent?: string;
     lastActive: Date;
     createdAt: Date;
+    expiresAt: Date; // Required for TTL index
     isCurrent: boolean;
+    deviceFingerprint?: string; // Device fingerprint hash for tracking
+  }>;
+
+  // Device list per user (for device management)
+  deviceList?: Array<{
+    fingerprint: string;
+    device: string;
+    browser?: string;
+    os?: string;
+    firstSeen: Date;
+    lastActive: Date;
+    lastIp?: string;
+    loginCount: number;
+    isTrusted: boolean;
+    trustedAt?: Date;
   }>;
 
   // Two-Factor Authentication
@@ -206,6 +253,7 @@ export interface IUser extends Document {
     recoveryCodes?: string[]; // Bcrypt hashed recovery codes
     backupEnabled: boolean;
     lastVerified?: Date;
+    needsReenrollment?: boolean; // Set when all recovery codes are exhausted
     trustedDevices?: Array<{
       deviceId: string;
       deviceName: string;
@@ -226,9 +274,44 @@ export interface IUser extends Document {
     readAt?: Date;
   }>;
 
+  // Device tokens for push notifications
+  deviceTokens: Array<{
+    token: string;
+    platform: 'ios' | 'android' | 'web';
+    deviceId?: string;
+    addedAt: Date;
+    lastUsed?: Date;
+    isActive: boolean;
+  }>;
+
   // Demo Account Fields
   isDemoAccount?: boolean;
   demoExpiresAt?: Date;
+
+  // GDPR Data Restriction Fields (Article 18 - Right to Restriction of Processing)
+  processingRestricted?: boolean;
+  restrictedAt?: Date;
+  restrictionReason?: string;
+  restrictionDetails?: {
+    reason: string;
+    requestedAt: Date;
+    requestedBy: 'user' | 'admin';
+    notes?: string;
+    legalBasis?: string;
+  };
+  unrestrictedAt?: Date;
+
+  // Fraud Detection Fields
+  deviceFingerprints: Array<{
+    fingerprint: string;
+    userAgent: string;
+    ip: string;
+    firstSeen: Date;
+    lastSeen: Date;
+    isSuspicious: boolean;
+  }>;
+  registrationIP?: string;
+  knownIPs: string[];
 
   // Audit
   createdAt: Date;
@@ -266,6 +349,13 @@ export interface IUserModel extends Model<IUser> {
 
 const userSchema = new Schema<IUser>(
   {
+    // Multi-tenant
+    tenantId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Tenant',
+      index: true
+    },
+
     // Basic Info
     firstName: {
       type: String,
@@ -333,7 +423,18 @@ const userSchema = new Schema<IUser>(
       default: 'customer',
       index: true
     },
-    
+
+    // Admin Invite Tracking (Task #66)
+    adminInviteAcceptedAt: {
+      type: Date,
+      default: null
+    },
+    invitedBy: {
+      type: Schema.Types.ObjectId,
+      ref: 'User',
+      default: null
+    },
+
     // Profile & Social Fields
     avatar: {
       type: String,
@@ -416,7 +517,23 @@ const userSchema = new Schema<IUser>(
         type: { type: String, enum: ['earned', 'spent', 'bonus', 'referral'], required: true },
         description: { type: String, required: true },
         date: { type: Date, default: Date.now },
+        expiresAt: { type: Date }, // Points expire 24 months from earning
         relatedBooking: { type: Schema.Types.ObjectId, ref: 'Booking' }
+      }],
+      // Track processed job IDs to prevent duplicate awards (idempotency)
+      processedJobIds: [{ type: String }],
+      // Track first booking bonus award status
+      firstBookingAwarded: { type: Boolean, default: false },
+      // FIX: Store pending rewards until first booking completion
+      // Per terms: rewards awarded "when they sign up AND complete their first booking"
+      pendingRewards: [{
+        type: { type: String, enum: ['welcome_bonus', 'referral_bonus'] },
+        amount: { type: Number, required: true },
+        description: { type: String },
+        status: { type: String, enum: ['pending', 'awarded', 'expired'], default: 'pending' },
+        referrerId: { type: Schema.Types.ObjectId, ref: 'User' },
+        createdAt: { type: Date, default: Date.now },
+        awardedAt: { type: Date }
       }]
     },
     
@@ -439,6 +556,12 @@ const userSchema = new Schema<IUser>(
         reminders: { type: Boolean, default: true },
         newMessages: { type: Boolean, default: true },
         promotions: { type: Boolean, default: false }
+      },
+      quietHours: {
+        enabled: { type: Boolean, default: false },
+        startTime: { type: String, default: '22:00' },
+        endTime: { type: String, default: '08:00' },
+        timezone: { type: String, default: 'UTC' }
       },
       language: { type: String, default: 'en' },
       timezone: { type: String, default: 'UTC' },
@@ -552,7 +675,9 @@ const userSchema = new Schema<IUser>(
     },
     lockUntil: Date,
     passwordChangedAt: Date,
-    
+    // FIX: Password history for preventing reuse (last 5 passwords)
+    passwordHistory: [{ type: String }],
+
     // Tokens
     resetPasswordToken: String,
     resetPasswordExpire: Date,
@@ -561,8 +686,9 @@ const userSchema = new Schema<IUser>(
     refreshTokens: [String],
     tokenVersion: { type: Number, default: 1 },
 
-    // Sessions (login history)
+    // Sessions (login history) - 30 day TTL with MongoDB TTL index
     sessions: [{
+      sessionId: { type: String, required: true },
       token: { type: String, select: false },
       device: String,
       browser: String,
@@ -572,7 +698,23 @@ const userSchema = new Schema<IUser>(
       userAgent: String,
       lastActive: { type: Date, default: Date.now },
       createdAt: { type: Date, default: Date.now },
+      expiresAt: { type: Date, required: true }, // Required for TTL index
       isCurrent: { type: Boolean, default: false },
+      deviceFingerprint: String, // Device fingerprint hash for tracking
+    }],
+
+    // Device list per user (for device management)
+    deviceList: [{
+      fingerprint: { type: String, required: true },
+      device: String,
+      browser: String,
+      os: String,
+      firstSeen: { type: Date, default: Date.now },
+      lastActive: { type: Date, default: Date.now },
+      lastIp: String,
+      loginCount: { type: Number, default: 1 },
+      isTrusted: { type: Boolean, default: false },
+      trustedAt: Date,
     }],
 
     // Two-Factor Authentication
@@ -582,6 +724,7 @@ const userSchema = new Schema<IUser>(
       recoveryCodes: { type: [String], select: false }, // Bcrypt hashed recovery codes
       backupEnabled: { type: Boolean, default: true },
       lastVerified: Date,
+      needsReenrollment: { type: Boolean, default: false }, // Set when all recovery codes exhausted
       trustedDevices: [{
         deviceId: { type: String, required: true },
         deviceName: { type: String },
@@ -602,9 +745,44 @@ const userSchema = new Schema<IUser>(
       readAt: Date,
     }],
 
+    // Device tokens for push notifications
+    deviceTokens: [{
+      token: { type: String, required: true },
+      platform: { type: String, enum: ['ios', 'android', 'web'], required: true },
+      deviceId: { type: String },
+      addedAt: { type: Date, default: Date.now },
+      lastUsed: { type: Date },
+      isActive: { type: Boolean, default: true },
+    }],
+
     // Demo Account Fields
     isDemoAccount: { type: Boolean, default: false },
     demoExpiresAt: { type: Date },
+
+    // Fraud Detection Fields
+    deviceFingerprints: [{
+      fingerprint: { type: String, required: true },
+      userAgent: { type: String },
+      ip: { type: String },
+      firstSeen: { type: Date, default: Date.now },
+      lastSeen: { type: Date, default: Date.now },
+      isSuspicious: { type: Boolean, default: false },
+    }],
+    registrationIP: { type: String },
+    knownIPs: [{ type: String }],
+
+    // GDPR Data Restriction Fields (Article 18 - Right to Restriction of Processing)
+    processingRestricted: { type: Boolean, default: false },
+    restrictedAt: { type: Date },
+    restrictionReason: { type: String },
+    restrictionDetails: {
+      reason: String,
+      requestedAt: Date,
+      requestedBy: String,
+      notes: String,
+      legalBasis: String,
+    },
+    unrestrictedAt: { type: Date },
 
     // Audit
     createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
@@ -645,6 +823,28 @@ userSchema.index({ 'loyaltySystem.tier': 1 });
 userSchema.index({ 'socialProfiles.followers': 1 });
 userSchema.index({ 'socialProfiles.following': 1 });
 userSchema.index({ 'aiPersonalization.preferences.preferredServiceTypes': 1 });
+// User analytics: get users by role sorted by creation date
+// Supports queries like: find all providers/customers by registration date
+userSchema.index({ role: 1, createdAt: -1 });
+
+// TTL Index for Sessions - MongoDB auto-deletes documents where expiresAt < current time
+// Sessions expire after 30 days (2592000 seconds)
+userSchema.index({ 'sessions.expiresAt': 1 }, { expireAfterSeconds: 0 });
+
+// Index for efficient session cleanup queries
+userSchema.index({ 'sessions.sessionId': 1 }, { unique: true, sparse: true });
+
+// Fraud Detection Indexes
+userSchema.index({ registrationIP: 1 });
+userSchema.index({ 'deviceFingerprints.fingerprint': 1 });
+userSchema.index({ knownIPs: 1 });
+
+// ===================================
+// TENANT ISOLATION INDEXES (CRITICAL)
+// ===================================
+userSchema.index({ tenantId: 1, email: 1 }, { unique: true });
+userSchema.index({ tenantId: 1, role: 1 });
+userSchema.index({ tenantId: 1, accountStatus: 1 });
 
 // Virtual Properties
 userSchema.virtual('fullName').get(function() {
@@ -851,16 +1051,21 @@ userSchema.methods.generateReferralCode = function(): string {
 };
 
 userSchema.methods.addLoyaltyPoints = async function(amount: number, type: string, description: string, bookingId?: string) {
+  // Points expire 24 months from earning
+  const expiresAt = new Date();
+  expiresAt.setMonth(expiresAt.getMonth() + 24);
+
   const pointsEntry = {
     amount,
     type,
     description,
     date: new Date(),
+    expiresAt,
     relatedBooking: bookingId ? new mongoose.Types.ObjectId(bookingId) : undefined
   };
 
   const updates: any = {
-    $inc: { 
+    $inc: {
       'loyaltySystem.coins': amount,
       'loyaltySystem.totalEarned': amount
     },
@@ -872,7 +1077,13 @@ userSchema.methods.addLoyaltyPoints = async function(amount: number, type: strin
 };
 
 userSchema.methods.spendLoyaltyPoints = async function(amount: number, description: string, bookingId?: string): Promise<boolean> {
-  if (this.loyaltySystem.coins < amount) {
+  // Exclude expired points from balance calculation
+  const now = new Date();
+  const validPoints = this.loyaltySystem.pointsHistory
+    .filter((entry: any) => entry.expiresAt === undefined || entry.expiresAt > now)
+    .reduce((total: number, entry: any) => total + entry.amount, 0);
+
+  if (validPoints < amount) {
     return false;
   }
 
@@ -885,7 +1096,7 @@ userSchema.methods.spendLoyaltyPoints = async function(amount: number, descripti
   };
 
   const updates: any = {
-    $inc: { 
+    $inc: {
       'loyaltySystem.coins': -amount,
       'loyaltySystem.totalSpent': amount
     },
@@ -943,6 +1154,64 @@ userSchema.methods.updateSecurityInfo = async function(req: any) {
   }
 
   return this.updateOne(updates, { validateBeforeSave: false });
+};
+
+/**
+ * Add or update a device fingerprint for fraud detection
+ */
+userSchema.methods.addDeviceFingerprint = async function(
+  fingerprint: string,
+  userAgent: string,
+  ip: string
+): Promise<{ isNew: boolean; isSuspicious: boolean }> {
+  const existingIndex = this.deviceFingerprints.findIndex(
+    (d: any) => d.fingerprint === fingerprint
+  );
+
+  if (existingIndex >= 0) {
+    // Update existing fingerprint
+    this.deviceFingerprints[existingIndex].lastSeen = new Date();
+    if (ip) {
+      this.deviceFingerprints[existingIndex].ip = ip;
+    }
+    await this.save({ validateBeforeSave: false });
+    return { isNew: false, isSuspicious: this.deviceFingerprints[existingIndex].isSuspicious };
+  }
+
+  // Check if this is a new device (suspicious if more than 3 devices already)
+  const isSuspicious = this.deviceFingerprints.length >= 3;
+
+  // Add new fingerprint
+  this.deviceFingerprints.push({
+    fingerprint,
+    userAgent: userAgent?.substring(0, 500) || 'unknown',
+    ip,
+    firstSeen: new Date(),
+    lastSeen: new Date(),
+    isSuspicious,
+  });
+
+  await this.save({ validateBeforeSave: false });
+  return { isNew: true, isSuspicious };
+};
+
+/**
+ * Get count of active devices
+ */
+userSchema.methods.getActiveDeviceCount = function(): number {
+  const thirtyDaysAgo = new Date();
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+  return this.deviceFingerprints.filter((d: any) =>
+    d.lastSeen && d.lastSeen > thirtyDaysAgo
+  ).length;
+};
+
+/**
+ * Check if IP is already known
+ */
+userSchema.methods.isKnownIP = function(ip: string): boolean {
+  return this.knownIPs.includes(ip) || this.registrationIP === ip;
 };
 
 // Static Methods

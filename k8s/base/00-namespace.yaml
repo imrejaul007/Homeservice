@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nilin
+  labels:
+    name: nilin
+    environment: production
+    app.kubernetes.io/name: nilin
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nilin-monitoring
+  labels:
+    name: nilin-monitoring
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nilin-ingress
+  labels:
+    name: nilin-ingress

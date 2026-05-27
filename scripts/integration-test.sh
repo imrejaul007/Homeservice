@@ -342,7 +342,7 @@ main() {
     echo "  1. Start development servers: cd backend && npm run dev"
     echo "  2. Start frontend: cd frontend && npm run dev" 
     echo "  3. Access application at http://localhost:3000"
-    echo "  4. Login with admin@homeservice.com / AdminPassword123!"
+    echo "  4. Login with admin@homeservice.com / \${ADMIN_PASSWORD:-<check .env file>}"
     echo ""
 }
 

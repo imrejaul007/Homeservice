@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nilin-frontend
+  labels:
+    app: nilin
+    component: frontend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nilin
+      component: frontend
+  template:
+    metadata:
+      labels:
+        app: nilin
+        component: frontend
+    spec:
+      containers:
+        - name: frontend
+          image: nilin/frontend:latest
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 5

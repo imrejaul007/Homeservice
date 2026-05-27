@@ -215,6 +215,7 @@ const dataRequestSchema = new Schema<IDataRequest>(
 // Compound indexes
 dataRequestSchema.index({ userId: 1, type: 1, status: 1 });
 dataRequestSchema.index({ status: 1, requestedAt: -1 });
+// TTL index for automatic document cleanup (no field-level index to avoid conflict)
 dataRequestSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 dataRequestSchema.index({ downloadExpiry: 1 }, { expireAfterSeconds: 0 });
 

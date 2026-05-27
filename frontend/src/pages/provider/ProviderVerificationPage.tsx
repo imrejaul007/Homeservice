@@ -40,7 +40,7 @@ interface VerificationStep {
   id: string;
   title: string;
   description: string;
-  status: 'pending' | 'in_progress' | 'completed' | 'failed';
+  status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'submitted';
   documents?: VerificationDocument[];
 }
 

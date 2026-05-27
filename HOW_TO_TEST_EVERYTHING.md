@@ -140,8 +140,10 @@ npm run dev
 
 **Login:**
 - POST `/api/auth/login`
-- Body: `{ "email": "admin@homeservice.com", "password": "AdminPassword123!" }`
+- Body: `{ "email": "admin@homeservice.com", "password": "${ADMIN_PASSWORD}" }`
 - Expected: `200`, token returned, redirect path provided
+
+> Note: Set `ADMIN_PASSWORD` environment variable or check `.env` for the actual password used during testing.
 
 **Protected Route:**
 - GET `/api/auth/me`
@@ -309,9 +311,11 @@ npm run test:e2e -- --grep "Protected Routes"
 
 #### 1. Admin Login
 1. Go to `http://localhost:3000/login`
-2. Login with: `admin@homeservice.com` / `AdminPassword123!`
+2. Login with: `admin@homeservice.com` / `${ADMIN_PASSWORD}`
 3. **Expected**: Redirect to `/admin/dashboard`
 4. **Verify**: Admin dashboard with user management, pending approvals
+
+> Note: Set `ADMIN_PASSWORD` environment variable or check `.env` for the actual password.
 
 ### Test Authentication Features
 

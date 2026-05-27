@@ -97,6 +97,25 @@ const RewardsPage: React.FC = () => {
             </div>
           )}
 
+          {/* Empty State - if no loyalty data */}
+          {!isLoading && !loyaltyStatus && !error && (
+            <div className="glass-nilin rounded-nilin-lg p-12 text-center">
+              <div className="w-20 h-20 rounded-full bg-nilin-coral/20 flex items-center justify-center mx-auto mb-4">
+                <Gift className="w-10 h-10 text-nilin-coral" />
+              </div>
+              <h3 className="text-xl font-serif text-nilin-charcoal mb-2">Start earning rewards</h3>
+              <p className="text-nilin-warmGray mb-6 max-w-md mx-auto">
+                Book your first service to start earning coins and unlock exclusive tier benefits.
+              </p>
+              <button
+                onClick={() => navigate('/search')}
+                className="btn-nilin"
+              >
+                Book a Service
+              </button>
+            </div>
+          )}
+
           {/* Header with Coins */}
           <div className={`bg-gradient-to-br ${colors.from} ${colors.to} rounded-nilin-xl p-8 mb-8 text-white shadow-nilin-warm`}>
             <div className="flex items-center justify-between">

@@ -4,6 +4,53 @@ import User from '../models/user.model';
 import Dispute from '../models/dispute.model';
 import { ApiError } from '../utils/ApiError';
 import { eventBus, EVENT_TYPES } from '../event-bus';
+import { Money } from '../domain/value-objects/money';
+import crypto from 'crypto';
+import logger from '../utils/logger';
+
+// Maximum reasonable amount in cents for a single refund (1 million = $10,000)
+const MAX_REFUND_AMOUNT_CENTS = 1000000;
+
+/**
+ * Validate that a refund amount is in the correct unit (dollars, not cents).
+ * Prevents over-refund attacks where amounts are accidentally sent in cents.
+ */
+const validateRefundAmount = (
+  refundAmount: number,
+  maxRefundable: number,
+  currency: string = 'AED'
+): { valid: boolean; error?: string; sanitizedAmount?: number } => {
+  // Check for obviously invalid amounts
+  if (!Number.isFinite(refundAmount) || refundAmount <= 0) {
+    return { valid: false, error: 'Refund amount must be a positive finite number' };
+  }
+
+  // Check if amount is suspiciously large (likely in cents)
+  const isAmountLikelyInCents =
+    refundAmount >= 1000 &&
+    refundAmount / 100 > maxRefundable * 1.1; // 10% tolerance
+
+  if (isAmountLikelyInCents) {
+    return {
+      valid: false,
+      error: `Refund amount ${refundAmount} appears to be in cents instead of dollars. ` +
+        `Maximum refundable: ${maxRefundable.toFixed(2)} ${currency}. ` +
+        `If you intended to refund ${(refundAmount / 100).toFixed(2)} ${currency}, please use that value instead.`,
+    };
+  }
+
+  // Check if amount exceeds maximum refundable
+  if (refundAmount > maxRefundable) {
+    return {
+      valid: false,
+      error: `Refund amount ${refundAmount.toFixed(2)} exceeds maximum refundable amount ${maxRefundable.toFixed(2)} ${currency}`,
+    };
+  }
+
+  // Use Money value object for precise calculation
+  const money = Money.fromDecimal(refundAmount, currency as any);
+  return { valid: true, sanitizedAmount: money.toDecimal() };
+};
 
 // ============================================
 // TYPES & INTERFACES
@@ -135,7 +182,7 @@ export class RefundService {
     }
 
     // Check if payment was made
-    if (booking.payment?.status !== 'paid') {
+    if (booking.payment?.status !== 'completed') {
       throw new ApiError(400, 'No payment was made for this booking');
     }
 
@@ -149,11 +196,31 @@ export class RefundService {
       throw new ApiError(409, 'A refund request is already pending for this booking');
     }
 
-    // Calculate refund amount
+    // Calculate refund amount with proper validation
+    const currency = booking.pricing?.currency || 'AED';
     const originalAmount = booking.pricing?.totalAmount || 0;
-    let refundAmount = data.amount || originalAmount;
 
-    // Validate refund amount
+    // Calculate max refundable (considering existing refunds)
+    const existingRefundsTotal = await this.getExistingRefundsTotal(data.bookingId);
+    const maxRefundable = originalAmount - existingRefundsTotal;
+
+    if (maxRefundable <= 0) {
+      throw new ApiError(400, 'Full refund already processed for this booking');
+    }
+
+    let refundAmount: number;
+    if (data.amount !== undefined && data.amount !== null) {
+      // Validate the amount to prevent over-refund attacks
+      const validation = validateRefundAmount(data.amount, maxRefundable, currency);
+      if (!validation.valid) {
+        throw new ApiError(400, validation.error);
+      }
+      refundAmount = validation.sanitizedAmount || data.amount;
+    } else {
+      refundAmount = maxRefundable;
+    }
+
+    // Validate refund amount against original
     if (refundAmount > originalAmount) {
       throw new ApiError(400, 'Refund amount cannot exceed booking total');
     }
@@ -184,7 +251,7 @@ export class RefundService {
         performedBy: new Types.ObjectId(data.requestedBy),
         performedByRole: 'customer',
         timestamp: new Date(),
-        details: `Refund request created for ${refundAmount} ${booking.pricing?.currency || 'AED'}`,
+        details: `Refund request created for ${refundAmount.toFixed(2)} ${currency}`,
       }],
     });
 
@@ -435,9 +502,12 @@ export class RefundService {
       // Get Stripe instance (using the payment service pattern)
       const stripe = await this.getStripeInstance();
 
+      // Get currency from booking
+      const booking = await Booking.findById(refund.bookingId);
+      const currency = booking?.pricing?.currency || 'AED';
+
       if (!refund.stripeChargeId) {
         // Try to get charge ID from booking
-        const booking = await Booking.findById(refund.bookingId);
         if (booking?.payment?.transactionId) {
           refund.stripeChargeId = booking.payment.transactionId;
         } else {
@@ -445,10 +515,22 @@ export class RefundService {
         }
       }
 
+      // Calculate refund amount in cents using Money for precision
+      const refundMoney = Money.fromDecimal(refund.amount, currency as any);
+      const amountInCents = refundMoney.amount;
+
+      // Validate amount is reasonable
+      if (amountInCents <= 0 || amountInCents > MAX_REFUND_AMOUNT_CENTS) {
+        throw new ApiError(400, `Invalid refund amount: ${amountInCents} cents (${refundMoney.toString()})`);
+      }
+
+      // Generate idempotency key for Stripe
+      const idempotencyKey = `refund-${refund._id.toString()}-${crypto.randomUUID().slice(0, 8)}`;
+
       // Create Stripe refund
       const stripeRefund = await stripe.refunds.create({
         charge: refund.stripeChargeId,
-        amount: Math.round(refund.amount * 100), // Convert to cents
+        amount: amountInCents,
         reason: 'requested_by_customer',
         metadata: {
           refundId: refund._id.toString(),
@@ -456,6 +538,8 @@ export class RefundService {
           bookingId: refund.bookingId.toString(),
           type: refund.type,
         },
+      }, {
+        idempotencyKey,
       });
 
       // Update refund with Stripe refund ID
@@ -469,7 +553,7 @@ export class RefundService {
         performedBy: new Types.ObjectId('system'),
         performedByRole: 'system',
         timestamp: new Date(),
-        details: `Stripe refund ${stripeRefund.id} processed successfully`,
+        details: `Stripe refund ${stripeRefund.id} processed successfully (${refundMoney.toString()})`,
         previousStatus: 'processing',
         newStatus: 'completed',
       });
@@ -485,6 +569,7 @@ export class RefundService {
         refundNumber: refund.refundNumber,
         bookingId: refund.bookingId,
         amount: refund.amount,
+        amountCents: amountInCents,
         stripeRefundId: stripeRefund.id,
       });
 
@@ -556,18 +641,31 @@ export class RefundService {
 
       case 'refund.created': {
         const stripeRefund = event.data.object;
-        console.log('Stripe refund created:', stripeRefund.id);
+        logger.info('Stripe refund created', {
+          context: 'RefundService',
+          action: 'REFUND_CREATED',
+          refundId: stripeRefund.id,
+        });
         break;
       }
 
       case 'refund.updated': {
         const stripeRefund = event.data.object;
-        console.log('Stripe refund updated:', stripeRefund.id, 'Status:', stripeRefund.status);
+        logger.info('Stripe refund updated', {
+          context: 'RefundService',
+          action: 'REFUND_UPDATED',
+          refundId: stripeRefund.id,
+          status: stripeRefund.status,
+        });
         break;
       }
 
       default:
-        console.log(`Unhandled Stripe event type: ${event.type}`);
+        logger.debug('Unhandled Stripe refund event type', {
+          context: 'RefundService',
+          action: 'UNHANDLED_EVENT',
+          eventType: event.type,
+        });
     }
   }
 
@@ -765,6 +863,28 @@ export class RefundService {
   // ========================================
   // Helper Methods
   // ========================================
+
+  /**
+   * Get total amount of existing refunds for a booking
+   */
+  private async getExistingRefundsTotal(bookingId: string): Promise<number> {
+    const RefundRequest = mongoose.model('RefundRequest');
+    const result = await RefundRequest.aggregate([
+      {
+        $match: {
+          bookingId: new Types.ObjectId(bookingId),
+          status: { $in: ['approved', 'processing', 'completed'] },
+        },
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: '$amount' },
+        },
+      },
+    ]);
+    return result[0]?.total || 0;
+  }
 
   /**
    * Generate unique refund number

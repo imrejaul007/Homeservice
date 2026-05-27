@@ -36,7 +36,7 @@ interface Transaction {
   amount: number;
   description: string;
   date: Date;
-  status: 'completed' | 'pending' | 'failed';
+  status: 'completed' | 'pending' | 'failed' | 'reversed';
   bookingId?: string;
 }
 

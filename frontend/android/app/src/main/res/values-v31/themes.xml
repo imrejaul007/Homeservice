@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!--
+        NILIN Android 12+ Splash Screen Theme
+        Uses Capacitor's built-in splash screen configuration
+        Package: com.nilin.app
+        Brand Color: #E8B4A8
+    -->
+
+    <!-- Splash screen theme for Android 12+ (API 31+) -->
+    <style name="AppTheme.NoActionBarLaunch" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/splash_background</item>
+        <item name="android:statusBarColor">@color/splash_background</item>
+        <item name="android:navigationBarColor">@color/splash_background</item>
+    </style>
+
+</resources>

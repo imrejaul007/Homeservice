@@ -7,7 +7,7 @@ import { Loader2 } from 'lucide-react';
 
 export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   /** Visual style variant */
-  variant?: 'primary' | 'secondary' | 'ghost' | 'danger';
+  variant?: 'primary' | 'secondary' | 'ghost' | 'danger' | 'outline';
   /** Size preset */
   size?: 'sm' | 'md' | 'lg';
   /** Shows loading spinner and disables interaction */
@@ -50,6 +50,12 @@ const variantStyles = {
     hover: 'hover:bg-nilin-error/90 hover:shadow-nilin-warm-lg',
     active: 'active:bg-nilin-error/80 active:shadow-none',
     disabled: 'disabled:bg-nilin-error/50',
+  },
+  outline: {
+    base: 'bg-transparent text-nilin-coral border-2 border-nilin-coral',
+    hover: 'hover:bg-nilin-coral/10 hover:shadow-nilin-warm',
+    active: 'active:bg-nilin-coral/15 active:shadow-none',
+    disabled: 'disabled:text-nilin-coral/50 disabled:border-nilin-coral/50',
   },
 } as const;
 

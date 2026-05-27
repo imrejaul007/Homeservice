@@ -1,0 +1,88 @@
+global:
+  imageRegistry: nilin
+  imageTag: dev
+
+namespace: nilin-dev
+environment: development
+
+replicas:
+  api: 1
+  worker: 1
+  scheduler: 1
+  frontend: 1
+
+ingress:
+  enabled: true
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+  hosts:
+    - host: dev.nilin.io
+      paths:
+        - path: /api
+          pathType: Prefix
+          service: api
+        - path: /
+          pathType: Prefix
+          service: frontend
+
+autoscaling:
+  enabled: false
+  api:
+    minReplicas: 1
+    maxReplicas: 3
+  worker:
+    minReplicas: 1
+    maxReplicas: 2
+  frontend:
+    minReplicas: 1
+    maxReplicas: 2
+
+resources:
+  api:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  worker:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  frontend:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
+logging:
+  level: debug
+
+monitoring:
+  enabled: false
+  sentry:
+    sampleRate: 1.0
+    tracesSampleRate: 1.0
+
+mongodb:
+  persistence:
+    size: 5Gi
+
+redis:
+  persistence:
+    size: 1Gi
+
+prometheus:
+  enabled: false
+
+grafana:
+  enabled: false
+
+loki:
+  enabled: false

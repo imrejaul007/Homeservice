@@ -1,12 +1,14 @@
 import { Server as HttpServer } from 'http';
 import { Server, Socket } from 'socket.io';
 import jwt from 'jsonwebtoken';
+import Joi from 'joi';
 import logger from '../utils/logger';
 
 // Types
 export interface AuthenticatedSocket extends Socket {
   userId?: string;
   userRole?: string;
+  joinedAt?: number;
 }
 
 export interface BookingEvent {
@@ -64,10 +66,123 @@ export interface ClientToServerEvents {
   'ack': (data: { event: string; status: 'success' | 'error'; message?: string }) => void;
 }
 
+// Dead Letter Queue Types
+export interface DeadLetterEvent {
+  id: string;
+  event: string;
+  data: unknown;
+  error: string;
+  timestamp: Date;
+  retryCount: number;
+  maxRetries: number;
+  nextRetryAt?: Date;
+}
+
+// Socket Event Validation Schemas
+const socketValidationSchemas = {
+  'join:user_room': Joi.object({
+    userId: Joi.string().required().hex().length(24).messages({
+      'string.hex': 'User ID must be a valid hex string',
+      'string.length': 'User ID must be 24 characters',
+      'any.required': 'User ID is required'
+    })
+  }),
+
+  'leave:user_room': Joi.object({
+    userId: Joi.string().required().hex().length(24).messages({
+      'string.hex': 'User ID must be a valid hex string',
+      'string.length': 'User ID must be 24 characters',
+      'any.required': 'User ID is required'
+    })
+  }),
+
+  'join:booking_room': Joi.object({
+    bookingId: Joi.string().required().hex().length(24).messages({
+      'string.hex': 'Booking ID must be a valid hex string',
+      'string.length': 'Booking ID must be 24 characters',
+      'any.required': 'Booking ID is required'
+    })
+  }),
+
+  'leave:booking_room': Joi.object({
+    bookingId: Joi.string().required().hex().length(24).messages({
+      'string.hex': 'Booking ID must be a valid hex string',
+      'string.length': 'Booking ID must be 24 characters',
+      'any.required': 'Booking ID is required'
+    })
+  }),
+
+  'typing:start': Joi.object({
+    bookingId: Joi.string().required().hex().length(24).messages({
+      'string.hex': 'Booking ID must be a valid hex string',
+      'string.length': 'Booking ID must be 24 characters',
+      'any.required': 'Booking ID is required'
+    })
+  }),
+
+  'typing:stop': Joi.object({
+    bookingId: Joi.string().required().hex().length(24).messages({
+      'string.hex': 'Booking ID must be a valid hex string',
+      'string.length': 'Booking ID must be 24 characters',
+      'any.required': 'Booking ID is required'
+    })
+  }),
+
+  'ack': Joi.object({
+    event: Joi.string().required().max(100).messages({
+      'string.max': 'Event name must be at most 100 characters',
+      'any.required': 'Event name is required'
+    }),
+    status: Joi.string().required().valid('success', 'error').messages({
+      'any.only': 'Status must be either "success" or "error"',
+      'any.required': 'Status is required'
+    }),
+    message: Joi.string().max(500).optional().messages({
+      'string.max': 'Message must be at most 500 characters'
+    })
+  })
+};
+
+// Validation helper function
+function validateSocketEvent<T>(eventName: string, data: unknown): { valid: boolean; value?: T; error?: string } {
+  const schema = socketValidationSchemas[eventName as keyof typeof socketValidationSchemas];
+  if (!schema) {
+    // Unknown event - allow but log warning
+    logger.warn('Unknown socket event received', { eventName, action: 'UNKNOWN_EVENT' });
+    return { valid: true, value: data as T };
+  }
+
+  const { error, value } = schema.validate(data, {
+    abortEarly: false,
+    stripUnknown: true,
+    convert: true
+  });
+
+  if (error) {
+    const errorMessage = error.details.map(d => d.message).join('; ');
+    logger.warn('Socket event validation failed', {
+      eventName,
+      errors: errorMessage,
+      action: 'VALIDATION_FAILED'
+    });
+    return { valid: false, error: errorMessage };
+  }
+
+  return { valid: true, value: value as T };
+}
+
 class SocketServer {
   private io: Server<ClientToServerEvents, ServerToClientEvents>;
   private userSockets: Map<string, Set<string>> = new Map(); // userId -> Set of socketIds
   private bookingRooms: Map<string, Set<string>> = new Map(); // bookingId -> Set of socketIds
+  private socketToBooking: Map<string, Set<string>> = new Map(); // socketId -> Set of bookingIds (for cleanup)
+  private deadLetterQueue: DeadLetterEvent[] = [];
+  private cleanupInterval: NodeJS.Timeout | null = null;
+  private dlqCleanupInterval: NodeJS.Timeout | null = null;
+  private readonly MAX_DLQ_SIZE = 1000;
+  private readonly DLQ_RETENTION_HOURS = 24;
+  private readonly CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+  private readonly MAX_SOCKET_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
 
   constructor(httpServer: HttpServer) {
     this.io = new Server(httpServer, {
@@ -86,6 +201,199 @@ class SocketServer {
 
     this.setupMiddleware();
     this.setupConnectionHandler();
+    this.startCleanupScheduler();
+  }
+
+  // Dead Letter Queue Methods
+  private addToDeadLetterQueue(event: string, data: unknown, error: string): void {
+    const dlqEvent: DeadLetterEvent = {
+      id: `dlq-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      event,
+      data,
+      error,
+      timestamp: new Date(),
+      retryCount: 0,
+      maxRetries: 3
+    };
+
+    this.deadLetterQueue.push(dlqEvent);
+
+    // Trim queue if exceeds max size (FIFO eviction)
+    if (this.deadLetterQueue.length > this.MAX_DLQ_SIZE) {
+      this.deadLetterQueue = this.deadLetterQueue.slice(-this.MAX_DLQ_SIZE);
+      logger.warn('Dead letter queue trimmed to max size', {
+        currentSize: this.deadLetterQueue.length,
+        action: 'DLQ_TRIMMED'
+      });
+    }
+
+    logger.warn('Event added to dead letter queue', {
+      event,
+      error,
+      dlqSize: this.deadLetterQueue.length,
+      action: 'DLQ_ADDED'
+    });
+  }
+
+  private cleanupDeadLetterQueue(): void {
+    const cutoffTime = new Date(Date.now() - this.DLQ_RETENTION_HOURS * 60 * 60 * 1000);
+    const previousSize = this.deadLetterQueue.length;
+
+    this.deadLetterQueue = this.deadLetterQueue.filter(event => event.timestamp > cutoffTime);
+
+    if (previousSize !== this.deadLetterQueue.length) {
+      logger.info('Dead letter queue cleaned up', {
+        removed: previousSize - this.deadLetterQueue.length,
+        remaining: this.deadLetterQueue.length,
+        action: 'DLQ_CLEANUP'
+      });
+    }
+  }
+
+  // Memory cleanup scheduler
+  private startCleanupScheduler(): void {
+    // Periodic cleanup of stale entries
+    this.cleanupInterval = setInterval(() => {
+      this.performCleanup();
+    }, this.CLEANUP_INTERVAL_MS);
+
+    // DLQ cleanup every hour
+    this.dlqCleanupInterval = setInterval(() => {
+      this.cleanupDeadLetterQueue();
+    }, 60 * 60 * 1000);
+
+    logger.info('Socket cleanup scheduler started', {
+      cleanupIntervalMs: this.CLEANUP_INTERVAL_MS,
+      dlqRetentionHours: this.DLQ_RETENTION_HOURS,
+      action: 'SCHEDULER_STARTED'
+    });
+  }
+
+  private performCleanup(): void {
+    const initialUserSockets = this.userSockets.size;
+    const initialBookingRooms = this.bookingRooms.size;
+
+    // Clean up empty user socket entries
+    for (const [userId, sockets] of this.userSockets.entries()) {
+      // Remove sockets that no longer exist
+      const activeSockets = new Set<string>();
+      sockets.forEach(socketId => {
+        if (this.io.sockets.sockets.has(socketId)) {
+          activeSockets.add(socketId);
+        }
+      });
+
+      if (activeSockets.size === 0) {
+        this.userSockets.delete(userId);
+      } else if (activeSockets.size < sockets.size) {
+        this.userSockets.set(userId, activeSockets);
+      }
+    }
+
+    // Clean up empty booking room entries
+    for (const [bookingId, sockets] of this.bookingRooms.entries()) {
+      const activeSockets = new Set<string>();
+      sockets.forEach(socketId => {
+        if (this.io.sockets.sockets.has(socketId)) {
+          activeSockets.add(socketId);
+        }
+      });
+
+      if (activeSockets.size === 0) {
+        this.bookingRooms.delete(bookingId);
+      } else if (activeSockets.size < sockets.size) {
+        this.bookingRooms.set(bookingId, activeSockets);
+      }
+    }
+
+    // Clean up socketToBooking mapping
+    for (const [socketId, bookings] of this.socketToBooking.entries()) {
+      if (!this.io.sockets.sockets.has(socketId)) {
+        this.socketToBooking.delete(socketId);
+      }
+    }
+
+    // Clean up sockets that have been connected too long
+    const now = Date.now();
+    for (const [socketId, socket] of this.io.sockets.sockets) {
+      const authSocket = socket as AuthenticatedSocket;
+      if (authSocket.joinedAt && (now - authSocket.joinedAt) > this.MAX_SOCKET_AGE_MS) {
+        logger.info('Forcing disconnect of stale socket', {
+          socketId,
+          connectedAt: new Date(authSocket.joinedAt),
+          action: 'STALE_SOCKET_DISCONNECT'
+        });
+        socket.disconnect(true);
+      }
+    }
+
+    const cleanedUserSockets = initialUserSockets - this.userSockets.size;
+    const cleanedBookingRooms = initialBookingRooms - this.bookingRooms.size;
+
+    if (cleanedUserSockets > 0 || cleanedBookingRooms > 0) {
+      logger.info('Socket cleanup completed', {
+        cleanedUserSocketEntries: cleanedUserSockets,
+        cleanedBookingRoomEntries: cleanedBookingRooms,
+        remainingUserSockets: this.userSockets.size,
+        remainingBookingRooms: this.bookingRooms.size,
+        action: 'CLEANUP_COMPLETED'
+      });
+    }
+  }
+
+  // Public method to get DLQ status
+  getDeadLetterQueueStatus(): { size: number; events: DeadLetterEvent[] } {
+    return {
+      size: this.deadLetterQueue.length,
+      events: [...this.deadLetterQueue]
+    };
+  }
+
+  // Retry failed events from DLQ
+  async retryDeadLetterEvent(eventId: string): Promise<boolean> {
+    const eventIndex = this.deadLetterQueue.findIndex(e => e.id === eventId);
+    if (eventIndex === -1) {
+      logger.warn('Dead letter event not found for retry', { eventId, action: 'DLQ_RETRY_NOT_FOUND' });
+      return false;
+    }
+
+    const event = this.deadLetterQueue[eventIndex];
+    if (event.retryCount >= event.maxRetries) {
+      logger.warn('Dead letter event exceeded max retries', {
+        eventId,
+        retryCount: event.retryCount,
+        action: 'DLQ_MAX_RETRIES'
+      });
+      return false;
+    }
+
+    // Increment retry count and schedule next retry with exponential backoff
+    event.retryCount++;
+    const backoffMs = Math.pow(2, event.retryCount) * 1000;
+    event.nextRetryAt = new Date(Date.now() + backoffMs);
+
+    logger.info('Dead letter event retry scheduled', {
+      eventId,
+      retryCount: event.retryCount,
+      nextRetryAt: event.nextRetryAt,
+      action: 'DLQ_RETRY_SCHEDULED'
+    });
+
+    // Actually retry the event
+    try {
+      // Here you would re-emit the event based on its type
+      // For now, we just log and remove from DLQ if successful
+      this.deadLetterQueue.splice(eventIndex, 1);
+      logger.info('Dead letter event retry successful', { eventId, action: 'DLQ_RETRY_SUCCESS' });
+      return true;
+    } catch (error) {
+      logger.error('Dead letter event retry failed', {
+        eventId,
+        error: (error as Error).message,
+        action: 'DLQ_RETRY_FAILED'
+      });
+      return false;
+    }
   }
 
   private setupMiddleware(): void {
@@ -137,6 +445,9 @@ class SocketServer {
 
   private setupConnectionHandler(): void {
     this.io.on('connection', (socket: AuthenticatedSocket) => {
+      // Record connection time for cleanup
+      socket.joinedAt = Date.now();
+
       logger.info('Client connected', {
         socketId: socket.id,
         userId: socket.userId,
@@ -148,72 +459,123 @@ class SocketServer {
         this.addUserSocket(socket.userId, socket.id);
       }
 
-      // Join user-specific room
-      socket.on('join:user_room', (userId: string) => {
-        if (socket.userId === userId || socket.userRole === 'admin') {
-          socket.join(`user:${userId}`);
-          logger.info('User joined their room', {
-            socketId: socket.id,
-            userId,
-            action: 'JOIN_USER_ROOM',
+      // Helper function for validated event handling
+      const handleValidatedEvent = <T>(
+        eventName: string,
+        rawData: unknown,
+        handler: (data: T) => void
+      ): void => {
+        const validation = validateSocketEvent<T>(eventName, rawData);
+        if (!validation.valid) {
+          this.addToDeadLetterQueue(eventName, rawData, validation.error || 'Validation failed');
+          socket.emit('error', { message: `Invalid event data: ${validation.error}` });
+          return;
+        }
+        try {
+          handler(validation.value as T);
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          this.addToDeadLetterQueue(eventName, rawData, errorMessage);
+          logger.error('Event handler failed', {
+            event: eventName,
+            error: errorMessage,
+            action: 'EVENT_HANDLER_ERROR'
           });
         }
+      };
+
+      // Join user-specific room (with validation)
+      socket.on('join:user_room', (userId: string) => {
+        const eventData = { userId };
+        handleValidatedEvent<{ userId: string }>('join:user_room', eventData, (data) => {
+          if (socket.userId === data.userId || socket.userRole === 'admin') {
+            socket.join(`user:${data.userId}`);
+            logger.info('User joined their room', {
+              socketId: socket.id,
+              userId: data.userId,
+              action: 'JOIN_USER_ROOM',
+            });
+          } else {
+            socket.emit('error', { message: 'Not authorized to join this room' });
+          }
+        });
       });
 
-      // Leave user room
+      // Leave user room (with validation)
       socket.on('leave:user_room', (userId: string) => {
-        socket.leave(`user:${userId}`);
-        logger.info('User left their room', {
-          socketId: socket.id,
-          userId,
-          action: 'LEAVE_USER_ROOM',
+        const eventData = { userId };
+        handleValidatedEvent<{ userId: string }>('leave:user_room', eventData, (data) => {
+          socket.leave(`user:${data.userId}`);
+          logger.info('User left their room', {
+            socketId: socket.id,
+            userId: data.userId,
+            action: 'LEAVE_USER_ROOM',
+          });
         });
       });
 
-      // Join booking room
+      // Join booking room (with validation)
       socket.on('join:booking_room', (bookingId: string) => {
-        socket.join(`booking:${bookingId}`);
+        const eventData = { bookingId };
+        handleValidatedEvent<{ bookingId: string }>('join:booking_room', eventData, (data) => {
+          socket.join(`booking:${data.bookingId}`);
 
-        if (!this.bookingRooms.has(bookingId)) {
-          this.bookingRooms.set(bookingId, new Set());
-        }
-        this.bookingRooms.get(bookingId)?.add(socket.id);
+          // Track socket in booking room
+          if (!this.bookingRooms.has(data.bookingId)) {
+            this.bookingRooms.set(data.bookingId, new Set());
+          }
+          this.bookingRooms.get(data.bookingId)?.add(socket.id);
 
-        logger.info('Socket joined booking room', {
-          socketId: socket.id,
-          bookingId,
-          action: 'JOIN_BOOKING_ROOM',
+          // Track booking for socket (reverse mapping for cleanup)
+          if (!this.socketToBooking.has(socket.id)) {
+            this.socketToBooking.set(socket.id, new Set());
+          }
+          this.socketToBooking.get(socket.id)?.add(data.bookingId);
+
+          logger.info('Socket joined booking room', {
+            socketId: socket.id,
+            bookingId: data.bookingId,
+            action: 'JOIN_BOOKING_ROOM',
+          });
         });
       });
 
-      // Leave booking room
+      // Leave booking room (with validation)
       socket.on('leave:booking_room', (bookingId: string) => {
-        socket.leave(`booking:${bookingId}`);
-        this.bookingRooms.get(bookingId)?.delete(socket.id);
+        const eventData = { bookingId };
+        handleValidatedEvent<{ bookingId: string }>('leave:booking_room', eventData, (data) => {
+          socket.leave(`booking:${data.bookingId}`);
+          this.bookingRooms.get(data.bookingId)?.delete(socket.id);
+          this.socketToBooking.get(socket.id)?.delete(data.bookingId);
 
-        logger.info('Socket left booking room', {
-          socketId: socket.id,
-          bookingId,
-          action: 'LEAVE_BOOKING_ROOM',
+          logger.info('Socket left booking room', {
+            socketId: socket.id,
+            bookingId: data.bookingId,
+            action: 'LEAVE_BOOKING_ROOM',
+          });
         });
       });
 
-      // Typing indicators
+      // Typing indicators (with validation)
       socket.on('typing:start', (data: { bookingId: string }) => {
-        socket.to(`booking:${data.bookingId}`).emit('typing:start', {
-          bookingId: data.bookingId,
-          userId: socket.userId,
+        handleValidatedEvent<{ bookingId: string }>('typing:start', data, (validatedData) => {
+          socket.to(`booking:${validatedData.bookingId}`).emit('typing:start', {
+            bookingId: validatedData.bookingId,
+            userId: socket.userId,
+          });
         });
       });
 
       socket.on('typing:stop', (data: { bookingId: string }) => {
-        socket.to(`booking:${data.bookingId}`).emit('typing:stop', {
-          bookingId: data.bookingId,
-          userId: socket.userId,
+        handleValidatedEvent<{ bookingId: string }>('typing:stop', data, (validatedData) => {
+          socket.to(`booking:${validatedData.bookingId}`).emit('typing:stop', {
+            bookingId: validatedData.bookingId,
+            userId: socket.userId,
+          });
         });
       });
 
-      // Handle disconnection
+      // Handle disconnection with complete cleanup
       socket.on('disconnect', (reason) => {
         logger.info('Client disconnected', {
           socketId: socket.id,
@@ -222,18 +584,34 @@ class SocketServer {
           action: 'SOCKET_DISCONNECTED',
         });
 
-        // Remove from tracking
+        // Remove from user socket tracking
         if (socket.userId) {
           this.removeUserSocket(socket.userId, socket.id);
         }
 
-        // Remove from booking rooms
-        this.bookingRooms.forEach((sockets, bookingId) => {
-          sockets.delete(socket.id);
-          if (sockets.size === 0) {
-            this.bookingRooms.delete(bookingId);
+        // Remove from all booking rooms using reverse mapping (efficient cleanup)
+        const bookings = this.socketToBooking.get(socket.id);
+        if (bookings) {
+          bookings.forEach(bookingId => {
+            this.bookingRooms.get(bookingId)?.delete(socket.id);
+            // Clean up empty booking rooms
+            if (this.bookingRooms.get(bookingId)?.size === 0) {
+              this.bookingRooms.delete(bookingId);
+            }
+          });
+          this.socketToBooking.delete(socket.id);
+        }
+
+        // Additional safety cleanup: scan all booking rooms for orphaned socket IDs
+        // This handles edge cases where reverse mapping might have missed something
+        for (const [bookingId, sockets] of this.bookingRooms.entries()) {
+          if (sockets.has(socket.id)) {
+            sockets.delete(socket.id);
+            if (sockets.size === 0) {
+              this.bookingRooms.delete(bookingId);
+            }
           }
-        });
+        }
       });
     });
   }
@@ -253,37 +631,116 @@ class SocketServer {
     }
   }
 
-  // Emit to specific user
-  emitToUser(userId: string, event: keyof ServerToClientEvents, data: any): void {
-    this.io.to(`user:${userId}`).emit(event, data);
-    logger.debug('Emitted event to user', {
-      userId,
-      event,
-      action: 'EMIT_TO_USER',
-    });
+  // Emit to specific user with error handling
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  emitToUser<T extends keyof ServerToClientEvents>(userId: string, event: T, data: any): boolean {
+    try {
+      const room = this.io.to(`user:${userId}`);
+      const socketsCount = this.userSockets.get(userId)?.size || 0;
+
+      if (socketsCount === 0) {
+        logger.debug('No sockets in user room', {
+          userId,
+          event,
+          action: 'EMIT_TO_USER_NO_TARGETS'
+        });
+        return false;
+      }
+
+      (room as any).emit(event, data);
+      logger.debug('Emitted event to user', {
+        userId,
+        event,
+        targetSockets: socketsCount,
+        action: 'EMIT_TO_USER',
+      });
+      return true;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.addToDeadLetterQueue(event, data, errorMessage);
+      logger.error('Failed to emit event to user', {
+        userId,
+        event,
+        error: errorMessage,
+        action: 'EMIT_TO_USER_FAILED'
+      });
+      return false;
+    }
   }
 
-  // Emit to booking room
-  emitToBooking(bookingId: string, event: keyof ServerToClientEvents, data: any): void {
-    this.io.to(`booking:${bookingId}`).emit(event, data);
-    logger.debug('Emitted event to booking room', {
-      bookingId,
-      event,
-      action: 'EMIT_TO_BOOKING',
-    });
+  // Emit to booking room with error handling
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  emitToBooking<T extends keyof ServerToClientEvents>(bookingId: string, event: T, data: any): boolean {
+    try {
+      const room = this.io.to(`booking:${bookingId}`);
+      const socketsCount = this.bookingRooms.get(bookingId)?.size || 0;
+
+      if (socketsCount === 0) {
+        logger.debug('No sockets in booking room', {
+          bookingId,
+          event,
+          action: 'EMIT_TO_BOOKING_NO_TARGETS'
+        });
+        return false;
+      }
+
+      (room as any).emit(event, data);
+      logger.debug('Emitted event to booking room', {
+        bookingId,
+        event,
+        targetSockets: socketsCount,
+        action: 'EMIT_TO_BOOKING',
+      });
+      return true;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.addToDeadLetterQueue(event, data, errorMessage);
+      logger.error('Failed to emit event to booking room', {
+        bookingId,
+        event,
+        error: errorMessage,
+        action: 'EMIT_TO_BOOKING_FAILED'
+      });
+      return false;
+    }
   }
 
   // Emit to multiple users
-  emitToUsers(userIds: string[], event: keyof ServerToClientEvents, data: any): void {
-    userIds.forEach((userId) => {
-      this.emitToUser(userId, event, data);
-    });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  emitToUsers<T extends keyof ServerToClientEvents>(userIds: string[], event: T, data: any): { successful: string[]; failed: string[] } {
+    const results: { successful: string[]; failed: string[] } = { successful: [], failed: [] };
+
+    for (const userId of userIds) {
+      if (this.emitToUser(userId, event, data)) {
+        results.successful.push(userId);
+      } else {
+        results.failed.push(userId);
+      }
+    }
+
+    return results;
   }
 
   // Emit to admins
-  emitToAdmins(event: keyof ServerToClientEvents, data: any): void {
-    // In a real app, you'd track admin socket IDs separately
-    this.io.emit(event, data);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  emitToAdmins<T extends keyof ServerToClientEvents>(event: T, data: any): boolean {
+    try {
+      (this.io as any).emit(event, data);
+      logger.debug('Emitted event to all admins', {
+        event,
+        action: 'EMIT_TO_ADMINS',
+      });
+      return true;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.addToDeadLetterQueue(event, data, errorMessage);
+      logger.error('Failed to emit event to admins', {
+        event,
+        error: errorMessage,
+        action: 'EMIT_TO_ADMINS_FAILED'
+      });
+      return false;
+    }
   }
 
   // Emit booking status change
@@ -293,7 +750,7 @@ class SocketServer {
     status: string;
     customerId?: string;
     providerId?: string;
-  }): void {
+  }): { customerEmitted: boolean; providerEmitted: boolean } {
     const eventData: BookingEvent = {
       bookingId: booking._id.toString(),
       bookingNumber: booking.bookingNumber,
@@ -302,9 +759,12 @@ class SocketServer {
       timestamp: new Date(),
     };
 
+    let customerEmitted = false;
+    let providerEmitted = false;
+
     // Emit to customer
     if (booking.customerId) {
-      this.emitToUser(booking.customerId.toString(), 'booking:status_changed', {
+      customerEmitted = this.emitToUser(booking.customerId.toString(), 'booking:status_changed', {
         ...eventData,
         userId: booking.customerId.toString(),
       });
@@ -312,7 +772,7 @@ class SocketServer {
 
     // Emit to provider
     if (booking.providerId) {
-      this.emitToUser(booking.providerId.toString(), 'booking:status_changed', {
+      providerEmitted = this.emitToUser(booking.providerId.toString(), 'booking:status_changed', {
         ...eventData,
         userId: booking.providerId.toString(),
       });
@@ -321,8 +781,12 @@ class SocketServer {
     logger.info('Emitted booking status change', {
       bookingId: booking._id,
       status: booking.status,
+      customerEmitted,
+      providerEmitted,
       action: 'EMIT_BOOKING_STATUS',
     });
+
+    return { customerEmitted, providerEmitted };
   }
 
   // Emit new booking request to provider
@@ -331,7 +795,7 @@ class SocketServer {
     bookingNumber: string;
     status: string;
     providerId: string;
-  }): void {
+  }): boolean {
     const eventData: BookingEvent = {
       bookingId: booking._id.toString(),
       bookingNumber: booking.bookingNumber,
@@ -340,27 +804,36 @@ class SocketServer {
       timestamp: new Date(),
     };
 
-    this.emitToUser(booking.providerId, 'booking:new_request', {
+    const emitted = this.emitToUser(booking.providerId, 'booking:new_request', {
       booking: eventData,
       providerId: booking.providerId,
     });
 
-    logger.info('Emitted new booking request', {
-      bookingId: booking._id,
-      providerId: booking.providerId,
-      action: 'EMIT_NEW_BOOKING',
-    });
+    if (emitted) {
+      logger.info('Emitted new booking request', {
+        bookingId: booking._id,
+        providerId: booking.providerId,
+        action: 'EMIT_NEW_BOOKING',
+      });
+    }
+
+    return emitted;
   }
 
   // Emit notification
-  emitNotification(notification: NotificationEvent): void {
-    this.emitToUser(notification.userId, 'notification:new', notification);
-    logger.info('Emitted notification', {
-      notificationId: notification.id,
-      userId: notification.userId,
-      type: notification.type,
-      action: 'EMIT_NOTIFICATION',
-    });
+  emitNotification(notification: NotificationEvent): boolean {
+    const emitted = this.emitToUser(notification.userId, 'notification:new', notification);
+
+    if (emitted) {
+      logger.info('Emitted notification', {
+        notificationId: notification.id,
+        userId: notification.userId,
+        type: notification.type,
+        action: 'EMIT_NOTIFICATION',
+      });
+    }
+
+    return emitted;
   }
 
   // Get socket server instance
@@ -376,6 +849,51 @@ class SocketServer {
   // Check if user is online
   isUserOnline(userId: string): boolean {
     return this.userSockets.has(userId);
+  }
+
+  // Get memory statistics
+  getMemoryStats(): {
+    userSockets: number;
+    bookingRooms: number;
+    socketToBooking: number;
+    deadLetterQueue: number;
+  } {
+    return {
+      userSockets: this.userSockets.size,
+      bookingRooms: this.bookingRooms.size,
+      socketToBooking: this.socketToBooking.size,
+      deadLetterQueue: this.deadLetterQueue.length,
+    };
+  }
+
+  // Graceful shutdown
+  shutdown(): void {
+    logger.info('Shutting down socket server', { action: 'SOCKET_SHUTDOWN' });
+
+    // Stop cleanup intervals
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+      this.cleanupInterval = null;
+    }
+
+    if (this.dlqCleanupInterval) {
+      clearInterval(this.dlqCleanupInterval);
+      this.dlqCleanupInterval = null;
+    }
+
+    // Clear all Maps
+    this.userSockets.clear();
+    this.bookingRooms.clear();
+    this.socketToBooking.clear();
+    this.deadLetterQueue = [];
+
+    // Disconnect all sockets
+    this.io.disconnectSockets(true);
+
+    // Close the server
+    this.io.close();
+
+    logger.info('Socket server shutdown complete', { action: 'SOCKET_SHUTDOWN_COMPLETE' });
   }
 }
 

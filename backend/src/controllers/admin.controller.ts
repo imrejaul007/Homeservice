@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { PipelineStage } from 'mongoose';
 import ProviderProfile from '../models/providerProfile.model';
 import User from '../models/user.model';
 import Service from '../models/service.model';
@@ -7,10 +8,14 @@ import ServiceCategory from '../models/serviceCategory.model';
 import { asyncHandler } from '../utils/asyncHandler';
 import { ApiError } from '../utils/ApiError';
 import logger from '../utils/logger';
+import { getTenantContext, TenantContext } from '../utils/tenantFilter';
+import { sendProviderApproval, sendProviderRejection } from '../services/email.service';
+import crypto from 'crypto';
 
 /**
- * Generate a random secure password
+ * Generate a cryptographically secure random password
  * @returns A random password with 16 characters
+ * FIX: Uses crypto.randomBytes instead of Math.random() for security
  */
 const generateSecurePassword = (): string => {
   const length = 16;
@@ -20,30 +25,59 @@ const generateSecurePassword = (): string => {
   const special = '!@#$%^&*';
   const allChars = lowercase + uppercase + numbers + special;
 
+  // Use crypto.randomBytes for cryptographically secure random numbers
+  const randomBytes = crypto.randomBytes(32);
   let password = '';
-  // Ensure at least one of each type
-  password += lowercase[Math.floor(Math.random() * lowercase.length)];
-  password += uppercase[Math.floor(Math.random() * uppercase.length)];
-  password += numbers[Math.floor(Math.random() * numbers.length)];
-  password += special[Math.floor(Math.random() * special.length)];
+  let byteIndex = 0;
 
-  // Fill the rest randomly
-  for (let i = password.length; i < length; i++) {
-    password += allChars[Math.floor(Math.random() * allChars.length)];
+  // Ensure at least one of each required character type
+  const required = [
+    lowercase[randomBytes[byteIndex++] % lowercase.length],
+    uppercase[randomBytes[byteIndex++] % uppercase.length],
+    numbers[randomBytes[byteIndex++] % numbers.length],
+    special[randomBytes[byteIndex++] % special.length],
+  ];
+
+  // Fill the rest using remaining random bytes
+  for (let i = 0; i < length; i++) {
+    if (i < required.length) {
+      password += required[i];
+    } else {
+      password += allChars[randomBytes[byteIndex++] % allChars.length];
+    }
   }
 
-  // Shuffle the password
-  return password.split('').sort(() => Math.random() - 0.5).join('');
+  // Shuffle using Fisher-Yates with crypto random
+  const passwordArray = password.split('');
+  for (let i = passwordArray.length - 1; i > 0; i--) {
+    const j = randomBytes[byteIndex++] % (i + 1);
+    [passwordArray[i], passwordArray[j]] = [passwordArray[j], passwordArray[i]];
+  }
+
+  return passwordArray.join('');
 };
 
 /**
  * Get all pending providers for verification
  * GET /api/admin/providers/pending
+ * Hard page size limit added for security
  */
 export const getPendingProviders = asyncHandler(async (req: Request, res: Response) => {
-  const { page = 1, limit = 10, search } = req.query;
-  
+  // Extract tenant context for service calls
+  const tenantContext: TenantContext = getTenantContext(req);
+
+  // Enforce hard limits on pagination params
+  const page = Math.max(1, parseInt(req.query.page as string) || 1);
+  const limit = Math.min(50, Math.max(1, parseInt(req.query.limit as string) || 10));
+  const search = req.query.search as string | undefined;
+
+  // Build tenant-scoped query
   const query: any = { 'verificationStatus.overall': 'pending' };
+
+  // Add tenant filter for non-admin requests
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    query.tenantId = tenantContext.tenantId;
+  }
   
   if (search && typeof search === 'string') {
     query.$or = [
@@ -80,9 +114,17 @@ export const getPendingProviders = asyncHandler(async (req: Request, res: Respon
  * GET /api/admin/providers/:id
  */
 export const getProviderForVerification = asyncHandler(async (req: Request, res: Response) => {
+  // Extract tenant context for service calls
+  const tenantContext: TenantContext = getTenantContext(req);
   const { id } = req.params;
 
-  const provider = await ProviderProfile.findById(id)
+  // Build tenant-scoped query
+  const query: any = { _id: id };
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    query.tenantId = tenantContext.tenantId;
+  }
+
+  const provider = await ProviderProfile.findOne(query)
     .populate('userId', 'email role accountStatus createdAt lastLogin');
 
   if (!provider) {
@@ -100,11 +142,19 @@ export const getProviderForVerification = asyncHandler(async (req: Request, res:
  * POST /api/admin/providers/:id/approve
  */
 export const approveProvider = asyncHandler(async (req: Request, res: Response) => {
+  // Extract tenant context for service calls
+  const tenantContext: TenantContext = getTenantContext(req);
   const { id } = req.params;
   const { notes } = req.body;
   const adminUser = req.user as any;
 
-  const provider = await ProviderProfile.findById(id).populate('userId', 'email');
+  // Build tenant-scoped query
+  const query: any = { _id: id };
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    query.tenantId = tenantContext.tenantId;
+  }
+
+  const provider = await ProviderProfile.findOne(query).populate('userId', 'email');
 
   if (!provider) {
     throw new ApiError(404, 'Provider not found');
@@ -112,6 +162,25 @@ export const approveProvider = asyncHandler(async (req: Request, res: Response) 
 
   if (provider.verificationStatus.overall === 'approved') {
     throw new ApiError(400, 'Provider is already approved');
+  }
+
+  // SECURITY FIX: Validate required verification documents before approval
+  const requiredVerifications = ['identity', 'business', 'background'] as const;
+  const missingDocs = requiredVerifications.filter(
+    (v) => {
+      const status = provider.verificationStatus[v as keyof typeof provider.verificationStatus];
+      return status && (status as any).status !== 'approved';
+    }
+  );
+
+  if (missingDocs.length > 0) {
+    logger.warn('Provider approval blocked - missing verification documents', {
+      providerId: id,
+      missingVerifications: missingDocs,
+      currentStatus: provider.verificationStatus,
+      action: 'PROVIDER_APPROVAL_BLOCKED',
+    });
+    throw new ApiError(400, `Cannot approve: Missing ${missingDocs.join(', ')} verification documents. All required verifications must be approved first.`);
   }
 
   // Update provider verification status
@@ -135,8 +204,13 @@ export const approveProvider = asyncHandler(async (req: Request, res: Response) 
   // IMPORTANT: Create Service documents for each provider service
   // This makes them searchable in the Services collection
   if (provider.services && provider.services.length > 0) {
-    console.log(`Creating ${provider.services.length} service documents for ${provider.businessInfo.businessName}`);
-    
+    logger.info('Creating service documents for approved provider', {
+      action: 'ADMIN_PROVIDER_APPROVAL',
+      providerId: id,
+      businessName: provider.businessInfo.businessName,
+      serviceCount: provider.services.length
+    });
+
     for (const service of provider.services) {
       try {
         // Check if service already exists (avoid duplicates)
@@ -154,21 +228,21 @@ export const approveProvider = asyncHandler(async (req: Request, res: Response) 
             subcategory: service.subcategory,
             description: service.description,
             shortDescription: service.description.substring(0, 100),
-            
+
             price: {
               amount: service.price.amount,
               currency: service.price.currency || 'AED',
               type: service.price.type || 'fixed',
               discounts: service.price.discounts || []
             },
-            
+
             duration: service.duration,
             images: service.images || [],
             tags: service.tags || [],
             requirements: service.requirements || [],
             includedItems: service.includedItems || [],
             addOns: service.addOns || [],
-            
+
             // Location from provider
             location: {
               address: {
@@ -196,7 +270,7 @@ export const approveProvider = asyncHandler(async (req: Request, res: Response) 
                 perKmFee: 0
               }
             },
-            
+
             // Availability from provider
             availability: {
               schedule: provider.availability?.schedule || {
@@ -213,33 +287,34 @@ export const approveProvider = asyncHandler(async (req: Request, res: Response) 
               instantBooking: provider.businessInfo.instantBooking || false,
               advanceBookingDays: provider.businessInfo.advanceBookingDays || 30
             },
-            
+
             // Initial ratings
             rating: {
               average: 0,
               count: 0,
               distribution: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 }
             },
-            
+
             isActive: service.isActive !== false,
             isFeatured: false,
             isPopular: false
           });
 
           await newService.save();
-          console.log(`✅ Created service: ${service.name} (${service.category})`);
+          logger.debug('Service created', { serviceId: newService._id, serviceName: service.name });
         } else {
-          console.log(`⚠️ Service already exists: ${service.name}`);
+          logger.debug('Service already exists, skipping', { serviceName: service.name });
         }
       } catch (serviceError) {
-        console.error(`Error creating service ${service.name}:`, serviceError);
+        logger.error('Error creating service', {
+          serviceName: service.name,
+          providerId: id,
+          error: (serviceError as Error).message
+        });
         // Continue with other services even if one fails
       }
     }
   }
-
-  // TODO: Send approval email
-  console.log('Provider approved:', provider.businessInfo.businessName);
 
   // Audit logging for provider approval
   logger.info('ADMIN_AUDIT: Provider approved', {
@@ -251,6 +326,22 @@ export const approveProvider = asyncHandler(async (req: Request, res: Response) 
     businessName: provider.businessInfo.businessName,
     timestamp: new Date().toISOString()
   });
+
+  // Send approval notification email to provider (async, non-blocking)
+  const userEmail = (provider.userId as any)?.email;
+  const userFirstName = (provider.userId as any)?.firstName || provider.businessInfo.businessName;
+  if (userEmail) {
+    sendProviderApproval({
+      email: userEmail,
+      firstName: userFirstName,
+      businessName: provider.businessInfo.businessName
+    }).catch((err) => {
+      logger.error('Failed to send provider approval email', {
+        providerId: id,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    });
+  }
 
   res.json({
     success: true,
@@ -264,15 +355,23 @@ export const approveProvider = asyncHandler(async (req: Request, res: Response) 
  * POST /api/admin/providers/:id/reject
  */
 export const rejectProvider = asyncHandler(async (req: Request, res: Response) => {
+  // Extract tenant context for service calls
+  const tenantContext: TenantContext = getTenantContext(req);
   const { id } = req.params;
   const { reason, notes } = req.body;
   const adminUser = req.user as any;
+
+  // Build tenant-scoped query
+  const query: any = { _id: id };
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    query.tenantId = tenantContext.tenantId;
+  }
 
   if (!reason) {
     throw new ApiError(400, 'Rejection reason is required');
   }
 
-  const provider = await ProviderProfile.findById(id).populate('userId', 'email');
+  const provider = await ProviderProfile.findOne(query).populate('userId', 'email');
 
   if (!provider) {
     throw new ApiError(404, 'Provider not found');
@@ -300,9 +399,6 @@ export const rejectProvider = asyncHandler(async (req: Request, res: Response) =
     });
   }
 
-  // TODO: Send rejection email
-  console.log('Provider rejected:', provider.businessInfo.businessName, 'Reason:', reason);
-
   // Audit logging for provider rejection
   logger.info('ADMIN_AUDIT: Provider rejected', {
     action: 'PROVIDER_REJECTED',
@@ -315,6 +411,22 @@ export const rejectProvider = asyncHandler(async (req: Request, res: Response) =
     timestamp: new Date().toISOString()
   });
 
+  // Send rejection notification email to provider (async, non-blocking)
+  const userEmail = (provider.userId as any)?.email;
+  const userFirstName = (provider.userId as any)?.firstName || provider.businessInfo.businessName;
+  if (userEmail) {
+    sendProviderRejection({
+      email: userEmail,
+      firstName: userFirstName,
+      businessName: provider.businessInfo.businessName
+    }, reason).catch((err) => {
+      logger.error('Failed to send provider rejection email', {
+        providerId: id,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    });
+  }
+
   res.json({
     success: true,
     message: 'Provider rejected successfully',
@@ -326,12 +438,21 @@ export const rejectProvider = asyncHandler(async (req: Request, res: Response) =
  * Get verification statistics
  * GET /api/admin/providers/stats
  */
-export const getVerificationStats = asyncHandler(async (_req: Request, res: Response) => {
+export const getVerificationStats = asyncHandler(async (req: Request, res: Response) => {
+  // Extract tenant context for service calls
+  const tenantContext: TenantContext = getTenantContext(req);
+
+  // Build tenant-scoped query
+  const baseQuery: any = {};
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    baseQuery.tenantId = tenantContext.tenantId;
+  }
+
   const stats = await Promise.all([
-    ProviderProfile.countDocuments({ 'verificationStatus.overall': 'pending' }),
-    ProviderProfile.countDocuments({ 'verificationStatus.overall': 'approved' }),
-    ProviderProfile.countDocuments({ 'verificationStatus.overall': 'rejected' }),
-    ProviderProfile.countDocuments(),
+    ProviderProfile.countDocuments({ ...baseQuery, 'verificationStatus.overall': 'pending' }),
+    ProviderProfile.countDocuments({ ...baseQuery, 'verificationStatus.overall': 'approved' }),
+    ProviderProfile.countDocuments({ ...baseQuery, 'verificationStatus.overall': 'rejected' }),
+    ProviderProfile.countDocuments(baseQuery),
   ]);
 
   const [pending, approved, rejected, total] = stats;
@@ -523,11 +644,17 @@ export const createTestProvider = asyncHandler(async (req: Request, res: Respons
 /**
  * Get all services with filtering and pagination for admin
  * GET /api/admin/services
+ * Hard page size limit added for security
  */
 export const getAllServices = asyncHandler(async (req: Request, res: Response) => {
+  // Extract tenant context for service calls
+  const tenantContext: TenantContext = getTenantContext(req);
+
+  // Enforce hard limits on pagination params
+  const page = Math.max(1, parseInt(req.query.page as string) || 1);
+  const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
+
   const {
-    page = 1,
-    limit = 20,
     search,
     category,
     status,
@@ -538,6 +665,11 @@ export const getAllServices = asyncHandler(async (req: Request, res: Response) =
 
   // Build query
   const query: any = {};
+
+  // Add tenant filter for non-admin requests
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    query.tenantId = tenantContext.tenantId;
+  }
 
   if (search && typeof search === 'string') {
     query.$or = [
@@ -590,17 +722,29 @@ export const getAllServices = asyncHandler(async (req: Request, res: Response) =
 /**
  * Get services pending approval
  * GET /api/admin/services/pending
+ * Hard page size limit added for security
  */
 export const getPendingServices = asyncHandler(async (req: Request, res: Response) => {
-  const { page = 1, limit = 20 } = req.query;
+  // Extract tenant context for service calls
+  const tenantContext: TenantContext = getTenantContext(req);
 
-  const services = await Service.find({ status: 'pending_review' })
+  // Enforce hard limits on pagination params
+  const page = Math.max(1, parseInt(req.query.page as string) || 1);
+  const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
+
+  // Build tenant-scoped query
+  const query: any = { status: 'pending_review' };
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    query.tenantId = tenantContext.tenantId;
+  }
+
+  const services = await Service.find(query)
     .populate('providerId', 'firstName lastName email businessInfo.businessName')
     .sort({ createdAt: -1 })
     .skip((Number(page) - 1) * Number(limit))
     .limit(Number(limit));
 
-  const total = await Service.countDocuments({ status: 'pending_review' });
+  const total = await Service.countDocuments(query);
 
   res.json({
     success: true,
@@ -623,16 +767,24 @@ export const getPendingServices = asyncHandler(async (req: Request, res: Respons
  * PATCH /api/admin/services/:id/status
  */
 export const updateServiceStatus = asyncHandler(async (req: Request, res: Response) => {
+  // Extract tenant context for service calls
+  const tenantContext: TenantContext = getTenantContext(req);
   const { id } = req.params;
   const { status, reason, notes } = req.body;
 
-  // Validate status - FIX: Added 'rejected' to valid statuses
-  const validStatuses = ['active', 'inactive', 'pending_review', 'draft', 'rejected'];
+  // Validate status - aligned with Service model enum: 'draft', 'active', 'inactive', 'pending_review'
+  const validStatuses = ['active', 'inactive', 'pending_review', 'draft'];
   if (!validStatuses.includes(status)) {
     throw new ApiError(400, 'Invalid status');
   }
 
-  const service = await Service.findById(id)
+  // Build tenant-scoped query
+  const query: any = { _id: id };
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    query.tenantId = tenantContext.tenantId;
+  }
+
+  const service = await Service.findOne(query)
     .populate('providerId', 'firstName lastName email businessInfo.businessName');
 
   if (!service) {
@@ -665,7 +817,13 @@ export const updateServiceStatus = asyncHandler(async (req: Request, res: Respon
 
   await service.save();
 
-  console.log(`Service ${service.name} status updated to ${status} by admin`);
+  logger.info('ADMIN_AUDIT: Service status updated', {
+    action: 'SERVICE_STATUS_UPDATED',
+    serviceId: service._id,
+    serviceName: service.name,
+    newStatus: status,
+    adminId: (req.user as any)?._id
+  });
 
   res.json({
     success: true,
@@ -679,18 +837,32 @@ export const updateServiceStatus = asyncHandler(async (req: Request, res: Respon
  * DELETE /api/admin/services/:id
  */
 export const adminDeleteService = asyncHandler(async (req: Request, res: Response) => {
+  // Extract tenant context for service calls
+  const tenantContext: TenantContext = getTenantContext(req);
   const { id } = req.params;
   const { reason } = req.body;
 
-  const service = await Service.findById(id);
+  // Build tenant-scoped query
+  const query: any = { _id: id };
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    query.tenantId = tenantContext.tenantId;
+  }
+
+  const service = await Service.findOne(query);
 
   if (!service) {
     throw new ApiError(404, 'Service not found');
   }
 
-  await Service.findByIdAndDelete(id);
+  await Service.findOneAndDelete(query);
 
-  console.log(`Service ${service.name} deleted by admin. Reason: ${reason || 'No reason provided'}`);
+  logger.info('ADMIN_AUDIT: Service deleted', {
+    action: 'SERVICE_DELETED',
+    serviceId: id,
+    serviceName: service.name,
+    reason: reason || 'No reason provided',
+    adminId: (req.user as any)?._id
+  });
 
   res.json({
     success: true,
@@ -702,19 +874,29 @@ export const adminDeleteService = asyncHandler(async (req: Request, res: Respons
  * Get service analytics and statistics for admin
  * GET /api/admin/services/stats
  */
-export const getServiceStats = asyncHandler(async (_req: Request, res: Response) => {
+export const getServiceStats = asyncHandler(async (req: Request, res: Response) => {
+  // Extract tenant context for service calls
+  const tenantContext: TenantContext = getTenantContext(req);
+
+  // Build tenant-scoped query
+  const baseQuery: any = {};
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    baseQuery.tenantId = tenantContext.tenantId;
+  }
+
   const stats = await Promise.all([
-    Service.countDocuments(),
-    Service.countDocuments({ status: 'active' }),
-    Service.countDocuments({ status: 'inactive' }),
-    Service.countDocuments({ status: 'pending_review' }),
-    Service.countDocuments({ status: 'draft' }),
+    Service.countDocuments(baseQuery),
+    Service.countDocuments({ ...baseQuery, status: 'active' }),
+    Service.countDocuments({ ...baseQuery, status: 'inactive' }),
+    Service.countDocuments({ ...baseQuery, status: 'pending_review' }),
+    Service.countDocuments({ ...baseQuery, status: 'draft' }),
   ]);
 
   const [total, active, inactive, pendingReview, draft] = stats;
 
-  // Category distribution
-  const categoryStats = await Service.aggregate([
+  // Category distribution (with tenant filter for aggregation)
+  const categoryStatsPipeline: PipelineStage[] = [
+    { $match: baseQuery },
     {
       $group: {
         _id: '$category',
@@ -723,10 +905,11 @@ export const getServiceStats = asyncHandler(async (_req: Request, res: Response)
       }
     },
     { $sort: { count: -1 } }
-  ]);
+  ];
+  const categoryStats = await Service.aggregate(categoryStatsPipeline);
 
   // Recent activity
-  const recentServices = await Service.find()
+  const recentServices = await Service.find(baseQuery)
     .populate('providerId', 'firstName lastName businessInfo.businessName')
     .sort({ createdAt: -1 })
     .limit(10);
@@ -755,11 +938,17 @@ export const getServiceStats = asyncHandler(async (_req: Request, res: Response)
 /**
  * Get all users with filtering and pagination for admin
  * GET /api/admin/users
+ * Hard page size limit added for security
  */
 export const getAllUsers = asyncHandler(async (req: Request, res: Response) => {
+  // Extract tenant context for service calls
+  const tenantContext: TenantContext = getTenantContext(req);
+
+  // Enforce hard limits on pagination params
+  const page = Math.max(1, parseInt(req.query.page as string) || 1);
+  const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
+
   const {
-    page = 1,
-    limit = 20,
     search,
     role,
     status,
@@ -769,6 +958,11 @@ export const getAllUsers = asyncHandler(async (req: Request, res: Response) => {
 
   // Build query
   const query: any = {};
+
+  // Add tenant filter for non-admin requests
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    query.tenantId = tenantContext.tenantId;
+  }
 
   if (search && typeof search === 'string') {
     query.$or = [
@@ -819,6 +1013,8 @@ export const getAllUsers = asyncHandler(async (req: Request, res: Response) => {
  * PATCH /api/admin/users/:id/status
  */
 export const updateUserStatus = asyncHandler(async (req: Request, res: Response) => {
+  // Extract tenant context for service calls
+  const tenantContext: TenantContext = getTenantContext(req);
   const { id } = req.params;
   const { status } = req.body;
 
@@ -828,7 +1024,13 @@ export const updateUserStatus = asyncHandler(async (req: Request, res: Response)
     throw new ApiError(400, 'Invalid status');
   }
 
-  const user = await User.findById(id);
+  // Build tenant-scoped query
+  const query: any = { _id: id };
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    query.tenantId = tenantContext.tenantId;
+  }
+
+  const user = await User.findOne(query);
 
   if (!user) {
     throw new ApiError(404, 'User not found');
@@ -844,7 +1046,14 @@ export const updateUserStatus = asyncHandler(async (req: Request, res: Response)
 
   await user.save();
 
-  console.log(`User ${user.email} status updated to ${status} by admin`);
+  logger.info('ADMIN_AUDIT: User status updated', {
+    action: 'USER_STATUS_UPDATED',
+    userId: user._id,
+    userEmail: user.email,
+    previousStatus: user.accountStatus,
+    newStatus: status,
+    adminId: (req.user as any)?._id
+  });
 
   res.json({
     success: true,
@@ -865,10 +1074,18 @@ export const updateUserStatus = asyncHandler(async (req: Request, res: Response)
  * DELETE /api/admin/users/:id
  */
 export const adminDeleteUser = asyncHandler(async (req: Request, res: Response) => {
+  // Extract tenant context for service calls
+  const tenantContext: TenantContext = getTenantContext(req);
   const { id } = req.params;
   const { reason } = req.body;
 
-  const user = await User.findById(id);
+  // Build tenant-scoped query
+  const query: any = { _id: id };
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    query.tenantId = tenantContext.tenantId;
+  }
+
+  const user = await User.findOne(query);
 
   if (!user) {
     throw new ApiError(404, 'User not found');
@@ -879,15 +1096,30 @@ export const adminDeleteUser = asyncHandler(async (req: Request, res: Response) 
     throw new ApiError(400, 'Cannot delete your own account');
   }
 
-  // If user is a provider, also delete provider profile and services
+  // If user is a provider, also delete provider profile and services (with tenant filter)
   if (user.role === 'provider') {
-    await ProviderProfile.findOneAndDelete({ userId: user._id });
-    await Service.deleteMany({ providerId: user._id });
+    const profileQuery: any = { userId: user._id };
+    if (!tenantContext.isAdmin && tenantContext.tenantId) {
+      profileQuery.tenantId = tenantContext.tenantId;
+    }
+    await ProviderProfile.findOneAndDelete(profileQuery);
+    const serviceQuery: any = { providerId: user._id };
+    if (!tenantContext.isAdmin && tenantContext.tenantId) {
+      serviceQuery.tenantId = tenantContext.tenantId;
+    }
+    await Service.deleteMany(serviceQuery);
   }
 
-  await User.findByIdAndDelete(id);
+  await User.findOneAndDelete(query);
 
-  console.log(`User ${user.email} deleted by admin. Reason: ${reason || 'No reason provided'}`);
+  logger.info('ADMIN_AUDIT: User account deleted', {
+    action: 'USER_DELETED',
+    userId: user._id,
+    userEmail: user.email,
+    userRole: user.role,
+    reason: reason || 'No reason provided',
+    adminId: (req.user as any)?._id
+  });
 
   res.json({
     success: true,
@@ -899,21 +1131,30 @@ export const adminDeleteUser = asyncHandler(async (req: Request, res: Response) 
  * Get user statistics for admin dashboard
  * GET /api/admin/users/stats
  */
-export const getUserStats = asyncHandler(async (_req: Request, res: Response) => {
+export const getUserStats = asyncHandler(async (req: Request, res: Response) => {
+  // Extract tenant context for service calls
+  const tenantContext: TenantContext = getTenantContext(req);
+
+  // Build tenant-scoped query
+  const baseQuery: any = {};
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    baseQuery.tenantId = tenantContext.tenantId;
+  }
+
   const stats = await Promise.all([
-    User.countDocuments(),
-    User.countDocuments({ role: 'customer' }),
-    User.countDocuments({ role: 'provider' }),
-    User.countDocuments({ role: 'admin' }),
-    User.countDocuments({ accountStatus: 'active' }),
-    User.countDocuments({ accountStatus: 'suspended' }),
-    User.countDocuments({ accountStatus: 'banned' }),
+    User.countDocuments(baseQuery),
+    User.countDocuments({ ...baseQuery, role: 'customer' }),
+    User.countDocuments({ ...baseQuery, role: 'provider' }),
+    User.countDocuments({ ...baseQuery, role: 'admin' }),
+    User.countDocuments({ ...baseQuery, accountStatus: 'active' }),
+    User.countDocuments({ ...baseQuery, accountStatus: 'suspended' }),
+    User.countDocuments({ ...baseQuery, accountStatus: 'banned' }),
   ]);
 
   const [total, customers, providers, admins, active, suspended, banned] = stats;
 
   // Recent registrations
-  const recentUsers = await User.find()
+  const recentUsers = await User.find(baseQuery)
     .select('-password -refreshTokens')
     .sort({ createdAt: -1 })
     .limit(10);
@@ -943,11 +1184,23 @@ export const getUserStats = asyncHandler(async (_req: Request, res: Response) =>
 /**
  * Get providers with their services (hierarchical view)
  * GET /api/admin/providers-with-services
+ * Uses cursor-based pagination for efficiency with large datasets
  */
 export const getProvidersWithServices = asyncHandler(async (req: Request, res: Response) => {
-  const { page = 1, limit = 20, status, search } = req.query;
+  // Extract tenant context for service calls
+  const tenantContext: TenantContext = getTenantContext(req);
+
+  // Pagination params with hard limits
+  const page = Math.max(1, parseInt(req.query.page as string) || 1);
+  const limit = Math.min(50, Math.max(1, parseInt(req.query.limit as string) || 20));
+
+  const { status, search } = req.query;
 
   const query: any = {};
+  // Add tenant filter for non-admin requests
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    query.tenantId = tenantContext.tenantId;
+  }
   if (status && status !== 'all') {
     query['verificationStatus.overall'] = status;
   }
@@ -962,15 +1215,26 @@ export const getProvidersWithServices = asyncHandler(async (req: Request, res: R
   const ProviderProfile = require('../models/providerProfile.model').default;
   const Service = require('../models/service.model').default;
 
+  // Get total count for pagination metadata
+  const total = await ProviderProfile.countDocuments(query);
+
+  // Apply database-level pagination (skip/limit)
+  const skip = (page - 1) * limit;
   const providers = await ProviderProfile.find(query)
     .populate('userId', 'firstName lastName email accountStatus')
     .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(limit)
     .lean();
 
-  // Get services for each provider
+  // Get services for each paginated provider
   const providersWithServices = await Promise.all(
     providers.map(async (provider: any) => {
-      const services = await Service.find({ providerId: provider.userId._id })
+      const serviceQuery: any = { providerId: provider.userId._id };
+      if (!tenantContext.isAdmin && tenantContext.tenantId) {
+        serviceQuery.tenantId = tenantContext.tenantId;
+      }
+      const services = await Service.find(serviceQuery)
         .select('name category price status createdAt rating isActive')
         .sort({ createdAt: -1 })
         .lean();
@@ -982,19 +1246,19 @@ export const getProvidersWithServices = asyncHandler(async (req: Request, res: R
     })
   );
 
-  // Apply pagination
-  const skip = (Number(page) - 1) * Number(limit);
-  const paginatedProviders = providersWithServices.slice(skip, skip + Number(limit));
+  const totalPages = Math.ceil(total / limit);
 
   res.json({
     success: true,
     data: {
-      providers: paginatedProviders,
+      providers: providersWithServices,
       pagination: {
-        page: Number(page),
-        limit: Number(limit),
-        total: providersWithServices.length,
-        pages: Math.ceil(providersWithServices.length / Number(limit))
+        page,
+        limit,
+        total,
+        totalPages,
+        hasNextPage: page < totalPages,
+        hasPrevPage: page > 1
       }
     }
   });
@@ -1006,6 +1270,8 @@ export const getProvidersWithServices = asyncHandler(async (req: Request, res: R
  * POST /api/admin/services/batch-action
  */
 export const batchServiceAction = asyncHandler(async (req: Request, res: Response) => {
+  // Extract tenant context for service calls
+  const tenantContext: TenantContext = getTenantContext(req);
   const { serviceIds, action } = req.body; // action: 'approve' | 'reject'
 
   if (!serviceIds || !Array.isArray(serviceIds) || serviceIds.length === 0) {
@@ -1019,8 +1285,14 @@ export const batchServiceAction = asyncHandler(async (req: Request, res: Respons
   const Service = require('../models/service.model').default;
   const newStatus = action === 'approve' ? 'active' : 'rejected';
 
+  // Build tenant-scoped query
+  const query: any = { _id: { $in: serviceIds }, status: 'pending_review' };
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    query.tenantId = tenantContext.tenantId;
+  }
+
   const result = await Service.updateMany(
-    { _id: { $in: serviceIds }, status: 'pending_review' },
+    query,
     {
       status: newStatus,
       isActive: action === 'approve',
@@ -1045,12 +1317,20 @@ export const batchServiceAction = asyncHandler(async (req: Request, res: Respons
  * GET /api/admin/providers/:id/services
  */
 export const getProviderServices = asyncHandler(async (req: Request, res: Response) => {
+  // Extract tenant context for service calls
+  const tenantContext: TenantContext = getTenantContext(req);
   const { id } = req.params;
 
   const ProviderProfile = require('../models/providerProfile.model').default;
   const Service = require('../models/service.model').default;
 
-  const provider = await ProviderProfile.findById(id)
+  // Build tenant-scoped query
+  const providerQuery: any = { _id: id };
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    providerQuery.tenantId = tenantContext.tenantId;
+  }
+
+  const provider = await ProviderProfile.findOne(providerQuery)
     .populate('userId', 'firstName lastName email accountStatus')
     .lean();
 
@@ -1058,7 +1338,12 @@ export const getProviderServices = asyncHandler(async (req: Request, res: Respon
     throw new ApiError(404, 'Provider not found');
   }
 
-  const services = await Service.find({ providerId: provider.userId._id })
+  const serviceQuery: any = { providerId: provider.userId._id };
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    serviceQuery.tenantId = tenantContext.tenantId;
+  }
+
+  const services = await Service.find(serviceQuery)
     .sort({ createdAt: -1 })
     .lean();
 
@@ -1078,11 +1363,17 @@ export const getProviderServices = asyncHandler(async (req: Request, res: Respon
 /**
  * Get all bookings with filtering and pagination for admin
  * GET /api/admin/bookings
+ * Hard page size limit added for security
  */
 export const getAllBookings = asyncHandler(async (req: Request, res: Response) => {
+  // Extract tenant context for service calls
+  const tenantContext: TenantContext = getTenantContext(req);
+
+  // Enforce hard limits on pagination params
+  const page = Math.max(1, parseInt(req.query.page as string) || 1);
+  const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
+
   const {
-    page = 1,
-    limit = 20,
     search,
     status,
     provider,
@@ -1095,6 +1386,11 @@ export const getAllBookings = asyncHandler(async (req: Request, res: Response) =
 
   // Build query
   const query: any = {};
+
+  // Add tenant filter for non-admin requests
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    query.tenantId = tenantContext.tenantId;
+  }
 
   if (search && typeof search === 'string') {
     query.$or = [
@@ -1165,9 +1461,17 @@ export const getAllBookings = asyncHandler(async (req: Request, res: Response) =
  * GET /api/admin/bookings/:id
  */
 export const getBookingDetails = asyncHandler(async (req: Request, res: Response) => {
+  // Extract tenant context for service calls
+  const tenantContext: TenantContext = getTenantContext(req);
   const { id } = req.params;
 
-  const booking = await Booking.findById(id)
+  // Build tenant-scoped query
+  const query: any = { _id: id };
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    query.tenantId = tenantContext.tenantId;
+  }
+
+  const booking = await Booking.findOne(query)
     .populate('customerId', 'firstName lastName email phone')
     .populate('providerId', 'firstName lastName email')
     .populate('serviceId', 'name category description price');
@@ -1187,16 +1491,37 @@ export const getBookingDetails = asyncHandler(async (req: Request, res: Response
  * PATCH /api/admin/bookings/:id/status
  */
 export const updateBookingStatus = asyncHandler(async (req: Request, res: Response) => {
+  // Extract tenant context for service calls
+  const tenantContext: TenantContext = getTenantContext(req);
   const { id } = req.params;
   const { status, reason, notes } = req.body;
   const adminUser = req.user as any;
+
+  // SECURITY FIX: RBAC - Check admin permission for booking status overrides
+  const requiredPermission = 'booking:update:all';
+  if (adminUser.role !== 'admin') {
+    logger.warn('Unauthorized booking status update attempt', {
+      action: 'UNAUTHORIZED_BOOKING_UPDATE',
+      userId: adminUser._id,
+      userRole: adminUser.role,
+      bookingId: id,
+      attemptedPermission: requiredPermission,
+    });
+    throw new ApiError(403, `Permission denied. Required: ${requiredPermission}`);
+  }
 
   const validStatuses = ['pending', 'confirmed', 'in_progress', 'completed', 'cancelled', 'no_show'];
   if (!validStatuses.includes(status)) {
     throw new ApiError(400, 'Invalid status');
   }
 
-  const booking = await Booking.findById(id);
+  // Build tenant-scoped query
+  const query: any = { _id: id };
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    query.tenantId = tenantContext.tenantId;
+  }
+
+  const booking = await Booking.findOne(query);
 
   if (!booking) {
     throw new ApiError(404, 'Booking not found');
@@ -1223,17 +1548,20 @@ export const updateBookingStatus = asyncHandler(async (req: Request, res: Respon
 
   await booking.save();
 
-  // Audit logging
-  logger.info('ADMIN_AUDIT: Booking status updated', {
+  // SECURITY FIX: Enhanced audit logging for admin booking actions
+  logger.info('ADMIN_BOOKING_AUDIT: Booking status updated', {
     action: 'BOOKING_STATUS_UPDATED',
     adminId: adminUser._id,
     adminEmail: adminUser.email,
+    adminRole: adminUser.role,
     bookingId: id,
     bookingNumber: booking.bookingNumber,
     previousStatus,
     newStatus: status,
     reason,
-    timestamp: new Date().toISOString()
+    permissionUsed: requiredPermission,
+    timestamp: new Date().toISOString(),
+    type: 'ADMIN_BOOKING_ACTION'
   });
 
   res.json({
@@ -1247,14 +1575,24 @@ export const updateBookingStatus = asyncHandler(async (req: Request, res: Respon
  * Get booking statistics for admin dashboard
  * GET /api/admin/bookings/stats
  */
-export const getBookingStats = asyncHandler(async (_req: Request, res: Response) => {
+export const getBookingStats = asyncHandler(async (req: Request, res: Response) => {
+  // Extract tenant context for service calls
+  const tenantContext: TenantContext = getTenantContext(req);
+
   const now = new Date();
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const startOfWeek = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
+  // Build tenant-scoped base query
+  const baseQuery: any = {};
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    baseQuery.tenantId = tenantContext.tenantId;
+  }
+
   const [stats, todayCount, weekCount, monthCount, revenueStats] = await Promise.all([
     Booking.aggregate([
+      { $match: baseQuery },
       {
         $group: {
           _id: '$status',
@@ -1262,11 +1600,11 @@ export const getBookingStats = asyncHandler(async (_req: Request, res: Response)
         }
       }
     ]),
-    Booking.countDocuments({ scheduledDate: { $gte: startOfToday } }),
-    Booking.countDocuments({ scheduledDate: { $gte: startOfWeek } }),
-    Booking.countDocuments({ scheduledDate: { $gte: startOfMonth } }),
+    Booking.countDocuments({ ...baseQuery, scheduledDate: { $gte: startOfToday } }),
+    Booking.countDocuments({ ...baseQuery, scheduledDate: { $gte: startOfWeek } }),
+    Booking.countDocuments({ ...baseQuery, scheduledDate: { $gte: startOfMonth } }),
     Booking.aggregate([
-      { $match: { status: 'completed' } },
+      { $match: { ...baseQuery, status: 'completed' } },
       {
         $group: {
           _id: null,
@@ -1318,11 +1656,32 @@ export const getBookingStats = asyncHandler(async (_req: Request, res: Response)
  * POST /api/admin/bookings/:id/cancel
  */
 export const cancelBooking = asyncHandler(async (req: Request, res: Response) => {
+  // Extract tenant context for service calls
+  const tenantContext: TenantContext = getTenantContext(req);
   const { id } = req.params;
   const { reason, refundAmount } = req.body;
   const adminUser = req.user as any;
 
-  const booking = await Booking.findById(id);
+  // SECURITY FIX: RBAC - Check admin permission for booking cancellations
+  const requiredPermission = 'booking:update:all';
+  if (adminUser.role !== 'admin') {
+    logger.warn('Unauthorized booking cancellation attempt', {
+      action: 'UNAUTHORIZED_BOOKING_CANCEL',
+      userId: adminUser._id,
+      userRole: adminUser.role,
+      bookingId: id,
+      attemptedPermission: requiredPermission,
+    });
+    throw new ApiError(403, `Permission denied. Required: ${requiredPermission}`);
+  }
+
+  // Build tenant-scoped query
+  const query: any = { _id: id };
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    query.tenantId = tenantContext.tenantId;
+  }
+
+  const booking = await Booking.findOne(query);
 
   if (!booking) {
     throw new ApiError(404, 'Booking not found');
@@ -1352,16 +1711,19 @@ export const cancelBooking = asyncHandler(async (req: Request, res: Response) =>
 
   await booking.save();
 
-  // Audit logging
-  logger.info('ADMIN_AUDIT: Booking cancelled', {
+  // SECURITY FIX: Enhanced audit logging for admin booking cancellations
+  logger.info('ADMIN_BOOKING_AUDIT: Booking cancelled', {
     action: 'BOOKING_CANCELLED',
     adminId: adminUser._id,
     adminEmail: adminUser.email,
+    adminRole: adminUser.role,
     bookingId: id,
     bookingNumber: booking.bookingNumber,
     reason,
     refundAmount: refundAmount || 0,
-    timestamp: new Date().toISOString()
+    permissionUsed: requiredPermission,
+    timestamp: new Date().toISOString(),
+    type: 'ADMIN_BOOKING_ACTION'
   });
 
   res.json({
@@ -1378,11 +1740,17 @@ export const cancelBooking = asyncHandler(async (req: Request, res: Response) =>
 /**
  * Get all service categories for admin
  * GET /api/admin/categories
+ * Hard page size limit added for security
  */
 export const getAllCategories = asyncHandler(async (req: Request, res: Response) => {
+  // Extract tenant context for service calls
+  const tenantContext: TenantContext = getTenantContext(req);
+
+  // Enforce hard limits on pagination params
+  const page = Math.max(1, parseInt(req.query.page as string) || 1);
+  const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
+
   const {
-    page = 1,
-    limit = 20,
     search,
     isActive,
     isFeatured,
@@ -1392,6 +1760,11 @@ export const getAllCategories = asyncHandler(async (req: Request, res: Response)
 
   // Build query
   const query: any = {};
+
+  // Add tenant filter for non-admin requests
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    query.tenantId = tenantContext.tenantId;
+  }
 
   if (search && typeof search === 'string') {
     query.$or = [
@@ -1440,9 +1813,17 @@ export const getAllCategories = asyncHandler(async (req: Request, res: Response)
  * GET /api/admin/categories/:id
  */
 export const getCategoryDetails = asyncHandler(async (req: Request, res: Response) => {
+  // Extract tenant context for service calls
+  const tenantContext: TenantContext = getTenantContext(req);
   const { id } = req.params;
 
-  const category = await ServiceCategory.findById(id);
+  // Build tenant-scoped query
+  const query: any = { _id: id };
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    query.tenantId = tenantContext.tenantId;
+  }
+
+  const category = await ServiceCategory.findOne(query);
 
   if (!category) {
     throw new ApiError(404, 'Category not found');
@@ -1459,14 +1840,18 @@ export const getCategoryDetails = asyncHandler(async (req: Request, res: Respons
  * POST /api/admin/categories
  */
 export const createCategory = asyncHandler(async (req: Request, res: Response) => {
+  // Extract tenant context for service calls
+  const tenantContext: TenantContext = getTenantContext(req);
   const { name, description, icon, color, imageUrl, subcategories, isActive, isFeatured, sortOrder } = req.body;
   const adminUser = req.user as any;
 
-  // Check if category with same name or slug exists
+  // Check if category with same name or slug exists (scoped to tenant)
   const slug = name.toLowerCase().trim().replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, '-');
-  const existing = await ServiceCategory.findOne({
-    $or: [{ name }, { slug }]
-  });
+  const existingQuery: any = { $or: [{ name }, { slug }] };
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    existingQuery.tenantId = tenantContext.tenantId;
+  }
+  const existing = await ServiceCategory.findOne(existingQuery);
 
   if (existing) {
     throw new ApiError(400, 'Category with this name already exists');
@@ -1484,7 +1869,8 @@ export const createCategory = asyncHandler(async (req: Request, res: Response) =
     isFeatured: isFeatured || false,
     sortOrder: sortOrder || 0,
     createdBy: adminUser._id,
-    updatedBy: adminUser._id
+    updatedBy: adminUser._id,
+    tenantId: tenantContext.tenantId
   });
 
   await category.save();
@@ -1511,11 +1897,19 @@ export const createCategory = asyncHandler(async (req: Request, res: Response) =
  * PATCH /api/admin/categories/:id
  */
 export const updateCategory = asyncHandler(async (req: Request, res: Response) => {
+  // Extract tenant context for service calls
+  const tenantContext: TenantContext = getTenantContext(req);
   const { id } = req.params;
   const updates = req.body;
   const adminUser = req.user as any;
 
-  const category = await ServiceCategory.findById(id);
+  // Build tenant-scoped query
+  const query: any = { _id: id };
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    query.tenantId = tenantContext.tenantId;
+  }
+
+  const category = await ServiceCategory.findOne(query);
 
   if (!category) {
     throw new ApiError(404, 'Category not found');
@@ -1525,8 +1919,12 @@ export const updateCategory = asyncHandler(async (req: Request, res: Response) =
   if (updates.name && updates.name !== category.name) {
     updates.slug = updates.name.toLowerCase().trim().replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, '-');
 
-    // Check if new slug conflicts
-    const existing = await ServiceCategory.findOne({ slug: updates.slug, _id: { $ne: id } });
+    // Check if new slug conflicts (scoped to tenant)
+    const existingQuery: any = { slug: updates.slug, _id: { $ne: id } };
+    if (!tenantContext.isAdmin && tenantContext.tenantId) {
+      existingQuery.tenantId = tenantContext.tenantId;
+    }
+    const existing = await ServiceCategory.findOne(existingQuery);
     if (existing) {
       throw new ApiError(400, 'Category with this name already exists');
     }
@@ -1563,23 +1961,35 @@ export const updateCategory = asyncHandler(async (req: Request, res: Response) =
  * DELETE /api/admin/categories/:id
  */
 export const deleteCategory = asyncHandler(async (req: Request, res: Response) => {
+  // Extract tenant context for service calls
+  const tenantContext: TenantContext = getTenantContext(req);
   const { id } = req.params;
   const { reason } = req.body;
   const adminUser = req.user as any;
 
-  const category = await ServiceCategory.findById(id);
+  // Build tenant-scoped query
+  const query: any = { _id: id };
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    query.tenantId = tenantContext.tenantId;
+  }
+
+  const category = await ServiceCategory.findOne(query);
 
   if (!category) {
     throw new ApiError(404, 'Category not found');
   }
 
-  // Check if category has active services
-  const serviceCount = await Service.countDocuments({ category: category.name });
+  // Check if category has active services (scoped to tenant)
+  const serviceQuery: any = { category: category.name };
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    serviceQuery.tenantId = tenantContext.tenantId;
+  }
+  const serviceCount = await Service.countDocuments(serviceQuery);
   if (serviceCount > 0) {
     throw new ApiError(400, `Cannot delete category with ${serviceCount} active services. Remove or reassign services first.`);
   }
 
-  await ServiceCategory.findByIdAndDelete(id);
+  await ServiceCategory.findOneAndDelete(query);
 
   // Audit logging
   logger.info('ADMIN_AUDIT: Category deleted', {
@@ -1603,10 +2013,18 @@ export const deleteCategory = asyncHandler(async (req: Request, res: Response) =
  * POST /api/admin/categories/:id/featured
  */
 export const toggleCategoryFeatured = asyncHandler(async (req: Request, res: Response) => {
+  // Extract tenant context for service calls
+  const tenantContext: TenantContext = getTenantContext(req);
   const { id } = req.params;
   const adminUser = req.user as any;
 
-  const category = await ServiceCategory.findById(id);
+  // Build tenant-scoped query
+  const query: any = { _id: id };
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    query.tenantId = tenantContext.tenantId;
+  }
+
+  const category = await ServiceCategory.findOne(query);
 
   if (!category) {
     throw new ApiError(404, 'Category not found');
@@ -1639,11 +2057,19 @@ export const toggleCategoryFeatured = asyncHandler(async (req: Request, res: Res
  * POST /api/admin/categories/:id/subcategories
  */
 export const addSubcategory = asyncHandler(async (req: Request, res: Response) => {
+  // Extract tenant context for service calls
+  const tenantContext: TenantContext = getTenantContext(req);
   const { id } = req.params;
   const { name, description, icon, color, imageUrl } = req.body;
   const adminUser = req.user as any;
 
-  const category = await ServiceCategory.findById(id);
+  // Build tenant-scoped query
+  const query: any = { _id: id };
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    query.tenantId = tenantContext.tenantId;
+  }
+
+  const category = await ServiceCategory.findOne(query);
 
   if (!category) {
     throw new ApiError(404, 'Category not found');

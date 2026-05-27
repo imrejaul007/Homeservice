@@ -100,7 +100,10 @@ export const uploadFileToCloudinary = async (
 ): Promise<{ publicId: string; url: string; secureUrl: string }> => {
   const result = await cloudinary.uploader.upload(filePath, {
     folder: `nilin/${folder}`,
-    resource_type: 'auto',
+    resource_type: 'image',
+    format: 'webp',
+    quality: 'auto',
+    fetch_format: 'auto',
   });
 
   return {
@@ -149,5 +152,42 @@ export const uploadAvatar = multer({
     }
   },
 });
+
+// Portfolio upload configuration
+export const uploadPortfolio = multer({
+  storage: createCloudinaryStorage('portfolio'),
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB limit for portfolio images
+  },
+  fileFilter: (_req, file, cb) => {
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only JPEG, PNG, and WebP images are allowed'));
+    }
+  },
+});
+
+// Portfolio upload configuration for multiple images
+const multerPortfolioUpload = multer({
+  storage: createCloudinaryStorage('portfolio'),
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB per image
+    files: 5, // Max 5 images at once
+  },
+  fileFilter: (_req, file, cb) => {
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only JPEG, PNG, and WebP images are allowed'));
+    }
+  },
+});
+
+// Export as both single upload and array upload
+export const uploadPortfolioMultiple = multerPortfolioUpload.array('images', 5);
+export const uploadPortfolioSingle = multerPortfolioUpload.single('image');
 
 export default cloudinary;
