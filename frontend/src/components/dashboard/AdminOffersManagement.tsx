@@ -148,10 +148,15 @@ const AdminOffersManagement: React.FC = () => {
   const loadOffers = async () => {
     setIsLoading(true);
     try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (tokens?.accessToken) {
+        headers['Authorization'] = `Bearer ${tokens.accessToken}`;
+      }
+
       const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:5000/api'}/offers/admin/all`, {
-        headers: {
-          'Authorization': `Bearer ${tokens?.accessToken || ''}`,
-        },
+        headers,
       });
       const data = await response.json();
       if (data.success) {
@@ -170,16 +175,20 @@ const AdminOffersManagement: React.FC = () => {
     setIsSaving(true);
 
     try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (tokens?.accessToken) {
+        headers['Authorization'] = `Bearer ${tokens.accessToken}`;
+      }
+
       const url = editingOffer
         ? `${import.meta.env.VITE_API_URL || 'http://localhost:5000/api'}/offers/admin/${editingOffer._id}`
         : `${import.meta.env.VITE_API_URL || 'http://localhost:5000/api'}/offers/admin`;
 
       const response = await fetch(url, {
         method: editingOffer ? 'PUT' : 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${tokens?.accessToken || ''}`,
-        },
+        headers,
         body: JSON.stringify(formData),
       });
 
@@ -228,11 +237,14 @@ const AdminOffersManagement: React.FC = () => {
     if (!confirm('Are you sure you want to delete this offer?')) return;
 
     try {
+      const headers: Record<string, string> = {};
+      if (tokens?.accessToken) {
+        headers['Authorization'] = `Bearer ${tokens.accessToken}`;
+      }
+
       const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:5000/api'}/offers/admin/${offerId}`, {
         method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${tokens?.accessToken || ''}`,
-        },
+        headers,
       });
 
       const data = await response.json();
@@ -250,12 +262,16 @@ const AdminOffersManagement: React.FC = () => {
 
   const handleToggleActive = async (offer: Offer) => {
     try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (tokens?.accessToken) {
+        headers['Authorization'] = `Bearer ${tokens.accessToken}`;
+      }
+
       const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:5000/api'}/offers/admin/${offer._id}`, {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${tokens?.accessToken || ''}`,
-        },
+        headers,
         body: JSON.stringify({ isActive: !offer.isActive }),
       });
 

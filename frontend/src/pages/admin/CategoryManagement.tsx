@@ -82,10 +82,13 @@ const SubcategoryModal: React.FC<{
   const loadSubcategories = async () => {
     setLoading(true);
     try {
+      const headers: Record<string, string> = {};
+      if (tokens?.accessToken) {
+        headers['Authorization'] = `Bearer ${tokens.accessToken}`;
+      }
+
       const response = await fetch(`${API_URL}/categories/${category.slug}/subcategories`, {
-        headers: {
-          Authorization: `Bearer ${tokens.accessToken || ''}`,
-        },
+        headers,
       });
       const data = await response.json();
       if (data.success) {
