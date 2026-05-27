@@ -2629,6 +2629,187 @@ export const moderateReview = asyncHandler(async (req: Request, res: Response) =
 });
 
 // ============================================
+// Admin Review Management
+// ============================================
+
+/**
+ * Get review statistics for admin dashboard
+ * GET /api/admin/reviews/stats
+ */
+export const getReviewStats = asyncHandler(async (req: Request, res: Response) => {
+  const tenantContext: TenantContext = getTenantContext(req);
+
+  // Build tenant-scoped base query
+  const baseQuery: any = {};
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    baseQuery.tenantId = tenantContext.tenantId;
+  }
+
+  const [total, pending, approved, rejected, hidden, flagged] = await Promise.all([
+    Review.countDocuments(baseQuery),
+    Review.countDocuments({ ...baseQuery, moderationStatus: 'pending' }),
+    Review.countDocuments({ ...baseQuery, moderationStatus: 'approved' }),
+    Review.countDocuments({ ...baseQuery, moderationStatus: 'rejected' }),
+    Review.countDocuments({ ...baseQuery, moderationStatus: 'hidden' }),
+    Review.countDocuments({ ...baseQuery, reportCount: { $gt: 0 } }),
+  ]);
+
+  // Get average rating stats
+  const ratingStats = await Review.aggregate([
+    { $match: { ...baseQuery, moderationStatus: 'approved' } },
+    {
+      $group: {
+        _id: null,
+        avgRating: { $avg: '$rating' },
+        totalRatings: { $sum: 1 },
+        rating5: { $sum: { $cond: [{ $eq: ['$rating', 5] }, 1, 0] } },
+        rating4: { $sum: { $cond: [{ $eq: ['$rating', 4] }, 1, 0] } },
+        rating3: { $sum: { $cond: [{ $eq: ['$rating', 3] }, 1, 0] } },
+        rating2: { $sum: { $cond: [{ $eq: ['$rating', 2] }, 1, 0] } },
+        rating1: { $sum: { $cond: [{ $eq: ['$rating', 1] }, 1, 0] } },
+      }
+    }
+  ]);
+
+  res.json({
+    success: true,
+    data: {
+      total,
+      pending,
+      approved,
+      rejected,
+      hidden,
+      flagged,
+      rating: ratingStats[0] ? {
+        average: Math.round((ratingStats[0].avgRating || 0) * 10) / 10,
+        distribution: {
+          5: ratingStats[0].rating5,
+          4: ratingStats[0].rating4,
+          3: ratingStats[0].rating3,
+          2: ratingStats[0].rating2,
+          1: ratingStats[0].rating1,
+        }
+      } : {
+        average: 0,
+        distribution: { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 }
+      }
+    }
+  });
+});
+
+/**
+ * Get all reviews with filters and pagination for admin
+ * GET /api/admin/reviews
+ */
+export const getAllReviews = asyncHandler(async (req: Request, res: Response) => {
+  const tenantContext: TenantContext = getTenantContext(req);
+
+  // Enforce hard limits on pagination params
+  const page = Math.max(1, parseInt(req.query.page as string) || 1);
+  const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
+
+  const {
+    status,
+    search,
+    rating,
+    minRating,
+    maxRating,
+    provider,
+    customer,
+    hasPhotos,
+    isFlagged,
+    sortBy = 'createdAt',
+    order = 'desc'
+  } = req.query;
+
+  // Build query
+  const query: any = {};
+
+  // Add tenant filter for non-admin requests
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    query.tenantId = tenantContext.tenantId;
+  }
+
+  // Filter by moderation status
+  if (status && typeof status === 'string') {
+    if (status === 'flagged') {
+      query.reportCount = { $gt: 0 };
+    } else {
+      query.moderationStatus = status;
+    }
+  }
+
+  // Search by review content
+  if (search && typeof search === 'string') {
+    query.$or = [
+      { comment: { $regex: search, $options: 'i' } },
+      { title: { $regex: search, $options: 'i' } }
+    ];
+  }
+
+  // Filter by rating
+  if (rating && typeof rating === 'string') {
+    query.rating = parseInt(rating);
+  }
+  if (minRating || maxRating) {
+    query.rating = {};
+    if (minRating) (query.rating as any).$gte = parseInt(minRating as string);
+    if (maxRating) (query.rating as any).$lte = parseInt(maxRating as string);
+  }
+
+  // Filter by provider (reviewee)
+  if (provider && typeof provider === 'string') {
+    query.revieweeId = provider;
+  }
+
+  // Filter by customer (reviewer)
+  if (customer && typeof customer === 'string') {
+    query.reviewerId = customer;
+  }
+
+  // Filter by photo presence
+  if (hasPhotos === 'true') {
+    query.photos = { $exists: true, $ne: [] };
+  } else if (hasPhotos === 'false') {
+    query.photos = { $size: 0 };
+  }
+
+  // Filter by flag status
+  if (isFlagged === 'true') {
+    query.reportCount = { $gt: 0 };
+  }
+
+  // Sort options
+  const sortOptions: any = {};
+  sortOptions[sortBy as string] = order === 'desc' ? -1 : 1;
+
+  const reviews = await Review.find(query)
+    .populate('reviewerId', 'firstName lastName email avatar')
+    .populate('revieweeId', 'firstName lastName email businessInfo.businessName')
+    .populate('bookingId', 'bookingNumber scheduledDate serviceId')
+    .sort(sortOptions)
+    .skip((Number(page) - 1) * Number(limit))
+    .limit(Number(limit));
+
+  const total = await Review.countDocuments(query);
+
+  res.json({
+    success: true,
+    data: {
+      reviews,
+      pagination: {
+        page: Number(page),
+        limit: Number(limit),
+        total,
+        pages: Math.ceil(total / Number(limit)),
+        hasNext: Number(page) * Number(limit) < total,
+        hasPrev: Number(page) > 1
+      }
+    }
+  });
+});
+
+// ============================================
 // Withdrawal Management
 // ============================================
 
@@ -3289,6 +3470,8 @@ export default {
   addSubcategory,
   getCategoryStats,
   // Review Moderation
+  getReviewStats,
+  getAllReviews,
   getPendingReviews,
   getFlaggedReviews,
   moderateReview,

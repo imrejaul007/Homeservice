@@ -35,6 +35,8 @@ import {
   addSubcategory,
   getCategoryStats,
   // Review Moderation
+  getReviewStats,
+  getAllReviews,
   getPendingReviews,
   getFlaggedReviews,
   moderateReview,
@@ -248,6 +250,12 @@ router.put('/maintenance', asyncHandler(async (req: Request, res: Response) => {
 // ========================================
 // Review Moderation Routes
 // ========================================
+
+// GET /api/admin/reviews - List all reviews with filters
+router.get('/reviews', getAllReviews);
+
+// GET /api/admin/reviews/stats - Get review statistics
+router.get('/reviews/stats', getReviewStats);
 
 router.get('/reviews/pending', getPendingReviews);
 router.get('/reviews/flagged', getFlaggedReviews);

@@ -31,6 +31,7 @@ import { walletApi } from '../../services/walletApi';
 import type { Wallet as WalletType, WalletTransaction, EarningsSummary } from '../../services/walletApi';
 import { socketService } from '../../services/socket';
 import { formatPrice } from '../../utils/currency';
+import { EmptyState } from '../../components/common/EmptyState';
 
 interface Transaction {
   id: string;
@@ -588,7 +589,7 @@ const ProviderEarningsPage: React.FC = () => {
               <h3 className="text-sm font-medium text-nilin-warmGray mb-4">Earnings Goal</h3>
               <div className="mb-2">
                 <div className="flex justify-between text-sm mb-1">
-                  <span className="text-nilin-charcoal">Monthly Target: {wallet?.currency || 'AED'} 5,000</span>
+                  <span className="text-nilin-charcoal">Monthly Target: {formatPrice(5000, wallet?.currency)}</span>
                   <span className="text-nilin-warmGray">
                     {monthlySummary ? `${((monthlySummary.earnings / 5000) * 100).toFixed(0)}%` : '0%'}
                   </span>
@@ -602,7 +603,7 @@ const ProviderEarningsPage: React.FC = () => {
               </div>
               <p className="text-sm text-nilin-warmGray">
                 {monthlySummary
-                  ? `${(wallet?.currency || 'AED')} ${(5000 - monthlySummary.earnings).toLocaleString()} more to reach your goal`
+                  ? `${formatPrice(5000 - monthlySummary.earnings, wallet?.currency)} more to reach your goal`
                   : 'Set your monthly earnings goal'}
               </p>
             </div>
@@ -637,13 +638,12 @@ const ProviderEarningsPage: React.FC = () => {
             </div>
 
             {filteredTransactions.length === 0 ? (
-              <div className="text-center py-12">
-                <Wallet className="h-12 w-12 text-nilin-warmGray mx-auto mb-4" />
-                <p className="text-nilin-warmGray">No transactions found</p>
-                <p className="text-sm text-nilin-warmGray mt-1">
-                  {filter !== 'all' ? 'Try changing the filter' : 'Your transactions will appear here'}
-                </p>
-              </div>
+              <EmptyState
+                icon={<Wallet className="h-8 w-8" />}
+                title="No transactions found"
+                description={filter !== 'all' ? 'Try changing the filter' : 'Your transactions will appear here'}
+                compact
+              />
             ) : (
               <>
                 <div className="space-y-4">
@@ -686,7 +686,7 @@ const ProviderEarningsPage: React.FC = () => {
                         <p className={`font-semibold ${
                           transaction.amount > 0 ? 'text-green-600' : 'text-nilin-charcoal'
                         }`}>
-                          {transaction.amount > 0 ? '+' : ''}{wallet?.currency || 'AED'}{Math.abs(transaction.amount).toLocaleString()}
+                          {transaction.amount > 0 ? '+' : ''}{formatPrice(Math.abs(transaction.amount), wallet?.currency)}
                         </p>
                         {getStatusBadge(transaction.status)}
                       </div>
@@ -760,7 +760,7 @@ const ProviderEarningsPage: React.FC = () => {
                 <div className="mb-6">
                   <p className="text-sm text-nilin-warmGray mb-2">Available Balance</p>
                   <p className="text-2xl font-bold text-nilin-charcoal">
-                    {wallet?.currency || 'AED'} {availableBalance.toLocaleString()}
+                    {formatPrice(availableBalance, wallet?.currency)}
                   </p>
                 </div>
 
@@ -795,7 +795,7 @@ const ProviderEarningsPage: React.FC = () => {
                         disabled={amount > availableBalance}
                         className="px-3 py-2 rounded-nilin border border-nilin-border text-sm font-medium text-nilin-charcoal hover:bg-nilin-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        {wallet?.currency || 'AED'} {amount}
+                        {formatPrice(amount, wallet?.currency)}
                       </button>
                     ))}
                     <button

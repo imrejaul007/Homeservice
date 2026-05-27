@@ -51,8 +51,6 @@ const PayoutManagement: React.FC<PayoutManagementProps> = () => {
     limit: 20,
     total: 0,
     pages: 0,
-    hasMore: false,
-    hasPrev: false,
   });
 
   // Filters
@@ -550,7 +548,7 @@ const PayoutManagement: React.FC<PayoutManagementProps> = () => {
               <div className="flex items-center space-x-2">
                 <button
                   onClick={() => handlePageChange(pagination.page - 1)}
-                  disabled={!pagination.hasPrev}
+                  disabled={pagination.page <= 1}
                   className="px-3 py-1 border border-gray-300 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
                 >
                   Previous
@@ -560,7 +558,7 @@ const PayoutManagement: React.FC<PayoutManagementProps> = () => {
                 </span>
                 <button
                   onClick={() => handlePageChange(pagination.page + 1)}
-                  disabled={!pagination.hasMore}
+                  disabled={pagination.page >= pagination.pages}
                   className="px-3 py-1 border border-gray-300 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
                 >
                   Next
@@ -787,26 +785,26 @@ const PayoutManagement: React.FC<PayoutManagementProps> = () => {
                         <div className="flex items-center justify-between">
                           <span className="text-sm text-gray-500">Bank</span>
                           <span className="text-sm text-gray-900">
-                            {detailData.transaction.metadata.bankAccount.bankName}
+                            {(detailData.transaction.metadata as { bankAccount: { bankName: string; accountHolder: string; accountNumber: string; iban?: string } }).bankAccount.bankName}
                           </span>
                         </div>
                         <div className="flex items-center justify-between">
                           <span className="text-sm text-gray-500">Account Holder</span>
                           <span className="text-sm text-gray-900">
-                            {detailData.transaction.metadata.bankAccount.accountHolder}
+                            {(detailData.transaction.metadata as { bankAccount: { bankName: string; accountHolder: string; accountNumber: string; iban?: string } }).bankAccount.accountHolder}
                           </span>
                         </div>
                         <div className="flex items-center justify-between">
                           <span className="text-sm text-gray-500">Account Number</span>
                           <span className="text-sm text-gray-900 font-mono">
-                            {detailData.transaction.metadata.bankAccount.accountNumber}
+                            {(detailData.transaction.metadata as { bankAccount: { bankName: string; accountHolder: string; accountNumber: string; iban?: string } }).bankAccount.accountNumber}
                           </span>
                         </div>
-                        {detailData.transaction.metadata.bankAccount.iban && (
+                        {(detailData.transaction.metadata as { bankAccount: { bankName: string; accountHolder: string; accountNumber: string; iban?: string } }).bankAccount.iban && (
                           <div className="flex items-center justify-between">
                             <span className="text-sm text-gray-500">IBAN</span>
                             <span className="text-sm text-gray-900 font-mono">
-                              {detailData.transaction.metadata.bankAccount.iban}
+                              {(detailData.transaction.metadata as { bankAccount: { bankName: string; accountHolder: string; accountNumber: string; iban?: string } }).bankAccount.iban}
                             </span>
                           </div>
                         )}
@@ -847,12 +845,12 @@ const PayoutManagement: React.FC<PayoutManagementProps> = () => {
                       </h4>
                       <div className="bg-red-50 border border-red-200 rounded-lg p-4">
                         <p className="text-sm text-red-800">
-                          {detailData.transaction.metadata.rejectionReason}
+                          {(detailData.transaction.metadata as { rejectionReason?: string; rejectedAt?: string }).rejectionReason}
                         </p>
                         <p className="text-xs text-red-600 mt-2">
                           Rejected on{' '}
-                          {detailData.transaction.metadata.rejectedAt &&
-                            formatDate(detailData.transaction.metadata.rejectedAt)}
+                          {(detailData.transaction.metadata as { rejectionReason?: string; rejectedAt?: string }).rejectedAt &&
+                            formatDate((detailData.transaction.metadata as { rejectionReason?: string; rejectedAt?: string }).rejectedAt!)}
                         </p>
                       </div>
                     </div>
