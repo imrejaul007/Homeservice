@@ -22,6 +22,7 @@ import NavigationHeader from '../../components/layout/NavigationHeader';
 import Footer from '../../components/layout/Footer';
 import Breadcrumb from '../../components/common/Breadcrumb';
 import { useAuthStore } from '../../stores/authStore';
+import { useToastActions } from '../../components/common/Toast';
 import { api } from '../../services/api';
 import {
   serviceAreasToStrings,
@@ -96,6 +97,7 @@ function buildProfileFormData(
 const ProviderProfilePage: React.FC = () => {
   const navigate = useNavigate();
   const { user, providerProfile } = useAuthStore();
+  const toast = useToastActions();
 
   // Redirect if not a provider
   useEffect(() => {
@@ -175,6 +177,10 @@ const ProviderProfilePage: React.FC = () => {
         }
       } catch (error) {
         console.error('Failed to fetch analytics:', error);
+        toast.error(
+          'Failed to load analytics',
+          error instanceof Error ? error.message : 'An error occurred'
+        );
         // Fallback to providerProfile data
         const extendedProfile = providerProfile as unknown as ExtendedProviderProfile;
         setStats((prev) => ({
@@ -256,9 +262,14 @@ const ProviderProfilePage: React.FC = () => {
         throw new Error(data.message || 'Upload failed');
       }
     } catch (error: any) {
+      console.error('Error uploading profile image:', error);
       setProfileImage(user?.avatar || null);
       setErrorMessage(error.message || 'Failed to upload image');
-      setTimeout(() => setErrorMessage(''), 3000);
+      toast.error(
+        'Failed to upload image',
+        error instanceof Error ? error.message : 'An error occurred'
+      );
+      setTimeout(() => setErrorMessage(''), 5000);
     } finally {
       setIsUploading(false);
     }
@@ -361,8 +372,13 @@ const ProviderProfilePage: React.FC = () => {
         setTimeout(() => setSaveMessage(''), 3000);
       }
     } catch (error: any) {
+      console.error('Error toggling provider status:', error);
       setErrorMessage(error.response?.data?.message || 'Failed to update status');
-      setTimeout(() => setErrorMessage(''), 3000);
+      toast.error(
+        'Failed to update status',
+        error instanceof Error ? error.message : 'An error occurred'
+      );
+      setTimeout(() => setErrorMessage(''), 5000);
     } finally {
       setIsTogglingStatus(false);
     }

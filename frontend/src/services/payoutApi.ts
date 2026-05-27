@@ -29,6 +29,7 @@ export interface Payout {
     date: string;
     retryAttempt: number;
   }>;
+  maxRetries?: number;
   earningsBreakdown: {
     grossAmount: number;
     commission: number;

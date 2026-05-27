@@ -54,21 +54,22 @@ const NotificationBell: React.FC<NotificationBellProps> = ({ userId, userRole = 
   useEffect(() => {
     if (!userId) return;
 
+    let unsubscribe: (() => void) | undefined;
+
     // Connect to socket
     socketService.connect().then(() => {
       setIsConnected(true);
 
       // Listen for new notifications
-      socketService.on('notification:new', handleNewNotification);
+      unsubscribe = socketService.onNewNotification(handleNewNotification);
     }).catch(err => {
       console.error('Failed to connect to socket:', err);
       setIsConnected(false);
     });
 
-    // Disconnect on unmount
+    // Cleanup on unmount: unsubscribe and disconnect
     return () => {
-      const unsubscribe = socketService.onNewNotification(handleNewNotification);
-      unsubscribe();
+      unsubscribe?.();
       socketService.disconnect();
     };
   }, [userId, handleNewNotification]);

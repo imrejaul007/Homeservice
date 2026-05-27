@@ -15,6 +15,7 @@ import Footer from '../../components/layout/Footer';
 import Breadcrumb from '../../components/common/Breadcrumb';
 import { useAuthStore } from '../../stores/authStore';
 import { useToastActions } from '../../components/common/Toast';
+import { useDebouncedCallback } from '../../hooks/useDebounce';
 import { api } from '../../services/api';
 
 // Types
@@ -42,7 +43,8 @@ interface ReviewsResponse {
   success: boolean;
   data: {
     reviews: Review[];
-    total: number;
+    total?: number;
+    totalReviews?: number;
     averageRating: number;
     ratingDistribution: Record<number, number>;
   };
@@ -64,6 +66,11 @@ const ProviderReviewsPage: React.FC = () => {
   // Filter state
   const [selectedRating, setSelectedRating] = useState<number | null>(null);
   const [showFilterDropdown, setShowFilterDropdown] = useState(false);
+
+  // Debounced rating filter handler
+  const debouncedSetRating = useDebouncedCallback((rating: number | null) => {
+    setSelectedRating(rating);
+  }, 300);
 
   // Reply state
   const [replyingTo, setReplyingTo] = useState<Review | null>(null);
@@ -90,10 +97,16 @@ const ProviderReviewsPage: React.FC = () => {
         setReviews(data.data.reviews);
         setAverageRating(data.data.averageRating);
         setRatingDistribution(data.data.ratingDistribution);
-        setTotalReviews(data.data.total);
+        // Support both 'total' and 'totalReviews' from backend response
+        setTotalReviews(data.data.total ?? data.data.totalReviews ?? 0);
       }
     } catch (err: any) {
+      console.error('Error fetching reviews:', err);
       setError(err.response?.data?.message || 'Failed to load reviews');
+      toast.error(
+        'Failed to load reviews',
+        err.response?.data?.message || 'An error occurred'
+      );
     } finally {
       setIsLoading(false);
     }
@@ -232,7 +245,7 @@ const ProviderReviewsPage: React.FC = () => {
             {[5, 4, 3, 2, 1].map((rating) => (
               <button
                 key={rating}
-                onClick={() => setSelectedRating(selectedRating === rating ? null : rating)}
+                onClick={() => debouncedSetRating(selectedRating === rating ? null : rating)}
                 className={`glass-nilin rounded-nilin-lg p-3 text-center transition-all ${
                   selectedRating === rating
                     ? 'ring-2 ring-nilin-coral bg-nilin-coral/10'

@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import mongoose from 'mongoose';
 import ProviderProfile from '../models/providerProfile.model';
 import Service from '../models/service.model';
 import User from '../models/user.model';
@@ -168,24 +169,58 @@ export const getProviderById = asyncHandler(async (req: Request, res: Response):
       // Business hours
       businessHours: providerProfile.businessInfo?.businessHours || {},
 
-      // Performance metrics (computed from actual bookings)
+      // Performance metrics (computed using aggregation - avoids N+1 query)
       stats: await (async () => {
         try {
-          const bookings = await Booking.find({ providerId: id }).select('status customerId pricing').lean();
-          const total = bookings.length;
-          const completed = bookings.filter(b => b.status === 'completed').length;
-          const completionRate = total > 0 ? Math.round((completed / total) * 100) : 0;
+          const statsResult = await Booking.aggregate([
+            { $match: { providerId: new mongoose.Types.ObjectId(id) } },
+            {
+              $group: {
+                _id: null,
+                total: { $sum: 1 },
+                completed: {
+                  $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] }
+                },
+                customerIds: { $addToSet: '$customerId' }
+              }
+            },
+            {
+              $project: {
+                _id: 0,
+                total: 1,
+                completed: 1,
+                uniqueCustomers: {
+                  $size: {
+                    $filter: {
+                      input: '$customerIds',
+                      as: 'cid',
+                      cond: { $ne: ['$$cid', null] }
+                    }
+                  }
+                }
+              }
+            }
+          ]);
 
-          const customerIds = bookings.filter(b => b.customerId).map(b => b.customerId?.toString());
-          const uniqueCustomers = new Set(customerIds).size;
-          const repeatCustomers = customerIds.length - uniqueCustomers;
-          const repeatCustomerRate = uniqueCustomers > 0 ? Math.round((repeatCustomers / uniqueCustomers) * 100) : 0;
+          if (statsResult.length === 0) {
+            return {
+              completionRate: 0,
+              responseTime: providerProfile.analytics?.performanceMetrics?.responseTime || 0,
+              totalBookings: 0,
+              repeatCustomerRate: 0
+            };
+          }
+
+          const { total, completed, uniqueCustomers } = statsResult[0];
+          const completionRate = total > 0 ? Math.round((completed / total) * 100) : 0;
+          const totalCustomerBookings = uniqueCustomers > 0 ? total - uniqueCustomers : 0;
+          const repeatCustomerRate = uniqueCustomers > 0 ? Math.round((totalCustomerBookings / uniqueCustomers) * 100) : 0;
 
           return {
             completionRate,
             responseTime: providerProfile.analytics?.performanceMetrics?.responseTime || 0,
             totalBookings: total,
-            repeatCustomerRate,
+            repeatCustomerRate
           };
         } catch {
           return { completionRate: 0, responseTime: 0, totalBookings: 0, repeatCustomerRate: 0 };

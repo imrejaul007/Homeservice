@@ -156,7 +156,12 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
         });
       }
     } catch (error) {
+      console.error('Error loading service data:', error);
       setErrors({ load: error instanceof Error ? error.message : 'Failed to load service data' });
+      toast.error(
+        'Failed to load service',
+        error instanceof Error ? error.message : 'An error occurred'
+      );
     } finally {
       setIsLoadingService(false);
     }
@@ -269,8 +274,13 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
         resetForm();
       }
     } catch (error) {
+      console.error('Error updating service:', error);
       const { submit, fields } = parseApiValidationError(error);
       setErrors({ submit, ...fields });
+      toast.error(
+        'Failed to update service',
+        error instanceof Error ? error.message : 'An error occurred'
+      );
     } finally {
       setIsLoading(false);
     }

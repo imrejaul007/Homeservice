@@ -26,6 +26,7 @@ import {
   Clock,
   AlertCircle,
 } from 'lucide-react';
+import { toast } from 'react-hot-toast';
 import { api } from '../../services/api';
 
 // ============================================
@@ -837,7 +838,7 @@ const PermissionManager: React.FC = () => {
       fetchRoles();
     } catch (err) {
       console.error('Failed to delete role:', err);
-      alert('Failed to delete role. It may be in use by users.');
+      toast.error('Failed to delete role. It may be in use by users.');
     }
   };
 

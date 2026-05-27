@@ -23,7 +23,7 @@ import {
   TrendingDown,
   Wallet,
 } from 'lucide-react';
-import { payoutApi, type AdminWithdrawal, type WithdrawalStats, type WithdrawalFilters } from '../../services/payoutApi';
+import { payoutApi, type AdminWithdrawal, type WithdrawalStats, type WithdrawalFilters, type WithdrawalDetails } from '../../services/payoutApi';
 import { useAuthStore } from '../../stores/authStore';
 
 interface PayoutManagementProps {}
@@ -71,7 +71,7 @@ const PayoutManagement: React.FC<PayoutManagementProps> = () => {
 
   // Detail Modal
   const [showDetailModal, setShowDetailModal] = useState(false);
-  const [detailData, setDetailData] = useState<any>(null);
+  const [detailData, setDetailData] = useState<WithdrawalDetails | null>(null);
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
 
   // Fetch withdrawals

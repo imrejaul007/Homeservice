@@ -25,6 +25,7 @@ import { useAuthStore } from '../../stores/authStore';
 import { api } from '../../services/api';
 import { useToast } from '../../components/common/Toast/ToastContext';
 import { socketService } from '../../services/socket';
+import { secureStorage } from '@/lib/security';
 
 interface VerificationDocument {
   id: string;
@@ -124,83 +125,112 @@ const ProviderVerificationPage: React.FC = () => {
 
   // Socket listeners for verification updates
   useEffect(() => {
+    const unsubscribers: (() => void)[] = [];
+
     // Listen for provider approved
-    const unsubProviderApproved = socketService.onProviderApproved((data) => {
-      console.log('Provider approved:', data);
-      toast.addToast({
-        title: 'Verification Approved',
-        message: 'Your provider account has been verified!',
-        variant: 'success',
-      });
-      // Refresh verification status
-      window.location.reload();
-    });
+    unsubscribers.push(
+      socketService.onProviderApproved(() => {
+        // Log minimal info for debugging
+        console.log('Provider verification approved');
+        toast.addToast({
+          title: 'Verification Approved',
+          description: 'Your provider account has been verified!',
+          variant: 'success',
+        });
+        // Refresh verification status
+        window.location.reload();
+      })
+    );
 
     // Listen for provider rejected
-    const unsubProviderRejected = socketService.onProviderRejected((data) => {
-      console.log('Provider rejected:', data);
-      toast.addToast({
-        title: 'Verification Rejected',
-        message: data.reason || 'Your verification was rejected.',
-        variant: 'error',
-      });
-    });
+    unsubscribers.push(
+      socketService.onProviderRejected((data) => {
+        // Log minimal info for debugging without exposing sensitive details
+        console.log('Provider verification rejected');
+        toast.addToast({
+          title: 'Verification Rejected',
+          description: data.reason || 'Your verification was rejected.',
+          variant: 'error',
+        });
+      })
+    );
 
     // Listen for provider suspended
-    const unsubProviderSuspended = socketService.onProviderSuspended((data) => {
-      console.log('Provider suspended:', data);
-      toast.addToast({
-        title: 'Account Suspended',
-        message: data.reason || 'Your account has been suspended.',
-        variant: 'error',
-      });
-    });
+    unsubscribers.push(
+      socketService.onProviderSuspended(() => {
+        // Log minimal info for debugging
+        console.log('Provider account suspended');
+        toast.addToast({
+          title: 'Account Suspended',
+          description: 'Your account has been suspended.',
+          variant: 'error',
+        });
+      })
+    );
 
     // Listen for document verified
-    const unsubDocumentVerified = socketService.onDocumentVerified((data) => {
-      console.log('Document verified:', data);
-      setVerificationSteps((steps) =>
-        steps.map((step) => ({
-          ...step,
-          documents: step.documents?.map((doc) =>
-            doc.id === data.documentId
-              ? { ...doc, status: data.status, verifiedAt: new Date() }
-              : doc
-          ),
-        }))
-      );
-      toast.addToast({
-        title: 'Document Verified',
-        message: 'Your document has been verified.',
-        variant: 'success',
-      });
-    });
+    unsubscribers.push(
+      socketService.onDocumentVerified((data) => {
+        // Log minimal info for debugging without exposing document details
+        console.log('Document verified:', data.documentId);
+        setVerificationSteps((steps) =>
+          steps.map((step) => ({
+            ...step,
+            documents: step.documents?.map((doc) =>
+              doc.id === data.documentId
+                ? { ...doc, status: data.status, verifiedAt: new Date() }
+                : doc
+            ),
+          }))
+        );
+        toast.addToast({
+          title: 'Document Verified',
+          description: 'Your document has been verified.',
+          variant: 'success',
+        });
+      })
+    );
 
     // Listen for verification complete
-    const unsubVerificationComplete = socketService.onVerificationComplete((data) => {
-      console.log('Verification complete:', data);
-      toast.addToast({
-        title: 'Verification Complete',
-        message: 'You are now a verified provider!',
-        variant: 'success',
-      });
-      window.location.reload();
-    });
+    unsubscribers.push(
+      socketService.onVerificationComplete(() => {
+        // Log minimal info for debugging
+        console.log('Verification complete');
+        toast.addToast({
+          title: 'Verification Complete',
+          description: 'You are now a verified provider!',
+          variant: 'success',
+        });
+        window.location.reload();
+      })
+    );
 
-    // Cleanup on unmount
+    // Cleanup: call all unsubscribers
     return () => {
-      unsubProviderApproved();
-      unsubProviderRejected();
-      unsubProviderSuspended();
-      unsubDocumentVerified();
-      unsubVerificationComplete();
+      unsubscribers.forEach((unsub) => unsub());
     };
   }, [toast]);
 
   const handleFileUpload = async (stepId: string, documentId: string, file: File) => {
-    // Validate file
+    // File validation constants
+    const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'application/pdf'];
+    const MAX_SIZE = 10 * 1024 * 1024; // 10MB
+
+    // Validate file exists and has size
     if (!file || file.size === 0) {
       toast.addToast({ title: 'Please select a valid file', variant: 'error' });
+      return;
+    }
+
+    // Validate file type
+    if (!ALLOWED_TYPES.includes(file.type)) {
+      toast.addToast({ title: 'Invalid file type. Please upload PDF, PNG or JPG.', variant: 'error' });
+      return;
+    }
+
+    // Validate file size
+    if (file.size > MAX_SIZE) {
+      toast.addToast({ title: 'File too large. Maximum size is 10MB.', variant: 'error' });
       return;
     }
 
@@ -211,10 +241,17 @@ const ProviderVerificationPage: React.FC = () => {
       const formData = new FormData();
       formData.append('file', file);
 
-      // Get token safely - SSR check
-      const accessToken = typeof window !== 'undefined'
-        ? sessionStorage.getItem('accessToken')
-        : null;
+      // Get token from secureStorage instead of sessionStorage
+      const stored = secureStorage.getItem('auth-storage');
+      let accessToken: string | null = null;
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored);
+          accessToken = parsed?.state?.tokens?.accessToken || null;
+        } catch {
+          // ignore parse errors
+        }
+      }
 
       if (!accessToken) {
         throw new Error('Authentication required');

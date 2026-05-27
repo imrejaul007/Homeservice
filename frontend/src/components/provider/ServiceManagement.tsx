@@ -310,22 +310,6 @@ const ServiceManagement: React.FC = () => {
   const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
-    // Don't make API calls if user is not authenticated as provider
-    if (!isAuthenticated || !user || user.role !== 'provider' || !tokens?.accessToken) {
-      console.warn('⚠️ User not properly authenticated as provider:', {
-        isAuthenticated,
-        userRole: user?.role,
-        hasTokens: !!tokens?.accessToken
-      });
-      setError('Please log in as a provider to access this page');
-      setLoading(false);
-      return;
-    }
-
-    fetchOverviewStats();
-  }, [isAuthenticated, user, tokens]);
-
-  useEffect(() => {
     setPage(1);
   }, [statusFilter, sortBy, sortOrder, startDate, endDate, categoryFilter, searchTerm]);
 
@@ -370,8 +354,12 @@ const ServiceManagement: React.FC = () => {
         );
         setPagination(data.data.pagination);
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to fetch services');
         console.error('Error fetching services:', err);
+        setError(err instanceof Error ? err.message : 'Failed to fetch services');
+        toast.error(
+          'Failed to load services',
+          err instanceof Error ? err.message : 'An error occurred'
+        );
       } finally {
         setLoading(false);
         setListLoading(false);
@@ -403,31 +391,7 @@ const ServiceManagement: React.FC = () => {
     return () => clearTimeout(timer);
   }, [page, fetchServices, isAuthenticated, user, tokens, searchTerm]);
 
-  // Socket listeners for real-time service status updates
-  useEffect(() => {
-    // Listen for service approved
-    const unsubServiceApproved = socketService.onServiceApproved((data) => {
-      console.log('Service approved:', data);
-      toast.success('Service Approved', 'Your service has been approved and is now active.');
-      fetchServices(1, false);
-      fetchOverviewStats();
-    });
-
-    // Listen for service rejected
-    const unsubServiceRejected = socketService.onServiceRejected((data) => {
-      console.log('Service rejected:', data);
-      toast.error('Service Rejected', data.reason || 'Your service was not approved.');
-      fetchServices(1, false);
-    });
-
-    // Cleanup on unmount
-    return () => {
-      unsubServiceApproved();
-      unsubServiceRejected();
-    };
-  }, [fetchServices, fetchOverviewStats, toast]);
-
-  const fetchOverviewStats = async () => {
+  const fetchOverviewStats = useCallback(async () => {
     try {
       const data = await authService.get<{
         success: boolean,
@@ -464,9 +428,54 @@ const ServiceManagement: React.FC = () => {
         setAllCategories(data.data.overview.allCategories || []);
       }
     } catch (err) {
-      console.error('Error fetching stats:', err);
+      console.error('Error fetching overview stats:', err);
+      toast.error(
+        'Failed to load overview',
+        err instanceof Error ? err.message : 'An error occurred'
+      );
     }
-  };
+  }, []);
+
+  // Initial fetch of overview stats
+  useEffect(() => {
+    // Don't make API calls if user is not authenticated as provider
+    if (!isAuthenticated || !user || user.role !== 'provider' || !tokens?.accessToken) {
+      console.warn('User not properly authenticated as provider:', {
+        isAuthenticated,
+        userRole: user?.role,
+        hasTokens: !!tokens?.accessToken
+      });
+      setError('Please log in as a provider to access this page');
+      setLoading(false);
+      return;
+    }
+
+    void fetchOverviewStats();
+  }, [isAuthenticated, user, tokens, fetchOverviewStats]);
+
+  // Socket listeners for real-time service status updates
+  useEffect(() => {
+    // Listen for service approved
+    const unsubServiceApproved = socketService.onServiceApproved((data) => {
+      console.log('Service approved:', data);
+      toast.success('Service Approved', 'Your service has been approved and is now active.');
+      void fetchServices(1, false);
+      void fetchOverviewStats();
+    });
+
+    // Listen for service rejected
+    const unsubServiceRejected = socketService.onServiceRejected((data) => {
+      console.log('Service rejected:', data);
+      toast.error('Service Rejected', data.reason || 'Your service was not approved.');
+      void fetchServices(1, false);
+    });
+
+    // Cleanup on unmount
+    return () => {
+      unsubServiceApproved();
+      unsubServiceRejected();
+    };
+  }, [fetchServices, fetchOverviewStats, toast]);
 
   const openAnalyticsModal = async (service: Service) => {
     setAnalyticsService(service);
@@ -485,7 +494,12 @@ const ServiceManagement: React.FC = () => {
         setAnalyticsData(data.data.analytics);
       }
     } catch (err) {
+      console.error('Error loading service analytics:', err);
       setAnalyticsError(err instanceof Error ? err.message : 'Failed to load analytics');
+      toast.error(
+        'Failed to load analytics',
+        err instanceof Error ? err.message : 'An error occurred'
+      );
     } finally {
       setAnalyticsLoading(false);
     }

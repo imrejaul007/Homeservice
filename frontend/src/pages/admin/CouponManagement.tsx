@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { toast } from 'react-hot-toast';
 import { api } from '../../services/api';
 import { formatPrice } from '../../utils/currency';
 
@@ -33,6 +34,93 @@ interface CouponStats {
   featured: number;
 }
 
+interface CouponFormData {
+  code: string;
+  type: 'percentage' | 'fixed' | 'free_service';
+  value: number;
+  maxDiscount: number;
+  minOrderAmount: number;
+  usageLimit: number;
+  validFrom: string;
+  validUntil: string;
+  title: string;
+  description: string;
+  featured: boolean;
+}
+
+interface ValidationErrors {
+  code?: string;
+  title?: string;
+  value?: string;
+  minOrderAmount?: string;
+  usageLimit?: string;
+  validFrom?: string;
+  validUntil?: string;
+  general?: string;
+}
+
+const validateCoupon = (data: CouponFormData, isEditing: boolean): ValidationErrors => {
+  const errors: ValidationErrors = {};
+
+  // Code validation (not editable, so only check if creating)
+  if (!isEditing) {
+    if (!data.code || data.code.trim().length === 0) {
+      errors.code = 'Coupon code is required';
+    } else if (data.code.trim().length < 3) {
+      errors.code = 'Code must be at least 3 characters';
+    } else if (!/^[A-Za-z0-9]+$/.test(data.code)) {
+      errors.code = 'Code must be alphanumeric (letters and numbers only)';
+    }
+  }
+
+  // Title validation
+  if (!data.title || data.title.trim().length === 0) {
+    errors.title = 'Title is required';
+  } else if (data.title.trim().length < 2) {
+    errors.title = 'Title must be at least 2 characters';
+  }
+
+  // Value validation
+  if (data.value < 0) {
+    errors.value = 'Value cannot be negative';
+  } else if (data.type === 'percentage' && data.value > 100) {
+    errors.value = 'Percentage discount cannot exceed 100%';
+  }
+
+  // Min order amount validation
+  if (data.minOrderAmount < 0) {
+    errors.minOrderAmount = 'Minimum order amount cannot be negative';
+  }
+
+  // Usage limit validation
+  if (data.usageLimit < 1) {
+    errors.usageLimit = 'Usage limit must be at least 1';
+  }
+
+  // Date validations
+  if (!data.validFrom) {
+    errors.validFrom = 'Valid from date is required';
+  }
+
+  if (!data.validUntil) {
+    errors.validUntil = 'Expiration date is required';
+  } else {
+    const validUntilDate = new Date(data.validUntil);
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+
+    if (validUntilDate < now) {
+      errors.validUntil = 'Expiration date must be in the future';
+    }
+
+    if (data.validFrom && new Date(data.validFrom) >= validUntilDate) {
+      errors.validUntil = 'Expiration must be after start date';
+    }
+  }
+
+  return errors;
+};
+
 const CouponManagement: React.FC = () => {
   const [coupons, setCoupons] = useState<Coupon[]>([]);
   const [stats, setStats] = useState<CouponStats | null>(null);
@@ -46,6 +134,7 @@ const CouponManagement: React.FC = () => {
   const [showModal, setShowModal] = useState(false);
   const [editingCoupon, setEditingCoupon] = useState<Coupon | null>(null);
   const [saving, setSaving] = useState(false);
+  const [validationErrors, setValidationErrors] = useState<ValidationErrors>({});
   const [formData, setFormData] = useState({
     code: '',
     type: 'percentage' as 'percentage' | 'fixed' | 'free_service',
@@ -99,6 +188,15 @@ const CouponManagement: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // Validate form data
+    const errors = validateCoupon(formData, !!editingCoupon);
+    setValidationErrors(errors);
+
+    if (Object.keys(errors).length > 0) {
+      return;
+    }
+
     setSaving(true);
     try {
       const payload = {
@@ -117,11 +215,12 @@ const CouponManagement: React.FC = () => {
 
       setShowModal(false);
       setEditingCoupon(null);
+      setValidationErrors({});
       resetForm();
       fetchCoupons();
       fetchStats();
     } catch (err: any) {
-      alert(err.response?.data?.message || 'Failed to save coupon');
+      toast.error(err.response?.data?.message || 'Failed to save coupon');
     } finally {
       setSaving(false);
     }
@@ -129,6 +228,7 @@ const CouponManagement: React.FC = () => {
 
   const handleEdit = (coupon: Coupon) => {
     setEditingCoupon(coupon);
+    setValidationErrors({});
     setFormData({
       code: coupon.code,
       type: coupon.type,
@@ -149,10 +249,11 @@ const CouponManagement: React.FC = () => {
     if (!confirm('Are you sure you want to deactivate this coupon?')) return;
     try {
       await api.post(`/admin/coupons/${id}/deactivate`);
+      toast.success('Coupon deactivated successfully');
       fetchCoupons();
       fetchStats();
     } catch (err: any) {
-      alert(err.response?.data?.message || 'Failed to deactivate coupon');
+      toast.error(err.response?.data?.message || 'Failed to deactivate coupon');
     }
   };
 
@@ -160,10 +261,11 @@ const CouponManagement: React.FC = () => {
     if (!confirm('Are you sure you want to delete this coupon?')) return;
     try {
       await api.delete(`/admin/coupons/${id}`);
+      toast.success('Coupon deleted successfully');
       fetchCoupons();
       fetchStats();
     } catch (err: any) {
-      alert(err.response?.data?.message || 'Failed to delete coupon');
+      toast.error(err.response?.data?.message || 'Failed to delete coupon');
     }
   };
 
@@ -181,6 +283,7 @@ const CouponManagement: React.FC = () => {
       description: '',
       featured: false,
     });
+    setValidationErrors({});
   };
 
   const getTypeBadgeColor = (type: string) => {
@@ -384,33 +487,52 @@ const CouponManagement: React.FC = () => {
               {editingCoupon ? 'Edit Coupon' : 'Create Coupon'}
             </h2>
             <form onSubmit={handleSubmit} className="space-y-4">
+              {validationErrors.general && (
+                <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-2 rounded">
+                  {validationErrors.general}
+                </div>
+              )}
               <div>
                 <label className="block text-sm font-medium text-gray-700">Coupon Code</label>
                 <input
                   type="text"
                   value={formData.code}
-                  onChange={(e) => setFormData({ ...formData, code: e.target.value.toUpperCase() })}
-                  className="mt-1 w-full px-3 py-2 border rounded-lg"
+                  onChange={(e) => {
+                    setFormData({ ...formData, code: e.target.value.toUpperCase() });
+                    setValidationErrors(prev => ({ ...prev, code: undefined }));
+                  }}
+                  className={`mt-1 w-full px-3 py-2 border rounded-lg ${validationErrors.code ? 'border-red-500' : ''}`}
                   required
                   disabled={!!editingCoupon}
+                  placeholder="e.g., SAVE20"
                 />
+                {validationErrors.code && (
+                  <p className="mt-1 text-sm text-red-600">{validationErrors.code}</p>
+                )}
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700">Title</label>
                 <input
                   type="text"
                   value={formData.title}
-                  onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-                  className="mt-1 w-full px-3 py-2 border rounded-lg"
+                  onChange={(e) => {
+                    setFormData({ ...formData, title: e.target.value });
+                    setValidationErrors(prev => ({ ...prev, title: undefined }));
+                  }}
+                  className={`mt-1 w-full px-3 py-2 border rounded-lg ${validationErrors.title ? 'border-red-500' : ''}`}
                   required
+                  placeholder="e.g., Summer Sale 20% Off"
                 />
+                {validationErrors.title && (
+                  <p className="mt-1 text-sm text-red-600">{validationErrors.title}</p>
+                )}
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700">Type</label>
                   <select
                     value={formData.type}
-                    onChange={(e) => setFormData({ ...formData, type: e.target.value as any })}
+                    onChange={(e) => setFormData({ ...formData, type: e.target.value as 'percentage' | 'fixed' | 'free_service' })}
                     className="mt-1 w-full px-3 py-2 border rounded-lg"
                   >
                     <option value="percentage">Percentage</option>
@@ -425,11 +547,17 @@ const CouponManagement: React.FC = () => {
                   <input
                     type="number"
                     value={formData.value}
-                    onChange={(e) => setFormData({ ...formData, value: Number(e.target.value) })}
-                    className="mt-1 w-full px-3 py-2 border rounded-lg"
+                    onChange={(e) => {
+                      setFormData({ ...formData, value: Number(e.target.value) });
+                      setValidationErrors(prev => ({ ...prev, value: undefined }));
+                    }}
+                    className={`mt-1 w-full px-3 py-2 border rounded-lg ${validationErrors.value ? 'border-red-500' : ''}`}
                     required
                     min="0"
                   />
+                  {validationErrors.value && (
+                    <p className="mt-1 text-sm text-red-600">{validationErrors.value}</p>
+                  )}
                 </div>
               </div>
               {formData.type === 'percentage' && (
@@ -450,20 +578,32 @@ const CouponManagement: React.FC = () => {
                   <input
                     type="number"
                     value={formData.minOrderAmount}
-                    onChange={(e) => setFormData({ ...formData, minOrderAmount: Number(e.target.value) })}
-                    className="mt-1 w-full px-3 py-2 border rounded-lg"
+                    onChange={(e) => {
+                      setFormData({ ...formData, minOrderAmount: Number(e.target.value) });
+                      setValidationErrors(prev => ({ ...prev, minOrderAmount: undefined }));
+                    }}
+                    className={`mt-1 w-full px-3 py-2 border rounded-lg ${validationErrors.minOrderAmount ? 'border-red-500' : ''}`}
                     min="0"
                   />
+                  {validationErrors.minOrderAmount && (
+                    <p className="mt-1 text-sm text-red-600">{validationErrors.minOrderAmount}</p>
+                  )}
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700">Usage Limit</label>
                   <input
                     type="number"
                     value={formData.usageLimit}
-                    onChange={(e) => setFormData({ ...formData, usageLimit: Number(e.target.value) })}
-                    className="mt-1 w-full px-3 py-2 border rounded-lg"
+                    onChange={(e) => {
+                      setFormData({ ...formData, usageLimit: Number(e.target.value) });
+                      setValidationErrors(prev => ({ ...prev, usageLimit: undefined }));
+                    }}
+                    className={`mt-1 w-full px-3 py-2 border rounded-lg ${validationErrors.usageLimit ? 'border-red-500' : ''}`}
                     min="1"
                   />
+                  {validationErrors.usageLimit && (
+                    <p className="mt-1 text-sm text-red-600">{validationErrors.usageLimit}</p>
+                  )}
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
@@ -472,20 +612,32 @@ const CouponManagement: React.FC = () => {
                   <input
                     type="date"
                     value={formData.validFrom}
-                    onChange={(e) => setFormData({ ...formData, validFrom: e.target.value })}
-                    className="mt-1 w-full px-3 py-2 border rounded-lg"
+                    onChange={(e) => {
+                      setFormData({ ...formData, validFrom: e.target.value });
+                      setValidationErrors(prev => ({ ...prev, validFrom: undefined }));
+                    }}
+                    className={`mt-1 w-full px-3 py-2 border rounded-lg ${validationErrors.validFrom ? 'border-red-500' : ''}`}
                     required
                   />
+                  {validationErrors.validFrom && (
+                    <p className="mt-1 text-sm text-red-600">{validationErrors.validFrom}</p>
+                  )}
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700">Valid Until</label>
                   <input
                     type="date"
                     value={formData.validUntil}
-                    onChange={(e) => setFormData({ ...formData, validUntil: e.target.value })}
-                    className="mt-1 w-full px-3 py-2 border rounded-lg"
+                    onChange={(e) => {
+                      setFormData({ ...formData, validUntil: e.target.value });
+                      setValidationErrors(prev => ({ ...prev, validUntil: undefined }));
+                    }}
+                    className={`mt-1 w-full px-3 py-2 border rounded-lg ${validationErrors.validUntil ? 'border-red-500' : ''}`}
                     required
                   />
+                  {validationErrors.validUntil && (
+                    <p className="mt-1 text-sm text-red-600">{validationErrors.validUntil}</p>
+                  )}
                 </div>
               </div>
               <div>

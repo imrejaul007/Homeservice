@@ -21,7 +21,10 @@ import {
   providerAnalyticsApi,
   type ProviderInsightsAnalytics,
 } from '../../services/providerApi';
+import { useToastActions } from '../../components/common/Toast';
 import { cn } from '../../lib/utils';
+import { formatPrice } from '../../utils/currency';
+import { EmptyState } from '../../components/common/EmptyState';
 
 const EMPTY_ANALYTICS: ProviderInsightsAnalytics = {
   overview: {
@@ -62,6 +65,7 @@ const PERIOD_LABELS: Record<'7d' | '30d' | '90d', { current: string; previous: s
 const ProviderAnalyticsPage: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuthStore();
+  const toast = useToastActions();
   const [analytics, setAnalytics] = useState<ProviderInsightsAnalytics>(EMPTY_ANALYTICS);
   const [timeRange, setTimeRange] = useState<'7d' | '30d' | '90d'>('30d');
   const [isLoading, setIsLoading] = useState(true);
@@ -85,6 +89,10 @@ const ProviderAnalyticsPage: React.FC = () => {
       }
     } catch (err) {
       console.error('Failed to load provider analytics:', err);
+      toast.error(
+        'Failed to load analytics',
+        err instanceof Error ? err.message : 'Unable to load analytics. Please try again.'
+      );
       setError('Unable to load analytics. Please try again.');
       setAnalytics(EMPTY_ANALYTICS);
     } finally {
@@ -282,7 +290,7 @@ const ProviderAnalyticsPage: React.FC = () => {
                           >
                             <div className="w-full flex flex-col items-center gap-1">
                               <span className="text-xs text-nilin-warmGray truncate w-full text-center">
-                                ${day.revenue.toLocaleString()}
+                                {formatPrice(day.revenue)}
                               </span>
                               <div
                                 className="w-full max-w-12 bg-nilin-coral rounded-t-nilin transition-all hover:bg-nilin-rose mx-auto"
@@ -319,7 +327,7 @@ const ProviderAnalyticsPage: React.FC = () => {
 
                     <div className="mb-4">
                       <p className="text-3xl font-bold text-nilin-charcoal">
-                        ${analytics.earnings.thisMonth.toLocaleString()}
+                        {formatPrice(analytics.earnings.thisMonth)}
                       </p>
                       <div
                         className={cn(
@@ -340,7 +348,7 @@ const ProviderAnalyticsPage: React.FC = () => {
                       <div className="flex justify-between text-sm">
                         <span className="text-nilin-warmGray">{periodLabels.previous}</span>
                         <span className="font-medium text-nilin-charcoal">
-                          ${analytics.earnings.lastMonth.toLocaleString()}
+                          {formatPrice(analytics.earnings.lastMonth)}
                         </span>
                       </div>
                     </div>
@@ -416,9 +424,16 @@ const ProviderAnalyticsPage: React.FC = () => {
                   </div>
 
                   {analytics.topServices.length === 0 ? (
-                    <p className="text-center text-nilin-warmGray py-8 font-sans">
-                      No completed bookings in this period yet.
-                    </p>
+                    <EmptyState
+                      icon={
+                        <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                        </svg>
+                      }
+                      title="No completed bookings yet"
+                      description="Complete bookings to see your top services performance here."
+                      compact
+                    />
                   ) : (
                     <div className="overflow-x-auto">
                       <table className="w-full">
@@ -456,13 +471,12 @@ const ProviderAnalyticsPage: React.FC = () => {
                                 {service.bookings}
                               </td>
                               <td className="py-4 px-4 text-right font-medium text-nilin-charcoal">
-                                ${service.revenue.toLocaleString()}
+                                {formatPrice(service.revenue)}
                               </td>
                               <td className="py-4 px-4 text-right text-nilin-warmGray">
-                                $
                                 {service.bookings > 0
-                                  ? Math.round(service.revenue / service.bookings).toLocaleString()
-                                  : '0'}
+                                  ? formatPrice(Math.round(service.revenue / service.bookings))
+                                  : formatPrice(0)}
                               </td>
                             </tr>
                           ))}

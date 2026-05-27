@@ -1,8 +1,25 @@
 import { create } from 'zustand';
-import { persist, createJSONStorage } from 'zustand/middleware';
+import { persist, createJSONStorage, StateStorage } from 'zustand/middleware';
 import { immer } from 'zustand/middleware/immer';
 import type { AuthTokens, AuthUser, LoginCredentials, RegisterData } from '../services/AuthService';
 import type { BusinessInfo, LocationInfo, ServiceInput } from '../types/auth';
+import { secureStorage } from '@/lib/security';
+
+/**
+ * Custom zustand storage adapter that uses secureStorage
+ * This provides XSS protection by not exposing tokens in raw sessionStorage
+ */
+const secureAuthStorage: StateStorage = {
+  getItem: (name: string): string | null => {
+    return secureStorage.getItem(name);
+  },
+  setItem: (name: string, value: string): void => {
+    secureStorage.setItem(name, value);
+  },
+  removeItem: (name: string): void => {
+    secureStorage.removeItem(name);
+  },
+};
 
 // Re-export types for backward compatibility
 export type User = AuthUser;
@@ -752,10 +769,9 @@ export const useAuthStore = create<AuthState>()(
     {
       name: 'auth-storage',
       version: 2,
-      // Use sessionStorage for tokens to improve security
-      // Note: This loses cross-tab synchronization but prevents tokens from persisting
-      // in storage beyond the current browser session
-      storage: createJSONStorage(() => sessionStorage),
+      // Use secure storage adapter that wraps secureStorage
+      // This provides XSS protection by using encrypted storage
+      storage: createJSONStorage(() => secureAuthStorage),
       partialize: (state) => ({
         user: state.user,
         customerProfile: state.customerProfile,

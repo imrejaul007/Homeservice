@@ -30,6 +30,7 @@ import { useAuthStore } from '../../stores/authStore';
 import { walletApi } from '../../services/walletApi';
 import type { Wallet as WalletType, WalletTransaction, EarningsSummary } from '../../services/walletApi';
 import { socketService } from '../../services/socket';
+import { formatPrice } from '../../utils/currency';
 
 interface Transaction {
   id: string;
@@ -187,20 +188,23 @@ const ProviderEarningsPage: React.FC = () => {
   // Socket listeners for real-time updates
   useEffect(() => {
     // Listen for withdrawal approved
-    const unsubWithdrawalApproved = socketService.onWithdrawalApproved((data) => {
-      console.log('Withdrawal approved:', data);
+    const unsubWithdrawalApproved = socketService.onWithdrawalApproved(() => {
+      // Log minimal info for debugging without exposing financial data
+      console.log('Withdrawal approved');
       fetchData(true);
     });
 
     // Listen for withdrawal rejected
-    const unsubWithdrawalRejected = socketService.onWithdrawalRejected((data) => {
-      console.log('Withdrawal rejected:', data);
+    const unsubWithdrawalRejected = socketService.onWithdrawalRejected(() => {
+      // Log minimal info for debugging without exposing financial data
+      console.log('Withdrawal rejected');
       fetchData(true);
     });
 
     // Listen for booking confirmed (new earnings)
-    const unsubBookingConfirmed = socketService.on('booking:confirmed', (data) => {
-      console.log('Booking confirmed:', data);
+    const unsubBookingConfirmed = socketService.on('booking:confirmed', () => {
+      // Log minimal info for debugging without exposing financial data
+      console.log('Booking confirmed');
       fetchData(true);
     });
 
@@ -496,7 +500,7 @@ const ProviderEarningsPage: React.FC = () => {
               </div>
               <p className="text-sm text-nilin-warmGray mb-1">Total Earnings</p>
               <p className="text-2xl font-bold text-nilin-charcoal">
-                {wallet ? `${wallet.currency} ${wallet.totalEarned.toLocaleString()}` : '-'}
+                {wallet ? formatPrice(wallet.totalEarned, wallet.currency) : '-'}
               </p>
             </div>
 
@@ -509,7 +513,7 @@ const ProviderEarningsPage: React.FC = () => {
               </div>
               <p className="text-sm text-nilin-warmGray mb-1">Available Balance</p>
               <p className="text-2xl font-bold text-nilin-charcoal">
-                {wallet ? `${wallet.currency} ${availableBalance.toLocaleString()}` : '-'}
+                {wallet ? formatPrice(availableBalance, wallet.currency) : '-'}
               </p>
             </div>
 
@@ -522,7 +526,7 @@ const ProviderEarningsPage: React.FC = () => {
               </div>
               <p className="text-sm text-nilin-warmGray mb-1">Pending Balance</p>
               <p className="text-2xl font-bold text-nilin-charcoal">
-                {wallet ? `${wallet.currency} ${wallet.pendingBalance.toLocaleString()}` : '-'}
+                {wallet ? formatPrice(wallet.pendingBalance, wallet.currency) : '-'}
               </p>
               <p className="text-xs text-nilin-warmGray mt-1">Clears after service completion</p>
             </div>
@@ -536,7 +540,7 @@ const ProviderEarningsPage: React.FC = () => {
               </div>
               <p className="text-sm text-nilin-warmGray mb-1">This Month</p>
               <p className="text-2xl font-bold text-nilin-charcoal">
-                {monthlySummary ? `${wallet?.currency || 'AED'} ${monthlySummary.earnings.toLocaleString()}` : '-'}
+                {monthlySummary ? formatPrice(monthlySummary.earnings, wallet?.currency) : '-'}
               </p>
             </div>
           </div>
@@ -548,21 +552,21 @@ const ProviderEarningsPage: React.FC = () => {
               <div className="flex items-end justify-between">
                 <div>
                   <p className="text-3xl font-bold text-nilin-charcoal">
-                    {weeklySummary ? `${wallet?.currency || 'AED'} ${weeklySummary.earnings.toLocaleString()}` : '-'}
+                    {weeklySummary ? formatPrice(weeklySummary.earnings, wallet?.currency) : '-'}
                   </p>
                   <div className="flex items-center gap-1 mt-1">
                     {monthlyChange >= 0 ? (
                       <>
                         <TrendingUp className="h-4 w-4 text-green-600" />
                         <span className="text-sm text-green-600 font-medium">
-                          +{wallet?.currency || 'AED'} {Math.abs(monthlyChange).toLocaleString()}
+                          +{formatPrice(Math.abs(monthlyChange), wallet?.currency)}
                         </span>
                       </>
                     ) : (
                       <>
                         <TrendingDown className="h-4 w-4 text-red-600" />
                         <span className="text-sm text-red-600 font-medium">
-                          -{wallet?.currency || 'AED'} {Math.abs(monthlyChange).toLocaleString()}
+                          -{formatPrice(Math.abs(monthlyChange), wallet?.currency)}
                         </span>
                       </>
                     )}

@@ -512,7 +512,8 @@ const providerProfileSchema = new Schema<IProviderProfile>(
       businessType: {
         type: String,
         enum: ['individual', 'small_business', 'company', 'franchise'],
-        default: 'individual'
+        default: 'individual',
+        index: true
       },
       description: { 
         type: String, 

@@ -70,6 +70,7 @@ export interface IBooking extends Document {
       amount: number;
       description: string;
     }>;
+    couponDiscount: number;
     subtotal: number;
     tax: number;
     totalAmount: number;

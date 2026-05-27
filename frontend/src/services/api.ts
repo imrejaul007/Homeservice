@@ -21,11 +21,11 @@ export interface ApiResponse<T = unknown> {
   message?: string;
 }
 
-// Get auth tokens from sessionStorage (same as authStore for consistency)
-// Using sessionStorage for improved security - tokens don't persist beyond current tab
+// Get auth tokens from secure storage (same as authStore for consistency)
+// Using secureStorage for improved XSS protection
 const getAuthTokens = () => {
   try {
-    const stored = sessionStorage.getItem('auth-storage');
+    const stored = secureStorage.getItem('auth-storage');
     if (!stored) return null;
 
     const parsed = JSON.parse(stored);
@@ -40,13 +40,13 @@ const getAuthTokens = () => {
   }
 };
 
-// Update auth tokens - also save to sessionStorage
+// Update auth tokens - also save to secure storage
 const updateAuthTokens = (tokens: { accessToken: string; refreshToken: string }) => {
   try {
-    const stored = sessionStorage.getItem('auth-storage');
+    const stored = secureStorage.getItem('auth-storage');
     const parsed = stored ? JSON.parse(stored) : { state: {} };
     parsed.state.tokens = tokens;
-    sessionStorage.setItem('auth-storage', JSON.stringify(parsed));
+    secureStorage.setItem('auth-storage', JSON.stringify(parsed));
   } catch {
     // Silent fail
   }
@@ -55,13 +55,13 @@ const updateAuthTokens = (tokens: { accessToken: string; refreshToken: string })
 // Clear auth
 const clearAuth = () => {
   try {
-    const stored = sessionStorage.getItem('auth-storage');
+    const stored = secureStorage.getItem('auth-storage');
     if (stored) {
       const parsed = JSON.parse(stored);
       if (parsed.state) {
         parsed.state.tokens = null;
         parsed.state.isAuthenticated = false;
-        sessionStorage.setItem('auth-storage', JSON.stringify(parsed));
+        secureStorage.setItem('auth-storage', JSON.stringify(parsed));
       }
     }
   } catch {

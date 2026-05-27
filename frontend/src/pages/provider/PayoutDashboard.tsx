@@ -225,7 +225,7 @@ const PayoutCard: React.FC<PayoutCardProps> = ({ payout, onView, onCancel }) => 
           </div>
           <div className="text-xs text-red-600 mt-1">
             Attempt {payout.failures[payout.failures.length - 1].retryAttempt} of{' '}
-            {(payout as any).maxRetries || 3}
+            {payout.maxRetries || 3}
           </div>
         </div>
       )}

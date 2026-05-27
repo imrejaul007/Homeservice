@@ -70,6 +70,13 @@ const ProviderPortfolioPage: React.FC = () => {
     fetchPortfolio();
   }, []);
 
+  // Cleanup blob URLs on unmount to prevent memory leaks
+  useEffect(() => {
+    return () => {
+      imagePreviews.forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, [imagePreviews]);
+
   const fetchPortfolio = async () => {
     try {
       setIsLoading(true);

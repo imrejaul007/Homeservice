@@ -200,8 +200,13 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
         setErrors({});
       }
     } catch (error) {
+      console.error('Error creating service:', error);
       const { submit, fields } = parseApiValidationError(error);
       setErrors({ submit, ...fields });
+      toast.error(
+        'Failed to create service',
+        error instanceof Error ? error.message : 'An error occurred'
+      );
     } finally {
       setIsLoading(false);
     }

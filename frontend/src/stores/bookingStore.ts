@@ -645,7 +645,13 @@ export const useBookingStore = create<BookingState>()(
         }
       },
 
-      addDateOverride: async (override): Promise<void> => {
+      addDateOverride: async (override: {
+        date: string;
+        isAvailable: boolean;
+        reason?: string;
+        timeSlots?: Array<{ start: string; end: string; isActive: boolean }>;
+        notes?: string;
+      }): Promise<void> => {
         const bookingService = (await import('../services/BookingService')).default;
 
         try {
@@ -699,7 +705,11 @@ export const useBookingStore = create<BookingState>()(
         }
       },
 
-      getAvailableSlots: async (providerId: string, params): Promise<void> => {
+      getAvailableSlots: async (providerId: string, params: {
+        date: string;
+        duration: number;
+        days?: number;
+      }): Promise<void> => {
         const bookingService = (await import('../services/BookingService')).default;
 
         try {
@@ -725,7 +735,11 @@ export const useBookingStore = create<BookingState>()(
         }
       },
 
-      checkSlotAvailability: async (providerId: string, params): Promise<boolean> => {
+      checkSlotAvailability: async (providerId: string, params: {
+        date: string;
+        time: string;
+        duration: number;
+      }): Promise<boolean> => {
         const bookingService = (await import('../services/BookingService')).default;
 
         try {

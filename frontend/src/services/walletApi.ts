@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { API_BASE_URL } from '@/config/api';
+import { secureStorage } from '@/lib/security';
 
 const api = axios.create({
   baseURL: `${API_BASE_URL}/provider`,
@@ -8,7 +9,7 @@ const api = axios.create({
 
 // Add auth token interceptor
 api.interceptors.request.use((config) => {
-  const stored = sessionStorage.getItem('auth-storage');
+  const stored = secureStorage.getItem('auth-storage');
   if (stored) {
     try {
       const parsed = JSON.parse(stored);

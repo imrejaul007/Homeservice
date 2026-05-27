@@ -54,6 +54,7 @@ import type {
   CustomerSearchFilters,
   DashboardStats,
   TrustScoreBreakdown,
+  CustomerDetailResponse,
 } from '../../services/customerOpsApi';
 
 // ============================================
@@ -420,7 +421,7 @@ const CustomerDetailModal: React.FC<{
   onClose: () => void;
   onRefresh: () => void;
 }> = ({ customerId, onClose, onRefresh }) => {
-  const [customer, setCustomer] = useState<any>(null);
+  const [customer, setCustomer] = useState<CustomerDetailResponse | null>(null);
   const [trustScoreBreakdown, setTrustScoreBreakdown] = useState<TrustScoreBreakdown | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'overview' | 'bookings' | 'abuse' | 'actions'>('overview');

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { toast } from 'react-hot-toast';
 import { api } from '../../services/api';
 
 interface ApiKey {
@@ -26,6 +27,57 @@ interface ApiKeyStats {
   expiringSoon: number;
 }
 
+interface ApiKeyFormData {
+  name: string;
+  description: string;
+  permissions: string[];
+  expiresAt: string;
+  rateLimit: number;
+}
+
+interface ValidationErrors {
+  name?: string;
+  permissions?: string;
+  expiresAt?: string;
+  rateLimit?: string;
+}
+
+const validateApiKey = (data: ApiKeyFormData): ValidationErrors => {
+  const errors: ValidationErrors = {};
+
+  // Name validation
+  if (!data.name || data.name.trim().length === 0) {
+    errors.name = 'Name is required';
+  } else if (data.name.trim().length < 3) {
+    errors.name = 'Name must be at least 3 characters';
+  } else if (data.name.trim().length > 100) {
+    errors.name = 'Name must be less than 100 characters';
+  }
+
+  // Permissions validation
+  if (data.permissions.length === 0) {
+    errors.permissions = 'At least one permission is required';
+  }
+
+  // Rate limit validation
+  if (data.rateLimit < 1) {
+    errors.rateLimit = 'Rate limit must be at least 1';
+  } else if (data.rateLimit > 10000) {
+    errors.rateLimit = 'Rate limit cannot exceed 10000';
+  }
+
+  // Expiration date validation (if provided)
+  if (data.expiresAt) {
+    const expiresDate = new Date(data.expiresAt);
+    const now = new Date();
+    if (expiresDate <= now) {
+      errors.expiresAt = 'Expiration date must be in the future';
+    }
+  }
+
+  return errors;
+};
+
 const ApiKeyManagement: React.FC = () => {
   const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
   const [stats, setStats] = useState<ApiKeyStats | null>(null);
@@ -38,6 +90,7 @@ const ApiKeyManagement: React.FC = () => {
   const [showModal, setShowModal] = useState(false);
   const [showKeyModal, setShowKeyModal] = useState(false);
   const [createdKey, setCreatedKey] = useState<string | null>(null);
+  const [validationErrors, setValidationErrors] = useState<ValidationErrors>({});
   const [formData, setFormData] = useState({
     name: '',
     description: '',
@@ -94,6 +147,15 @@ const ApiKeyManagement: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // Validate form data
+    const errors = validateApiKey(formData);
+    setValidationErrors(errors);
+
+    if (Object.keys(errors).length > 0) {
+      return;
+    }
+
     try {
       const payload = {
         ...formData,
@@ -104,11 +166,12 @@ const ApiKeyManagement: React.FC = () => {
       setCreatedKey(response.data.data.key);
       setShowKeyModal(true);
       setShowModal(false);
+      setValidationErrors({});
       resetForm();
       fetchApiKeys();
       fetchStats();
     } catch (err: any) {
-      alert(err.response?.data?.message || 'Failed to create API key');
+      toast.error(err.response?.data?.message || 'Failed to create API key');
     }
   };
 
@@ -119,7 +182,7 @@ const ApiKeyManagement: React.FC = () => {
       setCreatedKey(response.data.data.key);
       setShowKeyModal(true);
     } catch (err: any) {
-      alert(err.response?.data?.message || 'Failed to regenerate API key');
+      toast.error(err.response?.data?.message || 'Failed to regenerate API key');
     }
   };
 
@@ -129,7 +192,7 @@ const ApiKeyManagement: React.FC = () => {
       fetchApiKeys();
       fetchStats();
     } catch (err: any) {
-      alert(err.response?.data?.message || 'Failed to toggle API key');
+      toast.error(err.response?.data?.message || 'Failed to toggle API key');
     }
   };
 
@@ -137,10 +200,11 @@ const ApiKeyManagement: React.FC = () => {
     if (!confirm('Are you sure you want to delete this API key? This action cannot be undone.')) return;
     try {
       await api.delete(`/admin/api-keys/${id}`);
+      toast.success('API key deleted successfully');
       fetchApiKeys();
       fetchStats();
     } catch (err: any) {
-      alert(err.response?.data?.message || 'Failed to delete API key');
+      toast.error(err.response?.data?.message || 'Failed to delete API key');
     }
   };
 
@@ -152,6 +216,7 @@ const ApiKeyManagement: React.FC = () => {
       expiresAt: '',
       rateLimit: 100,
     });
+    setValidationErrors({});
   };
 
   const togglePermission = (permission: string) => {
@@ -165,7 +230,7 @@ const ApiKeyManagement: React.FC = () => {
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
-    alert('Copied to clipboard!');
+    toast.success('Copied to clipboard!');
   };
 
   return (
@@ -357,11 +422,17 @@ const ApiKeyManagement: React.FC = () => {
                 <input
                   type="text"
                   value={formData.name}
-                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                  className="mt-1 w-full px-3 py-2 border rounded-lg"
+                  onChange={(e) => {
+                    setFormData({ ...formData, name: e.target.value });
+                    setValidationErrors(prev => ({ ...prev, name: undefined }));
+                  }}
+                  className={`mt-1 w-full px-3 py-2 border rounded-lg ${validationErrors.name ? 'border-red-500' : ''}`}
                   required
                   placeholder="e.g., Production API Key"
                 />
+                {validationErrors.name && (
+                  <p className="mt-1 text-sm text-red-600">{validationErrors.name}</p>
+                )}
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700">Description</label>
@@ -381,13 +452,19 @@ const ApiKeyManagement: React.FC = () => {
                       <input
                         type="checkbox"
                         checked={formData.permissions.includes(perm.value)}
-                        onChange={() => togglePermission(perm.value)}
+                        onChange={() => {
+                          togglePermission(perm.value);
+                          setValidationErrors(prev => ({ ...prev, permissions: undefined }));
+                        }}
                         className="h-4 w-4 text-blue-600 border-gray-300 rounded"
                       />
                       <span className="text-sm text-gray-700">{perm.label}</span>
                     </label>
                   ))}
                 </div>
+                {validationErrors.permissions && (
+                  <p className="mt-1 text-sm text-red-600">{validationErrors.permissions}</p>
+                )}
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -395,20 +472,32 @@ const ApiKeyManagement: React.FC = () => {
                   <input
                     type="date"
                     value={formData.expiresAt}
-                    onChange={(e) => setFormData({ ...formData, expiresAt: e.target.value })}
-                    className="mt-1 w-full px-3 py-2 border rounded-lg"
+                    onChange={(e) => {
+                      setFormData({ ...formData, expiresAt: e.target.value });
+                      setValidationErrors(prev => ({ ...prev, expiresAt: undefined }));
+                    }}
+                    className={`mt-1 w-full px-3 py-2 border rounded-lg ${validationErrors.expiresAt ? 'border-red-500' : ''}`}
                   />
+                  {validationErrors.expiresAt && (
+                    <p className="mt-1 text-sm text-red-600">{validationErrors.expiresAt}</p>
+                  )}
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700">Rate Limit (per min)</label>
                   <input
                     type="number"
                     value={formData.rateLimit}
-                    onChange={(e) => setFormData({ ...formData, rateLimit: Number(e.target.value) })}
-                    className="mt-1 w-full px-3 py-2 border rounded-lg"
+                    onChange={(e) => {
+                      setFormData({ ...formData, rateLimit: Number(e.target.value) });
+                      setValidationErrors(prev => ({ ...prev, rateLimit: undefined }));
+                    }}
+                    className={`mt-1 w-full px-3 py-2 border rounded-lg ${validationErrors.rateLimit ? 'border-red-500' : ''}`}
                     min="1"
                     max="10000"
                   />
+                  {validationErrors.rateLimit && (
+                    <p className="mt-1 text-sm text-red-600">{validationErrors.rateLimit}</p>
+                  )}
                 </div>
               </div>
               <div className="flex justify-end gap-3 pt-4">
