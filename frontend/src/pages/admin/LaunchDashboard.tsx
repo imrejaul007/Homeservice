@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import { demoApi, type LaunchReadiness, type ReadinessItem, type UserOnboardingFunnel, type ConversionData } from '../../services/demoApi';
 import { useAuthStore } from '../../stores/authStore';
+import { ErrorBoundary } from '../../components/common/ErrorBoundary';
 
 // ============================================
 // Types
@@ -327,8 +328,9 @@ const LaunchDashboard: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-      {/* Header */}
+    <ErrorBoundary>
+      <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+        {/* Header */}
       <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
         <div className="px-4 py-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between">
@@ -675,6 +677,7 @@ const LaunchDashboard: React.FC = () => {
         )}
       </div>
     </div>
+    </ErrorBoundary>
   );
 };
 

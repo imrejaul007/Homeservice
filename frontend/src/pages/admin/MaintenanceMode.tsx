@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { api } from '../../services/api';
+import { ErrorBoundary } from '../../components/common/ErrorBoundary';
 
 interface MaintenanceSettings {
   maintenanceMode: boolean;
@@ -20,6 +21,15 @@ const MaintenanceMode: React.FC = () => {
     message: 'The platform is currently under maintenance. Please try again later.',
     estimatedDuration: '',
   });
+  const successTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (successTimeoutRef.current) {
+        clearTimeout(successTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const fetchSettings = async () => {
     try {
@@ -61,7 +71,7 @@ const MaintenanceMode: React.FC = () => {
       fetchSettings();
 
       // Auto-hide success message after 5 seconds
-      setTimeout(() => setSuccessMessage(null), 5000);
+      successTimeoutRef.current = setTimeout(() => setSuccessMessage(null), 5000);
     } catch (err: any) {
       setError(err.response?.data?.message || 'Failed to update maintenance settings');
     } finally {
@@ -91,9 +101,10 @@ const MaintenanceMode: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gray-100 p-6">
-      <div className="max-w-3xl mx-auto">
-        {/* Header */}
+    <ErrorBoundary>
+      <div className="min-h-screen bg-gray-100 p-6">
+        <div className="max-w-3xl mx-auto">
+          {/* Header */}
         <div className="mb-6">
           <h1 className="text-2xl font-bold text-gray-900">Maintenance Mode</h1>
           <p className="text-gray-600 mt-1">
@@ -308,6 +319,7 @@ const MaintenanceMode: React.FC = () => {
         </div>
       </div>
     </div>
+    </ErrorBoundary>
   );
 };
 

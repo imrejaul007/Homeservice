@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { toast } from 'react-hot-toast';
 import { api } from '../../services/api';
+import { ErrorBoundary } from '../../components/common/ErrorBoundary';
 
 interface ApiKey {
   _id: string;
@@ -234,7 +235,8 @@ const ApiKeyManagement: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-100 p-6">
+    <ErrorBoundary>
+      <div className="min-h-screen bg-gray-100 p-6">
       <div className="max-w-7xl mx-auto">
         {/* Header */}
         <div className="flex justify-between items-center mb-6">
@@ -559,6 +561,7 @@ const ApiKeyManagement: React.FC = () => {
         </div>
       )}
     </div>
+    </ErrorBoundary>
   );
 };
 

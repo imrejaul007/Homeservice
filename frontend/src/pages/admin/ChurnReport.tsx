@@ -27,6 +27,7 @@ import {
   ArrowUpRight,
   ArrowDownRight,
 } from 'lucide-react';
+import { ErrorBoundary } from '../../components/common/ErrorBoundary';
 
 // ============================================
 // Risk Level Badge Component
@@ -281,10 +282,7 @@ const ChurnReport: React.FC = () => {
   }
 
   return (
-    <PageLayout
-      title="Churn Analysis"
-      subtitle="Customer retention and churn risk analysis"
-    >
+    <ErrorBoundary>
       <div className="space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
@@ -547,7 +545,7 @@ const ChurnReport: React.FC = () => {
           </div>
         )}
       </div>
-    </PageLayout>
+    </ErrorBoundary>
   );
 };
 

@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
+import { ErrorBoundary } from '../../components/common/ErrorBoundary';
 import {
   Shield,
   AlertTriangle,
@@ -511,8 +512,9 @@ const AnomalyDashboard: React.FC<AnomalyDashboardProps> = () => {
   ].filter(Boolean).length;
 
   return (
-    <div className={`min-h-screen bg-gray-50 dark:bg-gray-900 ${isFullscreen ? 'fixed inset-0 z-50' : ''}`}>
-      {/* Header */}
+    <ErrorBoundary>
+      <div className={`min-h-screen bg-gray-50 dark:bg-gray-900 ${isFullscreen ? 'fixed inset-0 z-50' : ''}`}>
+        {/* Header */}
       <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
         <div className="px-4 py-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between">
@@ -828,6 +830,7 @@ const AnomalyDashboard: React.FC<AnomalyDashboardProps> = () => {
         onUpdateStatus={handleUpdateStatus}
       />
     </div>
+    </ErrorBoundary>
   );
 };
 

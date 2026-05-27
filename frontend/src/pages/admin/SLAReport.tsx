@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { slaApi } from '../../services/analyticsApi';
+import { ErrorBoundary } from '../../components/common/ErrorBoundary';
 import type { SLAMetrics, SLAReport, SLAOverview, SLAThresholds, SLATrend, SLAComplianceByProvider, SLAComplianceByCategory } from '../../services/analyticsApi';
 import PageLayout from '../../components/layout/PageLayout';
 import { useAuthStore } from '../../stores/authStore';
@@ -155,8 +156,9 @@ const SLAReport: React.FC = () => {
   }
 
   return (
-    <PageLayout title="SLA Compliance" subtitle="Service Level Agreement monitoring and compliance tracking">
-      <div className="space-y-6">
+    <ErrorBoundary>
+      <PageLayout title="SLA Compliance" subtitle="Service Level Agreement monitoring and compliance tracking">
+        <div className="space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
@@ -540,6 +542,7 @@ const SLAReport: React.FC = () => {
         )}
       </div>
     </PageLayout>
+    </ErrorBoundary>
   );
 };
 

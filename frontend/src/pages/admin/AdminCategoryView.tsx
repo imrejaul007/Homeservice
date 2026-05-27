@@ -17,6 +17,7 @@ import {
   Loader2,
 } from 'lucide-react';
 import authService from '../../services/AuthService';
+import { ErrorBoundary } from '../../components/common/ErrorBoundary';
 
 interface Subcategory {
   _id: string;
@@ -201,7 +202,8 @@ const AdminCategoryView: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-nilin-cream">
+    <ErrorBoundary>
+      <div className="min-h-screen bg-nilin-cream">
       <div className="max-w-5xl mx-auto px-4 py-8">
         {/* Header */}
         <div className="mb-6">
@@ -485,6 +487,7 @@ const AdminCategoryView: React.FC = () => {
         )}
       </div>
     </div>
+    </ErrorBoundary>
   );
 };
 

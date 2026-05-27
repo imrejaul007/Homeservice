@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { ErrorBoundary } from '../../components/common/ErrorBoundary';
 import {
   executiveDashboardApi,
   analyticsApi,
@@ -317,8 +318,9 @@ const ExecutiveDashboard: React.FC = () => {
   }
 
   return (
-    <PageLayout title="Executive Dashboard">
-      <div className="space-y-6">
+    <ErrorBoundary>
+      <PageLayout title="Executive Dashboard">
+        <div className="space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
@@ -772,6 +774,7 @@ const ExecutiveDashboard: React.FC = () => {
         </div>
       </div>
     </PageLayout>
+    </ErrorBoundary>
   );
 };
 

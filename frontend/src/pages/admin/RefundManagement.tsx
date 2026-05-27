@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { ErrorBoundary } from '../../components/common/ErrorBoundary';
 import {
   ArrowLeft,
   Search,
@@ -210,8 +211,9 @@ const RefundManagement: React.FC<RefundManagementProps> = () => {
   };
 
   return (
-    <div className="min-h-screen bg-nilin-cream">
-      <div className="max-w-7xl mx-auto px-4 py-6">
+    <ErrorBoundary>
+      <div className="min-h-screen bg-nilin-cream">
+        <div className="max-w-7xl mx-auto px-4 py-6">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center">
@@ -724,6 +726,7 @@ const RefundManagement: React.FC<RefundManagementProps> = () => {
         </div>
       )}
     </div>
+    </ErrorBoundary>
   );
 };
 

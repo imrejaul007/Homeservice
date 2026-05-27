@@ -12,6 +12,7 @@ import { getTenantContext, TenantContext } from '../utils/tenantFilter';
 import { sendProviderApproval, sendProviderRejection } from '../services/email.service';
 import { getSocketServer } from '../socket';
 import { NotificationService } from '../services/notification.service';
+import { churnService } from '../services/churn.service';
 import crypto from 'crypto';
 
 /**
@@ -3432,6 +3433,66 @@ export const getWithdrawalDetails = asyncHandler(async (req: Request, res: Respo
   });
 });
 
+// ============================================
+// Churn Management
+// ============================================
+
+/**
+ * Get churn statistics for admin dashboard
+ * GET /api/admin/churn/stats
+ */
+export const getChurnStats = asyncHandler(async (req: Request, res: Response) => {
+  const tenantContext: TenantContext = getTenantContext(req);
+
+  // Parse date range from query params or use defaults (last 30 days)
+  const endDate = req.query.endDate
+    ? new Date(req.query.endDate as string)
+    : new Date();
+  const startDate = req.query.startDate
+    ? new Date(req.query.startDate as string)
+    : new Date(endDate.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+  // Validate date range
+  if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+    throw ApiError.badRequest('Invalid date range provided');
+  }
+
+  if (startDate >= endDate) {
+    throw ApiError.badRequest('Start date must be before end date');
+  }
+
+  try {
+    // Get churn stats from churn service
+    const stats = await churnService.getChurnStats({ startDate, endDate });
+
+    // Add tenant context to response metadata
+    const responseData = {
+      ...stats,
+      metadata: {
+        dateRange: {
+          startDate: startDate.toISOString(),
+          endDate: endDate.toISOString(),
+        },
+        generatedAt: new Date().toISOString(),
+        tenantId: tenantContext.tenantId || null,
+      },
+    };
+
+    res.json({
+      success: true,
+      data: responseData,
+    });
+  } catch (error) {
+    logger.error('Failed to get churn stats', {
+      error: error instanceof Error ? error.message : String(error),
+      startDate: startDate.toISOString(),
+      endDate: endDate.toISOString(),
+      tenantId: tenantContext.tenantId,
+    });
+    throw error;
+  }
+});
+
 // Default export
 export default {
   // Provider Management
@@ -3481,4 +3542,6 @@ export default {
   getWithdrawalDetails,
   approveWithdrawal,
   rejectWithdrawal,
+  // Churn Management
+  getChurnStats,
 };

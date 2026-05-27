@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { ErrorBoundary } from '../../components/common/ErrorBoundary';
 import {
   ArrowLeft,
   Search,
@@ -258,8 +259,9 @@ const PayoutManagement: React.FC<PayoutManagementProps> = () => {
   ];
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
+    <ErrorBoundary>
+      <div className="min-h-screen bg-gray-50">
+        {/* Header */}
       <div className="bg-white border-b border-gray-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
           <div className="flex items-center justify-between">
@@ -864,6 +866,7 @@ const PayoutManagement: React.FC<PayoutManagementProps> = () => {
         </div>
       )}
     </div>
+    </ErrorBoundary>
   );
 };
 

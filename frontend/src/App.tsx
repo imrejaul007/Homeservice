@@ -72,6 +72,11 @@ const AdsPage = lazy(() => import('./pages/provider/AdsPage'));
 const ProviderSettingsPage = lazy(() => import('./pages/provider/ProviderSettingsPage'));
 
 const ManagedServicesPage = lazy(() => import('./pages/provider/ManagedServicesPage'));
+const EarningsReport = lazy(() => import('./pages/provider/EarningsReport'));
+const InsightsDashboard = lazy(() => import('./pages/provider/InsightsDashboard'));
+const AvailabilityPage = lazy(() => import('./pages/provider/AvailabilityPage'));
+const OperationsDashboard = lazy(() => import('./pages/provider/OperationsDashboard'));
+const PayoutDashboard = lazy(() => import('./pages/provider/PayoutDashboard'));
 const AboutPage = lazy(() => import('./pages/AboutPage'));
 const OfferDetailPage = lazy(() => import('./pages/OfferDetailPage'));
 const PrivacyPage = lazy(() => import('./pages/PrivacyPage'));
@@ -567,6 +572,51 @@ function App() {
           element={
             <ProviderRoute>
               <ManagedServicesPage />
+            </ProviderRoute>
+          }
+        />
+
+        <Route
+          path="/provider/earnings-report"
+          element={
+            <ProviderRoute>
+              <EarningsReport />
+            </ProviderRoute>
+          }
+        />
+
+        <Route
+          path="/provider/insights"
+          element={
+            <ProviderRoute>
+              <InsightsDashboard />
+            </ProviderRoute>
+          }
+        />
+
+        <Route
+          path="/provider/availability-alt"
+          element={
+            <ProviderRoute>
+              <AvailabilityPage />
+            </ProviderRoute>
+          }
+        />
+
+        <Route
+          path="/provider/operations"
+          element={
+            <ProviderRoute>
+              <OperationsDashboard />
+            </ProviderRoute>
+          }
+        />
+
+        <Route
+          path="/provider/payouts"
+          element={
+            <ProviderRoute>
+              <PayoutDashboard />
             </ProviderRoute>
           }
         />

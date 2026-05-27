@@ -45,8 +45,11 @@ import {
   getWithdrawalStats,
   getWithdrawalDetails,
   approveWithdrawal,
-  rejectWithdrawal
+  rejectWithdrawal,
+  // Churn Management
+  getChurnStats
 } from '../controllers/admin.controller';
+import { disputeService } from '../services/dispute.service';
 import { authenticate, requireRole } from '../middleware/auth.middleware';
 import { adminLimiter } from '../middleware/rateLimiter';
 import PlatformSettings from '../models/settings.model';
@@ -112,6 +115,9 @@ router.use(adminLimiter); // Apply rate limiting to all admin routes
 
 // Dashboard Stats
 router.get('/stats', getAdminStats);
+
+// Churn Stats
+router.get('/churn/stats', getChurnStats);
 
 // Provider verification routes
 router.get('/providers/pending', getPendingProviders);
@@ -260,6 +266,44 @@ router.get('/reviews/stats', getReviewStats);
 router.get('/reviews/pending', getPendingReviews);
 router.get('/reviews/flagged', getFlaggedReviews);
 router.patch('/reviews/:id/moderate', moderateReview);
+
+// ========================================
+// Disputes Management Routes (Alias for /api/disputes)
+// ========================================
+
+router.get('/disputes', asyncHandler(async (req: Request, res: Response) => {
+  const filters = {
+    status: req.query.status as any,
+    category: req.query.category as string,
+    priority: req.query.priority as string,
+    assignedTo: req.query.assignedTo as string,
+    startDate: req.query.startDate as string,
+    endDate: req.query.endDate as string,
+    search: req.query.search as string,
+    page: parseInt(req.query.page as string) || 1,
+    limit: parseInt(req.query.limit as string) || 20,
+  };
+
+  const result = await disputeService.listDisputes(filters);
+
+  res.json({
+    success: true,
+    data: result.disputes,
+    pagination: result.pagination,
+  });
+}));
+
+router.get('/disputes/stats', asyncHandler(async (req: Request, res: Response) => {
+  const stats = await disputeService.getDisputeStats(
+    req.query.startDate as string,
+    req.query.endDate as string
+  );
+
+  res.json({
+    success: true,
+    data: stats,
+  });
+}));
 
 // ========================================
 // Withdrawal Management Routes

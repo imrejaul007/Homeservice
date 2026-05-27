@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { ErrorBoundary } from '../../components/common/ErrorBoundary';
 import {
   Search,
   Star,
@@ -583,11 +584,12 @@ const ReviewModeration: React.FC = () => {
   };
 
   return (
-    <PageLayout
-      title="Review Moderation"
-      subtitle="Manage and moderate customer reviews"
-    >
-      <div className="space-y-6">
+    <ErrorBoundary>
+      <PageLayout
+        title="Review Moderation"
+        subtitle="Manage and moderate customer reviews"
+      >
+        <div className="space-y-6">
         {/* Stats Cards */}
         {stats && (
           <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
@@ -846,6 +848,7 @@ const ReviewModeration: React.FC = () => {
         />
       )}
     </PageLayout>
+    </ErrorBoundary>
   );
 };
 
