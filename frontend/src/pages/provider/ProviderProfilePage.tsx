@@ -31,6 +31,42 @@ import {
 } from '../../utils/providerProfile';
 import ServiceAreaLocationPicker from '../../components/provider/ServiceAreaLocationPicker';
 
+// Type for analytics data from backend
+interface AnalyticsOverview {
+  statusBreakdown?: {
+    pending?: number;
+    confirmed?: number;
+    in_progress?: number;
+    completed?: number;
+    cancelled?: number;
+    no_show?: number;
+  };
+  ratingStats?: {
+    averageRating?: number;
+    average?: number;
+  };
+}
+
+// Type for extended provider profile data
+interface ExtendedProviderProfile {
+  analytics?: {
+    bookingStats?: {
+      totalBookings?: number;
+      completedBookings?: number;
+    };
+    performanceMetrics?: {
+      responseTime?: number;
+    };
+  };
+  reviewsData?: {
+    averageRating?: number;
+  };
+  businessInfo?: {
+    yearsExperience?: number;
+  };
+  isActive?: boolean;
+}
+
 function buildProfileFormData(
   user: ReturnType<typeof useAuthStore.getState>['user'],
   providerProfile: ReturnType<typeof useAuthStore.getState>['providerProfile']
@@ -113,8 +149,10 @@ const ProviderProfilePage: React.FC = () => {
       try {
         const response = await api.get('/provider/analytics');
         if (response.data?.success && response.data?.data) {
-          // Backend returns: { data: { overview: { bookingStats, ratingStats, ... } } }
-          const { statusBreakdown, ratingStats } = response.data.data.overview || {};
+          // Backend returns: { data: { overview: { statusBreakdown, ratingStats, ... } } }
+          const overview = response.data.data.overview as AnalyticsOverview | undefined;
+          const statusBreakdown = overview?.statusBreakdown;
+          const ratingStats = overview?.ratingStats;
           const totalBookings =
             (statusBreakdown?.pending || 0) +
             (statusBreakdown?.confirmed || 0) +
@@ -122,28 +160,30 @@ const ProviderProfilePage: React.FC = () => {
             (statusBreakdown?.completed || 0) +
             (statusBreakdown?.cancelled || 0) +
             (statusBreakdown?.no_show || 0);
+          const extendedProfile = providerProfile as unknown as ExtendedProviderProfile;
           setStats((prev) => ({
             ...prev,
             totalBookings,
             completedJobs: statusBreakdown?.completed || 0,
             rating: ratingStats?.averageRating || ratingStats?.average || 0,
-            responseTime: (providerProfile as any)?.analytics?.performanceMetrics?.responseTime
-              ? `${Math.round((providerProfile as any).analytics.performanceMetrics.responseTime)} mins`
+            responseTime: extendedProfile?.analytics?.performanceMetrics?.responseTime
+              ? `${Math.round(extendedProfile.analytics.performanceMetrics.responseTime)} mins`
               : 'N/A',
-            yearsExperience: profileData.yearsExperience || (providerProfile as any)?.businessInfo?.yearsExperience || 0,
-            isActive: (providerProfile as any)?.isActive ?? true,
+            yearsExperience: profileData.yearsExperience || extendedProfile?.businessInfo?.yearsExperience || 0,
+            isActive: extendedProfile?.isActive ?? true,
           }));
         }
       } catch (error) {
         console.error('Failed to fetch analytics:', error);
         // Fallback to providerProfile data
+        const extendedProfile = providerProfile as unknown as ExtendedProviderProfile;
         setStats((prev) => ({
           ...prev,
-          totalBookings: (providerProfile as any)?.analytics?.bookingStats?.totalBookings || 0,
-          completedJobs: (providerProfile as any)?.analytics?.bookingStats?.completedBookings || 0,
-          rating: (providerProfile as any)?.reviewsData?.averageRating || 0,
-          yearsExperience: profileData.yearsExperience || (providerProfile as any)?.businessInfo?.yearsExperience || 0,
-          isActive: (providerProfile as any)?.isActive ?? true,
+          totalBookings: extendedProfile?.analytics?.bookingStats?.totalBookings || 0,
+          completedJobs: extendedProfile?.analytics?.bookingStats?.completedBookings || 0,
+          rating: extendedProfile?.reviewsData?.averageRating || 0,
+          yearsExperience: profileData.yearsExperience || extendedProfile?.businessInfo?.yearsExperience || 0,
+          isActive: extendedProfile?.isActive ?? true,
         }));
       }
     };

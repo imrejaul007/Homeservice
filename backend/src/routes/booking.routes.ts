@@ -25,8 +25,13 @@ import {
   blockTimePeriod,
   removeBlockedPeriod,
   getProviderAvailableSlots,
-  checkTimeSlotAvailability
+  checkTimeSlotAvailability,
+  getAvailabilityAnalytics
 } from '../controllers/availability.controller';
+
+import {
+  getBookingAnalyticsHandler
+} from '../controllers/analytics.controller';
 
 import { authenticate } from '../middleware/auth.middleware';
 import {
@@ -84,5 +89,15 @@ router.delete('/availability/block/:blockId', authenticate, removeBlockedPeriod)
 // Public Availability Queries
 router.get('/availability/provider/:providerId/slots', getProviderAvailableSlots);
 router.get('/availability/provider/:providerId/check', checkTimeSlotAvailability);
+
+// ===================================
+// ANALYTICS ROUTES
+// ===================================
+
+// Booking Analytics (admin/provider)
+router.get('/bookings/analytics', authenticate, getBookingAnalyticsHandler);
+
+// Availability Analytics (provider)
+router.get('/availability/analytics', authenticate, getAvailabilityAnalytics);
 
 export default router;

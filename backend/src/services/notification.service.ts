@@ -183,6 +183,7 @@ export type NotificationType =
   | 'booking_reminder'
   | 'message_received'
   | 'review_received'
+  | 'review_rejected'
   | 'promotion'
   | 'loyalty_update'
   | 'provider_approved'
@@ -419,6 +420,16 @@ const NOTIFICATION_TEMPLATES: Record<NotificationType, { customer: { title: stri
     provider: {
       title: 'Service Under Review',
       message: 'Your new service has been submitted and is pending review.',
+    },
+  },
+  review_rejected: {
+    customer: {
+      title: 'Review Removed',
+      message: 'A review on your profile has been removed for violating guidelines.',
+    },
+    provider: {
+      title: 'Review Removed',
+      message: 'A review has been removed for violating our guidelines.',
     },
   },
 };
@@ -1159,6 +1170,7 @@ export class NotificationService {
       booking_reminder: prefs.push?.reminders ?? true,
       message_received: prefs.push?.newMessages ?? true,
       review_received: prefs.email?.bookingUpdates ?? true,
+      review_rejected: prefs.push?.bookingUpdates ?? true,
       promotion: prefs.email?.promotions ?? false,
       loyalty_update: true,
       provider_approved: prefs.push?.bookingUpdates ?? true,

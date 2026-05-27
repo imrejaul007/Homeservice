@@ -38,6 +38,9 @@ import {
   getTrustScoreColor,
   getTrustScoreBgColor,
   formatFlagType,
+  bulkUserActionApi,
+  exportUsersApi,
+  BulkUserAction,
 } from '../../services/customerOpsApi';
 import { useAuthStore } from '../../stores/authStore';
 import type {
@@ -125,60 +128,81 @@ const RiskBadge: React.FC<{ level: RiskLevel }> = ({ level }) => (
 const CustomerCard: React.FC<{
   customer: CustomerListItem;
   onClick: () => void;
-}> = ({ customer, onClick }) => {
+  isSelected: boolean;
+  onToggleSelect: () => void;
+}> = ({ customer, onClick, isSelected, onToggleSelect }) => {
   const { metrics, user } = customer;
 
   return (
     <div
-      onClick={onClick}
-      className="bg-white rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow cursor-pointer border border-gray-100"
+      className={`bg-white rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow border-2 ${
+        isSelected ? 'border-nilin-coral' : 'border-gray-100'
+      }`}
     >
       <div className="flex items-start gap-4">
-        <div className="relative">
-          <div className="w-12 h-12 rounded-full bg-nilin-coral/10 flex items-center justify-center overflow-hidden">
-            {user.avatar ? (
-              <img src={user.avatar} alt={user.firstName} className="w-full h-full object-cover" />
-            ) : (
-              <span className="text-nilin-coral font-semibold text-lg">
-                {user.firstName.charAt(0).toUpperCase()}
-              </span>
-            )}
-          </div>
-          {metrics.isBlocked && (
-            <div className="absolute -bottom-1 -right-1 w-5 h-5 bg-red-500 rounded-full flex items-center justify-center">
-              <Ban className="w-3 h-3 text-white" />
-            </div>
-          )}
+        {/* Checkbox for bulk selection */}
+        <div className="flex items-center h-12">
+          <input
+            type="checkbox"
+            checked={isSelected}
+            onChange={(e) => {
+              e.stopPropagation();
+              onToggleSelect();
+            }}
+            className="w-5 h-5 text-nilin-coral rounded border-gray-300 focus:ring-nilin-coral cursor-pointer"
+          />
         </div>
 
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
-            <h3 className="font-semibold text-nilin-charcoal truncate">
-              {user.firstName} {user.lastName}
-            </h3>
-            <TierBadge tier={metrics.tier} />
+        <div
+          onClick={onClick}
+          className="flex items-start gap-4 flex-1 cursor-pointer"
+        >
+          <div className="relative">
+            <div className="w-12 h-12 rounded-full bg-nilin-coral/10 flex items-center justify-center overflow-hidden">
+              {user.avatar ? (
+                <img src={user.avatar} alt={user.firstName} className="w-full h-full object-cover" />
+              ) : (
+                <span className="text-nilin-coral font-semibold text-lg">
+                  {user.firstName.charAt(0).toUpperCase()}
+                </span>
+              )}
+            </div>
+            {metrics.isBlocked && (
+              <div className="absolute -bottom-1 -right-1 w-5 h-5 bg-red-500 rounded-full flex items-center justify-center">
+                <Ban className="w-3 h-3 text-white" />
+              </div>
+            )}
           </div>
 
-          <p className="text-sm text-nilin-warmGray truncate mb-2">{user.email}</p>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-1">
+              <h3 className="font-semibold text-nilin-charcoal truncate">
+                {user.firstName} {user.lastName}
+              </h3>
+              <TierBadge tier={metrics.tier} />
+            </div>
 
-          <div className="flex items-center gap-4 text-sm">
-            <div className="flex items-center gap-1">
-              <TrustScoreGauge score={metrics.trustScore} size="sm" />
-              <span className="text-nilin-warmGray">Trust</span>
+            <p className="text-sm text-nilin-warmGray truncate mb-2">{user.email}</p>
+
+            <div className="flex items-center gap-4 text-sm">
+              <div className="flex items-center gap-1">
+                <TrustScoreGauge score={metrics.trustScore} size="sm" />
+                <span className="text-nilin-warmGray">Trust</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <Calendar className="w-4 h-4 text-nilin-warmGray" />
+                <span className="text-nilin-warmGray">{metrics.totalBookings} bookings</span>
+              </div>
+              <RiskBadge level={metrics.riskLevel} />
             </div>
-            <div className="flex items-center gap-1">
-              <Calendar className="w-4 h-4 text-nilin-warmGray" />
-              <span className="text-nilin-warmGray">{metrics.totalBookings} bookings</span>
-            </div>
-            <RiskBadge level={metrics.riskLevel} />
+
+            {metrics.abuseCount > 0 && (
+              <div className="mt-2 flex items-center gap-1 text-amber-600 text-xs">
+                <AlertTriangle className="w-3 h-3" />
+                <span>{metrics.abuseCount} unresolved flag(s)</span>
+              </div>
+            )}
           </div>
-
-          {metrics.abuseCount > 0 && (
-            <div className="mt-2 flex items-center gap-1 text-amber-600 text-xs">
-              <AlertTriangle className="w-3 h-3" />
-              <span>{metrics.abuseCount} unresolved flag(s)</span>
-            </div>
-          )}
         </div>
       </div>
     </div>
@@ -950,6 +974,69 @@ const CustomerManagement: React.FC = () => {
   const [sortBy, setSortBy] = useState('trustScore');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
 
+  // Bulk selection state
+  const [selectedUserIds, setSelectedUserIds] = useState<Set<string>>(new Set());
+  const [bulkActionLoading, setBulkActionLoading] = useState(false);
+  const [showBulkActionModal, setShowBulkActionModal] = useState(false);
+  const [pendingBulkAction, setPendingBulkAction] = useState<BulkUserAction | null>(null);
+
+  // Toggle user selection
+  const toggleUserSelection = (userId: string) => {
+    setSelectedUserIds((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(userId)) {
+        newSet.delete(userId);
+      } else {
+        newSet.add(userId);
+      }
+      return newSet;
+    });
+  };
+
+  // Select all visible users
+  const selectAllVisibleUsers = () => {
+    if (selectedUserIds.size === customers.length) {
+      setSelectedUserIds(new Set());
+    } else {
+      setSelectedUserIds(new Set(customers.map((c) => c.user.id)));
+    }
+  };
+
+  // Handle bulk action
+  const handleBulkAction = async () => {
+    if (!pendingBulkAction || selectedUserIds.size === 0) return;
+
+    setBulkActionLoading(true);
+    try {
+      const result = await bulkUserActionApi(
+        pendingBulkAction,
+        Array.from(selectedUserIds)
+      );
+      if (result.success) {
+        setSelectedUserIds(new Set());
+        await loadCustomers();
+      }
+    } catch (error) {
+      console.error('Bulk action failed:', error);
+    } finally {
+      setBulkActionLoading(false);
+      setShowBulkActionModal(false);
+      setPendingBulkAction(null);
+    }
+  };
+
+  // Export users to CSV
+  const handleExportUsers = async () => {
+    try {
+      await exportUsersApi({
+        status: filters.isBlocked === undefined ? undefined : filters.isBlocked ? 'suspended' : 'active',
+        role: 'customer',
+      });
+    } catch (error) {
+      console.error('Export failed:', error);
+    }
+  };
+
   const loadCustomers = useCallback(async () => {
     setLoading(true);
     try {
@@ -1089,6 +1176,57 @@ const CustomerManagement: React.FC = () => {
           stats={stats}
         />
 
+        {/* Bulk Action Toolbar */}
+        {selectedUserIds.size > 0 && (
+          <div className="bg-nilin-coral/10 border border-nilin-coral/20 rounded-xl p-4 mb-6">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <span className="text-nilin-charcoal font-medium">
+                  {selectedUserIds.size} user{selectedUserIds.size !== 1 ? 's' : ''} selected
+                </span>
+                <button
+                  onClick={() => setSelectedUserIds(new Set())}
+                  className="text-sm text-nilin-warmGray hover:text-nilin-charcoal"
+                >
+                  Clear selection
+                </button>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    setPendingBulkAction('activate');
+                    setShowBulkActionModal(true);
+                  }}
+                  className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors flex items-center gap-2"
+                >
+                  <UserCheck className="w-4 h-4" />
+                  Activate
+                </button>
+                <button
+                  onClick={() => {
+                    setPendingBulkAction('deactivate');
+                    setShowBulkActionModal(true);
+                  }}
+                  className="px-4 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 transition-colors flex items-center gap-2"
+                >
+                  <Ban className="w-4 h-4" />
+                  Deactivate
+                </button>
+                <button
+                  onClick={() => {
+                    setPendingBulkAction('suspend');
+                    setShowBulkActionModal(true);
+                  }}
+                  className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors flex items-center gap-2"
+                >
+                  <UserX className="w-4 h-4" />
+                  Suspend
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Customer List */}
         {loading ? (
           <div className="flex items-center justify-center py-12">
@@ -1104,12 +1242,38 @@ const CustomerManagement: React.FC = () => {
           </div>
         ) : (
           <>
+            {/* Header with export and select all */}
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={selectedUserIds.size === customers.length && customers.length > 0}
+                  onChange={selectAllVisibleUsers}
+                  className="w-5 h-5 text-nilin-coral rounded border-gray-300 focus:ring-nilin-coral cursor-pointer"
+                />
+                <span className="text-sm text-nilin-warmGray">
+                  {selectedUserIds.size === customers.length && customers.length > 0
+                    ? 'Deselect all'
+                    : 'Select all on this page'}
+                </span>
+              </div>
+              <button
+                onClick={handleExportUsers}
+                className="px-4 py-2 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors flex items-center gap-2"
+              >
+                <BarChart3 className="w-4 h-4" />
+                Export CSV
+              </button>
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {customers.map((customer) => (
                 <CustomerCard
                   key={customer.metrics._id}
                   customer={customer}
                   onClick={() => setSelectedCustomerId(customer.user.id)}
+                  isSelected={selectedUserIds.has(customer.user.id)}
+                  onToggleSelect={() => toggleUserSelection(customer.user.id)}
                 />
               ))}
             </div>
@@ -1153,6 +1317,69 @@ const CustomerManagement: React.FC = () => {
           onClose={() => setSelectedCustomerId(null)}
           onRefresh={loadCustomers}
         />
+      )}
+
+      {/* Bulk Action Confirmation Modal */}
+      {showBulkActionModal && pendingBulkAction && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl p-6 max-w-md w-full">
+            <div className="flex items-center gap-3 mb-4">
+              {pendingBulkAction === 'activate' && (
+                <div className="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center">
+                  <UserCheck className="w-5 h-5 text-green-600" />
+                </div>
+              )}
+              {pendingBulkAction === 'deactivate' && (
+                <div className="w-10 h-10 bg-amber-100 rounded-full flex items-center justify-center">
+                  <Ban className="w-5 h-5 text-amber-600" />
+                </div>
+              )}
+              {pendingBulkAction === 'suspend' && (
+                <div className="w-10 h-10 bg-red-100 rounded-full flex items-center justify-center">
+                  <UserX className="w-5 h-5 text-red-600" />
+                </div>
+              )}
+              <h3 className="text-lg font-semibold text-nilin-charcoal">
+                Confirm {pendingBulkAction.charAt(0).toUpperCase() + pendingBulkAction.slice(1)}
+              </h3>
+            </div>
+            <p className="text-nilin-warmGray mb-6">
+              Are you sure you want to {pendingBulkAction}{' '}
+              <span className="font-semibold text-nilin-charcoal">{selectedUserIds.size}</span> selected
+              user{selectedUserIds.size !== 1 ? 's' : ''}?
+              {pendingBulkAction === 'suspend' && (
+                <span className="block mt-2 text-amber-600">
+                  Suspended users will not be able to access their accounts.
+                </span>
+              )}
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => {
+                  setShowBulkActionModal(false);
+                  setPendingBulkAction(null);
+                }}
+                disabled={bulkActionLoading}
+                className="flex-1 px-4 py-2 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleBulkAction}
+                disabled={bulkActionLoading}
+                className={`flex-1 px-4 py-2 text-white rounded-lg transition-colors disabled:opacity-50 ${
+                  pendingBulkAction === 'activate'
+                    ? 'bg-green-500 hover:bg-green-600'
+                    : pendingBulkAction === 'deactivate'
+                    ? 'bg-amber-500 hover:bg-amber-600'
+                    : 'bg-red-500 hover:bg-red-600'
+                }`}
+              >
+                {bulkActionLoading ? 'Processing...' : 'Confirm'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

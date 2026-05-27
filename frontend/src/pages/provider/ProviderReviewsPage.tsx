@@ -14,6 +14,7 @@ import NavigationHeader from '../../components/layout/NavigationHeader';
 import Footer from '../../components/layout/Footer';
 import Breadcrumb from '../../components/common/Breadcrumb';
 import { useAuthStore } from '../../stores/authStore';
+import { useToastActions } from '../../components/common/Toast';
 import { api } from '../../services/api';
 
 // Types
@@ -50,6 +51,7 @@ interface ReviewsResponse {
 const ProviderReviewsPage: React.FC = () => {
   const navigate = useNavigate();
   const { user, isAuthenticated } = useAuthStore();
+  const toast = useToastActions();
   const [reviews, setReviews] = useState<Review[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -121,7 +123,9 @@ const ProviderReviewsPage: React.FC = () => {
         setReplyText('');
       }
     } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to submit reply');
+      const errorMessage = err.response?.data?.message || 'Failed to submit reply';
+      setError(errorMessage);
+      toast.error('Failed to submit reply', errorMessage);
     } finally {
       setIsSubmittingReply(false);
     }

@@ -36,6 +36,17 @@ router.get(
 );
 
 /**
+ * GET /api/experiences/available-bookings
+ * Get completed bookings eligible for experience submission
+ * Requires authentication
+ */
+router.get(
+  '/available-bookings',
+  authenticate,
+  experienceController.getAvailableBookings
+);
+
+/**
  * GET /api/experiences/:id
  * Get single experience by ID (public)
  */

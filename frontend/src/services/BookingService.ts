@@ -70,7 +70,7 @@ export interface Booking {
   actualDuration?: number;
 
   // Status
-  status: 'pending' | 'confirmed' | 'in_progress' | 'completed' | 'cancelled';
+  status: 'pending' | 'confirmed' | 'in_progress' | 'completed' | 'cancelled' | 'no_show';
   statusHistory: Array<{
     status: string;
     timestamp: string;
@@ -940,12 +940,13 @@ class BookingService {
    * Get booking status color
    */
   getStatusColor(status: Booking['status']): string {
-    const colors = {
+    const colors: Record<Booking['status'], string> = {
       pending: 'text-yellow-600 bg-yellow-100',
       confirmed: 'text-blue-600 bg-blue-100',
       in_progress: 'text-purple-600 bg-purple-100',
       completed: 'text-green-600 bg-green-100',
       cancelled: 'text-red-600 bg-red-100',
+      no_show: 'text-orange-600 bg-orange-100',
     };
     return colors[status] || 'text-gray-600 bg-gray-100';
   }
@@ -954,12 +955,13 @@ class BookingService {
    * Get booking status label
    */
   getStatusLabel(status: Booking['status']): string {
-    const labels = {
+    const labels: Record<Booking['status'], string> = {
       pending: 'Pending',
       confirmed: 'Confirmed',
       in_progress: 'In Progress',
       completed: 'Completed',
       cancelled: 'Cancelled',
+      no_show: 'No Show',
     };
     return labels[status] || status;
   }

@@ -25,6 +25,7 @@ import bookingService from '../../services/BookingService';
 import { cn, formatPrice } from '../../lib/utils';
 import ExperienceSubmissionForm from '../experience/ExperienceSubmissionForm';
 import { experienceApi } from '../../services/experienceApi';
+import { useToastActions } from '../common/Toast';
 
 interface BookingDetailProps {
   userType: 'customer' | 'provider';
@@ -35,6 +36,7 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
   const { bookingId } = useParams<{ bookingId: string }>();
   const [searchParams] = useSearchParams();
   const activeTab = searchParams.get('tab') || 'details';
+  const toast = useToastActions();
 
   const { user } = useAuthStore();
   const {
@@ -109,6 +111,7 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
       setNewMessage('');
     } catch (error) {
       console.error('Failed to send message:', error);
+      toast.error('Failed to send message', 'Please try again');
     }
   };
 

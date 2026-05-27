@@ -504,6 +504,77 @@ class CustomerOpsApiService {
 }
 
 // ============================================
+// Bulk Operations
+// ============================================
+
+export type BulkUserAction = 'activate' | 'deactivate' | 'suspend';
+
+export interface BulkActionResult {
+  success: boolean;
+  updated: number;
+  failed: string[];
+  skippedOwnAccount?: number;
+  totalRequested?: number;
+}
+
+/**
+ * Perform bulk action on multiple users
+ */
+export async function bulkUserActionApi(
+  action: BulkUserAction,
+  userIds: string[]
+): Promise<BulkActionResult> {
+  const response = await api.post('/admin/users/bulk-action', {
+    action,
+    userIds,
+  });
+  return response.data as BulkActionResult;
+}
+
+/**
+ * Export users to CSV file
+ */
+export async function exportUsersApi(params?: {
+  status?: string;
+  role?: string;
+}): Promise<void> {
+  const queryParams = new URLSearchParams();
+  queryParams.append('format', 'csv');
+
+  if (params?.status) {
+    queryParams.append('status', params.status);
+  }
+  if (params?.role) {
+    queryParams.append('role', params.role);
+  }
+
+  const response = await api.get(`/admin/users/export?${queryParams.toString()}`, {
+    responseType: 'blob',
+  });
+
+  // Create download link
+  const url = window.URL.createObjectURL(new Blob([response.data]));
+  const link = document.createElement('a');
+  link.href = url;
+
+  // Extract filename from Content-Disposition header
+  const contentDisposition = response.headers['content-disposition'];
+  let filename = `users-export-${new Date().toISOString().slice(0, 10)}.csv`;
+  if (contentDisposition) {
+    const matches = contentDisposition.match(/filename="(.+)"/);
+    if (matches) {
+      filename = matches[1];
+    }
+  }
+
+  link.setAttribute('download', filename);
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
+}
+
+// ============================================
 // Export singleton instance
 // ============================================
 

@@ -26,6 +26,83 @@ import { useToastActions } from '../common/Toast';
 import { AddServiceModal } from './AddServiceModal';
 import { EditServiceModal } from './EditServiceModal';
 
+// Confirmation Modal Component
+interface ConfirmModalProps {
+  isOpen: boolean;
+  title: string;
+  message: string;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  variant?: 'danger' | 'warning' | 'default';
+  isLoading?: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}
+
+const ConfirmModal: React.FC<ConfirmModalProps> = ({
+  isOpen,
+  title,
+  message,
+  confirmLabel = 'Confirm',
+  cancelLabel = 'Cancel',
+  variant = 'danger',
+  isLoading = false,
+  onConfirm,
+  onCancel,
+}) => {
+  if (!isOpen) return null;
+
+  const buttonStyles = {
+    danger: 'bg-red-600 hover:bg-red-700 text-white',
+    warning: 'bg-amber-600 hover:bg-amber-700 text-white',
+    default: 'bg-nilin-coral hover:bg-nilin-coral/90 text-white',
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div
+        className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+        onClick={onCancel}
+      />
+      <div className="relative glass-nilin-strong rounded-nilin-xl p-6 max-w-md w-full shadow-nilin-lg">
+        <div className="text-center">
+          <div className={`mx-auto w-12 h-12 rounded-full flex items-center justify-center mb-4 ${
+            variant === 'danger' ? 'bg-red-100' : variant === 'warning' ? 'bg-amber-100' : 'bg-nilin-blush'
+          }`}>
+            {variant === 'danger' ? (
+              <AlertCircle className="w-6 h-6 text-red-600" />
+            ) : variant === 'warning' ? (
+              <AlertCircle className="w-6 h-6 text-amber-600" />
+            ) : (
+              <AlertCircle className="w-6 h-6 text-nilin-coral" />
+            )}
+          </div>
+          <h3 className="text-lg font-serif text-nilin-charcoal mb-2">{title}</h3>
+          <p className="text-sm text-nilin-warmGray mb-6">{message}</p>
+        </div>
+        <div className="flex gap-3">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={isLoading}
+            className="flex-1 py-2.5 rounded-nilin border border-nilin-border text-nilin-charcoal hover:bg-nilin-muted transition-colors font-medium disabled:opacity-50"
+          >
+            {cancelLabel}
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={isLoading}
+            className={`flex-1 py-2.5 rounded-nilin font-medium transition-colors disabled:opacity-50 ${buttonStyles[variant]}`}
+          >
+            {isLoading ? 'Processing...' : confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 interface ServiceAnalyticsData {
   totalViews: number;
   totalClicks: number;
@@ -225,6 +302,12 @@ const ServiceManagement: React.FC = () => {
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [analyticsError, setAnalyticsError] = useState<string | null>(null);
 
+  // Delete Confirmation Modal State
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deletingServiceId, setDeletingServiceId] = useState<string | null>(null);
+  const [deletingServiceName, setDeletingServiceName] = useState<string>('');
+  const [isDeleting, setIsDeleting] = useState(false);
+
   useEffect(() => {
     // Don't make API calls if user is not authenticated as provider
     if (!isAuthenticated || !user || user.role !== 'provider' || !tokens?.accessToken) {
@@ -419,14 +502,19 @@ const ServiceManagement: React.FC = () => {
     }
   };
 
-  const deleteService = async (serviceId: string, serviceName: string) => {
-    if (!confirm(`Permanently delete "${serviceName}"? This cannot be undone.`)) {
-      return;
-    }
+  const handleDeleteClick = (serviceId: string, serviceName: string) => {
+    setDeletingServiceId(serviceId);
+    setDeletingServiceName(serviceName);
+    setShowDeleteModal(true);
+  };
 
+  const confirmDelete = async () => {
+    if (!deletingServiceId) return;
+
+    setIsDeleting(true);
     try {
       const data = await authService.delete<{ success: boolean; message?: string }>(
-        `/provider/services/${serviceId}`
+        `/provider/services/${deletingServiceId}`
       );
 
       if (data.success) {
@@ -443,7 +531,19 @@ const ServiceManagement: React.FC = () => {
         'Delete failed',
         err instanceof Error ? err.message : 'Failed to delete service'
       );
+    } finally {
+      setIsDeleting(false);
+      setShowDeleteModal(false);
+      setDeletingServiceId(null);
+      setDeletingServiceName('');
     }
+  };
+
+  const cancelDelete = () => {
+    setShowDeleteModal(false);
+    setDeletingServiceId(null);
+    setDeletingServiceName('');
+    setIsDeleting(false);
   };
 
   const getStatusBadge = (status: string) => {
@@ -843,7 +943,7 @@ const ServiceManagement: React.FC = () => {
                       </button>
                       <button
                         type="button"
-                        onClick={() => deleteService(service._id, service.name)}
+                        onClick={() => handleDeleteClick(service._id, service.name)}
                         className="p-2.5 text-nilin-warmGray hover:text-red-600 hover:bg-red-50 rounded-nilin transition-colors"
                         title="Delete service"
                       >
@@ -1023,6 +1123,19 @@ const ServiceManagement: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Delete Confirmation Modal */}
+      <ConfirmModal
+        isOpen={showDeleteModal}
+        title="Delete Service"
+        message={`Permanently delete "${deletingServiceName}"? This cannot be undone.`}
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        variant="danger"
+        isLoading={isDeleting}
+        onConfirm={confirmDelete}
+        onCancel={cancelDelete}
+      />
     </div>
   );
 };

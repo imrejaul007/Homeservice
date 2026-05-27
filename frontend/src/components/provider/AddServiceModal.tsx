@@ -152,7 +152,8 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
   };
 
   const addTag = () => {
-    if (currentTag.trim() && !formData.tags.includes(currentTag.trim())) {
+    const normalizedTag = currentTag.trim().toLowerCase();
+    if (normalizedTag && !formData.tags.some(tag => tag.toLowerCase() === normalizedTag)) {
       handleInputChange('tags', [...formData.tags, currentTag.trim()]);
       setCurrentTag('');
     }

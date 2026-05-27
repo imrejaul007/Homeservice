@@ -2346,3 +2346,41 @@ export const getCategoryStats = asyncHandler(async (_req: Request, res: Response
     }
   });
 });
+// Default export
+export default {
+  // Provider Management
+  getPendingProviders,
+  getProviderForVerification,
+  approveProvider,
+  rejectProvider,
+  getVerificationStats,
+  createTestProvider,
+  // Service Management
+  getAllServices,
+  getPendingServices,
+  updateServiceStatus,
+  adminDeleteService,
+  getServiceStats,
+  getProviderServices,
+  getProvidersWithServices,
+  batchServiceAction,
+  // User Management
+  getAllUsers,
+  updateUserStatus,
+  adminDeleteUser,
+  getUserStats,
+  // Booking Management
+  getAllBookings,
+  getBookingDetails,
+  updateBookingStatus,
+  getBookingStats,
+  // Category Management
+  getAllCategories,
+  getCategoryDetails,
+  createCategory,
+  updateCategory,
+  deleteCategory,
+  toggleCategoryFeatured,
+  addSubcategory,
+  getCategoryStats,
+};

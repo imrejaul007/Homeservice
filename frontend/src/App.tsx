@@ -32,6 +32,7 @@ const AdminReports = lazy(() => import('./components/dashboard/AdminReports'));
 const AdminOffersManagement = lazy(() => import('./components/dashboard/AdminOffersManagement'));
 const AdminCategoryView = lazy(() => import('./pages/admin/AdminCategoryView'));
 const CategoryManagement = lazy(() => import('./pages/admin/CategoryManagement'));
+const ReviewModeration = lazy(() => import('./pages/admin/ReviewModeration'));
 const HomePage = lazy(() => import('./pages/HomePage'));
 const ExperiencesPage = lazy(() => import('./pages/ExperiencesPage'));
 const SearchPage = lazy(() => import('./pages/SearchPage'));
@@ -616,6 +617,15 @@ function App() {
           element={
             <AdminRoute>
               <AdminOffersManagement />
+            </AdminRoute>
+          }
+        />
+
+        <Route
+          path="/admin/reviews"
+          element={
+            <AdminRoute>
+              <ReviewModeration />
             </AdminRoute>
           }
         />

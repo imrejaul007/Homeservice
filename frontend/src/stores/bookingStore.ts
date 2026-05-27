@@ -222,6 +222,33 @@ export const useBookingStore = create<BookingState>()(
       acceptBooking: async (bookingId: string, data?: BookingAcceptData): Promise<void> => {
         const bookingService = (await import('../services/BookingService')).default;
 
+        // Store previous state for rollback
+        const previousProviderBookings = [...get().providerBookings];
+        const previousCurrentBooking = get().currentBooking;
+        const previousStats = get().providerBookingsStats;
+
+        // Optimistic update - apply change immediately
+        set((state) => {
+          const index = state.providerBookings.findIndex(b => b._id === bookingId);
+          if (index !== -1) {
+            state.providerBookings[index] = {
+              ...state.providerBookings[index],
+              status: 'confirmed'
+            };
+          }
+          if (state.currentBooking?._id === bookingId) {
+            state.currentBooking = {
+              ...state.currentBooking,
+              status: 'confirmed'
+            };
+          }
+          // Update stats optimistically
+          if (state.providerBookingsStats) {
+            state.providerBookingsStats.pending = Math.max(0, state.providerBookingsStats.pending - 1);
+            state.providerBookingsStats.confirmed = (state.providerBookingsStats.confirmed || 0) + 1;
+          }
+        });
+
         try {
           set((state) => {
             state.isSubmitting = true;
@@ -232,21 +259,22 @@ export const useBookingStore = create<BookingState>()(
           const updatedBooking = response.data.booking;
 
           set((state) => {
-            // Update in provider bookings
+            // Update with server response
             const index = state.providerBookings.findIndex(b => b._id === bookingId);
             if (index !== -1) {
               state.providerBookings[index] = updatedBooking;
             }
-
-            // Update current booking if it matches
             if (state.currentBooking?._id === bookingId) {
               state.currentBooking = updatedBooking;
             }
-
             state.isSubmitting = false;
           });
         } catch (error) {
+          // Rollback on failure
           set((state) => {
+            state.providerBookings = previousProviderBookings;
+            state.currentBooking = previousCurrentBooking;
+            state.providerBookingsStats = previousStats;
             state.isSubmitting = false;
             state.errors = [{
               message: error instanceof Error ? error.message : 'Failed to accept booking',
@@ -260,6 +288,33 @@ export const useBookingStore = create<BookingState>()(
       rejectBooking: async (bookingId: string, data: BookingCancelData): Promise<void> => {
         const bookingService = (await import('../services/BookingService')).default;
 
+        // Store previous state for rollback
+        const previousProviderBookings = [...get().providerBookings];
+        const previousCurrentBooking = get().currentBooking;
+        const previousStats = get().providerBookingsStats;
+
+        // Optimistic update - apply change immediately
+        set((state) => {
+          const index = state.providerBookings.findIndex(b => b._id === bookingId);
+          if (index !== -1) {
+            state.providerBookings[index] = {
+              ...state.providerBookings[index],
+              status: 'cancelled'
+            };
+          }
+          if (state.currentBooking?._id === bookingId) {
+            state.currentBooking = {
+              ...state.currentBooking,
+              status: 'cancelled'
+            };
+          }
+          // Update stats optimistically
+          if (state.providerBookingsStats) {
+            state.providerBookingsStats.pending = Math.max(0, state.providerBookingsStats.pending - 1);
+            state.providerBookingsStats.cancelled = (state.providerBookingsStats.cancelled || 0) + 1;
+          }
+        });
+
         try {
           set((state) => {
             state.isSubmitting = true;
@@ -270,21 +325,22 @@ export const useBookingStore = create<BookingState>()(
           const updatedBooking = response.data.booking;
 
           set((state) => {
-            // Update in provider bookings
+            // Update with server response
             const index = state.providerBookings.findIndex(b => b._id === bookingId);
             if (index !== -1) {
               state.providerBookings[index] = updatedBooking;
             }
-
-            // Update current booking if it matches
             if (state.currentBooking?._id === bookingId) {
               state.currentBooking = updatedBooking;
             }
-
             state.isSubmitting = false;
           });
         } catch (error) {
+          // Rollback on failure
           set((state) => {
+            state.providerBookings = previousProviderBookings;
+            state.currentBooking = previousCurrentBooking;
+            state.providerBookingsStats = previousStats;
             state.isSubmitting = false;
             state.errors = [{
               message: error instanceof Error ? error.message : 'Failed to reject booking',

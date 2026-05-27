@@ -194,6 +194,7 @@ export interface ProviderInsightsAnalytics {
     completed: number;
     pending: number;
     cancelled: number;
+    no_show?: number;
   };
   topServices: Array<{
     name: string;
@@ -230,7 +231,7 @@ export const providerAnalyticsApi = {
     period: '7d' | '30d' | '90d' = '30d',
   ): Promise<{ success: boolean; data: ProviderInsightsAnalytics }> => {
     const response = await analyticsApi.get('/insights', {
-      params: { period },
+      params: { period: period === '7d' ? 'week' : period === '30d' ? 'month' : 'quarter' },
     });
     return response.data;
   },

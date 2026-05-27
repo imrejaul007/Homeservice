@@ -498,6 +498,89 @@ export const getExperienceById = asyncHandler(async (req: Request, res: Response
   });
 });
 
+/**
+ * Get Available Bookings for Experience Submission
+ * GET /api/experiences/available-bookings
+ *
+ * Returns completed bookings that don't have an experience submitted yet
+ */
+export const getAvailableBookings = asyncHandler(async (req: Request, res: Response) => {
+  const user = req.user as any;
+  const { page = '1', limit = '20' } = req.query;
+
+  const pageNum = parseInt(page as string, 10);
+  const limitNum = parseInt(limit as string, 10);
+  const skip = (pageNum - 1) * limitNum;
+
+  // Get all completed bookings for this user
+  const completedBookings = await Booking.find({
+    customerId: user._id,
+    status: 'completed',
+  })
+    .populate('serviceId', 'name category images')
+    .populate('providerId', 'firstName lastName avatar')
+    .sort({ updatedAt: -1 })
+    .lean();
+
+  // Get existing experience submissions
+  const existingExperiences = await Experience.find({
+    userId: user._id,
+    isDeleted: false,
+  }).select('bookingId');
+
+  const submittedBookingIds = new Set(
+    existingExperiences.map(e => e.bookingId?.toString())
+  );
+
+  // Filter out bookings that already have an experience
+  const availableBookings = completedBookings.filter(
+    booking => !submittedBookingIds.has(booking._id.toString())
+  );
+
+  // Paginate
+  const paginatedBookings = availableBookings.slice(skip, skip + limitNum);
+
+  // Transform to response format
+  const bookings = paginatedBookings.map(booking => ({
+    bookingId: booking._id,
+    bookingNumber: booking.bookingNumber,
+    service: booking.serviceId
+      ? {
+          id: (booking.serviceId as any)._id,
+          name: (booking.serviceId as any).name,
+          category: (booking.serviceId as any).category,
+          images: (booking.serviceId as any).images,
+        }
+      : null,
+    provider: booking.providerId
+      ? {
+          id: (booking.providerId as any)._id,
+          name: `${(booking.providerId as any).firstName || ''} ${(booking.providerId as any).lastName || ''}`.trim(),
+          avatar: (booking.providerId as any).avatar,
+        }
+      : null,
+    scheduledDate: booking.scheduledDate,
+    scheduledTime: booking.scheduledTime,
+    completedAt: booking.updatedAt,
+    hasReview: !!(booking as any).customerReview,
+  }));
+
+  return res.json({
+    success: true,
+    data: {
+      bookings,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total: availableBookings.length,
+        pages: Math.ceil(availableBookings.length / limitNum),
+        hasNext: pageNum * limitNum < availableBookings.length,
+        hasPrev: pageNum > 1,
+      },
+    },
+  });
+});
+
 export default {
   getPublicExperiences,
   getFeaturedExperiences,
@@ -507,4 +590,5 @@ export default {
   updateExperience,
   deleteExperience,
   getExperienceById,
+  getAvailableBookings,
 };

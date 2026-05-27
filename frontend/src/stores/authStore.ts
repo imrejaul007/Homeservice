@@ -436,6 +436,16 @@ export const useAuthStore = create<AuthState>()(
             state.user = (response as { user: AuthUser }).user;
             state.isLoading = false;
           });
+
+          // Refresh user and providerProfile if user is a provider
+          const currentUser = get().user;
+          if (currentUser?.role === 'provider') {
+            try {
+              await get().getCurrentUser();
+            } catch (profileError) {
+              console.error('Failed to refresh providerProfile:', profileError);
+            }
+          }
         } catch (error) {
           set((state) => {
             state.isLoading = false;

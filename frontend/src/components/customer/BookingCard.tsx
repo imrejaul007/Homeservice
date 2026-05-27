@@ -20,7 +20,7 @@ export interface Booking {
   };
   scheduledDate: string;
   scheduledTime: string;
-  status: 'pending' | 'confirmed' | 'in_progress' | 'completed' | 'cancelled';
+  status: 'pending' | 'confirmed' | 'in_progress' | 'completed' | 'cancelled' | 'no_show';
   totalPrice: number;
   location?: {
     address?: string;

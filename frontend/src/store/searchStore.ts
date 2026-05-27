@@ -40,6 +40,8 @@ interface SearchState {
   clearSearchHistory: () => void;
   setError: (error: string | null) => void;
   setLoading: (loading: boolean) => void;
+  invalidateProviderCache: (providerId?: string) => void;
+  invalidateServiceCache: (serviceId?: string) => void;
 }
 
 const initialFilters: SearchFilters = {
@@ -221,6 +223,50 @@ export const useSearchStore = create<SearchState>()(
 
       setLoading: (loading: boolean) => {
         set({ isLoading: loading });
+      },
+
+      invalidateProviderCache: (providerId?: string) => {
+        set((state) => {
+          // If providerId is provided, remove only that provider's services from cache
+          if (providerId) {
+            return {
+              services: state.services.filter(s => s.providerId !== providerId),
+              trendingServices: state.trendingServices.filter(s => s.providerId !== providerId),
+              popularServices: state.popularServices.filter(s => s.providerId !== providerId),
+            };
+          }
+          // Otherwise clear all cached service data
+          return {
+            services: [],
+            trendingServices: [],
+            popularServices: [],
+            totalCount: 0,
+            currentPage: 1,
+            totalPages: 1,
+          };
+        });
+      },
+
+      invalidateServiceCache: (serviceId?: string) => {
+        set((state) => {
+          // If serviceId is provided, remove only that service from cache
+          if (serviceId) {
+            return {
+              services: state.services.filter(s => s._id !== serviceId),
+              trendingServices: state.trendingServices.filter(s => s._id !== serviceId),
+              popularServices: state.popularServices.filter(s => s._id !== serviceId),
+            };
+          }
+          // Clear all service caches
+          return {
+            services: [],
+            trendingServices: [],
+            popularServices: [],
+            totalCount: 0,
+            currentPage: 1,
+            totalPages: 1,
+          };
+        });
       },
     }),
     {

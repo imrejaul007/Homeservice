@@ -890,3 +890,156 @@ export const updateAvailabilitySettings = asyncHandler(async (req: Request, res:
     data: { availability: legacyAvailability }
   });
 });
+
+/**
+ * Get Availability Analytics
+ * GET /api/availability/analytics
+ *
+ * Returns provider's availability statistics including:
+ * - Utilization rate
+ * - Booking density by day of week
+ * - Most/least booked time slots
+ * - Availability trends
+ */
+export const getAvailabilityAnalytics = asyncHandler(async (req: Request, res: Response) => {
+  if (req.user?.role !== 'provider') {
+    return res.status(403).json({
+      success: false,
+      message: 'Only providers can access availability analytics'
+    });
+  }
+
+  const providerId = req.user._id.toString();
+  const { period = '30d' } = req.query;
+
+  // Calculate date range based on period
+  let startDate: Date;
+  const now = new Date();
+  const endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+
+  switch (period) {
+    case '7d':
+      startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      break;
+    case '30d':
+      startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      break;
+    case '90d':
+      startDate = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+      break;
+    default:
+      startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+  }
+
+  // Get provider profile
+  const providerProfile = await ProviderProfile.findOne({ userId: providerId });
+
+  if (!providerProfile) {
+    return res.status(404).json({
+      success: false,
+      message: 'Provider profile not found'
+    });
+  }
+
+  // Get bookings in the period
+  const bookings = await Booking.find({
+    providerId,
+    createdAt: { $gte: startDate, $lte: endDate },
+  }).select('scheduledDate scheduledTime status duration').lean();
+
+  // Calculate total available slots (based on weekly schedule)
+  const schedule = providerProfile.availability?.schedule;
+  let totalWeeklySlots = 0;
+  const slotsPerDay: Record<string, number> = {};
+
+  if (schedule) {
+    const days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+    const weeksInPeriod = Math.ceil((endDate.getTime() - startDate.getTime()) / (7 * 24 * 60 * 60 * 1000));
+
+    days.forEach(day => {
+      const daySchedule = schedule[day as keyof typeof schedule];
+      if (daySchedule?.isAvailable && daySchedule.timeSlots) {
+        let daySlots = 0;
+        daySchedule.timeSlots.forEach(slot => {
+          if (slot.startTime && slot.endTime) {
+            const [startH, startM] = slot.startTime.split(':').map(Number);
+            const [endH, endM] = slot.endTime.split(':').map(Number);
+            const durationMinutes = (endH * 60 + endM) - (startH * 60 + startM);
+            daySlots += Math.max(1, Math.floor(durationMinutes / 60));
+          }
+        });
+        slotsPerDay[day] = daySlots;
+        totalWeeklySlots += daySlots;
+      }
+    });
+
+    totalWeeklySlots *= weeksInPeriod;
+  }
+
+  // Calculate booking statistics
+  const totalBookings = bookings.length;
+  const completedBookings = bookings.filter(b => b.status === 'completed').length;
+  const cancelledBookings = bookings.filter(b => b.status === 'cancelled').length;
+  const confirmedBookings = bookings.filter(b => ['confirmed', 'in_progress'].includes(b.status)).length;
+
+  // Calculate utilization rate
+  const utilizationRate = totalWeeklySlots > 0 ? (totalBookings / totalWeeklySlots) * 100 : 0;
+
+  // Calculate bookings by day of week
+  const bookingsByDayOfWeek: Record<string, number> = {
+    sunday: 0, monday: 0, tuesday: 0, wednesday: 0, thursday: 0, friday: 0, saturday: 0
+  };
+  const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+
+  bookings.forEach(booking => {
+    const date = new Date(booking.scheduledDate);
+    const dayName = days[date.getDay()];
+    bookingsByDayOfWeek[dayName]++;
+  });
+
+  // Find most and least busy days
+  const dayCounts = Object.entries(bookingsByDayOfWeek);
+  const mostBusyDay = dayCounts.reduce((max, [day, count]) => count > max[1] ? [day, count] : max, ['', 0]);
+  const leastBusyDay = dayCounts.reduce((min, [day, count]) => count < min[1] ? [day, count] : min, ['', Infinity]);
+
+  // Calculate average bookings per day
+  const daysInPeriod = Math.ceil((endDate.getTime() - startDate.getTime()) / (24 * 60 * 60 * 1000));
+  const avgBookingsPerDay = daysInPeriod > 0 ? totalBookings / daysInPeriod : 0;
+
+  // Calculate average duration of booked slots
+  const completedWithDuration = bookings.filter(b => b.duration);
+  const avgBookingDuration = completedWithDuration.length > 0
+    ? completedWithDuration.reduce((sum, b) => sum + (b.duration || 0), 0) / completedWithDuration.length
+    : 60;
+
+  return res.json({
+    success: true,
+    data: {
+      period,
+      dateRange: {
+        start: startDate,
+        end: endDate,
+      },
+      summary: {
+        totalAvailableSlots: totalWeeklySlots,
+        totalBookings,
+        completedBookings,
+        cancelledBookings,
+        confirmedBookings,
+        utilizationRate: Math.round(utilizationRate * 100) / 100,
+        avgBookingsPerDay: Math.round(avgBookingsPerDay * 100) / 100,
+        avgBookingDuration: Math.round(avgBookingDuration),
+      },
+      bookingsByDayOfWeek,
+      busiestDay: {
+        day: mostBusyDay[0],
+        bookings: mostBusyDay[1],
+      },
+      quietestDay: {
+        day: leastBusyDay[0],
+        bookings: leastBusyDay[1] === Infinity ? 0 : leastBusyDay[1],
+      },
+      generatedAt: new Date().toISOString(),
+    },
+  });
+});
