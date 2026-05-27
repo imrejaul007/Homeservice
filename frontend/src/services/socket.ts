@@ -47,6 +47,13 @@ export interface ServerToClientEvents {
   // Admin notification events
   'admin:new_provider_submission': (data: { providerId: string; providerName: string; submittedAt: Date }) => void;
   'admin:new_service_pending': (data: { serviceId: string; providerId: string; serviceName: string }) => void;
+  // Dispute events
+  'dispute:new': (data: { disputeId: string; bookingId: string; disputeNumber: string; category: string; priority: string }) => void;
+  'dispute:resolved': (data: { disputeId: string; resolution: string; resolutionType: string }) => void;
+  // Withdrawal events
+  'admin:new_withdrawal_request': (data: { withdrawalId: string; providerId: string; providerName: string; amount: number; currency: string; requestedAt: Date }) => void;
+  'withdrawal:approved': (data: { withdrawalId: string; providerId: string; amount: number; currency: string }) => void;
+  'withdrawal:rejected': (data: { withdrawalId: string; providerId: string; reason: string }) => void;
 }
 
 export interface ClientToServerEvents {
@@ -247,6 +254,28 @@ class SocketService {
     this.socket.on('admin:new_service_pending', (data) => {
       this.notifyListeners('admin:new_service_pending', data);
     });
+
+    // Dispute events
+    this.socket.on('dispute:new', (data) => {
+      this.notifyListeners('dispute:new', data);
+    });
+
+    this.socket.on('dispute:resolved', (data) => {
+      this.notifyListeners('dispute:resolved', data);
+    });
+
+    // Withdrawal events
+    this.socket.on('admin:new_withdrawal_request', (data) => {
+      this.notifyListeners('admin:new_withdrawal_request', data);
+    });
+
+    this.socket.on('withdrawal:approved', (data) => {
+      this.notifyListeners('withdrawal:approved', data);
+    });
+
+    this.socket.on('withdrawal:rejected', (data) => {
+      this.notifyListeners('withdrawal:rejected', data);
+    });
   }
 
   // Disconnect from socket server
@@ -390,6 +419,28 @@ class SocketService {
 
   onNewServicePending(callback: (data: { serviceId: string; providerId: string; serviceName: string }) => void): () => void {
     return this.on('admin:new_service_pending', callback);
+  }
+
+  // Dispute events
+  onNewDispute(callback: (data: { disputeId: string; bookingId: string; disputeNumber: string; category: string; priority: string }) => void): () => void {
+    return this.on('dispute:new', callback);
+  }
+
+  onDisputeResolved(callback: (data: { disputeId: string; resolution: string; resolutionType: string }) => void): () => void {
+    return this.on('dispute:resolved', callback);
+  }
+
+  // Withdrawal events
+  onNewWithdrawalRequest(callback: (data: { withdrawalId: string; providerId: string; providerName: string; amount: number; currency: string; requestedAt: Date }) => void): () => void {
+    return this.on('admin:new_withdrawal_request', callback);
+  }
+
+  onWithdrawalApproved(callback: (data: { withdrawalId: string; providerId: string; amount: number; currency: string }) => void): () => void {
+    return this.on('withdrawal:approved', callback);
+  }
+
+  onWithdrawalRejected(callback: (data: { withdrawalId: string; providerId: string; reason: string }) => void): () => void {
+    return this.on('withdrawal:rejected', callback);
   }
 }
 

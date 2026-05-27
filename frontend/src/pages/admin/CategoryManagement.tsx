@@ -21,6 +21,7 @@ import { useNavigate } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
 import { useAuthStore } from '../../stores/authStore';
 import PageLayout from '../../components/layout/PageLayout';
+import ErrorBoundary from '../../components/common/ErrorBoundary';
 import type { Category, Subcategory } from '../../types/category';
 
 // ============================================
@@ -658,6 +659,7 @@ const CategoryManagement: React.FC = () => {
   };
 
   return (
+    <ErrorBoundary>
     <PageLayout
       title="Category Management"
       subtitle="Manage service categories and their subcategories"
@@ -1048,6 +1050,7 @@ const CategoryManagement: React.FC = () => {
         />
       )}
     </PageLayout>
+    </ErrorBoundary>
   );
 };
 

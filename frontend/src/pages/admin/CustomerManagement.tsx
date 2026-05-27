@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { toast } from 'react-hot-toast';
 import {
   Search,
   Filter,
@@ -42,6 +43,7 @@ import {
   exportUsersApi,
   BulkUserAction,
 } from '../../services/customerOpsApi';
+import ErrorBoundary from '../../components/common/ErrorBoundary';
 import { useAuthStore } from '../../stores/authStore';
 import type {
   CustomerListItem,
@@ -443,6 +445,7 @@ const CustomerDetailModal: React.FC<{
       setTrustScoreBreakdown(breakdown);
     } catch (error) {
       console.error('Failed to load customer:', error);
+      toast.error('Failed to load customer details');
     } finally {
       setLoading(false);
     }
@@ -460,6 +463,7 @@ const CustomerDetailModal: React.FC<{
       onRefresh();
     } catch (error) {
       console.error('Failed to add flag:', error);
+      toast.error('Failed to add abuse flag');
     } finally {
       setActionLoading(false);
     }
@@ -473,6 +477,7 @@ const CustomerDetailModal: React.FC<{
       onRefresh();
     } catch (error) {
       console.error('Failed to resolve flag:', error);
+      toast.error('Failed to resolve flag');
     } finally {
       setActionLoading(false);
     }
@@ -488,6 +493,7 @@ const CustomerDetailModal: React.FC<{
       onRefresh();
     } catch (error) {
       console.error('Failed to block customer:', error);
+      toast.error('Failed to block customer');
     } finally {
       setActionLoading(false);
     }
@@ -501,6 +507,7 @@ const CustomerDetailModal: React.FC<{
       onRefresh();
     } catch (error) {
       console.error('Failed to unblock customer:', error);
+      toast.error('Failed to unblock customer');
     } finally {
       setActionLoading(false);
     }
@@ -515,6 +522,7 @@ const CustomerDetailModal: React.FC<{
       onRefresh();
     } catch (error) {
       console.error('Failed to refresh trust score:', error);
+      toast.error('Failed to refresh trust score');
     } finally {
       setActionLoading(false);
     }
@@ -1018,6 +1026,7 @@ const CustomerManagement: React.FC = () => {
       }
     } catch (error) {
       console.error('Bulk action failed:', error);
+      toast.error('Bulk action failed. Please try again.');
     } finally {
       setBulkActionLoading(false);
       setShowBulkActionModal(false);
@@ -1034,6 +1043,7 @@ const CustomerManagement: React.FC = () => {
       });
     } catch (error) {
       console.error('Export failed:', error);
+      toast.error('Export failed. Please try again.');
     }
   };
 
@@ -1052,6 +1062,7 @@ const CustomerManagement: React.FC = () => {
       setStats(result.stats as DashboardStats);
     } catch (error) {
       console.error('Failed to load customers:', error);
+      toast.error('Failed to load customers. Please refresh the page.');
     } finally {
       setLoading(false);
     }
@@ -1073,6 +1084,7 @@ const CustomerManagement: React.FC = () => {
       );
     } catch (error) {
       console.error('Failed to load stats:', error);
+      toast.error('Failed to load statistics');
     }
   }, []);
 
@@ -1103,6 +1115,7 @@ const CustomerManagement: React.FC = () => {
   };
 
   return (
+    <ErrorBoundary>
     <div className="min-h-screen bg-nilin-cream">
       <div className="max-w-7xl mx-auto px-4 py-8">
         {/* Header */}
@@ -1382,6 +1395,7 @@ const CustomerManagement: React.FC = () => {
         </div>
       )}
     </div>
+    </ErrorBoundary>
   );
 };
 

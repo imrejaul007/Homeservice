@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { toast } from 'react-hot-toast';
 import {
   analyticsApi,
   businessIntelligenceApi,
@@ -17,6 +18,7 @@ import type {
   BusinessHealthScore,
 } from '../../services/analyticsApi';
 import PageLayout from '../../components/layout/PageLayout';
+import ErrorBoundary from '../../components/common/ErrorBoundary';
 import {
   BarChart3,
   TrendingUp,
@@ -454,6 +456,7 @@ const AnalyticsDashboard: React.FC = () => {
       setHealthScore(healthResponse);
     } catch (error) {
       console.error('Failed to fetch analytics data:', error);
+      toast.error('Failed to load analytics data. Please try again.');
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -490,6 +493,7 @@ const AnalyticsDashboard: React.FC = () => {
   }
 
   return (
+    <ErrorBoundary>
     <PageLayout title="Analytics Dashboard">
       <div className="space-y-6">
         {/* Header */}
@@ -1124,6 +1128,7 @@ const AnalyticsDashboard: React.FC = () => {
         )}
       </div>
     </PageLayout>
+    </ErrorBoundary>
   );
 };
 

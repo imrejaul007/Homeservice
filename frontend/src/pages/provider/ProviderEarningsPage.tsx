@@ -29,6 +29,7 @@ import Breadcrumb from '../../components/common/Breadcrumb';
 import { useAuthStore } from '../../stores/authStore';
 import { walletApi } from '../../services/walletApi';
 import type { Wallet as WalletType, WalletTransaction, EarningsSummary } from '../../services/walletApi';
+import { socketService } from '../../services/socket';
 
 interface Transaction {
   id: string;
@@ -182,6 +183,34 @@ const ProviderEarningsPage: React.FC = () => {
       fetchData(true);
     }
   }, [currentPage]);
+
+  // Socket listeners for real-time updates
+  useEffect(() => {
+    // Listen for withdrawal approved
+    const unsubWithdrawalApproved = socketService.onWithdrawalApproved((data) => {
+      console.log('Withdrawal approved:', data);
+      fetchData(true);
+    });
+
+    // Listen for withdrawal rejected
+    const unsubWithdrawalRejected = socketService.onWithdrawalRejected((data) => {
+      console.log('Withdrawal rejected:', data);
+      fetchData(true);
+    });
+
+    // Listen for booking confirmed (new earnings)
+    const unsubBookingConfirmed = socketService.on('booking:confirmed', (data) => {
+      console.log('Booking confirmed:', data);
+      fetchData(true);
+    });
+
+    // Cleanup on unmount
+    return () => {
+      unsubWithdrawalApproved();
+      unsubWithdrawalRejected();
+      unsubBookingConfirmed();
+    };
+  }, [fetchData]);
 
   // Filter transactions
   const filteredTransactions = transactions.filter((txn) => {

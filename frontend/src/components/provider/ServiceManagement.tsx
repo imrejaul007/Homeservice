@@ -23,6 +23,7 @@ import {
 import { useAuthStore } from '../../stores/authStore';
 import authService from '../../services/AuthService';
 import { useToastActions } from '../common/Toast';
+import { socketService } from '../../services/socket';
 import { AddServiceModal } from './AddServiceModal';
 import { EditServiceModal } from './EditServiceModal';
 
@@ -401,6 +402,30 @@ const ServiceManagement: React.FC = () => {
 
     return () => clearTimeout(timer);
   }, [page, fetchServices, isAuthenticated, user, tokens, searchTerm]);
+
+  // Socket listeners for real-time service status updates
+  useEffect(() => {
+    // Listen for service approved
+    const unsubServiceApproved = socketService.onServiceApproved((data) => {
+      console.log('Service approved:', data);
+      toast.success('Service Approved', 'Your service has been approved and is now active.');
+      fetchServices(1, false);
+      fetchOverviewStats();
+    });
+
+    // Listen for service rejected
+    const unsubServiceRejected = socketService.onServiceRejected((data) => {
+      console.log('Service rejected:', data);
+      toast.error('Service Rejected', data.reason || 'Your service was not approved.');
+      fetchServices(1, false);
+    });
+
+    // Cleanup on unmount
+    return () => {
+      unsubServiceApproved();
+      unsubServiceRejected();
+    };
+  }, [fetchServices, fetchOverviewStats, toast]);
 
   const fetchOverviewStats = async () => {
     try {

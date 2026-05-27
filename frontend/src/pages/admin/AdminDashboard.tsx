@@ -4,6 +4,7 @@ import { Users, DollarSign, Calendar, TrendingUp, AlertTriangle, CheckCircle, Re
 import { Skeleton, StatsCardSkeleton } from '../../components/common/Skeleton';
 import { useAuthStore } from '../../stores/authStore';
 import { api } from '../../services/api';
+import { socketService } from '../../services/socket';
 
 // Types
 interface DashboardStats {
@@ -82,16 +83,6 @@ interface GeographicData {
   };
 }
 
-// Helper function to safely parse API response
-const safeParse = async <T>(response: Response, fallback: T): Promise<T> => {
-  try {
-    const data = await response.json();
-    return data.success && data.data ? data.data : fallback;
-  } catch {
-    return fallback;
-  }
-};
-
 export function AdminDashboard() {
   const navigate = useNavigate();
   const { user } = useAuthStore();
@@ -120,6 +111,14 @@ export function AdminDashboard() {
   const [refreshing, setRefreshing] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
+  // Real-time notification state
+  const [notifications, setNotifications] = useState<Array<{
+    id: string;
+    type: 'provider' | 'service' | 'dispute' | 'withdrawal';
+    message: string;
+    timestamp: Date;
+  }>>([]);
+
   // Fetch all dashboard data
   const fetchDashboardData = useCallback(async (showRefresh = false) => {
     if (showRefresh) {
@@ -134,17 +133,18 @@ export function AdminDashboard() {
         funnelRes,
         geoRes
       ] = await Promise.allSettled([
-        fetch('/api/admin/stats'),
-        fetch('/api/analytics/overview'),
-        fetch('/api/admin/churn/stats'),
-        fetch('/api/admin/analytics/funnel'),
-        fetch('/api/admin/analytics/geographic'),
+        api.get('/admin/stats'),
+        api.get('/analytics/overview'),
+        api.get('/admin/churn/stats'),
+        api.get('/admin/analytics/funnel'),
+        api.get('/admin/analytics/geographic'),
       ]);
 
       // Process stats
-      if (statsRes.status === 'fulfilled' && statsRes.value.ok) {
-        const data = await safeParse(statsRes.value, null);
-        if (data) {
+      if (statsRes.status === 'fulfilled' && statsRes.value.status === 200) {
+        const response = statsRes.value.data;
+        if (response?.success && response.data) {
+          const data = response.data;
           setStats({
             totalUsers: data.totalUsers || data.customers?.total || 0,
             activeProviders: data.activeProviders || data.providers?.active || 0,
@@ -157,9 +157,10 @@ export function AdminDashboard() {
       }
 
       // Process overview analytics
-      if (overviewRes.status === 'fulfilled' && overviewRes.value.ok) {
-        const data = await safeParse(overviewRes.value, null);
-        if (data) {
+      if (overviewRes.status === 'fulfilled' && overviewRes.value.status === 200) {
+        const response = overviewRes.value.data;
+        if (response?.success && response.data) {
+          const data = response.data;
           setAnalytics({
             customers: {
               total: data.customers?.total || 0,
@@ -179,7 +180,7 @@ export function AdminDashboard() {
               cancelled: data.bookings?.cancelled || 0,
             },
             revenue: {
-              thisMonth: data.revenue?.thisMonth || data.revenue?.thisMonth || 0,
+              thisMonth: data.revenue?.thisMonth || 0,
               lastMonth: data.revenue?.lastMonth || 0,
               monthOverMonthGrowth: data.revenue?.monthOverMonthGrowth || 0,
             },
@@ -188,9 +189,10 @@ export function AdminDashboard() {
       }
 
       // Process churn data
-      if (churnRes.status === 'fulfilled' && churnRes.value.ok) {
-        const data = await safeParse<ChurnData>(churnRes.value, null);
-        if (data) {
+      if (churnRes.status === 'fulfilled' && churnRes.value.status === 200) {
+        const response = churnRes.value.data;
+        if (response?.success && response.data) {
+          const data = response.data;
           setChurnData({
             totalAtRisk: data.totalAtRisk || data.atRiskCustomers || 0,
             churnRate: data.churnRate || 0,
@@ -205,17 +207,19 @@ export function AdminDashboard() {
       }
 
       // Process funnel data
-      if (funnelRes.status === 'fulfilled' && funnelRes.value.ok) {
-        const data = await safeParse<FunnelData>(funnelRes.value, null);
-        if (data) {
+      if (funnelRes.status === 'fulfilled' && funnelRes.value.status === 200) {
+        const response = funnelRes.value.data;
+        if (response?.success && response.data) {
+          const data = response.data;
           setFunnelData(data);
         }
       }
 
       // Process geographic data
-      if (geoRes.status === 'fulfilled' && geoRes.value.ok) {
-        const data = await safeParse<GeographicData>(geoRes.value, null);
-        if (data) {
+      if (geoRes.status === 'fulfilled' && geoRes.value.status === 200) {
+        const response = geoRes.value.data;
+        if (response?.success && response.data) {
+          const data = response.data;
           setGeographicData(data);
         }
       }
@@ -232,6 +236,85 @@ export function AdminDashboard() {
   useEffect(() => {
     fetchDashboardData();
   }, [fetchDashboardData]);
+
+  // Socket listeners for real-time updates
+  useEffect(() => {
+    const unsubscribers: Array<() => void> = [];
+
+    // New provider submission
+    const unsubProvider = socketService.onNewProviderSubmission((data) => {
+      setStats((prev) => ({
+        ...prev,
+        pendingVerifications: prev.pendingVerifications + 1,
+      }));
+      setNotifications((prev) => [
+        {
+          id: `provider-${data.providerId}-${Date.now()}`,
+          type: 'provider',
+          message: `New provider submission from ${data.providerName}`,
+          timestamp: new Date(),
+        },
+        ...prev,
+      ]);
+    });
+    unsubscribers.push(unsubProvider);
+
+    // New service pending
+    const unsubService = socketService.onNewServicePending((data) => {
+      setNotifications((prev) => [
+        {
+          id: `service-${data.serviceId}-${Date.now()}`,
+          type: 'service',
+          message: `New pending service: ${data.serviceName}`,
+          timestamp: new Date(),
+        },
+        ...prev,
+      ]);
+    });
+    unsubscribers.push(unsubService);
+
+    // New dispute
+    const unsubDispute = socketService.onNewDispute((data) => {
+      setStats((prev) => ({
+        ...prev,
+        activeIncidents: prev.activeIncidents + 1,
+      }));
+      setNotifications((prev) => [
+        {
+          id: `dispute-${data.disputeId}-${Date.now()}`,
+          type: 'dispute',
+          message: `New dispute #${data.disputeNumber}: ${data.category}`,
+          timestamp: new Date(),
+        },
+        ...prev,
+      ]);
+    });
+    unsubscribers.push(unsubDispute);
+
+    // New withdrawal request
+    const unsubWithdrawal = socketService.onNewWithdrawalRequest((data) => {
+      setNotifications((prev) => [
+        {
+          id: `withdrawal-${data.withdrawalId}-${Date.now()}`,
+          type: 'withdrawal',
+          message: `New withdrawal request from ${data.providerName}: ${data.currency} ${data.amount.toFixed(2)}`,
+          timestamp: new Date(),
+        },
+        ...prev,
+      ]);
+    });
+    unsubscribers.push(unsubWithdrawal);
+
+    // Connect to socket
+    socketService.connect().catch((error) => {
+      console.error('Failed to connect to socket:', error);
+    });
+
+    // Cleanup
+    return () => {
+      unsubscribers.forEach((unsub) => unsub());
+    };
+  }, []);
 
   // Handle refresh
   const handleRefresh = () => {
@@ -348,6 +431,36 @@ export function AdminDashboard() {
         </div>
       )}
 
+      {/* Real-time Notifications */}
+      {notifications.length > 0 && (
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-6">
+          <div className="flex items-start gap-3">
+            <div className="flex-1 space-y-2">
+              {notifications.slice(0, 5).map((notification) => (
+                <div key={notification.id} className="flex items-center gap-2 text-sm">
+                  <span className={`w-2 h-2 rounded-full ${
+                    notification.type === 'provider' ? 'bg-blue-500' :
+                    notification.type === 'service' ? 'bg-green-500' :
+                    notification.type === 'dispute' ? 'bg-red-500' :
+                    'bg-purple-500'
+                  }`} />
+                  <span className="text-blue-800">{notification.message}</span>
+                  <span className="text-blue-500 text-xs ml-auto">
+                    {notification.timestamp.toLocaleTimeString()}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <button
+              onClick={() => setNotifications([])}
+              className="text-blue-600 hover:text-blue-800 text-sm"
+            >
+              Clear
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Additional Stats Row */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         {/* Churn Stats */}
@@ -410,7 +523,7 @@ export function AdminDashboard() {
             {funnelData?.conversionRates?.overall?.toFixed(2) || 0}%
           </p>
           <span className="text-xs text-gray-500">Overall funnel</span>
-          {funnelData?.funnelData?.booking_completed > 0 && (
+          {funnelData?.booking_completed > 0 && (
             <div className="mt-2 text-xs text-gray-600">
               {funnelData.booking_completed.toLocaleString()} completed bookings
             </div>

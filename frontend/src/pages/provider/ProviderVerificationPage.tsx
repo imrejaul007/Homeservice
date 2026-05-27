@@ -24,6 +24,7 @@ import Breadcrumb from '../../components/common/Breadcrumb';
 import { useAuthStore } from '../../stores/authStore';
 import { api } from '../../services/api';
 import { useToast } from '../../components/common/Toast/ToastContext';
+import { socketService } from '../../services/socket';
 
 interface VerificationDocument {
   id: string;
@@ -120,6 +121,81 @@ const ProviderVerificationPage: React.FC = () => {
   // Calculate overall progress
   const completedSteps = verificationSteps.filter((s) => s.status === 'completed').length;
   const overallProgress = (completedSteps / verificationSteps.length) * 100;
+
+  // Socket listeners for verification updates
+  useEffect(() => {
+    // Listen for provider approved
+    const unsubProviderApproved = socketService.onProviderApproved((data) => {
+      console.log('Provider approved:', data);
+      toast.addToast({
+        title: 'Verification Approved',
+        message: 'Your provider account has been verified!',
+        variant: 'success',
+      });
+      // Refresh verification status
+      window.location.reload();
+    });
+
+    // Listen for provider rejected
+    const unsubProviderRejected = socketService.onProviderRejected((data) => {
+      console.log('Provider rejected:', data);
+      toast.addToast({
+        title: 'Verification Rejected',
+        message: data.reason || 'Your verification was rejected.',
+        variant: 'error',
+      });
+    });
+
+    // Listen for provider suspended
+    const unsubProviderSuspended = socketService.onProviderSuspended((data) => {
+      console.log('Provider suspended:', data);
+      toast.addToast({
+        title: 'Account Suspended',
+        message: data.reason || 'Your account has been suspended.',
+        variant: 'error',
+      });
+    });
+
+    // Listen for document verified
+    const unsubDocumentVerified = socketService.onDocumentVerified((data) => {
+      console.log('Document verified:', data);
+      setVerificationSteps((steps) =>
+        steps.map((step) => ({
+          ...step,
+          documents: step.documents?.map((doc) =>
+            doc.id === data.documentId
+              ? { ...doc, status: data.status, verifiedAt: new Date() }
+              : doc
+          ),
+        }))
+      );
+      toast.addToast({
+        title: 'Document Verified',
+        message: 'Your document has been verified.',
+        variant: 'success',
+      });
+    });
+
+    // Listen for verification complete
+    const unsubVerificationComplete = socketService.onVerificationComplete((data) => {
+      console.log('Verification complete:', data);
+      toast.addToast({
+        title: 'Verification Complete',
+        message: 'You are now a verified provider!',
+        variant: 'success',
+      });
+      window.location.reload();
+    });
+
+    // Cleanup on unmount
+    return () => {
+      unsubProviderApproved();
+      unsubProviderRejected();
+      unsubProviderSuspended();
+      unsubDocumentVerified();
+      unsubVerificationComplete();
+    };
+  }, [toast]);
 
   const handleFileUpload = async (stepId: string, documentId: string, file: File) => {
     // Validate file

@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
+import { toast } from 'react-hot-toast';
 import {
   ArrowLeft,
   Search,
@@ -34,6 +35,7 @@ import type {
   DisputeFilters,
   DisputeStats,
 } from '../../services/disputeApi';
+import ErrorBoundary from '../../components/common/ErrorBoundary';
 import { useAuthStore } from '../../stores/authStore';
 
 interface DisputeCenterProps {}
@@ -113,6 +115,7 @@ const DisputeCenter: React.FC<DisputeCenterProps> = () => {
       }
     } catch (err) {
       console.error('Failed to load stats:', err);
+      toast.error('Failed to load dispute statistics');
     }
   }, []);
 
@@ -125,7 +128,9 @@ const DisputeCenter: React.FC<DisputeCenterProps> = () => {
         setSelectedDispute(response.data);
       }
     } catch (err: any) {
-      setError(err.message || 'Failed to load dispute details');
+      const message = err.message || 'Failed to load dispute details';
+      setError(message);
+      toast.error(message);
     } finally {
       setIsLoadingDetail(false);
     }
@@ -208,18 +213,8 @@ const DisputeCenter: React.FC<DisputeCenterProps> = () => {
 
   // Close dispute
   const handleClose = async (disputeId: string) => {
-    if (!confirm('Are you sure you want to close this dispute?')) return;
-
-    try {
-      await disputeApi.closeDispute(disputeId);
-      await fetchDisputes();
-      if (selectedDispute?._id === disputeId) {
-        await fetchDisputeDetail(disputeId);
-      }
-      await fetchStats();
-    } catch (err: any) {
-      setError(err.message || 'Failed to close dispute');
-    }
+    // Show confirmation toast instead of native confirm
+    toast.error('Please use the Resolve action to close disputes');
   };
 
   // Update status
@@ -241,6 +236,7 @@ const DisputeCenter: React.FC<DisputeCenterProps> = () => {
   };
 
   return (
+    <ErrorBoundary>
     <div className="min-h-screen bg-nilin-cream">
       <div className="max-w-7xl mx-auto px-4 py-6">
         {/* Header */}
@@ -792,6 +788,7 @@ const DisputeCenter: React.FC<DisputeCenterProps> = () => {
         </div>
       )}
     </div>
+    </ErrorBoundary>
   );
 };
 

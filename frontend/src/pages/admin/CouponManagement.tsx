@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../../services/api';
+import { formatPrice } from '../../utils/currency';
 
 interface Coupon {
   _id: string;
@@ -44,6 +45,7 @@ const CouponManagement: React.FC = () => {
   const [totalPages, setTotalPages] = useState(1);
   const [showModal, setShowModal] = useState(false);
   const [editingCoupon, setEditingCoupon] = useState<Coupon | null>(null);
+  const [saving, setSaving] = useState(false);
   const [formData, setFormData] = useState({
     code: '',
     type: 'percentage' as 'percentage' | 'fixed' | 'free_service',
@@ -71,8 +73,9 @@ const CouponManagement: React.FC = () => {
       if (filterActive) params.append('isActive', filterActive);
 
       const response = await api.get(`/admin/coupons?${params}`);
-      setCoupons(response.data.data.coupons);
-      setTotalPages(response.data.data.pagination.pages);
+      const data = response.data?.data;
+      setCoupons(data?.coupons ?? []);
+      setTotalPages(data?.pagination?.pages ?? 1);
     } catch (err: any) {
       setError(err.response?.data?.message || 'Failed to load coupons');
     } finally {
@@ -83,7 +86,7 @@ const CouponManagement: React.FC = () => {
   const fetchStats = async () => {
     try {
       const response = await api.get('/admin/coupons/stats');
-      setStats(response.data.data.stats);
+      setStats(response.data?.data?.stats ?? null);
     } catch (err) {
       console.error('Failed to load stats:', err);
     }
@@ -96,6 +99,7 @@ const CouponManagement: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setSaving(true);
     try {
       const payload = {
         ...formData,
@@ -118,6 +122,8 @@ const CouponManagement: React.FC = () => {
       fetchStats();
     } catch (err: any) {
       alert(err.response?.data?.message || 'Failed to save coupon');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -130,8 +136,8 @@ const CouponManagement: React.FC = () => {
       maxDiscount: coupon.maxDiscount || 0,
       minOrderAmount: coupon.minOrderValue,
       usageLimit: coupon.maxUses,
-      validFrom: coupon.validFrom.split('T')[0],
-      validUntil: coupon.validUntil.split('T')[0],
+      validFrom: coupon.validFrom?.split('T')[0] || '',
+      validUntil: coupon.validUntil?.split('T')[0] || '',
       title: coupon.title,
       description: coupon.description || '',
       featured: coupon.featured || false,
@@ -294,8 +300,8 @@ const CouponManagement: React.FC = () => {
                     </td>
                     <td className="px-6 py-4 text-gray-900">
                       {coupon.type === 'percentage'
-                        ? `${coupon.value}%${coupon.maxDiscount ? ` (max ${coupon.maxDiscount})` : ''}`
-                        : `$${coupon.value}`}
+                        ? `${coupon.value}%${coupon.maxDiscount ? ` (max ${formatPrice(coupon.maxDiscount)})` : ''}`
+                        : formatPrice(coupon.value)}
                     </td>
                     <td className="px-6 py-4 text-gray-900">
                       {coupon.currentUses} / {coupon.maxUses}
@@ -513,9 +519,10 @@ const CouponManagement: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                  disabled={saving}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
                 >
-                  {editingCoupon ? 'Update' : 'Create'}
+                  {saving ? 'Saving...' : (editingCoupon ? 'Update' : 'Create')}
                 </button>
               </div>
             </form>

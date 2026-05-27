@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { toast } from 'react-hot-toast';
 import { fraudApi } from '../../services/analyticsApi';
 import type { FraudReport, FraudStats, FraudOverview, SuspiciousActivity } from '../../services/analyticsApi';
 import PageLayout from '../../components/layout/PageLayout';
+import ErrorBoundary from '../../components/common/ErrorBoundary';
 import { useAuthStore } from '../../stores/authStore';
 import {
   Shield,
@@ -227,6 +229,7 @@ const FraudReport: React.FC = () => {
       setOverview(overviewData);
     } catch (error) {
       console.error('Failed to fetch fraud data:', error);
+      toast.error('Failed to load fraud data. Please try again.');
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -239,7 +242,7 @@ const FraudReport: React.FC = () => {
 
   const handleAnalyzeProvider = async () => {
     if (!providerId.trim()) {
-      alert('Please enter a provider ID');
+      toast.error('Please enter a provider ID');
       return;
     }
 
@@ -248,9 +251,10 @@ const FraudReport: React.FC = () => {
       const report = await fraudApi.analyzeProvider(providerId);
       setFraudReports((prev) => [report, ...prev.filter((r) => r.providerId !== report.providerId)]);
       setActiveTab('reports');
+      toast.success('Provider analysis complete');
     } catch (error) {
       console.error('Failed to analyze provider:', error);
-      alert('Failed to analyze provider. Please check the provider ID.');
+      toast.error('Failed to analyze provider. Please check the provider ID.');
     } finally {
       setLoading(false);
     }
@@ -279,6 +283,7 @@ const FraudReport: React.FC = () => {
   }
 
   return (
+    <ErrorBoundary>
     <PageLayout title="Fraud Detection" subtitle="Provider fraud detection and risk analysis">
       <div className="space-y-6">
         {/* Header */}
@@ -537,6 +542,7 @@ const FraudReport: React.FC = () => {
         )}
       </div>
     </PageLayout>
+    </ErrorBoundary>
   );
 };
 

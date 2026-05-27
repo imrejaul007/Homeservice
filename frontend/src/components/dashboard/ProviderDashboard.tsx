@@ -4,6 +4,7 @@ import { useAuthStore } from '../../stores/authStore';
 import { bookingService } from '../../services/BookingService';
 import { providerAnalyticsApi, type ProviderAnalytics } from '../../services/providerApi';
 import { reviewsApi, type Review } from '../../services/reviewsApi';
+import { socketService } from '../../services/socket';
 import NotificationBell from '../common/NotificationBell';
 import {
   Building,
@@ -92,6 +93,171 @@ const ProviderDashboard: React.FC = () => {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
   const { user, providerProfile, logout } = useAuthStore();
+
+  // Helper to provide empty analytics state
+  const getEmptyAnalytics = (): ProviderAnalytics => ({
+    serviceStats: { total: 0, active: 0, draft: 0, inactive: 0, pending_review: 0 },
+    performanceStats: { totalViews: 0, totalClicks: 0, totalBookings: 0, conversionRate: 0, bookingRate: 0 },
+    ratingStats: { averageRating: 0, totalReviews: 0 },
+    bookingStats: { newBookings: 0, pendingRequests: 0, todaySchedule: 0, completedThisMonth: 0 },
+    categories: [],
+    topServices: [],
+  });
+
+  // Retry configuration
+  const RETRY_DELAYS = [1000, 3000, 5000];
+  const MAX_RETRIES = 3;
+
+  // Fetch booking requests
+  const fetchBookingRequests = useCallback(async () => {
+    try {
+      setLoadingBookings(true);
+      const response = await bookingService.getProviderBookings({
+        status: 'pending',
+        limit: 5,
+        sortBy: 'createdAt',
+        sortOrder: 'desc'
+      });
+
+      if (response.success && response.data.bookings) {
+        const transformedBookings = response.data.bookings.map((booking: any) => {
+          // Resolve customer name: try populated customer, then customerInfo snapshot, then guestInfo
+          const firstName = booking.customer?.firstName || booking.customerInfo?.firstName || booking.guestInfo?.name?.split(' ')[0];
+          const lastName = booking.customer?.lastName || booking.customerInfo?.lastName || booking.guestInfo?.name?.split(' ').slice(1).join(' ');
+          const customerName = (firstName || lastName) ? `${firstName || ''} ${lastName || ''}`.trim() : (booking.isGuestBooking ? 'Guest' : 'Customer');
+
+          return {
+            _id: booking._id,
+            bookingNumber: booking.bookingNumber,
+            customerName,
+            serviceName: booking.service?.name || 'Service',
+            scheduledDate: booking.scheduledDate,
+            scheduledTime: booking.scheduledTime,
+            status: booking.status,
+            totalAmount: booking.pricing?.totalAmount || 0,
+            customer: booking.customer,
+            service: booking.service,
+            pricing: booking.pricing
+          };
+        });
+        setBookingRequests(transformedBookings);
+      }
+    } catch {
+      setBookingRequests([]);
+    } finally {
+      setLoadingBookings(false);
+    }
+  }, []);
+
+  // Fetch analytics with retry logic
+  const fetchAnalyticsWithRetry = useCallback(async (retryCount = 0) => {
+    try {
+      setLoadingAnalytics(true);
+      setAnalyticsError(null);
+      const response = await providerAnalyticsApi.getProviderAnalytics();
+      if (response.success && response.data.overview) {
+        setAnalytics(response.data.overview);
+        return;
+      }
+      // API returned success but no data - this is valid for new providers
+      setAnalytics(response.data.overview || getEmptyAnalytics());
+    } catch (error: any) {
+      const isNetworkError = !error.response || error.code === 'ECONNABORTED';
+      const shouldRetry = isNetworkError && retryCount < MAX_RETRIES;
+
+      if (shouldRetry) {
+        console.warn(`Analytics fetch failed, retrying in ${RETRY_DELAYS[retryCount]}ms...`);
+        await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS[retryCount]));
+        return fetchAnalyticsWithRetry(retryCount + 1);
+      }
+
+      console.error('Failed to fetch analytics:', error);
+      setAnalyticsError(
+        error.response?.status === 401
+          ? 'Session expired. Please log in again.'
+          : 'Failed to load analytics. Your data will update automatically.'
+      );
+      // Provide fallback empty analytics so UI doesn't break
+      setAnalytics(getEmptyAnalytics());
+    } finally {
+      setLoadingAnalytics(false);
+    }
+  }, []);
+
+  // Fetch reviews data
+  const fetchReviews = useCallback(async () => {
+    try {
+      setLoadingReviews(true);
+      setReviewsError(null);
+      const providerId = providerProfile?._id || (user as any)?.id;
+      if (!providerId) return;
+
+      const response = await reviewsApi.getProviderReviews(providerId);
+      if (response.success && response.data.reviews) {
+        // Transform reviews to RecentReview format
+        const transformedReviews: RecentReview[] = response.data.reviews.slice(0, 5).map((review: Review) => ({
+          id: review.id,
+          customerName: review.customer
+            ? `${review.customer.firstName} ${review.customer.lastName}`
+            : 'Customer',
+          rating: review.rating,
+          comment: review.comment,
+          serviceName: review.service?.name || 'Service',
+          date: review.createdAt
+        }));
+        setRecentReviews(transformedReviews);
+      }
+    } catch (error) {
+      console.error('Failed to fetch reviews:', error);
+      setReviewsError('Failed to load reviews');
+      setRecentReviews([]);
+    } finally {
+      setLoadingReviews(false);
+    }
+  }, [providerProfile?._id, (user as any)?.id]);
+
+  // Initial data fetch
+  useEffect(() => {
+    fetchBookingRequests();
+    fetchAnalyticsWithRetry();
+    fetchReviews();
+  }, [fetchBookingRequests, fetchAnalyticsWithRetry, fetchReviews]);
+
+  // Socket listeners for real-time updates
+  useEffect(() => {
+    // Listen for booking status changes
+    const unsubBookingStatus = socketService.onBookingStatusChanged((data) => {
+      console.log('Booking status changed:', data);
+      fetchBookingRequests();
+      fetchAnalyticsWithRetry();
+    });
+
+    // Listen for new booking requests
+    const unsubNewRequest = socketService.on('booking:new_request', (data) => {
+      console.log('New booking request:', data);
+      fetchBookingRequests();
+    });
+
+    // Listen for booking confirmations
+    const unsubBookingConfirmed = socketService.on('booking:confirmed', (data) => {
+      console.log('Booking confirmed:', data);
+      fetchBookingRequests();
+      fetchAnalyticsWithRetry();
+    });
+
+    // Listen for new notifications
+    const unsubNotification = socketService.onNewNotification((data) => {
+      console.log('New notification:', data);
+    });
+
+    // Cleanup on unmount
+    return () => {
+      unsubBookingStatus();
+      unsubNewRequest();
+      unsubBookingConfirmed();
+      unsubNotification();
+    };
+  }, [fetchBookingRequests, fetchAnalyticsWithRetry]);
 
   // Handle booking accept
   const handleAcceptBooking = async (bookingId: string) => {
@@ -261,141 +427,6 @@ const ProviderDashboard: React.FC = () => {
       color: 'bg-nilin-coral'
     }
   ]) as StatCard[];
-
-  // Fetch booking requests
-  useEffect(() => {
-    const fetchBookingRequests = async () => {
-      try {
-        setLoadingBookings(true);
-        const response = await bookingService.getProviderBookings({
-          status: 'pending',
-          limit: 5,
-          sortBy: 'createdAt',
-          sortOrder: 'desc'
-        });
-
-        if (response.success && response.data.bookings) {
-          const transformedBookings = response.data.bookings.map((booking: any) => {
-            // Resolve customer name: try populated customer, then customerInfo snapshot, then guestInfo
-            const firstName = booking.customer?.firstName || booking.customerInfo?.firstName || booking.guestInfo?.name?.split(' ')[0];
-            const lastName = booking.customer?.lastName || booking.customerInfo?.lastName || booking.guestInfo?.name?.split(' ').slice(1).join(' ');
-            const customerName = (firstName || lastName) ? `${firstName || ''} ${lastName || ''}`.trim() : (booking.isGuestBooking ? 'Guest' : 'Customer');
-
-            return {
-            _id: booking._id,
-            bookingNumber: booking.bookingNumber,
-            customerName,
-            serviceName: booking.service?.name || 'Service',
-            scheduledDate: booking.scheduledDate,
-            scheduledTime: booking.scheduledTime,
-            status: booking.status,
-            totalAmount: booking.pricing?.totalAmount || 0,
-            customer: booking.customer,
-            service: booking.service,
-            pricing: booking.pricing
-          };
-          });
-          setBookingRequests(transformedBookings);
-        }
-      } catch {
-        setBookingRequests([]);
-      } finally {
-        setLoadingBookings(false);
-      }
-    };
-
-    fetchBookingRequests();
-  }, []);
-
-  // Helper to provide empty analytics state
-  const getEmptyAnalytics = (): ProviderAnalytics => ({
-    serviceStats: { total: 0, active: 0, draft: 0, inactive: 0, pending_review: 0 },
-    performanceStats: { totalViews: 0, totalClicks: 0, totalBookings: 0, conversionRate: 0, bookingRate: 0 },
-    ratingStats: { averageRating: 0, totalReviews: 0 },
-    bookingStats: { newBookings: 0, pendingRequests: 0, todaySchedule: 0, completedThisMonth: 0 },
-    categories: [],
-    topServices: [],
-  });
-
-  // Retry configuration
-  const RETRY_DELAYS = [1000, 3000, 5000];
-  const MAX_RETRIES = 3;
-
-  // Fetch analytics with retry logic
-  const fetchAnalyticsWithRetry = async (retryCount = 0) => {
-    try {
-      setLoadingAnalytics(true);
-      setAnalyticsError(null);
-      const response = await providerAnalyticsApi.getProviderAnalytics();
-      if (response.success && response.data.overview) {
-        setAnalytics(response.data.overview);
-        return;
-      }
-      // API returned success but no data - this is valid for new providers
-      setAnalytics(response.data.overview || getEmptyAnalytics());
-    } catch (error: any) {
-      const isNetworkError = !error.response || error.code === 'ECONNABORTED';
-      const shouldRetry = isNetworkError && retryCount < MAX_RETRIES;
-
-      if (shouldRetry) {
-        console.warn(`Analytics fetch failed, retrying in ${RETRY_DELAYS[retryCount]}ms...`);
-        await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS[retryCount]));
-        return fetchAnalyticsWithRetry(retryCount + 1);
-      }
-
-      console.error('Failed to fetch analytics:', error);
-      setAnalyticsError(
-        error.response?.status === 401
-          ? 'Session expired. Please log in again.'
-          : 'Failed to load analytics. Your data will update automatically.'
-      );
-      // Provide fallback empty analytics so UI doesn't break
-      setAnalytics(getEmptyAnalytics());
-    } finally {
-      setLoadingAnalytics(false);
-    }
-  };
-
-  // Fetch analytics data
-  useEffect(() => {
-    fetchAnalyticsWithRetry();
-  }, []);
-
-  // Fetch reviews data
-  useEffect(() => {
-    const fetchReviews = async () => {
-      try {
-        setLoadingReviews(true);
-        setReviewsError(null);
-        const providerId = providerProfile?._id || (user as any)?.id;
-        if (!providerId) return;
-
-        const response = await reviewsApi.getProviderReviews(providerId);
-        if (response.success && response.data.reviews) {
-          // Transform reviews to RecentReview format
-          const transformedReviews: RecentReview[] = response.data.reviews.slice(0, 5).map((review: Review) => ({
-            id: review.id,
-            customerName: review.customer
-              ? `${review.customer.firstName} ${review.customer.lastName}`
-              : 'Customer',
-            rating: review.rating,
-            comment: review.comment,
-            serviceName: review.service?.name || 'Service',
-            date: review.createdAt
-          }));
-          setRecentReviews(transformedReviews);
-        }
-      } catch (error) {
-        console.error('Failed to fetch reviews:', error);
-        setReviewsError('Failed to load reviews');
-        setRecentReviews([]);
-      } finally {
-        setLoadingReviews(false);
-      }
-    };
-
-    fetchReviews();
-  }, [providerProfile?._id, (user as any)?.id]);
 
   const handleLogout = () => {
     logout();
