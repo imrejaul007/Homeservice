@@ -288,6 +288,19 @@ class SocketService {
     this.disconnect();
     await this.connect();
   }
+
+  // Helper methods for common subscriptions
+  onNewNotification(callback: (data: NotificationEvent) => void): () => void {
+    return this.on('notification:new', callback);
+  }
+
+  onBookingStatusChanged(callback: (data: BookingEvent) => void): () => void {
+    return this.on('booking:status_changed', callback);
+  }
+
+  off(event: keyof ServerToClientEvents, callback: ServerToClientEvents[keyof ServerToClientEvents]): void {
+    this.listeners.get(event)?.delete(callback as Function);
+  }
 }
 
 // Export singleton instance

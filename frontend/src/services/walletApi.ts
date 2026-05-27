@@ -1,13 +1,13 @@
 import axios from 'axios';
 import { API_BASE_URL } from '@/config/api';
 
-const walletApi = axios.create({
+const api = axios.create({
   baseURL: `${API_BASE_URL}/provider`,
   withCredentials: true,
 });
 
 // Add auth token interceptor
-walletApi.interceptors.request.use((config) => {
+api.interceptors.request.use((config) => {
   const stored = sessionStorage.getItem('auth-storage');
   if (stored) {
     try {
@@ -97,7 +97,7 @@ class WalletApiService {
    * Get wallet balance and summary
    */
   async getWallet(): Promise<WalletResponse> {
-    const response = await walletApi.get('/wallet');
+    const response = await api.get('/wallet');
     return response.data;
   }
 
@@ -117,7 +117,7 @@ class WalletApiService {
     const queryString = params.toString();
     const url = queryString ? `/earnings/transactions?${queryString}` : '/earnings/transactions';
 
-    const response = await walletApi.get(url);
+    const response = await api.get(url);
     return response.data;
   }
 
@@ -125,7 +125,7 @@ class WalletApiService {
    * Get earnings summary
    */
   async getEarningsSummary(period: 'week' | 'month' | 'year' = 'month'): Promise<EarningsSummaryResponse> {
-    const response = await walletApi.get(`/earnings/summary?period=${period}`);
+    const response = await api.get(`/earnings/summary?period=${period}`);
     return response.data;
   }
 
@@ -141,7 +141,7 @@ class WalletApiService {
       accountHolder: string;
     };
   }): Promise<WithdrawalResponse> {
-    const response = await walletApi.post('/withdraw', data);
+    const response = await api.post('/withdraw', data);
     return response.data;
   }
 
@@ -152,7 +152,7 @@ class WalletApiService {
     amount: number;
     idempotencyKey: string;
   }): Promise<AddMoneyResponse> {
-    const response = await walletApi.post('/add-money', data);
+    const response = await api.post('/add-money', data);
     return response.data;
   }
 }

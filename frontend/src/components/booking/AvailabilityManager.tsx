@@ -537,7 +537,9 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
                           )}
 
                           {slotError && (
-                            <AlertCircle className="h-4 w-4 text-yellow-500" title={slotError} />
+                            <span aria-label={slotError}>
+                              <AlertCircle className="h-4 w-4 text-yellow-500" />
+                            </span>
                           )}
                         </div>
                       );

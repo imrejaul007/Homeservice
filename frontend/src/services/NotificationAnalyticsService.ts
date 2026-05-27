@@ -561,8 +561,31 @@ class NotificationAnalyticsService {
     try {
       const response = await notificationApi.getAnalytics(params);
       if (response.success && response.data) {
+        // Adapt backend response format to NotificationAnalyticsData
+        const adaptedData = {
+          channels: {
+            in_app: { sent: 0, delivered: 0, clicked: 0, rate: 0 },
+            email: { sent: 0, delivered: 0, clicked: 0, rate: 0 },
+            sms: { sent: 0, delivered: 0, clicked: 0, rate: 0 },
+            push: { sent: 0, delivered: 0, clicked: 0, rate: 0 },
+          } as NotificationAnalyticsData['channels'],
+          recentActivity: { last7Days: 0, last30Days: 0 },
+        };
+        // Map byChannel to channels
+        Object.entries(response.data.byChannel).forEach(([channel, stats]) => {
+          if (channel in adaptedData.channels) {
+            adaptedData.channels[channel as keyof typeof adaptedData.channels] = {
+              sent: stats.sent,
+              delivered: stats.delivered,
+              clicked: stats.clicked,
+              rate: stats.rate,
+            };
+          }
+        });
+        adaptedData.recentActivity.last7Days = response.data.totalSent;
+        adaptedData.recentActivity.last30Days = response.data.totalSent;
         // Merge with local analytics
-        this.mergeAnalytics(response.data);
+        this.mergeAnalytics(adaptedData);
         return this.analytics;
       }
       return null;

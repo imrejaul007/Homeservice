@@ -192,7 +192,20 @@ export const useBookingStore = create<BookingState>()(
           set((state) => {
             state.providerBookings = response.data.bookings;
             state.providerBookingsPagination = response.pagination || null;
-            state.providerBookingsStats = response.stats || null;
+            // Transform stats to match ProviderBookingsStats shape
+            if (response.stats) {
+              state.providerBookingsStats = {
+                pending: response.stats.pending,
+                confirmed: response.stats.confirmed,
+                in_progress: response.stats.in_progress ?? 0,
+                completed: response.stats.completed,
+                cancelled: response.stats.cancelled,
+                no_show: response.stats.no_show ?? 0,
+                total: response.stats.total ?? (response.data.bookings?.length ?? 0),
+              };
+            } else {
+              state.providerBookingsStats = null;
+            }
             state.isLoading = false;
           });
         } catch (error) {
@@ -505,7 +518,7 @@ export const useBookingStore = create<BookingState>()(
             state.errors = [];
           });
 
-          const response = await bookingService.getProviderAvailability(providerId);
+          const response = await bookingService.getProviderAvailability();
 
           set((state) => {
             state.providerAvailability = response.data.availability;

@@ -88,7 +88,7 @@ const ProviderReviewsPage: React.FC = () => {
         setReviews(data.data.reviews);
         setAverageRating(data.data.averageRating);
         setRatingDistribution(data.data.ratingDistribution);
-        setTotalReviews(data.data.totalReviews);
+        setTotalReviews(data.data.total);
       }
     } catch (err: any) {
       setError(err.response?.data?.message || 'Failed to load reviews');

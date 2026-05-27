@@ -35,7 +35,7 @@ function buildProfileFormData(
   user: ReturnType<typeof useAuthStore.getState>['user'],
   providerProfile: ReturnType<typeof useAuthStore.getState>['providerProfile']
 ) {
-  const pp = providerProfile as Record<string, unknown> | null;
+  const pp = providerProfile as unknown as Record<string, unknown> | null;
   return {
     firstName: user?.firstName || '',
     lastName: user?.lastName || '',

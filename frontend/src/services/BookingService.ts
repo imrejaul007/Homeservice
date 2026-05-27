@@ -346,6 +346,17 @@ export interface BookingResponse<T = any> {
     limit: number;
     total: number;
     pages: number;
+    hasMore?: boolean;
+    nextCursor?: string;
+  };
+  stats?: {
+    pending: number;
+    confirmed: number;
+    completed: number;
+    cancelled: number;
+    in_progress?: number;
+    no_show?: number;
+    total?: number;
   };
 }
 

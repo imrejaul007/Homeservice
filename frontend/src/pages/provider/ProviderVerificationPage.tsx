@@ -47,7 +47,7 @@ interface VerificationStep {
 const ProviderVerificationPage: React.FC = () => {
   const navigate = useNavigate();
   const { user, providerProfile } = useAuthStore();
-  const toast = useToast ? useToast() : null;
+  const toast = useToast();
 
   // Redirect if not a provider
   useEffect(() => {
@@ -124,7 +124,7 @@ const ProviderVerificationPage: React.FC = () => {
   const handleFileUpload = async (stepId: string, documentId: string, file: File) => {
     // Validate file
     if (!file || file.size === 0) {
-      toast?.error('Please select a valid file');
+      toast.addToast({ title: 'Please select a valid file', variant: 'error' });
       return;
     }
 
@@ -190,12 +190,12 @@ const ProviderVerificationPage: React.FC = () => {
         })
       );
 
-      toast?.success('Document uploaded successfully');
+      toast.addToast({ title: 'Document uploaded successfully', variant: 'success' });
 
     } catch (error) {
       console.error('Upload failed:', error);
       setUploadProgress({});
-      toast?.error(error instanceof Error ? error.message : 'Failed to upload document');
+      toast.addToast({ title: error instanceof Error ? error.message : 'Failed to upload document', variant: 'error' });
     }
   };
 
@@ -212,11 +212,11 @@ const ProviderVerificationPage: React.FC = () => {
             status: 'submitted' as const,
           }))
         );
-        toast?.success('Your verification documents have been submitted for review. You will be notified once the review is complete.');
+        toast.addToast({ title: 'Your verification documents have been submitted for review. You will be notified once the review is complete.', variant: 'success' });
       }
     } catch (error: any) {
       console.error('Submit failed:', error);
-      toast?.error(error.response?.data?.message || 'Failed to submit verification. Please try again.');
+      toast.addToast({ title: error.response?.data?.message || 'Failed to submit verification. Please try again.', variant: 'error' });
     } finally {
       setIsSubmitting(false);
     }

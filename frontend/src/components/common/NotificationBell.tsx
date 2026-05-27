@@ -67,7 +67,8 @@ const NotificationBell: React.FC<NotificationBellProps> = ({ userId, userRole = 
 
     // Disconnect on unmount
     return () => {
-      socketService.off('notification:new', handleNewNotification);
+      const unsubscribe = socketService.onNewNotification(handleNewNotification);
+      unsubscribe();
       socketService.disconnect();
     };
   }, [userId, handleNewNotification]);

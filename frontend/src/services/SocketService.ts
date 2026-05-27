@@ -424,6 +424,14 @@ class SocketService {
     return this.addListener('unauthorized', callback);
   }
 
+  /**
+   * Remove event listener (alias for unsubscribe)
+   * Maintains API compatibility
+   */
+  off(event: string, callback: Function): void {
+    this.listeners.get(event)?.delete(callback);
+  }
+
   // P0 FIX: Internal listener management with subscription tracking
   addListener(event: string, callback: Function): () => void {
     if (!this.listeners.has(event)) {

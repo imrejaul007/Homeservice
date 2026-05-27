@@ -18,7 +18,7 @@ import {
   calculateContractDuration,
   isExpiringSoon,
 } from '../../services/managedContractApi';
-import { useToast } from '../../components/common/Toast';
+import { useToast } from '../../components/common/Toast/ToastContext';
 
 // ============================================
 // Icon Components
@@ -160,7 +160,10 @@ const ManagedServicesPage: React.FC = () => {
   const [generatedReport, setGeneratedReport] = useState<ContractReport | null>(null);
 
   // Toast
-  const { showToast } = useToast();
+  const { addToast } = useToast();
+  const showToast = (title: string, variant: 'success' | 'error' | 'warning' | 'info' = 'info') => {
+    addToast({ title, variant });
+  };
 
   // ============================================
   // Data Fetching

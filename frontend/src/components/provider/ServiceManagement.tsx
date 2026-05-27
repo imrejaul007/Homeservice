@@ -337,7 +337,20 @@ const ServiceManagement: React.FC = () => {
 
       if (data.success) {
         setServiceStats(data.data.overview.serviceStats);
-        setStatusCounts(data.data.overview.statusCounts || data.data.overview.serviceStats);
+        // Merge statusCounts with defaults - use statusCounts if available, otherwise derive from serviceStats
+        const statusCounts = data.data.overview.statusCounts;
+        if (statusCounts) {
+          setStatusCounts(statusCounts);
+        } else {
+          const stats = data.data.overview.serviceStats;
+          setStatusCounts({
+            all: stats.total ?? 0,
+            active: stats.active ?? 0,
+            inactive: stats.inactive ?? 0,
+            pending_review: stats.pending_review ?? 0,
+            draft: stats.draft ?? 0,
+          });
+        }
         setPerformanceStats(data.data.overview.performanceStats);
         setBookingStats(data.data.overview.bookingStats);
         setAllCategories(data.data.overview.allCategories || []);
