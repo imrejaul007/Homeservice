@@ -304,7 +304,7 @@ const ExecutiveDashboard: React.FC = () => {
 
   if (loading) {
     return (
-      <PageLayout title="Executive Dashboard">
+      <PageLayout title="Executive Dashboard" backHref="/admin/dashboard">
         <div className="flex items-center justify-center h-96">
           <div className="text-center">
             <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto" />
@@ -319,7 +319,7 @@ const ExecutiveDashboard: React.FC = () => {
 
   return (
     <ErrorBoundary>
-      <PageLayout title="Executive Dashboard">
+      <PageLayout title="Executive Dashboard" backHref="/admin/dashboard">
         <div className="space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">

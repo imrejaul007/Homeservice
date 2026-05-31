@@ -144,7 +144,7 @@ const SLAReport: React.FC = () => {
 
   if (loading) {
     return (
-      <PageLayout title="SLA Compliance">
+      <PageLayout title="SLA Compliance" backHref="/admin/reports">
         <div className="flex items-center justify-center h-96">
           <div className="text-center">
             <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto" />

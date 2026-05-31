@@ -493,7 +493,7 @@ const AnalyticsDashboard: React.FC = () => {
 
   if (loading) {
     return (
-      <PageLayout title="Analytics Dashboard">
+      <PageLayout title="Analytics Dashboard" backHref="/admin/dashboard">
         <div className="flex items-center justify-center h-96">
           <div className="text-center">
             <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto" />
@@ -508,7 +508,7 @@ const AnalyticsDashboard: React.FC = () => {
 
   return (
     <ErrorBoundary>
-    <PageLayout title="Analytics Dashboard">
+    <PageLayout title="Analytics Dashboard" backHref="/admin/dashboard">
       <div className="space-y-6">
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">

@@ -1,4 +1,4 @@
-import { NavLink } from 'react-router-dom';
+import { NavLink, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard,
   BarChart3,
@@ -14,7 +14,10 @@ import {
   ChevronRight,
   Shield,
   UserCheck,
+  LogOut,
 } from 'lucide-react';
+import { useAuthStore } from '../../stores/authStore';
+import authService from '../../services/AuthService';
 
 export interface AdminNavItem {
   to: string;
@@ -45,6 +48,19 @@ interface AdminNavProps {
 }
 
 export function AdminNav({ pendingVerifications = 0, className = '' }: AdminNavProps) {
+  const navigate = useNavigate();
+  const { user, logout } = useAuthStore();
+
+  const handleLogout = async () => {
+    try {
+      await authService.logout();
+    } catch (error) {
+      console.error('Logout error:', error);
+    }
+    logout();
+    navigate('/');
+  };
+
   return (
     <nav
       className={`glass glass-blur rounded-2xl border border-nilin-border/50 p-3 ${className}`}
@@ -54,9 +70,9 @@ export function AdminNav({ pendingVerifications = 0, className = '' }: AdminNavP
         <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-nilin-rose to-nilin-coral flex items-center justify-center">
           <Shield className="w-4 h-4 text-white" />
         </div>
-        <div>
+        <div className="flex-1">
           <p className="text-xs font-semibold uppercase tracking-wider text-nilin-coral font-sans">Admin</p>
-          <p className="text-sm font-serif text-nilin-charcoal">Control center</p>
+          <p className="text-sm font-serif text-nilin-charcoal truncate">{user?.firstName || 'Admin'}</p>
         </div>
       </div>
 
@@ -109,6 +125,20 @@ export function AdminNav({ pendingVerifications = 0, className = '' }: AdminNavP
           );
         })}
       </ul>
+
+      {/* Logout Button */}
+      <div className="mt-4 pt-3 border-t border-nilin-border/40">
+        <button
+          onClick={handleLogout}
+          className="w-full flex items-center gap-3 rounded-xl px-3 py-2.5 transition-all font-sans text-nilin-charcoal hover:bg-red-50 hover:text-red-600"
+        >
+          <LogOut className="w-4 h-4 flex-shrink-0" />
+          <div className="flex-1 text-left">
+            <p className="text-sm font-medium">Logout</p>
+            <p className="text-xs text-nilin-warmGray">Sign out</p>
+          </div>
+        </button>
+      </div>
     </nav>
   );
 }
