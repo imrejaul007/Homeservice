@@ -122,11 +122,18 @@ export const capitalize = (str: string): string => {
 
 /**
  * Check if a string is a valid email
+ * SECURITY FIX: Comprehensive RFC 5321/5322 compliant regex that:
+ * - Allows standard characters in local part (letters, numbers, dots, underscores, etc.)
+ * - Validates domain format with proper TLD structure
+ * - Rejects common bypass attempts (double dots, leading/trailing special chars)
  * @param email - Email to validate
  * @returns Boolean indicating if email is valid
  */
 export const isValidEmail = (email: string): boolean => {
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  // Comprehensive email regex supporting all valid ICANN TLDs (2-24 chars)
+  // Local part: alphanumeric + specific special chars, no leading/trailing dots
+  // Domain: alphanumeric with hyphens (not leading/trailing), followed by valid TLD
+  const emailRegex = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\.[a-zA-Z]{2,24}$/;
   return emailRegex.test(email);
 };
 

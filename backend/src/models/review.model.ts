@@ -1,7 +1,11 @@
 import mongoose, { Document, Schema, Model } from 'mongoose';
+import logger from '../utils/logger';
 
 export interface IReview extends Document {
   _id: mongoose.Types.ObjectId;
+
+  // Multi-tenant support
+  tenantId?: mongoose.Types.ObjectId;
 
   // Booking reference
   bookingId: mongoose.Types.ObjectId;
@@ -46,6 +50,13 @@ export interface IReview extends Document {
 
 const reviewSchema = new Schema<IReview>(
   {
+    // Multi-tenant support
+    tenantId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Tenant',
+      index: true,
+    },
+
     bookingId: {
       type: Schema.Types.ObjectId,
       ref: 'Booking',
@@ -180,10 +191,26 @@ reviewSchema.index(
 );
 
 // Compound indexes for common query patterns
-reviewSchema.index({ revieweeId: 1, createdAt: -1 });
+// PERFORMANCE FIX: Add index for service rating recalculation (N+1 query fix)
+reviewSchema.index({ bookingId: 1, isHidden: 1 }); // For rating recalculation
+reviewSchema.index({ revieweeId: 1, reviewerType: 1, createdAt: -1 }); // For provider reviews
 reviewSchema.index({ reviewerId: 1, createdAt: -1 });
 reviewSchema.index({ rating: 1, createdAt: -1 });
 reviewSchema.index({ isHidden: 1, createdAt: -1 });
+reviewSchema.index({ isHidden: 1 }); // For findByProvider queries filtering hidden reviews
+// PERFORMANCE FIX: Compound index for service analytics queries
+reviewSchema.index({ bookingId: 1, revieweeId: 1 }); // For service-level rating queries
+
+// Tenant isolation indexes
+reviewSchema.index({ tenantId: 1, revieweeId: 1 });
+reviewSchema.index({ tenantId: 1, reviewerId: 1 });
+reviewSchema.index({ tenantId: 1, moderationStatus: 1 });
+
+// FIX: Add index for helpful votes sorting (find most helpful reviews)
+reviewSchema.index({ helpfulVotes: -1, createdAt: -1 });
+
+// FIX: Add index for report count queries (moderation queue)
+reviewSchema.index({ reportCount: 1, moderationStatus: 1 });
 
 // Partial index for visible reviews only (performance optimization)
 reviewSchema.index(
@@ -295,5 +322,82 @@ reviewSchema.statics.existsForBooking = async function(
 };
 
 const Review: Model<IReview> = mongoose.model<IReview>('Review', reviewSchema);
+
+// ===================================
+// POST-SAVE HOOKS FOR DENORMALIZED ANALYTICS
+// ===================================
+// FIX: Trigger ProviderProfile review stats recalculation when reviews change
+
+reviewSchema.post('save', async function(doc) {
+  // Recalculate provider's review stats when a review is created or updated
+  if (doc.revieweeType === 'provider' && doc.reviewerType === 'customer') {
+    try {
+      const ProviderProfile = mongoose.model('ProviderProfile') as any;
+      await ProviderProfile.recalculateReviewsData(doc.revieweeId);
+
+      // Also update booking reference to review
+      const Booking = mongoose.model('Booking');
+      await Booking.findByIdAndUpdate(doc.bookingId, {
+        $set: { customerReview: doc._id }
+      });
+
+      logger.debug('Provider review stats recalculated after review change', {
+        context: 'ReviewModel',
+        action: 'RECALCULATE_REVIEW_STATS',
+        reviewId: doc._id.toString(),
+        providerId: doc.revieweeId.toString(),
+      });
+    } catch (error) {
+      logger.warn('Failed to recalculate provider review stats', {
+        context: 'ReviewModel',
+        action: 'RECALCULATE_REVIEW_STATS_ERROR',
+        reviewId: doc._id.toString(),
+        error: (error as Error).message,
+      });
+    }
+  }
+});
+
+// Recalculate on review deletion
+reviewSchema.post('findOneAndDelete', async function(doc) {
+  if (doc && doc.revieweeType === 'provider' && doc.reviewerType === 'customer') {
+    try {
+      const ProviderProfile = mongoose.model('ProviderProfile') as any;
+      await ProviderProfile.recalculateReviewsData(doc.revieweeId);
+
+      // Clear review reference from booking
+      const Booking = mongoose.model('Booking');
+      await Booking.findByIdAndUpdate(doc.bookingId, {
+        $unset: { customerReview: 1 }
+      });
+
+      logger.debug('Provider review stats recalculated after review deletion', {
+        context: 'ReviewModel',
+        action: 'RECALCULATE_REVIEW_STATS_ON_DELETE',
+        reviewId: doc._id.toString(),
+        providerId: doc.revieweeId.toString(),
+      });
+    } catch (error) {
+      logger.warn('Failed to recalculate provider review stats on delete', {
+        context: 'ReviewModel',
+        action: 'RECALCULATE_REVIEW_STATS_DELETE_ERROR',
+        reviewId: doc._id.toString(),
+        error: (error as Error).message,
+      });
+    }
+  }
+});
+
+// FIX: Pre-delete hook to clean up related data when review is deleted
+reviewSchema.pre('deleteOne', { document: true, query: false }, async function() {
+  // This runs before the document is deleted
+  // The post-delete hook will handle recalculating review stats
+  logger.debug('Review deletion initiated', {
+    context: 'ReviewModel',
+    action: 'REVIEW_DELETE_INITIATED',
+    reviewId: this._id.toString(),
+    bookingId: this.bookingId.toString(),
+  });
+});
 
 export default Review;

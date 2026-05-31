@@ -35,6 +35,7 @@ import {
   type Membership,
   type PlanType,
   type BillingCycle,
+  type BillingHistoryItem,
 } from '../services/subscriptionApi';
 
 // ============================================
@@ -183,7 +184,7 @@ const SubscriptionPlansPage: React.FC = () => {
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
   const [activeTab, setActiveTab] = useState<'plans' | 'membership' | 'billing'>('plans');
-  const [billingHistory, setBillingHistory] = useState<any[]>([]);
+  const [billingHistory, setBillingHistory] = useState<BillingHistoryItem[]>([]);
 
   // Fetch data on mount
   useEffect(() => {
@@ -216,11 +217,11 @@ const SubscriptionPlansPage: React.FC = () => {
       if (membershipRes.status === 'fulfilled') {
         setMembershipTier(membershipRes.value.data);
       }
-    } catch (err: any) {
-      console.error('Failed to fetch subscription data:', err);
+    } catch (err) {
       // Don't show error for missing subscription (user might not have one)
-      if (err.response?.status !== 404) {
-        setError(err.response?.data?.message || 'Failed to load subscription data');
+      const error = err as { response?: { status?: number; data?: { message?: string } } };
+      if (error.response?.status !== 404) {
+        setError(error.response?.data?.message || 'Failed to load subscription data');
       }
     } finally {
       setIsLoading(false);
@@ -255,8 +256,9 @@ const SubscriptionPlansPage: React.FC = () => {
 
       // Clear success message after 3 seconds
       setTimeout(() => setSuccessMessage(null), 3000);
-    } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to create subscription');
+    } catch (err) {
+      const error = err as { response?: { data?: { message?: string } } };
+      setError(error.response?.data?.message || 'Failed to create subscription');
     } finally {
       setIsProcessing(false);
     }
@@ -280,8 +282,9 @@ const SubscriptionPlansPage: React.FC = () => {
       setUsageStats(usageRes.data);
 
       setTimeout(() => setSuccessMessage(null), 3000);
-    } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to change plan');
+    } catch (err) {
+      const error = err as { response?: { data?: { message?: string } } };
+      setError(error.response?.data?.message || 'Failed to change plan');
     } finally {
       setIsProcessing(false);
     }
@@ -303,8 +306,9 @@ const SubscriptionPlansPage: React.FC = () => {
       setSuccessMessage('Your subscription will be cancelled at the end of the billing period.');
 
       setTimeout(() => setSuccessMessage(null), 5000);
-    } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to cancel subscription');
+    } catch (err) {
+      const error = err as { response?: { data?: { message?: string } } };
+      setError(error.response?.data?.message || 'Failed to cancel subscription');
     } finally {
       setIsProcessing(false);
     }
@@ -319,8 +323,9 @@ const SubscriptionPlansPage: React.FC = () => {
       setCurrentSubscription(response.data);
       setSuccessMessage('Your subscription has been reactivated!');
       setTimeout(() => setSuccessMessage(null), 3000);
-    } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to reactivate subscription');
+    } catch (err) {
+      const error = err as { response?: { data?: { message?: string } } };
+      setError(error.response?.data?.message || 'Failed to reactivate subscription');
     } finally {
       setIsProcessing(false);
     }

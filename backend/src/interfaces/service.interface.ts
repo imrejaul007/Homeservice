@@ -1141,6 +1141,8 @@ export type NotificationType =
   | 'refund_processed'
   | 'new_message'
   | 'offer_available'
+  | 'dispute_received'
+  | 'dispute_resolved'
   | 'system';
 
 /**

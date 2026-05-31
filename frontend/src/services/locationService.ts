@@ -1,4 +1,7 @@
 import { api } from './api';
+import { Capacitor } from '@capacitor/core';
+import { Geolocation, type Position } from '@capacitor/geolocation';
+import { Preferences } from '@capacitor/preferences';
 import type { LocationCoordinates, GeocodeResponse, UserLocation, SupportedCity } from '@/types/location.types';
 
 export const SUPPORTED_CITIES: SupportedCity[] = [
@@ -13,7 +16,26 @@ export const SUPPORTED_CITIES: SupportedCity[] = [
 const DEFAULT_CITY = SUPPORTED_CITIES[0];
 
 class WebLocationService {
+  private isNative: boolean;
+
+  constructor() {
+    this.isNative = typeof window !== 'undefined' && Capacitor.isNativePlatform();
+  }
+
   async checkPermissionStatus(): Promise<'granted' | 'denied' | 'prompt' | 'undetermined'> {
+    // Use Capacitor geolocation on native
+    if (this.isNative) {
+      try {
+        const permission = await Geolocation.checkPermissions();
+        if (permission.location === 'granted') return 'granted';
+        if (permission.location === 'denied') return 'denied';
+        return 'prompt';
+      } catch {
+        return 'undetermined';
+      }
+    }
+
+    // Browser fallback
     if (!navigator.geolocation) {
       return 'undetermined';
     }
@@ -31,6 +53,17 @@ class WebLocationService {
   }
 
   async requestLocationPermission(): Promise<boolean> {
+    // Use Capacitor geolocation on native
+    if (this.isNative) {
+      try {
+        const permission = await Geolocation.requestPermissions();
+        return permission.location === 'granted';
+      } catch {
+        return false;
+      }
+    }
+
+    // Browser fallback
     if (!navigator.geolocation) {
       return false;
     }
@@ -41,6 +74,21 @@ class WebLocationService {
         () => resolve(false),
         { timeout: 10000, maximumAge: 0 }
       );
+    });
+  }
+
+  private async getNativeLocation(): Promise<Position> {
+    const permission = await Geolocation.checkPermissions();
+    if (permission.location !== 'granted') {
+      const requested = await Geolocation.requestPermissions();
+      if (requested.location !== 'granted') {
+        throw new Error('Location permission denied');
+      }
+    }
+
+    return await Geolocation.getCurrentPosition({
+      enableHighAccuracy: true,
+      timeout: 15000,
     });
   }
 
@@ -61,6 +109,13 @@ class WebLocationService {
         }
       );
     });
+  }
+
+  private async getLocation(): Promise<GeolocationPosition | Position> {
+    if (this.isNative) {
+      return await this.getNativeLocation();
+    }
+    return await this.getBrowserLocation();
   }
 
   private async reverseGeocode(lat: number, lng: number): Promise<GeocodeResponse> {
@@ -109,10 +164,13 @@ class WebLocationService {
 
   async getCurrentLocation(): Promise<UserLocation | null> {
     try {
-      const position = await this.getBrowserLocation();
+      const position = await this.getLocation();
+
+      // Handle both browser and native position formats
+      const pos = position as { coords: { latitude: number; longitude: number } };
       const coords: LocationCoordinates = {
-        latitude: position.coords.latitude,
-        longitude: position.coords.longitude,
+        latitude: pos.coords.latitude,
+        longitude: pos.coords.longitude,
       };
 
       const address = await this.reverseGeocode(coords.latitude, coords.longitude);
@@ -138,23 +196,44 @@ class WebLocationService {
     }
   }
 
-  getCachedLocation(): UserLocation | null {
+  async getCachedLocation(): Promise<UserLocation | null> {
     try {
-      const cached = localStorage.getItem('homeservice_location');
-      if (cached) {
-        const location = JSON.parse(cached);
-        location.lastUpdated = new Date(location.lastUpdated);
-        return location;
+      if (this.isNative) {
+        const cached = await Preferences.get({ key: 'homeservice_location' });
+        if (cached.value) {
+          const location = JSON.parse(cached.value) as UserLocation;
+          location.lastUpdated = new Date(location.lastUpdated);
+          return location;
+        }
+        return null;
+      } else {
+        // Browser fallback
+        if (typeof window !== 'undefined' && window.localStorage) {
+          const cached = localStorage.getItem('homeservice_location');
+          if (cached) {
+            const location = JSON.parse(cached);
+            location.lastUpdated = new Date(location.lastUpdated);
+            return location;
+          }
+        }
+        return null;
       }
     } catch {
-      // Ignore
+      return null;
     }
-    return null;
   }
 
-  cacheLocation(location: UserLocation): void {
+  async cacheLocation(location: UserLocation): Promise<void> {
     try {
-      localStorage.setItem('homeservice_location', JSON.stringify(location));
+      const serialized = JSON.stringify(location);
+      if (this.isNative) {
+        await Preferences.set({ key: 'homeservice_location', value: serialized });
+      } else {
+        // Browser fallback
+        if (typeof window !== 'undefined' && window.localStorage) {
+          localStorage.setItem('homeservice_location', serialized);
+        }
+      }
     } catch {
       // Ignore
     }

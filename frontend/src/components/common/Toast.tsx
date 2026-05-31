@@ -91,27 +91,81 @@ const Toast: React.FC<ToastProps> = ({ toast, onClose }) => {
   const [progress, setProgress] = useState(100);
   const [isPaused, setIsPaused] = useState(false);
 
+  // Use refs for timers to ensure proper cleanup
+  const timerRef = React.useRef<NodeJS.Timeout | null>(null);
+  const intervalRef = React.useRef<NodeJS.Timeout | null>(null);
+  const startTimeRef = React.useRef<number>(Date.now());
+  const onCloseRef = React.useRef(onClose);
+
+  // Keep onClose ref updated to avoid stale closures
+  onCloseRef.current = onClose;
+
   React.useEffect(() => {
+    // Reset start time when duration changes
+    startTimeRef.current = Date.now();
+
+    // Clear any existing timers
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+
     if (duration === 0 || isPaused) return;
 
-    const startTime = Date.now();
+    // Calculate remaining time based on current progress
     const remainingTime = (progress / 100) * duration;
 
-    const timer = setTimeout(() => {
-      onClose();
+    // Set close timer
+    timerRef.current = setTimeout(() => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+      onCloseRef.current();
     }, remainingTime);
 
-    const interval = setInterval(() => {
-      const elapsed = Date.now() - startTime;
+    // Set progress interval
+    intervalRef.current = setInterval(() => {
+      const elapsed = Date.now() - startTimeRef.current;
       const newProgress = Math.max(0, 100 - (elapsed / duration) * 100);
       setProgress(newProgress);
+
+      if (newProgress <= 0 && intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
     }, 50);
 
+    // Cleanup function - critical for preventing memory leaks
     return () => {
-      clearTimeout(timer);
-      clearInterval(interval);
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
     };
-  }, [duration, onClose, progress, isPaused]);
+  }, [duration, progress, isPaused]);
+
+  // Cleanup on unmount - ensures all timers are cleared when component unmounts
+  React.useEffect(() => {
+    return () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+    };
+  }, []);
 
   const styles = variantStyles[variant];
 
@@ -221,7 +275,9 @@ const ToastProvider: React.FC<ToastProviderProps> = ({
         {/* Toast Viewport */}
         <ToastPrimitive.Viewport
           className={cn(
-            'fixed bottom-4 right-4 z-[100]',
+            // CRITICAL FIX: z-[9999] ensures toasts appear above all modals, drawers, and overlays
+            // Standard modal z-index is 50-100, drawers are 100-200, but we need to be above everything
+            'fixed bottom-4 right-4 z-[9999]',
             'flex flex-col gap-2 w-[380px] max-w-[calc(100vw-32px)]',
             'outline-none'
           )}

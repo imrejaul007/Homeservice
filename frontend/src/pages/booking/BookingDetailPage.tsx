@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Calendar,
@@ -8,7 +8,9 @@ import {
   User,
   Star,
   MessageCircle,
-  ArrowLeft
+  ArrowLeft,
+  AlertCircle,
+  RefreshCw
 } from 'lucide-react';
 import NavigationHeader from '../../components/layout/NavigationHeader';
 import Footer from '../../components/layout/Footer';
@@ -17,6 +19,12 @@ import Timeline from '../../components/customer/Timeline';
 import { useBookingStore } from '../../stores/bookingStore';
 import { useAuthStore } from '../../stores/authStore';
 import type { TimelineEvent } from '../../components/customer/Timeline';
+import { toast } from 'react-hot-toast';
+
+interface BookingError {
+  message: string;
+  code?: string;
+}
 
 const BookingDetailPage: React.FC = () => {
   const { bookingId } = useParams<{ bookingId: string }>();
@@ -28,10 +36,19 @@ const BookingDetailPage: React.FC = () => {
     cancelBooking,
     isLoading
   } = useBookingStore();
+  const [error, setError] = useState<BookingError | null>(null);
+  const [showCancelModal, setShowCancelModal] = useState(false);
 
   useEffect(() => {
     if (bookingId) {
-      getBooking(bookingId);
+      setError(null);
+      getBooking(bookingId).catch((err: unknown) => {
+        const errorObj = err as Error;
+        setError({
+          message: errorObj?.message || 'Failed to load booking details',
+          code: (err as { code?: string })?.code
+        });
+      });
     }
   }, [bookingId]);
 
@@ -47,10 +64,20 @@ const BookingDetailPage: React.FC = () => {
     );
   }
 
-  const handleCancelBooking = async () => {
-    if (currentBooking && window.confirm('Are you sure you want to cancel this booking?')) {
+  const handleCancelClick = () => {
+    setShowCancelModal(true);
+  };
+
+  const handleConfirmCancel = async () => {
+    if (!currentBooking) return;
+    setShowCancelModal(false);
+    try {
       await cancelBooking(currentBooking._id, { reason: 'Customer requested cancellation' });
+      toast.success('Booking cancelled successfully');
       navigate('/customer/bookings');
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to cancel booking';
+      toast.error(errorMessage);
     }
   };
 
@@ -130,6 +157,32 @@ const BookingDetailPage: React.FC = () => {
     );
   }
 
+  if (error) {
+    return (
+      <div className="min-h-screen bg-nilin-cream flex flex-col">
+        <NavigationHeader />
+        <div className="flex-1 flex items-center justify-center px-4">
+          <div className="text-center max-w-md">
+            <AlertCircle className="h-16 w-16 text-red-500 mx-auto mb-4" />
+            <h2 className="text-2xl font-bold text-nilin-charcoal mb-2">Unable to Load Booking</h2>
+            <p className="text-nilin-warmGray mb-6">{error.message}</p>
+            <button
+              onClick={() => {
+                setError(null);
+                if (bookingId) getBooking(bookingId);
+              }}
+              className="px-6 py-3 bg-nilin-coral text-white font-semibold rounded-lg hover:shadow-lg transition-shadow inline-flex items-center gap-2"
+            >
+              <RefreshCw className="h-4 w-4" />
+              Try Again
+            </button>
+          </div>
+        </div>
+        <Footer />
+      </div>
+    );
+  }
+
   if (!currentBooking) {
     return (
       <div className="min-h-screen bg-nilin-cream flex flex-col">
@@ -151,12 +204,13 @@ const BookingDetailPage: React.FC = () => {
     );
   }
 
-  const statusColors = {
+  const statusColors: Record<string, string> = {
     pending: 'bg-yellow-100 text-yellow-800',
     confirmed: 'bg-blue-100 text-blue-800',
     in_progress: 'bg-purple-100 text-purple-800',
     completed: 'bg-green-100 text-green-800',
-    cancelled: 'bg-red-100 text-red-800'
+    cancelled: 'bg-red-100 text-red-800',
+    no_show: 'bg-orange-100 text-orange-800'
   };
 
   return (
@@ -249,7 +303,7 @@ const BookingDetailPage: React.FC = () => {
               <h3 className="text-lg font-semibold text-nilin-charcoal mb-4">Actions</h3>
               <div className="flex gap-3">
                 <button
-                  onClick={handleCancelBooking}
+                  onClick={handleCancelClick}
                   className="px-6 py-3 bg-red-100 text-red-700 font-semibold rounded-lg hover:bg-red-200 transition-colors"
                 >
                   Cancel Booking
@@ -261,6 +315,30 @@ const BookingDetailPage: React.FC = () => {
       </div>
 
       <Footer />
+
+      {/* Cancel Booking Confirmation Modal */}
+      {showCancelModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+            <h3 className="text-lg font-semibold text-nilin-charcoal mb-4">Cancel Booking</h3>
+            <p className="text-nilin-warmGray mb-6">Are you sure you want to cancel this booking?</p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setShowCancelModal(false)}
+                className="px-4 py-2 text-nilin-warmGray hover:bg-nilin-muted rounded-lg transition-colors"
+              >
+                Keep Booking
+              </button>
+              <button
+                onClick={handleConfirmCancel}
+                className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
+              >
+                Cancel Booking
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

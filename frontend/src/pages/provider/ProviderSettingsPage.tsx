@@ -63,6 +63,23 @@ interface PrivacySettings {
   showReviewsPublicly: boolean;
 }
 
+interface ProviderProfileSettings {
+  businessSettings?: {
+    autoAcceptBookings?: boolean;
+    maxAdvanceBookingDays?: number;
+    minBookingNoticeHours?: number;
+    cancellationPolicyHours?: number;
+  };
+  locationInfo?: {
+    serviceAreas?: Array<{ city: string; state?: string; country?: string }>;
+  };
+  privacySettings?: {
+    showEmail?: boolean;
+    showPhone?: boolean;
+    showReviewsPublicly?: boolean;
+  };
+}
+
 const ProviderSettingsPage: React.FC = () => {
   const navigate = useNavigate();
   const { user, providerProfile } = useAuthStore();
@@ -70,7 +87,7 @@ const ProviderSettingsPage: React.FC = () => {
   // Redirect if not a provider
   useEffect(() => {
     if (user?.role !== 'provider') {
-      navigate('/dashboard');
+      navigate('/provider/dashboard'); // FIX: Was '/dashboard'
     }
   }, [user, navigate]);
 
@@ -165,7 +182,7 @@ const ProviderSettingsPage: React.FC = () => {
         }
 
         // Load provider business settings
-        const profileData = providerProfile as any;
+        const profileData = providerProfile as ProviderProfileSettings | null;
         if (profileData) {
           setBusiness({
             autoAcceptBookings: profileData.businessSettings?.autoAcceptBookings ?? false,

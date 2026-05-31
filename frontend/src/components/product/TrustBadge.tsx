@@ -3,7 +3,7 @@ import { Shield, Star, Clock, CheckCircle, Award, Users, Heart } from 'lucide-re
 
 // Trust Badge Component - Increases conversion and trust
 interface TrustBadgeProps {
-  type: 'verified' | 'rating' | 'response_time' | 'completed' | 'top_rated' | 'reviews';
+  type: 'verified' | 'rating' | 'response_time' | 'completed' | 'top_rated' | 'reviews' | 'premium';
   count?: number;
   value?: string | number;
   size?: 'sm' | 'md' | 'lg';
@@ -52,6 +52,13 @@ const badgeConfig = {
     color: 'text-nilin-coral',
     bgColor: 'bg-nilin-blush',
     borderColor: 'border-nilin-coral/20',
+  },
+  premium: {
+    icon: Award,
+    label: 'Premium',
+    color: 'text-purple-600',
+    bgColor: 'bg-purple-50',
+    borderColor: 'border-purple-200',
   },
 };
 

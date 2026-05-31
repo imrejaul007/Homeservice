@@ -89,7 +89,7 @@ export const getVerification = asyncHandler(async (req: Request, res: Response) 
       providerId: new mongoose.Types.ObjectId(providerId),
       status: 'pending',
       documents: [],
-      backgroundCheck: { status: 'pending' },
+      backgroundChecks: [],
       fraudFlags: [],
       reviewHistory: [],
       metadata: { verificationAttempts: 0 },
@@ -114,8 +114,25 @@ export const uploadKycDocument = asyncHandler(async (req: Request, res: Response
     throw new ApiError(400, 'Document file is required');
   }
 
-  // In production, you would upload to cloud storage and get URL
-  const documentUrl = `/uploads/kyc/${req.file.filename}`;
+  // SECURITY FIX: Upload KYC documents to Cloudinary instead of local storage
+  let documentUrl: string;
+
+  try {
+    const { uploadBufferToCloudinary } = await import('../utils/cloudinary');
+    const result = await uploadBufferToCloudinary(req.file.buffer, 'kyc/documents', {
+      resourceType: 'raw', // KYC documents may be PDFs, images, etc.
+      publicId: `${providerId}_${documentType}_${Date.now()}`,
+    });
+    documentUrl = result.secureUrl;
+  } catch (uploadError) {
+    logger.error('Failed to upload KYC document to Cloudinary', {
+      providerId,
+      documentType,
+      error: uploadError instanceof Error ? uploadError.message : String(uploadError),
+      action: 'KYC_CLOUDINARY_UPLOAD_FAILED',
+    });
+    throw new ApiError(500, 'Failed to upload document. Please try again.');
+  }
 
   const verification = await providerOpsService.uploadKycDocument(
     providerId,

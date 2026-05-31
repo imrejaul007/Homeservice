@@ -12,7 +12,8 @@ import { asyncHandler } from '../utils/asyncHandler';
 
 export const getProviderReviews = asyncHandler(async (req: Request, res: Response) => {
   const { providerId } = req.params;
-  const { page = '1', limit = '10' } = req.query;
+  const pageNum = Math.max(1, parseInt(req.query.page as string, 10) || 1);
+  const limitNum = Math.min(50, Math.max(1, parseInt(req.query.limit as string, 10) || 10));
 
   const providerProfile = await ProviderProfile.findOne({ userId: providerId });
 
@@ -28,29 +29,64 @@ export const getProviderReviews = asyncHandler(async (req: Request, res: Respons
     });
   }
 
-  // Get reviews with customer and service info
-  const reviews = await Promise.all(
-    providerProfile.reviewsData.recentReviews.slice(0, 20).map(async (review) => {
-      const booking = await Booking.findById(review.bookingId).populate([
-        { path: 'customerId', select: 'firstName lastName avatar' },
-        { path: 'serviceId', select: 'name' },
-      ]);
+  const totalReviews = providerProfile.reviewsData.totalReviews || 0;
+  const totalPages = Math.ceil(totalReviews / limitNum);
 
-      let serviceName = 'Service';
-      if (booking?.serviceId) {
-        const service = await Service.findById(booking.serviceId).select('name').lean();
-        serviceName = service?.name || 'Service';
-      }
+  // FIX: Apply pagination BEFORE fetching (prevents loading all reviews into memory)
+  const startIndex = (pageNum - 1) * limitNum;
+  const endIndex = startIndex + limitNum;
+  const paginatedReviewIds = providerProfile.reviewsData.recentReviews
+    .slice(startIndex, endIndex)
+    .map((review: any) => review.bookingId)
+    .filter(Boolean);
+
+  if (paginatedReviewIds.length === 0) {
+    return res.json({
+      success: true,
+      data: {
+        reviews: [],
+        total: totalReviews,
+        totalReviews,
+        averageRating: providerProfile.reviewsData.averageRating,
+        ratingDistribution: providerProfile.reviewsData.ratingDistribution,
+        page: pageNum,
+        pages: totalPages,
+      },
+    });
+  }
+
+  // FIX: Single query with $in instead of N+1 individual queries
+  const bookings = await Booking.find({ _id: { $in: paginatedReviewIds } })
+    .populate([
+      { path: 'customerId', select: 'firstName lastName avatar' },
+      { path: 'serviceId', select: 'name' },
+    ])
+    .lean();
+
+  // Create a map for O(1) lookup
+  const bookingMap = new Map(
+    bookings.map(b => [b._id.toString(), b])
+  );
+
+  // Transform reviews maintaining pagination order
+  const reviews = paginatedReviewIds
+    .map((bookingId: any) => {
+      const booking = bookingMap.get(bookingId?.toString());
+      if (!booking) return null;
+
+      const reviewData = providerProfile.reviewsData.recentReviews.find(
+        (r: any) => r.bookingId?.toString() === bookingId?.toString()
+      );
 
       return {
-        id: review.bookingId?.toString() || '',
-        rating: review.rating,
-        title: review.title,
-        comment: review.comment,
-        photos: review.photos || [],
+        id: bookingId?.toString() || '',
+        rating: reviewData?.rating || 0,
+        title: reviewData?.title || '',
+        comment: reviewData?.comment || '',
+        photos: reviewData?.photos || [],
         isVerified: true,
-        createdAt: review.createdAt,
-        customer: booking?.customerId
+        createdAt: reviewData?.createdAt || booking.createdAt,
+        customer: booking.customerId
           ? {
               id: (booking.customerId as any)._id.toString(),
               firstName: (booking.customerId as any).firstName,
@@ -58,28 +94,23 @@ export const getProviderReviews = asyncHandler(async (req: Request, res: Respons
               avatar: (booking.customerId as any).avatar,
             }
           : null,
-        service: booking?.serviceId ? { name: serviceName } : null,
+        service: booking.serviceId
+          ? { name: (booking.serviceId as any).name || 'Service' }
+          : null,
       };
     })
-  );
-
-  // Pagination
-  const pageNum = parseInt(page as string, 10);
-  const limitNum = parseInt(limit as string, 10);
-  const startIndex = (pageNum - 1) * limitNum;
-  const endIndex = startIndex + limitNum;
-  const paginatedReviews = reviews.slice(startIndex, endIndex);
+    .filter(Boolean);
 
   return res.json({
     success: true,
     data: {
-      reviews: paginatedReviews,
-      total: providerProfile.reviewsData.totalReviews,
-      totalReviews: providerProfile.reviewsData.totalReviews, // Alias for frontend compatibility
+      reviews,
+      total: totalReviews,
+      totalReviews,
       averageRating: providerProfile.reviewsData.averageRating,
       ratingDistribution: providerProfile.reviewsData.ratingDistribution,
       page: pageNum,
-      pages: Math.ceil(providerProfile.reviewsData.totalReviews / limitNum),
+      pages: totalPages,
     },
   });
 });

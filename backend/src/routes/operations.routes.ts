@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { authenticate } from '../middleware/auth.middleware';
+import { authenticate, requireRole } from '../middleware/auth.middleware';
 import { asyncHandler } from '../utils/asyncHandler';
 import Booking from '../models/booking.model';
 import User from '../models/user.model';
@@ -7,8 +7,9 @@ import Service from '../models/service.model';
 
 const router = Router();
 
-// All routes require admin authentication
+// All routes require admin authentication and admin role
 router.use(authenticate);
+router.use(requireRole('admin'));
 
 /**
  * @route   GET /api/admin/stats/overview

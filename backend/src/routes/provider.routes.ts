@@ -24,6 +24,7 @@ import {
 } from '../controllers/provider.controller';
 import { authenticate, requireProviderAccount } from '../middleware/auth.middleware';
 import { validateProviderRole } from '../middleware/validation.middleware';
+import { IUser } from '../models/user.model';
 import {
   validateServiceCreation,
   validateServiceUpdate,
@@ -88,7 +89,7 @@ router.delete('/portfolio/:itemId/images/:imageId', removePortfolioImage);
 
 // Toggle provider active status
 router.patch('/status', asyncHandler(async (req, res) => {
-  const providerProfile = await ProviderProfile.findOne({ userId: (req.user as any)._id });
+  const providerProfile = await ProviderProfile.findOne({ userId: (req.user as IUser)._id });
   if (!providerProfile) {
     throw new ApiError(404, 'Provider profile not found');
   }
@@ -104,6 +105,93 @@ router.patch('/status', asyncHandler(async (req, res) => {
     message: providerProfile.isActive
       ? 'Your profile is now visible to customers'
       : 'Your profile is now hidden from customers'
+  });
+}));
+
+// Provider profile routes (GET/PATCH /provider/profile - get/update own profile)
+router.get('/profile', asyncHandler(async (req, res) => {
+  const providerProfile = await ProviderProfile.findOne({ userId: (req.user as IUser)._id })
+    .populate('userId', 'firstName lastName email phone avatar role');
+
+  if (!providerProfile) {
+    throw new ApiError(404, 'Provider profile not found');
+  }
+
+  res.json({
+    success: true,
+    data: {
+      profile: providerProfile
+    }
+  });
+}));
+
+router.patch('/profile', asyncHandler(async (req, res) => {
+  const providerProfile = await ProviderProfile.findOne({ userId: (req.user as IUser)._id });
+
+  if (!providerProfile) {
+    throw new ApiError(404, 'Provider profile not found');
+  }
+
+  const allowedUpdates = [
+    'businessName', 'businessType', 'bio', 'serviceAreas',
+    'workingHours', 'experience', 'certifications'
+  ];
+
+  const updates = Object.keys(req.body)
+    .filter(key => allowedUpdates.includes(key))
+    .reduce((obj, key) => {
+      obj[key] = req.body[key];
+      return obj;
+    }, {} as Record<string, unknown>);
+
+  Object.assign(providerProfile, updates);
+  await providerProfile.save();
+
+  res.json({
+    success: true,
+    data: {
+      profile: providerProfile
+    },
+    message: 'Profile updated successfully'
+  });
+}));
+
+// Provider reviews route (GET /provider/reviews - get own received reviews)
+router.get('/reviews', asyncHandler(async (req, res) => {
+  const providerProfile = await ProviderProfile.findOne({ userId: (req.user as IUser)._id });
+
+  if (!providerProfile) {
+    throw new ApiError(404, 'Provider profile not found');
+  }
+
+  const page = parseInt(req.query.page as string) || 1;
+  const limit = parseInt(req.query.limit as string) || 20;
+  const skip = (page - 1) * limit;
+
+  const Review = (req as any).modelMap?.get('Review') as typeof import('../models/review.model').default | undefined;
+  const ReviewModel = Review || require('../models/review.model').default;
+
+  const [reviews, total] = await Promise.all([
+    ReviewModel.find({ providerId: providerProfile._id })
+      .populate('customerId', 'firstName lastName avatar')
+      .populate('serviceId', 'name')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit),
+    ReviewModel.countDocuments({ providerId: providerProfile._id })
+  ]);
+
+  res.json({
+    success: true,
+    data: {
+      reviews,
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit)
+      }
+    }
   });
 }));
 

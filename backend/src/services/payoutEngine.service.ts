@@ -7,8 +7,17 @@ import { ApiError } from '../utils/ApiError';
 import logger from '../utils/logger';
 import { creditWallet } from './wallet.service';
 import { eventBus, EVENT_TYPES } from '../event-bus';
+import { getSocketServer } from '../socket';
+import { calculateCommission } from './settlement.service';
+import { NotificationService } from './notification.service';
+import { withLockOrSkip } from '../utils/redisLock';
+import { redis, isRedisAvailable } from '../config/redis';
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '');
+const stripeKey = process.env.STRIPE_SECRET_KEY;
+if (!stripeKey) {
+  throw new Error('STRIPE_SECRET_KEY environment variable is required for payout processing');
+}
+const stripe = new Stripe(stripeKey);
 
 // ===================================
 // TYPES & INTERFACES
@@ -57,6 +66,99 @@ export interface EarningsBreakdown {
   netPayable: number;
 }
 
+// Idempotency key map for fallback when Redis is unavailable
+const processedPayouts: Map<string, { success: boolean; timestamp: number }> = new Map();
+
+// Redis-based idempotency TTL (24 hours in seconds)
+const IDEMPOTENCY_TTL = 24 * 60 * 60;
+
+/**
+ * Check idempotency using Redis for distributed deployments
+ * Falls back to in-memory Map if Redis is unavailable
+ */
+const checkIdempotency = async (payoutId: string): Promise<{ isDuplicate: boolean; previousResult?: ProcessPayoutResult }> => {
+  const key = `payout:idempotency:${payoutId}`;
+
+  // Try Redis first
+  if (redis && isRedisAvailable()) {
+    try {
+      const existing = await redis.get(key);
+      if (existing) {
+        const data = JSON.parse(existing);
+        logger.info('Payout already processed (idempotency check via Redis)', {
+          payoutId,
+          timestamp: new Date(data.timestamp).toISOString(),
+          action: 'IDEMPOTENT_SKIP',
+        });
+        return {
+          isDuplicate: true,
+          previousResult: {
+            success: data.success,
+            payoutId,
+          },
+        };
+      }
+      return { isDuplicate: false };
+    } catch (error) {
+      logger.warn('Redis idempotency check failed, falling back to in-memory', {
+        payoutId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  // Fall back to in-memory check
+  const inMemory = processedPayouts.get(payoutId);
+  if (inMemory) {
+    const age = Date.now() - inMemory.timestamp;
+    if (age < IDEMPOTENCY_TTL * 1000) {
+      return { isDuplicate: true, previousResult: { success: inMemory.success, payoutId } };
+    }
+    // Expired entry, clean it up
+    processedPayouts.delete(payoutId);
+  }
+  return { isDuplicate: false };
+};
+
+/**
+ * Record payout result for idempotency using Redis
+ * Falls back to in-memory Map if Redis is unavailable
+ */
+const recordPayoutResult = async (payoutId: string, success: boolean): Promise<void> => {
+  const key = `payout:idempotency:${payoutId}`;
+
+  // Record in Redis first
+  if (redis && isRedisAvailable()) {
+    try {
+      await redis.setex(key, IDEMPOTENCY_TTL, JSON.stringify({
+        success,
+        timestamp: Date.now(),
+      }));
+      // Remove from in-memory fallback if it exists
+      processedPayouts.delete(payoutId);
+      return;
+    } catch (error) {
+      logger.warn('Redis idempotency record failed, using in-memory fallback', {
+        payoutId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  // Fall back to in-memory storage
+  processedPayouts.set(payoutId, { success, timestamp: Date.now() });
+
+  // Periodic cleanup of old entries
+  if (processedPayouts.size > 10000) {
+    const now = Date.now();
+    for (const [mapKey, value] of processedPayouts) {
+      if (now - value.timestamp > IDEMPOTENCY_TTL * 1000) {
+        processedPayouts.delete(mapKey);
+      }
+    }
+  }
+};
+
 // Default payout configuration
 const DEFAULT_PAYOUT_CONFIG: PayoutSchedule = {
   frequency: 'weekly',
@@ -74,6 +176,7 @@ const providerPayoutConfigs: Map<string, ProviderPayoutConfig> = new Map();
 // ===================================
 // HELPER FUNCTIONS
 // ===================================
+
 
 /**
  * Calculate earnings breakdown for a provider within a period
@@ -100,18 +203,31 @@ export const calculateEarningsBreakdown = async (
   const totalGross = bookings.reduce((sum, b) => sum + b.pricing.totalAmount, 0);
   const totalRefunded = refunds.reduce((sum, r) => sum + (r.cancellationDetails?.refundAmount || 0), 0);
 
-  // Calculate commission (15% of gross)
-  const commissionRate = 0.15;
-  const platformFeeRate = 0.02;
+  // SECURITY FIX: Calculate commission per-booking using the proper settlement service
+  // instead of hardcoded rates to ensure consistency
+  let totalCommission = 0;
+  let totalPlatformFee = 0;
+
+  for (const booking of bookings) {
+    try {
+      const commissionResult = await calculateCommission(booking._id);
+      totalCommission += commissionResult.commission;
+      totalPlatformFee += commissionResult.platformFee;
+    } catch (error) {
+      // Fallback to default rates if commission calculation fails
+      logger.warn('Commission calculation failed, using default rates', {
+        bookingId: booking._id.toString(),
+        error: error instanceof Error ? error.message : String(error),
+      });
+      // Default rates: 15% commission, 2% platform fee
+      totalCommission += booking.pricing.totalAmount * 0.15;
+      totalPlatformFee += booking.pricing.totalAmount * 0.02;
+    }
+  }
 
   const grossAmount = totalGross - totalRefunded;
-  const commission = grossAmount * commissionRate;
-  const platformFee = grossAmount * platformFeeRate;
-
-  // Other deductions (placeholder for additional fees)
   const otherDeductions = 0;
-
-  const netPayable = grossAmount - commission - platformFee - otherDeductions;
+  const netPayable = grossAmount - totalCommission - totalPlatformFee - otherDeductions;
 
   return {
     periodStart,
@@ -120,8 +236,8 @@ export const calculateEarningsBreakdown = async (
     completedBookings: bookings.length,
     refundedAmount: totalRefunded,
     chargebackAmount: 0, // Placeholder
-    commission,
-    platformFee,
+    commission: totalCommission,
+    platformFee: totalPlatformFee,
     otherDeductions,
     netPayable: Math.max(0, netPayable),
   };
@@ -330,70 +446,329 @@ export const scheduleBulkPayouts = async (): Promise<{
 // ===================================
 
 /**
- * Process a single payout
+ * Process a single payout with atomic status check and transaction safety
+ * CRITICAL FIX: Prevents double payout by using atomic operations
  */
-export const processPayout = async (payoutId: string): Promise<ProcessPayoutResult> => {
-  const payout = await Payout.findById(payoutId);
-
-  if (!payout) {
-    return { success: false, error: 'Payout not found', errorCode: 'PAYOUT_NOT_FOUND' };
+export const processPayout = async (
+  payoutId: string,
+  processedBy?: Types.ObjectId,
+  idempotencyKey?: string
+): Promise<ProcessPayoutResult> => {
+  // Check idempotency first (Redis-based for multi-instance support)
+  if (idempotencyKey) {
+    const idempotencyCheck = await checkIdempotency(idempotencyKey);
+    if (idempotencyCheck.isDuplicate && idempotencyCheck.previousResult) {
+      return idempotencyCheck.previousResult;
+    }
   }
 
-  if (!['pending', 'scheduled', 'failed'].includes(payout.status)) {
-    return {
-      success: false,
-      error: `Cannot process payout in status: ${payout.status}`,
-      errorCode: 'INVALID_STATUS',
-    };
-  }
-
+  const session = await mongoose.startSession();
   try {
-    await payout.markAsProcessing();
+    session.startTransaction();
+
+    // CRITICAL FIX: Use atomic findOneAndUpdate with status condition
+    // This prevents race conditions where multiple processes could process the same payout
+    const payout = await Payout.findOneAndUpdate(
+      {
+        _id: new Types.ObjectId(payoutId),
+        status: { $in: ['pending', 'scheduled', 'failed'] },
+      },
+      {
+        $set: {
+          status: 'processing',
+          processedBy,
+          processedAt: new Date(),
+        },
+      },
+      { new: true, session }
+    );
+
+    if (!payout) {
+      // Either payout doesn't exist or is already being processed/completed
+      await session.abortTransaction();
+      return {
+        success: false,
+        payoutId,
+        error: 'Payout already processed or invalid status',
+        errorCode: 'PAYOUT_ALREADY_PROCESSED',
+      };
+    }
+
+    logger.info('Payout status updated to processing (atomic)', {
+      payoutId: payout._id.toString(),
+      payoutNumber: payout.payoutNumber,
+      previousStatus: ['pending', 'scheduled', 'failed'],
+      action: 'PAYOUT_PROCESSING_STARTED',
+    });
+
+    logger.info('PAYOUT_INITIATED', {
+      payoutId: payout._id.toString(),
+      providerId: payout.providerId.toString(),
+      amount: payout.netAmount || payout.amount,
+      currency: payout.currency || 'AED',
+      method: payout.method,
+      action: 'PAYOUT_INITIATED',
+    });
+
+    let stripePayoutId: string | undefined;
 
     if (payout.method === 'wallet') {
-      // Credit to wallet directly
-      const result = await creditWallet({
-        userId: payout.providerId.toString(),
-        type: 'credit',
-        amount: payout.amount,
-        description: `Payout #${payout.payoutNumber}`,
-        reference: payoutId,
-        referenceType: 'payout',
-        metadata: {
-          payoutNumber: payout.payoutNumber,
+      // Credit to wallet directly with transaction support
+      const result = await creditWallet(
+        {
+          userId: payout.providerId.toString(),
+          type: 'credit',
+          amount: payout.amount,
+          description: `Payout #${payout.payoutNumber}`,
+          reference: payoutId,
+          referenceType: 'payout',
+          metadata: {
+            payoutNumber: payout.payoutNumber,
+            payoutId: payout._id.toString(),
+          },
         },
-      });
+        undefined, // No request context
+        {
+          preventDuplicateReference: {
+            reference: payoutId,
+            referenceType: 'payout',
+          },
+        },
+        session
+      );
 
-      if (result.success) {
-        await payout.markAsCompleted(undefined);
-        return { success: true, payoutId: payout._id.toString() };
-      } else {
+      if (!result.success) {
         throw ApiError.internal(result.error || 'Wallet credit failed');
       }
-    } else {
-      // Bank transfer via Stripe
-      // Note: This would use Stripe Connect for actual bank transfers
-      const stripePayout = await createStripePayout(payout);
 
-      if (stripePayout) {
-        await payout.markAsCompleted(stripePayout.id);
-        return {
-          success: true,
-          payoutId: payout._id.toString(),
-          stripePayoutId: stripePayout.id,
-        };
-      } else {
-        throw ApiError.internal('Stripe payout creation failed');
+      // Mark payout as completed within the transaction
+      payout.status = 'completed';
+      payout.processedDate = new Date();
+      await payout.save({ session });
+
+      // HIGH SEVERITY FIX: Link settlements to payout after completion
+      const Settlement = mongoose.model('Settlement');
+      await Settlement.updateMany(
+        { payoutId: payout._id },
+        { $set: { status: 'paid', paidAt: new Date() } },
+        { session }
+      );
+
+      // Also link any approved settlements for this provider that were included in this payout
+      await Settlement.updateMany(
+        {
+          providerId: payout.providerId,
+          status: 'approved',
+          payoutId: { $exists: false },
+        },
+        {
+          $set: {
+            status: 'paid',
+            paidAt: new Date(),
+            payoutId: payout._id,
+          },
+        },
+        { session }
+      );
+
+      await session.commitTransaction();
+
+      logger.info('Payout completed (wallet)', {
+        payoutId: payout._id.toString(),
+        payoutNumber: payout.payoutNumber,
+        amount: payout.amount,
+        providerId: payout.providerId.toString(),
+        action: 'PAYOUT_COMPLETED_WALLET',
+      });
+
+      // Record for idempotency
+      if (idempotencyKey) {
+        await recordPayoutResult(idempotencyKey, true);
       }
+
+      // Emit socket event for real-time payout status update
+      const socketServer = getSocketServer();
+      if (socketServer) {
+        socketServer.emitWithdrawalApproved(
+          payout.providerId.toString(),
+          payoutId,
+          payout.amount,
+          payout.currency
+        );
+      }
+
+      // Send notification to provider about payout completion (outside transaction)
+      sendPayoutNotification(payout, 'completed').catch((notifError) => {
+        logger.error('Failed to send payout completion notification', {
+          payoutId,
+          error: notifError instanceof Error ? notifError.message : String(notifError),
+        });
+      });
+
+      return { success: true, payoutId: payout._id.toString() };
+    } else {
+      // Bank transfer via Stripe - needs compensation logic
+      try {
+        const stripePayout = await createStripePayout(payout);
+
+        if (!stripePayout) {
+          throw ApiError.internal('Stripe payout creation failed');
+        }
+
+        stripePayoutId = stripePayout.id;
+
+        // Mark payout as completed within the transaction
+        payout.status = 'completed';
+        payout.processedDate = new Date();
+        payout.stripePayoutId = stripePayoutId;
+        await payout.save({ session });
+
+        // HIGH SEVERITY FIX: Link settlements to payout after completion
+        const Settlement = mongoose.model('Settlement');
+        await Settlement.updateMany(
+          { payoutId: payout._id },
+          { $set: { status: 'paid', paidAt: new Date() } },
+          { session }
+        );
+
+        // Also link any approved settlements for this provider that were included in this payout
+        await Settlement.updateMany(
+          {
+            providerId: payout.providerId,
+            status: 'approved',
+            payoutId: { $exists: false },
+          },
+          {
+            $set: {
+              status: 'paid',
+              paidAt: new Date(),
+              payoutId: payout._id,
+            },
+          },
+          { session }
+        );
+
+        await session.commitTransaction();
+      } catch (stripeError: unknown) {
+        // Abort transaction first
+        await session.abortTransaction();
+
+        // Mark payout as failed with proper error
+        const stripeErrorMessage = stripeError instanceof Error ? stripeError.message : 'Stripe payout creation failed';
+        await Payout.findByIdAndUpdate(payoutId, {
+          status: 'failed',
+          failureReason: stripeErrorMessage,
+          failureCode: 'STRIPE_ERROR',
+        });
+
+        // Re-throw for the outer catch handler to handle idempotency and notifications
+        throw stripeError;
+      }
+
+      logger.info('Payout completed (bank transfer)', {
+        payoutId: payout._id.toString(),
+        payoutNumber: payout.payoutNumber,
+        stripePayoutId,
+        amount: payout.amount,
+        providerId: payout.providerId.toString(),
+        action: 'PAYOUT_COMPLETED_BANK',
+      });
+
+      // Record for idempotency
+      if (idempotencyKey) {
+        await recordPayoutResult(idempotencyKey, true);
+      }
+
+      // Emit socket event for real-time payout status update
+      const socketServer = getSocketServer();
+      if (socketServer) {
+        socketServer.emitWithdrawalApproved(
+          payout.providerId.toString(),
+          payoutId,
+          payout.amount,
+          payout.currency
+        );
+      }
+
+      // Send notification to provider about payout completion (outside transaction)
+      sendPayoutNotification(payout, 'completed').catch((notifError) => {
+        logger.error('Failed to send payout completion notification', {
+          payoutId,
+          error: notifError instanceof Error ? notifError.message : String(notifError),
+        });
+      });
+
+      return {
+        success: true,
+        payoutId: payout._id.toString(),
+        stripePayoutId,
+      };
     }
   } catch (error: any) {
+    await session.abortTransaction();
+
     logger.error('Failed to process payout', {
       payoutId,
       error: error.message,
+      stack: error.stack,
       action: 'PAYOUT_PROCESSING_ERROR',
     });
 
-    await payout.addFailure(error.message, 'PROCESSING_ERROR');
+    // Try to record the failure, but don't fail the whole operation
+    try {
+      // Use atomic update to record failure
+      await Payout.findOneAndUpdate(
+        { _id: new Types.ObjectId(payoutId), status: 'processing' },
+        {
+          $set: { status: 'failed' },
+          $push: {
+            failures: {
+              reason: error.message || 'Unknown error',
+              date: new Date(),
+              retryAttempt: 1, // Will be incremented by addFailure
+            },
+          },
+        }
+      );
+    } catch (updateError) {
+      logger.error('Failed to update payout status to failed', {
+        payoutId,
+        error: updateError instanceof Error ? updateError.message : String(updateError),
+      });
+    }
+
+    // Record for idempotency (even on failure, to prevent retries)
+    if (idempotencyKey) {
+      await recordPayoutResult(idempotencyKey, false);
+    }
+
+    // Emit socket event for payout rejection - fetch payout first to get providerId
+    const socketServer = getSocketServer();
+    if (socketServer) {
+      try {
+        const failedPayout = await Payout.findById(payoutId);
+        socketServer.emitWithdrawalRejected(
+          failedPayout?.providerId?.toString() || payoutId,
+          payoutId,
+          0,
+          'AED',
+          error.message || 'Payout processing failed'
+        );
+      } catch (socketError) {
+        logger.error('Failed to emit withdrawal rejected event', {
+          payoutId,
+          error: socketError instanceof Error ? socketError.message : String(socketError),
+        });
+      }
+    }
+
+    // Send notification to provider about payout failure (outside transaction)
+    sendPayoutFailureNotification(payoutId, error.message).catch((notifError) => {
+      logger.error('Failed to send payout failure notification', {
+        payoutId,
+        error: notifError instanceof Error ? notifError.message : String(notifError),
+      });
+    });
 
     return {
       success: false,
@@ -401,6 +776,90 @@ export const processPayout = async (payoutId: string): Promise<ProcessPayoutResu
       error: error.message,
       errorCode: 'PROCESSING_ERROR',
     };
+  } finally {
+    if (session && session.hasEnded === false) {
+      await session.endSession();
+    }
+  }
+};
+
+/**
+ * Send payout completion notification
+ */
+const sendPayoutNotification = async (payout: any, type: 'completed' | 'failed'): Promise<void> => {
+  const notificationService = new NotificationService();
+
+  if (type === 'completed') {
+    await notificationService.createNotification({
+      recipientId: payout.providerId.toString(),
+      type: 'withdrawal_approved',
+      title: 'Payout Completed',
+      message: `Your payout of ${payout.amount} ${payout.currency} has been completed.`,
+      metadata: {
+        payoutId: payout._id.toString(),
+        payoutNumber: payout.payoutNumber,
+        amount: payout.amount,
+        currency: payout.currency,
+      },
+    });
+
+    // Send withdrawal approved email notification
+    try {
+      const { default: emailServiceModule } = await import('./email.service');
+      const emailService = emailServiceModule;
+
+      // Get provider details for email
+      const User = mongoose.model('User');
+      const provider = await User.findById(payout.providerId);
+
+      if (provider?.email) {
+        await emailService.sendWithdrawalApproved({
+          to: provider.email,
+          providerName: `${provider.firstName || ''} ${provider.lastName || ''}`.trim() || 'Provider',
+          amount: payout.amount,
+          currency: payout.currency || 'AED',
+          payoutNumber: payout.payoutNumber,
+        });
+      }
+    } catch (emailError) {
+      logger.error('Failed to send withdrawal approved email', {
+        context: 'PayoutEngine',
+        action: 'WITHDRAWAL_EMAIL_ERROR',
+        payoutId: payout._id.toString(),
+        error: emailError instanceof Error ? emailError.message : String(emailError),
+      });
+    }
+  }
+};
+
+/**
+ * Send payout failure notification
+ */
+const sendPayoutFailureNotification = async (payoutId: string, errorMessage: string): Promise<void> => {
+  try {
+    // Fetch payout to get providerId
+    const payout = await Payout.findById(payoutId);
+    if (!payout) return;
+
+    const notificationService = new NotificationService();
+    await notificationService.createNotification({
+      recipientId: payout.providerId.toString(),
+      type: 'withdrawal_rejected',
+      title: 'Payout Failed',
+      message: `Your payout of ${payout.amount} ${payout.currency} could not be processed. Reason: ${errorMessage}`,
+      metadata: {
+        payoutId: payout._id.toString(),
+        payoutNumber: payout.payoutNumber,
+        amount: payout.amount,
+        currency: payout.currency,
+        error: errorMessage,
+      },
+    });
+  } catch (error) {
+    logger.error('Failed to send payout failure notification', {
+      payoutId,
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 };
 
@@ -444,38 +903,93 @@ const createStripePayout = async (payout: any): Promise<Stripe.Payout | null> =>
 
 /**
  * Process due payouts (for scheduled job)
+ * CRITICAL FIX: Uses Redis distributed lock to prevent double processing
  */
 export const processDuePayouts = async (batchSize: number = 100): Promise<{
   processed: number;
   failed: number;
+  skipped: number;
   totalAmount: number;
+  errors: string[];
 }> => {
+  const startTime = Date.now();
   const results = {
     processed: 0,
     failed: 0,
+    skipped: 0,
     totalAmount: 0,
+    errors: [] as string[],
   };
 
   const duePayouts = await Payout.findDuePayouts(batchSize);
 
-  for (const payout of duePayouts) {
-    const result = await processPayout(payout._id.toString());
+  logger.info('Processing due payouts batch', {
+    batchSize,
+    dueCount: duePayouts.length,
+    action: 'PAYOUT_BATCH_START',
+  });
 
-    if (result.success) {
+  for (const payout of duePayouts) {
+    const payoutId = payout._id.toString();
+
+    // CRITICAL FIX: Acquire Redis distributed lock before processing
+    // This prevents the same payout from being processed by multiple workers
+    const lockResult = await withLockOrSkip(
+      `payout:process:${payoutId}`,
+      async () => {
+        return await processPayout(payoutId, undefined, `batch:${payoutId}`);
+      },
+      300 // 5 minutes TTL for batch processing
+    );
+
+    if (!lockResult.success) {
+      // Lock not acquired - either another worker has it or Redis is down
+      if (lockResult.error?.includes('Lock not available')) {
+        logger.debug('Payout skipped - already being processed by another worker', {
+          payoutId,
+          action: 'PAYOUT_SKIPPED_LOCKED',
+        });
+        results.skipped++;
+      } else {
+        logger.warn('Payout processing failed', {
+          payoutId,
+          error: lockResult.error,
+          action: 'PAYOUT_PROCESS_FAILED',
+        });
+        results.failed++;
+        results.errors.push(`Payout ${payoutId}: ${lockResult.error}`);
+      }
+      continue;
+    }
+
+    if (lockResult.result?.success) {
       results.processed++;
       results.totalAmount += payout.amount;
 
       // Publish event
       await eventBus.publish(EVENT_TYPES.PAYOUT_COMPLETED, {
-        payoutId: result.payoutId,
-        providerId: (payout as any).providerId._id.toString(),
+        payoutId: lockResult.result.payoutId,
+        providerId: (payout as any).providerId?._id?.toString() || payout.providerId.toString(),
         amount: payout.amount,
-        stripePayoutId: result.stripePayoutId,
+        stripePayoutId: lockResult.result.stripePayoutId,
       });
     } else {
       results.failed++;
+      if (lockResult.result?.error) {
+        results.errors.push(`Payout ${payoutId}: ${lockResult.result.error}`);
+      }
     }
   }
+
+  logger.info('Batch payout processing complete', {
+    total: duePayouts.length,
+    successful: results.processed,
+    failed: results.failed,
+    skipped: results.skipped,
+    totalAmount: results.totalAmount,
+    duration: Date.now() - startTime,
+    action: 'PAYOUT_BATCH_COMPLETE',
+  });
 
   return results;
 };
@@ -507,7 +1021,7 @@ export const retryFailedPayouts = async (batchSize: number = 50): Promise<{
 
     results.retried++;
 
-    const result = await processPayout(payout._id.toString());
+    const result = await processPayout(payout._id.toString(), undefined, `retry:${payout._id.toString()}`);
 
     if (result.success) {
       results.succeeded++;
@@ -528,17 +1042,29 @@ export const cancelPayout = async (
   reason: string,
   cancelledBy?: string
 ): Promise<void> => {
-  const payout = await Payout.findById(payoutId);
+  // Use atomic status check for cancellation too
+  const payout = await Payout.findOneAndUpdate(
+    {
+      _id: new Types.ObjectId(payoutId),
+      status: { $in: ['pending', 'scheduled'] },
+    },
+    {
+      $set: {
+        status: 'cancelled',
+        notes: reason,
+        processedBy: cancelledBy ? new Types.ObjectId(cancelledBy) : undefined,
+      },
+    },
+    { new: true }
+  );
 
   if (!payout) {
-    throw new ApiError(404, 'Payout not found');
+    const existing = await Payout.findById(payoutId);
+    if (!existing) {
+      throw new ApiError(404, 'Payout not found');
+    }
+    throw new ApiError(400, `Cannot cancel payout in status: ${existing.status}`);
   }
-
-  if (!payout.canBeCancelled) {
-    throw new ApiError(400, `Cannot cancel payout in status: ${payout.status}`);
-  }
-
-  await payout.cancel(reason, cancelledBy ? new Types.ObjectId(cancelledBy) : undefined);
 
   logger.info('Payout cancelled', {
     payoutId,
@@ -731,6 +1257,185 @@ export const updateProviderPayoutConfig = (
 };
 
 // ===================================
+// PROVIDER PAYOUT REQUEST
+// ===================================
+
+/**
+ * Request a payout from pending balance
+ * This is the main function providers use to withdraw their earnings
+ */
+export const requestPayout = async (
+  providerId: string,
+  amount: number,
+  options?: {
+    method?: 'bank_transfer' | 'wallet';
+    bankDetails?: ProviderPayoutConfig['bankDetails'];
+    notes?: string;
+  }
+): Promise<{
+  success: boolean;
+  payoutId?: string;
+  payoutNumber?: string;
+  amount?: number;
+  message?: string;
+}> => {
+  const Wallet = mongoose.model('Wallet');
+
+  // Validate amount
+  if (!amount || amount <= 0) {
+    throw new ApiError(400, 'Invalid payout amount');
+  }
+
+  // Minimum payout amount (50 AED)
+  const MIN_PAYOUT_AMOUNT = 50;
+  if (amount < MIN_PAYOUT_AMOUNT) {
+    throw new ApiError(400, `Minimum payout amount is ${MIN_PAYOUT_AMOUNT} AED`);
+  }
+
+  // Get provider wallet
+  const wallet = await Wallet.findOne({ userId: new Types.ObjectId(providerId) });
+
+  if (!wallet) {
+    throw new ApiError(404, 'Wallet not found for provider');
+  }
+
+  // Check pending balance
+  if ((wallet.pendingBalance || 0) < amount) {
+    throw new ApiError(
+      400,
+      `Insufficient pending balance. Available: ${wallet.pendingBalance || 0} AED, Requested: ${amount} AED`
+    );
+  }
+
+  // Check if provider already has a pending payout request
+  const existingPending = await Payout.findOne({
+    providerId: new Types.ObjectId(providerId),
+    status: { $in: ['pending', 'scheduled', 'processing'] },
+  });
+
+  if (existingPending) {
+    throw new ApiError(
+      400,
+      'You already have a payout request in progress. Please wait for it to be processed.'
+    );
+  }
+
+  // Deduct from pending balance and add to main balance
+  await Wallet.findOneAndUpdate(
+    { userId: new Types.ObjectId(providerId) },
+    {
+      $inc: {
+        pendingBalance: -amount,
+        balance: amount,
+      },
+      $push: {
+        transactions: {
+          $each: [{
+            id: new Types.ObjectId().toString(),
+            type: 'debit',
+            amount: amount,
+            description: `Payout requested`,
+            reference: '',
+            referenceType: 'payout',
+            status: 'pending',
+            balanceAfter: (wallet.balance || 0) + amount,
+            createdAt: new Date(),
+          }],
+          $position: 0,
+        },
+      },
+    }
+  );
+
+  // Create payout record
+  const payout = new Payout({
+    providerId: new Types.ObjectId(providerId),
+    amount,
+    currency: 'AED',
+    status: 'pending',
+    method: options?.method || (options?.bankDetails ? 'bank_transfer' : 'wallet'),
+    bankDetails: options?.bankDetails,
+    notes: options?.notes,
+    requestedAt: new Date(),
+    earningsBreakdown: {
+      grossAmount: amount,
+      commission: 0,
+      platformFee: 0,
+      deductions: 0,
+      netAmount: amount,
+    },
+    maxRetries: 3,
+    currentRetryCount: 0,
+  });
+
+  await payout.save();
+
+  // Emit event for notifications
+  eventBus.publish(EVENT_TYPES.WITHDRAWAL_REQUESTED, {
+    payoutId: payout._id,
+    payoutNumber: payout.payoutNumber,
+    providerId,
+    amount,
+    method: payout.method,
+  });
+
+  logger.info('Payout requested by provider', {
+    payoutId: payout._id.toString(),
+    payoutNumber: payout.payoutNumber,
+    providerId,
+    amount,
+    method: payout.method,
+    pendingBalanceBefore: wallet.pendingBalance,
+    action: 'PAYOUT_REQUESTED',
+  });
+
+  return {
+    success: true,
+    payoutId: payout._id.toString(),
+    payoutNumber: payout.payoutNumber,
+    amount,
+    message: 'Payout request submitted successfully',
+  };
+};
+
+/**
+ * Get available balance for payout
+ */
+export const getAvailablePayoutBalance = async (providerId: string): Promise<{
+  pendingBalance: number;
+  availableForPayout: number;
+  minPayoutAmount: number;
+  hasPendingRequest: boolean;
+}> => {
+  const Wallet = mongoose.model('Wallet');
+
+  const wallet = await Wallet.findOne({ userId: new Types.ObjectId(providerId) });
+
+  const pendingBalance = wallet?.pendingBalance || 0;
+
+  // Check if provider already has a pending payout request
+  const existingPending = await Payout.findOne({
+    providerId: new Types.ObjectId(providerId),
+    status: { $in: ['pending', 'scheduled', 'processing'] },
+  });
+
+  const hasPendingRequest = !!existingPending;
+
+  // Available is pending balance minus any already scheduled payouts
+  let scheduledAmount = 0;
+  if (hasPendingRequest && existingPending) {
+    scheduledAmount = existingPending.amount;
+  }
+
+  return {
+    pendingBalance,
+    availableForPayout: Math.max(0, pendingBalance - scheduledAmount),
+    minPayoutAmount: 50,
+    hasPendingRequest,
+  };
+};
+
+// ===================================
 // EXPORTS
 // ===================================
 
@@ -752,6 +1457,10 @@ export default {
   // Recovery
   retryFailedPayouts,
   cancelPayout,
+
+  // Payout request
+  requestPayout,
+  getAvailablePayoutBalance,
 
   // Queries
   getPayoutHistory,

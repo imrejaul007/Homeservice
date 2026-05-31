@@ -5,7 +5,7 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { authenticate } from '../middleware/auth.middleware';
+import { authenticate, requireRole } from '../middleware/auth.middleware';
 import { asyncHandler } from '../utils/asyncHandler';
 import Booking from '../models/booking.model';
 import User from '../models/user.model';
@@ -160,7 +160,7 @@ const getLTVSegment = (ltv: number): 'low' | 'medium' | 'high' | 'vip' => {
  * @desc    Get Customer Lifetime Value analysis
  * @access  Admin
  */
-router.get('/ltv', authenticate, asyncHandler(async (req: Request, res: Response) => {
+router.get('/ltv', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
   const { startDate, endDate, limit = 100 } = req.query;
   const { startDate: start, endDate: end } = getDateRange(startDate as string, endDate as string);
   const limitNum = Math.min(parseInt(limit as string) || 100, 1000);
@@ -269,7 +269,7 @@ router.get('/ltv', authenticate, asyncHandler(async (req: Request, res: Response
  * @desc    Get Customer Acquisition Cost metrics
  * @access  Admin
  */
-router.get('/cac', authenticate, asyncHandler(async (req: Request, res: Response) => {
+router.get('/cac', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
   const { startDate, endDate } = req.query;
   const { startDate: start, endDate: end } = getDateRange(startDate as string, endDate as string);
 
@@ -376,7 +376,7 @@ router.get('/cac', authenticate, asyncHandler(async (req: Request, res: Response
  * @desc    Get Retention metrics
  * @access  Admin
  */
-router.get('/retention', authenticate, asyncHandler(async (req: Request, res: Response) => {
+router.get('/retention', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
   const { startDate, endDate } = req.query;
   const { startDate: start, endDate: end } = getDateRange(startDate as string, endDate as string);
 
@@ -465,7 +465,7 @@ router.get('/retention', authenticate, asyncHandler(async (req: Request, res: Re
  * @desc    Get RFM (Recency, Frequency, Monetary) analysis
  * @access  Admin
  */
-router.get('/rfm', authenticate, asyncHandler(async (req: Request, res: Response) => {
+router.get('/rfm', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
   const { limit = 1000 } = req.query;
   const limitNum = Math.min(parseInt(limit as string) || 1000, 5000);
   const now = new Date();
@@ -574,7 +574,7 @@ router.get('/rfm', authenticate, asyncHandler(async (req: Request, res: Response
  * @desc    Get Revenue Breakdown
  * @access  Admin
  */
-router.get('/revenue', authenticate, asyncHandler(async (req: Request, res: Response) => {
+router.get('/revenue', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
   const { startDate, endDate } = req.query;
   const { startDate: start, endDate: end } = getDateRange(startDate as string, endDate as string);
 
@@ -694,7 +694,7 @@ router.get('/revenue', authenticate, asyncHandler(async (req: Request, res: Resp
  * @desc    Get Business Health Score
  * @access  Admin
  */
-router.get('/health', authenticate, asyncHandler(async (_req: Request, res: Response) => {
+router.get('/health', authenticate, requireRole('admin'), asyncHandler(async (_req: Request, res: Response) => {
   const now = new Date();
   const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
   const sixtyDaysAgo = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000);

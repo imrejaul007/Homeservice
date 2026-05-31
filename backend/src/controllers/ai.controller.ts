@@ -1,5 +1,4 @@
 import { Request, Response } from 'express';
-import { asyncHandler } from '../utils/asyncHandler';
 import { ApiError } from '../utils/ApiError';
 import Joi from 'joi';
 import logger from '../utils/logger';
@@ -32,7 +31,7 @@ interface Conversation {
 const conversations = new Map<string, Conversation>();
 
 // Generate a simple response based on user message
-function generateAIResponse(message: string, context?: any): string {
+function generateAIResponse(message: string, context?: unknown): string {
   const lowerMessage = message.toLowerCase();
 
   if (lowerMessage.includes('booking') || lowerMessage.includes('appointment')) {
@@ -56,19 +55,19 @@ function generateAIResponse(message: string, context?: any): string {
   }
 
   if (lowerMessage.includes('hello') || lowerMessage.includes('hi') || lowerMessage.includes('hey')) {
-    return "Hello! 👋 I'm your NILIN assistant. I can help you with bookings, payments, finding providers, and answering questions about our services. How can I help you today?";
+    return "Hello! I'm your NILIN assistant. I can help you with bookings, payments, finding providers, and answering questions about our services. How can I help you today?";
   }
 
   if (lowerMessage.includes('contact') || lowerMessage.includes('support')) {
-    return "You can reach our support team via:\n📞 Phone: 1800-XXX-XXXX (24/7)\n📧 Email: support@nilin.com\n💬 In-app chat\nWe're always here to help!";
+    return "You can reach our support team via:\nPhone: Available in Settings > Help (24/7)\nEmail: support@nilin.com\nIn-app chat\nWe're always here to help!";
   }
 
   // Default response
-  return "I'm here to help! I can assist with:\n• Booking appointments\n• Finding providers\n• Managing payments\n• Tracking orders\n• General questions\n\nWhat would you like help with?";
+  return "I'm here to help! I can assist with:\n- Booking appointments\n- Finding providers\n- Managing payments\n- Tracking orders\n- General questions\n\nWhat would you like help with?";
 }
 
-export const chat = asyncHandler(async (req: Request, res: Response) => {
-  const user = (req as any).user;
+export async function chat(req: Request, res: Response): Promise<void> {
+  const user = (req as unknown as { user: { _id: { toString: () => string } } }).user;
   const { error, value } = chatSchema.validate(req.body);
 
   if (error) {
@@ -80,9 +79,34 @@ export const chat = asyncHandler(async (req: Request, res: Response) => {
 
   // Get or create conversation
   let conversation: Conversation;
-  if (conversationId && conversations.has(conversationId)) {
-    conversation = conversations.get(conversationId)!;
+  if (conversationId) {
+    const existingConv = conversations.get(conversationId);
+    // IDOR protection: only allow access if conversation exists AND belongs to user
+    if (existingConv && existingConv.userId === userId) {
+      conversation = existingConv;
+    } else if (existingConv && existingConv.userId !== userId) {
+      // User is trying to access another user's conversation
+      logger.warn('IDOR Attempt: User tried to access another user conversation', {
+        context: 'AIController',
+        action: 'IDOR_CHAT_ATTEMPT',
+        userId,
+        conversationId,
+        ownerId: existingConv.userId
+      });
+      throw new ApiError(403, 'Access denied to this conversation');
+    } else {
+      // Conversation doesn't exist - create new one (ignore invalid conversationId)
+      conversation = {
+        id: `conv-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+        userId,
+        messages: [],
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      conversations.set(conversation.id, conversation);
+    }
   } else {
+    // No conversationId provided - create new conversation
     conversation = {
       id: `conv-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
       userId,
@@ -127,10 +151,10 @@ export const chat = asyncHandler(async (req: Request, res: Response) => {
       messages: conversation.messages,
     },
   });
-});
+}
 
-export const getConversation = asyncHandler(async (req: Request, res: Response) => {
-  const user = (req as any).user;
+export async function getConversation(req: Request, res: Response): Promise<void> {
+  const user = (req as unknown as { user: { _id: { toString: () => string } } }).user;
   const { conversationId } = req.params;
   const userId = user._id.toString();
 
@@ -144,10 +168,10 @@ export const getConversation = asyncHandler(async (req: Request, res: Response) 
     success: true,
     data: conversation,
   });
-});
+}
 
-export const getConversations = asyncHandler(async (req: Request, res: Response) => {
-  const user = (req as any).user;
+export async function getConversations(req: Request, res: Response): Promise<void> {
+  const user = (req as unknown as { user: { _id: { toString: () => string } } }).user;
   const userId = user._id.toString();
 
   const userConversations = Array.from(conversations.values())
@@ -158,10 +182,10 @@ export const getConversations = asyncHandler(async (req: Request, res: Response)
     success: true,
     data: userConversations,
   });
-});
+}
 
-export const deleteConversation = asyncHandler(async (req: Request, res: Response) => {
-  const user = (req as any).user;
+export async function deleteConversation(req: Request, res: Response): Promise<void> {
+  const user = (req as unknown as { user: { _id: { toString: () => string } } }).user;
   const { conversationId } = req.params;
   const userId = user._id.toString();
 
@@ -177,7 +201,7 @@ export const deleteConversation = asyncHandler(async (req: Request, res: Respons
     success: true,
     message: 'Conversation deleted',
   });
-});
+}
 
 export default {
   chat,

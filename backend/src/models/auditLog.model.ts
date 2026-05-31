@@ -1,6 +1,9 @@
 import mongoose, { Schema, Document } from 'mongoose';
 
 export interface IAuditLog extends Document {
+  // Multi-tenant support
+  tenantId?: mongoose.Types.ObjectId;
+
   userId: mongoose.Types.ObjectId;
   action: string;
   resource: string;
@@ -15,6 +18,13 @@ export interface IAuditLog extends Document {
 
 const auditLogSchema = new Schema<IAuditLog>(
   {
+    // Multi-tenant support
+    tenantId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Tenant',
+      index: true
+    },
+
     userId: {
       type: Schema.Types.ObjectId,
       ref: 'User',
@@ -66,6 +76,10 @@ auditLogSchema.index({ createdAt: -1 });
 
 // TTL index for automatic log expiration (1 year = 31536000 seconds)
 auditLogSchema.index({ createdAt: 1 }, { expireAfterSeconds: 31536000 });
+
+// Tenant isolation indexes
+auditLogSchema.index({ tenantId: 1, createdAt: -1 });
+auditLogSchema.index({ tenantId: 1, resource: 1 });
 
 const AuditLog = mongoose.model<IAuditLog>('AuditLog', auditLogSchema);
 

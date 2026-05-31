@@ -40,9 +40,12 @@ class SecureStorageService {
   private memoryCache: Map<string, string>;
   private useCapacitorStorage: boolean = false;
   private capacitorStorageReady: boolean = false;
+  private isBrowser: boolean;
 
   private constructor() {
-    this.isCapacitor = Capacitor.isNativePlatform();
+    // FIX #12: Added SSR guard - check for browser environment before accessing Capacitor
+    this.isBrowser = typeof window !== 'undefined';
+    this.isCapacitor = this.isBrowser ? Capacitor.isNativePlatform() : false;
     this.memoryCache = new Map();
 
     // Initialize Capacitor Secure Storage if available
@@ -156,10 +159,12 @@ class SecureStorageService {
         }
       }
 
-      // Fallback to sessionStorage with encoding
-      const encoded = this.base64Encode(serialized);
-      sessionStorage.setItem(storageKey, encoded);
-      this.memoryCache.set(storageKey, encoded);
+      // Fallback to sessionStorage with encoding (SSR guard)
+      if (this.isBrowser) {
+        const encoded = this.base64Encode(serialized);
+        sessionStorage.setItem(storageKey, encoded);
+        this.memoryCache.set(storageKey, encoded);
+      }
       return true;
     } catch (error) {
       console.error('[SecureStorage] Failed to set item:', error);
@@ -219,7 +224,9 @@ class SecureStorageService {
         }
       }
 
-      // Fallback to sessionStorage
+      // Fallback to sessionStorage (SSR guard)
+      if (!this.isBrowser) return null;
+
       const encoded = sessionStorage.getItem(storageKey);
       if (!encoded) return null;
 
@@ -249,6 +256,7 @@ class SecureStorageService {
 
   /**
    * Remove an item from secure storage
+   * FIX #12: Added SSR guard for sessionStorage access
    */
   public async removeItem(key: string): Promise<boolean> {
     try {
@@ -262,7 +270,10 @@ class SecureStorageService {
         }
       }
 
-      sessionStorage.removeItem(storageKey);
+      // SSR guard: Only access sessionStorage in browser
+      if (this.isBrowser) {
+        sessionStorage.removeItem(storageKey);
+      }
       this.memoryCache.delete(storageKey);
       return true;
     } catch (error) {
@@ -273,6 +284,7 @@ class SecureStorageService {
 
   /**
    * Clear all secure storage
+   * FIX #12: Added SSR guard for sessionStorage access
    */
   public async clear(): Promise<boolean> {
     try {
@@ -289,15 +301,18 @@ class SecureStorageService {
         }
       }
 
-      // Clear sessionStorage items with our prefix
-      const keysToRemove: string[] = [];
-      for (let i = 0; i < sessionStorage.length; i++) {
-        const key = sessionStorage.key(i);
-        if (key?.startsWith('nilin_')) {
-          keysToRemove.push(key);
+      // SSR guard: Only access sessionStorage in browser
+      if (this.isBrowser) {
+        // Clear sessionStorage items with our prefix
+        const keysToRemove: string[] = [];
+        for (let i = 0; i < sessionStorage.length; i++) {
+          const key = sessionStorage.key(i);
+          if (key?.startsWith('nilin_')) {
+            keysToRemove.push(key);
+          }
         }
+        keysToRemove.forEach((key) => sessionStorage.removeItem(key));
       }
-      keysToRemove.forEach((key) => sessionStorage.removeItem(key));
 
       // Clear memory cache
       this.memoryCache.clear();
@@ -311,6 +326,7 @@ class SecureStorageService {
 
   /**
    * Get all keys in secure storage
+   * FIX #12: Added SSR guard for sessionStorage access
    */
   public async keys(): Promise<string[]> {
     try {
@@ -330,10 +346,13 @@ class SecureStorageService {
         }
       }
 
-      for (let i = 0; i < sessionStorage.length; i++) {
-        const key = sessionStorage.key(i);
-        if (key?.startsWith('nilin_')) {
-          keys.push(key.replace('nilin_', ''));
+      // SSR guard: Only access sessionStorage in browser
+      if (this.isBrowser) {
+        for (let i = 0; i < sessionStorage.length; i++) {
+          const key = sessionStorage.key(i);
+          if (key?.startsWith('nilin_')) {
+            keys.push(key.replace('nilin_', ''));
+          }
         }
       }
 

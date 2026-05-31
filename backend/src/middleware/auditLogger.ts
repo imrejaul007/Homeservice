@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import logger from '../utils/logger';
 import { v4 as uuid } from 'uuid';
+import { IUser } from '../models/user.model';
 
 // Sensitive fields to redact from audit logs (matches logger.ts)
 const sensitiveFields = [
@@ -63,7 +64,7 @@ export const auditLogger = (req: Request, res: Response, next: NextFunction) => 
     const auditLog: AuditLog = {
       id: requestId,
       timestamp: new Date(),
-      userId: (req.user as any)?._id?.toString(),
+      userId: req.user?._id?.toString(),
       ip: req.ip || req.socket.remoteAddress || 'unknown',
       method: req.method,
       path: req.path,
@@ -104,11 +105,12 @@ export const auditLogger = (req: Request, res: Response, next: NextFunction) => 
 
     // Log all admin actions with enhanced details
     if (isAdminRequest) {
+      const user = req.user as IUser | undefined;
       logger.info('ADMIN_AUDIT', {
         ...auditLog,
         action: `${req.method} ${req.path}`,
-        adminId: (req.user as any)?._id,
-        adminEmail: (req.user as any)?.email,
+        adminId: user?._id,
+        adminEmail: user?.email,
         targetResource: req.params.id,
         bodyFields: req.method !== 'GET' ? Object.keys(redactSensitiveFields(req.body || {})) : undefined,
         category: 'ADMIN_ACTION',

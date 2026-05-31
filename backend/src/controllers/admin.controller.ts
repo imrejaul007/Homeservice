@@ -1,7 +1,8 @@
 import { Request, Response } from 'express';
-import { PipelineStage } from 'mongoose';
+import mongoose, { PipelineStage } from 'mongoose';
+import Stripe from 'stripe';
 import ProviderProfile from '../models/providerProfile.model';
-import User from '../models/user.model';
+import User, { IUser } from '../models/user.model';
 import Service from '../models/service.model';
 import Booking from '../models/booking.model';
 import ServiceCategory from '../models/serviceCategory.model';
@@ -14,6 +15,11 @@ import { getSocketServer } from '../socket';
 import { NotificationService } from '../services/notification.service';
 import { churnService } from '../services/churn.service';
 import crypto from 'crypto';
+
+// Initialize Stripe client
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', {
+  apiVersion: '2023-10-16' as const,
+});
 
 /**
  * Generate a cryptographically secure random password
@@ -195,32 +201,43 @@ export const approveProvider = asyncHandler(async (req: Request, res: Response) 
   // Set verified badge so it shows on provider cards
   provider.instagramStyleProfile.isVerified = true;
 
-  await provider.save();
+  // FIX: Wrap ALL operations (provider save, user update, service creations) in a single transaction
+  // This prevents race conditions where partial state could be left on failure
+  const session = await mongoose.startSession();
+  let transactionCommitted = false;
 
-  // Update user account status
-  if (provider.userId) {
-    await User.findByIdAndUpdate(provider.userId, {
-      accountStatus: 'active'
-    });
-  }
-
-  // IMPORTANT: Create Service documents for each provider service
-  // This makes them searchable in the Services collection
-  if (provider.services && provider.services.length > 0) {
-    logger.info('Creating service documents for approved provider', {
-      action: 'ADMIN_PROVIDER_APPROVAL',
-      providerId: id,
-      businessName: provider.businessInfo.businessName,
-      serviceCount: provider.services.length
+  try {
+    session.startTransaction({
+      readConcern: { level: 'snapshot' },
+      writeConcern: { w: 'majority' }
     });
 
-    for (const service of provider.services) {
-      try {
-        // Check if service already exists (avoid duplicates)
+    // Save provider status update within transaction
+    await provider.save({ session });
+
+    // Update user account status within transaction
+    if (provider.userId) {
+      await User.findByIdAndUpdate(provider.userId, {
+        accountStatus: 'active'
+      }).session(session);
+    }
+
+    // IMPORTANT: Create Service documents for each provider service
+    // This makes them searchable in the Services collection
+    if (provider.services && provider.services.length > 0) {
+      logger.info('Creating service documents for approved provider', {
+        action: 'ADMIN_PROVIDER_APPROVAL',
+        providerId: id,
+        businessName: provider.businessInfo.businessName,
+        serviceCount: provider.services.length
+      });
+
+      for (const service of provider.services) {
+        // Check if service already exists (avoid duplicates) - within transaction
         const existingService = await Service.findOne({
           providerId: provider.userId,
           name: service.name
-        });
+        }).session(session);
 
         if (!existingService) {
           // Create new Service document with proper structure
@@ -298,25 +315,46 @@ export const approveProvider = asyncHandler(async (req: Request, res: Response) 
               distribution: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 }
             },
 
-            isActive: service.isActive !== false,
+            // Services from provider registration should go through moderation
+            // They are created as inactive/pending_review, not auto-approved
+            status: 'pending_review',
+            isActive: false,
             isFeatured: false,
             isPopular: false
           });
 
-          await newService.save();
-          logger.debug('Service created', { serviceId: newService._id, serviceName: service.name });
+          await newService.save({ session });
+          logger.debug('Service created within transaction', { serviceId: newService._id, serviceName: service.name });
         } else {
           logger.debug('Service already exists, skipping', { serviceName: service.name });
         }
-      } catch (serviceError) {
-        logger.error('Error creating service', {
-          serviceName: service.name,
-          providerId: id,
-          error: (serviceError as Error).message
-        });
-        // Continue with other services even if one fails
       }
     }
+
+    // Commit transaction only after ALL operations succeed
+    await session.commitTransaction();
+    transactionCommitted = true;
+
+    logger.info('Provider approval transaction committed', {
+      action: 'PROVIDER_APPROVAL_TRANSACTION',
+      providerId: id,
+      businessName: provider.businessInfo.businessName,
+      adminId: adminUser._id
+    });
+  } catch (error) {
+    // Abort transaction on any failure - prevents partial/inconsistent state
+    if (!transactionCommitted) {
+      await session.abortTransaction();
+    }
+    logger.error('Provider approval transaction failed - rolled back', {
+      action: 'PROVIDER_APPROVAL_ROLLBACK',
+      providerId: id,
+      error: error instanceof Error ? error.message : String(error),
+      adminId: adminUser._id
+    });
+    throw error;
+  } finally {
+    session.endSession();
   }
 
   // Audit logging for provider approval
@@ -845,8 +883,8 @@ export const updateServiceStatus = asyncHandler(async (req: Request, res: Respon
   const { id } = req.params;
   const { status, reason, notes } = req.body;
 
-  // Validate status - aligned with Service model enum: 'draft', 'active', 'inactive', 'pending_review'
-  const validStatuses = ['active', 'inactive', 'pending_review', 'draft'];
+  // Validate status - aligned with Service model enum: 'draft', 'active', 'inactive', 'pending_review', 'rejected'
+  const validStatuses = ['active', 'inactive', 'pending_review', 'draft', 'rejected'];
   if (!validStatuses.includes(status)) {
     throw new ApiError(400, 'Invalid status');
   }
@@ -865,9 +903,11 @@ export const updateServiceStatus = asyncHandler(async (req: Request, res: Respon
   }
 
   // Update service status
+  const previousStatus = service.status;
   service.status = status;
 
   // Sync isActive with status (required for search visibility)
+  // Active and rejected services should NOT be active in search
   service.isActive = status === 'active';
 
   // Add admin notes if provided (as metadata for now)
@@ -877,13 +917,32 @@ export const updateServiceStatus = asyncHandler(async (req: Request, res: Respon
     }
     (service as any).adminNotes.push({
       note: notes,
-      createdBy: (req.user as any)._id,
+      createdBy: (req.user as IUser)._id,
       createdAt: new Date(),
       action: status
     });
   }
 
-  // If rejecting, add reason (as metadata for now)
+  // Handle 'rejected' status specifically
+  if (status === 'rejected') {
+    // Add rejection reason to adminNotes for traceability
+    if (!(service as any).adminNotes) {
+      (service as any).adminNotes = [];
+    }
+    (service as any).adminNotes.push({
+      note: reason || 'Service was rejected',
+      createdBy: (req.user as IUser)._id,
+      createdAt: new Date(),
+      action: 'rejected',
+      isRejection: true
+    });
+    // Store standalone rejection reason for quick access
+    (service as any).rejectionReason = reason || 'Service was rejected';
+    (service as any).rejectedAt = new Date();
+    (service as any).rejectedBy = (req.user as IUser)._id;
+  }
+
+  // Legacy handling for inactive status
   if (status === 'inactive' && reason) {
     (service as any).rejectionReason = reason;
   }
@@ -894,9 +953,53 @@ export const updateServiceStatus = asyncHandler(async (req: Request, res: Respon
     action: 'SERVICE_STATUS_UPDATED',
     serviceId: service._id,
     serviceName: service.name,
+    previousStatus,
     newStatus: status,
-    adminId: (req.user as any)?._id
+    isActive: service.isActive,
+    adminId: (req.user as IUser)?._id
   });
+
+  // ========================================
+  // CACHE INVALIDATION & SEARCH INDEX UPDATE
+  // ========================================
+
+  // Clear Redis cache for this service (if using Redis caching)
+  try {
+    const { getRedisClient } = require('../config/redis');
+    const redisClient = await getRedisClient();
+    if (redisClient) {
+      // Delete service-specific cache keys
+      const cacheKeys = [
+        `service:${id}`,
+        `service:${id}:details`,
+        `services:provider:${service.providerId}`,
+        `services:category:${service.category}`
+      ];
+      for (const key of cacheKeys) {
+        await redisClient.del(key).catch(() => { /* Ignore if key doesn't exist */ });
+      }
+      logger.debug(`Cache invalidated for service ${id}`);
+    }
+  } catch (cacheError) {
+    logger.warn('Failed to invalidate cache', { serviceId: id, error: cacheError });
+  }
+
+  // Update Meilisearch index - update isActive status for search visibility
+  try {
+    const { updateServiceInIndex } = require('../services/search.service');
+    await updateServiceInIndex(service._id.toString(), {
+      isActive: service.isActive,
+      status: service.status,
+      updatedAt: new Date()
+    });
+    logger.debug(`Meilisearch index updated for service ${id}`);
+  } catch (searchError) {
+    logger.warn('Failed to update Meilisearch index', { serviceId: id, error: searchError });
+  }
+
+  // ========================================
+  // NOTIFICATIONS
+  // ========================================
 
   // Get provider user ID for notifications
   const providerUserId = (service.providerId as any)?._id || service.providerId?.toString();
@@ -906,16 +1009,20 @@ export const updateServiceStatus = asyncHandler(async (req: Request, res: Respon
     try {
       const notificationService = new NotificationService();
       const isApproved = status === 'active';
+      const isRejected = status === 'rejected';
+
       await notificationService.createNotification({
         recipientId: providerUserId,
-        type: isApproved ? 'service_approved' : 'service_rejected',
-        title: isApproved ? 'Service Approved' : 'Service Update Required',
+        type: isApproved ? 'service_approved' : isRejected ? 'service_rejected' : 'service_updated',
+        title: isApproved ? 'Service Approved' : isRejected ? 'Service Rejected' : 'Service Status Updated',
         message: isApproved
           ? 'Your service has been approved and is now live.'
-          : `Your service requires updates: ${reason || 'Please review and resubmit.'}`,
+          : isRejected
+            ? `Your service has been rejected: ${reason || 'Please review the feedback and resubmit.'}`
+            : `Your service status has been updated to: ${status}`,
         actionText: isApproved ? 'View Service' : 'Edit Service',
         actionUrl: `/provider/services/${service._id}/edit`,
-        metadata: { serviceId: service._id.toString(), status }
+        metadata: { serviceId: service._id.toString(), status, previousStatus, reason }
       });
     } catch (notifError) {
       logger.error('Failed to create service notification', {
@@ -928,17 +1035,16 @@ export const updateServiceStatus = asyncHandler(async (req: Request, res: Respon
     const socketServer = getSocketServer();
     if (socketServer) {
       if (status === 'active') {
-        // FIX: Correct parameter order - providerId first, serviceId second
-        socketServer.emitServiceApproved(providerUserId, service._id.toString());
-      } else if (reason) {
-        socketServer.emitServiceRejected(service._id.toString(), providerUserId, reason);
+        socketServer.emitServiceApproved(service._id.toString(), providerUserId);
+      } else if (status === 'rejected') {
+        socketServer.emitServiceRejected(service._id.toString(), providerUserId, reason || 'Service was rejected');
       }
     }
   }
 
   res.json({
     success: true,
-    message: `Service ${status === 'active' ? 'approved' : 'status updated'} successfully`,
+    message: `Service ${status === 'active' ? 'approved' : status === 'rejected' ? 'rejected' : 'status updated'} successfully`,
     data: { service }
   });
 });
@@ -972,7 +1078,7 @@ export const adminDeleteService = asyncHandler(async (req: Request, res: Respons
     serviceId: id,
     serviceName: service.name,
     reason: reason || 'No reason provided',
-    adminId: (req.user as any)?._id
+    adminId: (req.user as IUser)?._id
   });
 
   res.json({
@@ -1148,7 +1254,7 @@ export const updateUserStatus = asyncHandler(async (req: Request, res: Response)
   }
 
   // Prevent admin from changing their own status
-  if ((user._id as any).toString() === (req.user as any)._id.toString()) {
+  if ((user._id as mongoose.Types.ObjectId).toString() === (req.user as IUser)._id.toString()) {
     throw new ApiError(400, 'Cannot change your own account status');
   }
 
@@ -1163,7 +1269,7 @@ export const updateUserStatus = asyncHandler(async (req: Request, res: Response)
     userEmail: user.email,
     previousStatus: user.accountStatus,
     newStatus: status,
-    adminId: (req.user as any)?._id
+    adminId: (req.user as IUser)?._id
   });
 
   res.json({
@@ -1183,6 +1289,7 @@ export const updateUserStatus = asyncHandler(async (req: Request, res: Response)
 /**
  * Delete user account (admin only)
  * DELETE /api/admin/users/:id
+ * FIX: Wrap all deletions in a MongoDB transaction to prevent race conditions
  */
 export const adminDeleteUser = asyncHandler(async (req: Request, res: Response) => {
   // Extract tenant context for service calls
@@ -1203,34 +1310,65 @@ export const adminDeleteUser = asyncHandler(async (req: Request, res: Response) 
   }
 
   // Prevent admin from deleting their own account
-  if ((user._id as any).toString() === (req.user as any)._id.toString()) {
+  if ((user._id as mongoose.Types.ObjectId).toString() === (req.user as IUser)._id.toString()) {
     throw new ApiError(400, 'Cannot delete your own account');
   }
 
-  // If user is a provider, also delete provider profile and services (with tenant filter)
-  if (user.role === 'provider') {
-    const profileQuery: any = { userId: user._id };
-    if (!tenantContext.isAdmin && tenantContext.tenantId) {
-      profileQuery.tenantId = tenantContext.tenantId;
+  // Start transaction for atomic deletion of user, provider profile, and services
+  const session = await mongoose.startSession();
+  let deletionSuccess = false;
+
+  try {
+    session.startTransaction({
+      readConcern: { level: 'snapshot' },
+      writeConcern: { w: 'majority' }
+    });
+
+    // If user is a provider, also delete provider profile and services (with tenant filter)
+    if (user.role === 'provider') {
+      const profileQuery: any = { userId: user._id };
+      if (!tenantContext.isAdmin && tenantContext.tenantId) {
+        profileQuery.tenantId = tenantContext.tenantId;
+      }
+      await ProviderProfile.findOneAndDelete(profileQuery).session(session);
+
+      const serviceQuery: any = { providerId: user._id };
+      if (!tenantContext.isAdmin && tenantContext.tenantId) {
+        serviceQuery.tenantId = tenantContext.tenantId;
+      }
+      await Service.deleteMany(serviceQuery).session(session);
     }
-    await ProviderProfile.findOneAndDelete(profileQuery);
-    const serviceQuery: any = { providerId: user._id };
-    if (!tenantContext.isAdmin && tenantContext.tenantId) {
-      serviceQuery.tenantId = tenantContext.tenantId;
+
+    // Delete user account as the final step within transaction
+    await User.findOneAndDelete(query).session(session);
+
+    // Commit transaction only if all operations succeed
+    await session.commitTransaction();
+    deletionSuccess = true;
+
+    logger.info('ADMIN_AUDIT: User account deleted', {
+      action: 'USER_DELETED',
+      userId: user._id,
+      userEmail: user.email,
+      userRole: user.role,
+      reason: reason || 'No reason provided',
+      adminId: (req.user as IUser)?._id
+    });
+  } catch (error) {
+    // Abort transaction on any failure - prevents partial deletions
+    if (!deletionSuccess) {
+      await session.abortTransaction();
     }
-    await Service.deleteMany(serviceQuery);
+    logger.error('Failed to delete user account', {
+      action: 'USER_DELETION_FAILED',
+      userId: user._id,
+      error: error instanceof Error ? error.message : String(error),
+      adminId: (req.user as IUser)?._id
+    });
+    throw error;
+  } finally {
+    session.endSession();
   }
-
-  await User.findOneAndDelete(query);
-
-  logger.info('ADMIN_AUDIT: User account deleted', {
-    action: 'USER_DELETED',
-    userId: user._id,
-    userEmail: user.email,
-    userRole: user.role,
-    reason: reason || 'No reason provided',
-    adminId: (req.user as any)?._id
-  });
 
   res.json({
     success: true,
@@ -1331,31 +1469,66 @@ export const getProvidersWithServices = asyncHandler(async (req: Request, res: R
 
   // Apply database-level pagination (skip/limit)
   const skip = (page - 1) * limit;
-  const providers = await ProviderProfile.find(query)
-    .populate('userId', 'firstName lastName email accountStatus')
+
+  // PERFORMANCE FIX: Use aggregation to fetch providers with services in a single query
+  // This replaces the previous N+1 query pattern (1 for providers + N for services)
+  const providerIds = await ProviderProfile.find(query)
+    .select('_id')
     .sort({ createdAt: -1 })
     .skip(skip)
     .limit(limit)
     .lean();
 
-  // Get services for each paginated provider
-  const providersWithServices = await Promise.all(
-    providers.map(async (provider: any) => {
-      const serviceQuery: any = { providerId: provider.userId._id };
-      if (!tenantContext.isAdmin && tenantContext.tenantId) {
-        serviceQuery.tenantId = tenantContext.tenantId;
+  if (providerIds.length === 0) {
+    res.json({
+      success: true,
+      data: {
+        providers: [],
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit),
+          hasNextPage: false,
+          hasPrevPage: page > 1
+        }
       }
-      const services = await Service.find(serviceQuery)
-        .select('name category price status createdAt rating isActive')
-        .sort({ createdAt: -1 })
-        .lean();
+    });
+    return;
+  }
 
-      return {
-        ...provider,
-        services: services || []
-      };
-    })
-  );
+  // Batch fetch all services for the paginated providers in a single query
+  const serviceQuery: any = { providerId: { $in: providerIds.map((p: any) => p._id) } };
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    serviceQuery.tenantId = tenantContext.tenantId;
+  }
+
+  const services = await Service.find(serviceQuery)
+    .select('name category price status createdAt rating isActive providerId')
+    .sort({ createdAt: -1 })
+    .lean();
+
+  // Group services by providerId for efficient lookup
+  const servicesByProvider = new Map();
+  for (const service of services) {
+    const providerId = service.providerId.toString();
+    if (!servicesByProvider.has(providerId)) {
+      servicesByProvider.set(providerId, []);
+    }
+    servicesByProvider.get(providerId).push(service);
+  }
+
+  // Fetch provider profiles with user data
+  const providers = await ProviderProfile.find({ _id: { $in: providerIds.map((p: any) => p._id) } })
+    .populate('userId', 'firstName lastName email accountStatus')
+    .sort({ createdAt: -1 })
+    .lean();
+
+  // Map services to providers
+  const providersWithServices = providers.map((provider: any) => ({
+    ...provider,
+    services: servicesByProvider.get(provider.userId._id.toString()) || []
+  }));
 
   const totalPages = Math.ceil(total / limit);
 
@@ -1407,7 +1580,7 @@ export const batchServiceAction = asyncHandler(async (req: Request, res: Respons
     {
       status: newStatus,
       isActive: action === 'approve',
-      updatedBy: (req.user as any)._id,
+      updatedBy: (req.user as IUser)._id,
       updatedAt: new Date()
     }
   );
@@ -1621,6 +1794,11 @@ export const updateBookingStatus = asyncHandler(async (req: Request, res: Respon
     throw new ApiError(403, `Permission denied. Required: ${requiredPermission}`);
   }
 
+  // SECURITY FIX: Input validation for booking ID
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    throw new ApiError(400, 'Invalid booking ID format');
+  }
+
   const validStatuses = ['pending', 'confirmed', 'in_progress', 'completed', 'cancelled', 'no_show'];
   if (!validStatuses.includes(status)) {
     throw new ApiError(400, 'Invalid status');
@@ -1632,9 +1810,27 @@ export const updateBookingStatus = asyncHandler(async (req: Request, res: Respon
     query.tenantId = tenantContext.tenantId;
   }
 
+  // SECURITY FIX: Explicit booking existence check with tenant scoping
+  // This prevents admin from accessing bookings outside their tenant scope
   const booking = await Booking.findOne(query);
 
   if (!booking) {
+    // SECURITY FIX: Distinguish between "not found" and "tenant access denied"
+    // A 404 without this distinction could leak information about other tenants' bookings
+    const anyBookingExists = await Booking.exists({ _id: id });
+    if (anyBookingExists) {
+      logger.warn('Admin attempted to access booking outside tenant scope', {
+        action: 'TENANT_SCOPE_VIOLATION',
+        adminId: adminUser._id,
+        adminTenant: tenantContext.tenantId,
+        bookingId: id,
+      });
+    }
+    throw new ApiError(404, 'Booking not found');
+  }
+
+  // SECURITY FIX: Exclude deleted bookings
+  if (booking.deletedAt) {
     throw new ApiError(404, 'Booking not found');
   }
 
@@ -2372,6 +2568,69 @@ export const getCategoryStats = asyncHandler(async (_req: Request, res: Response
 import Review from '../models/review.model';
 
 /**
+ * Helper function to update service and provider ratings when a review is approved
+ * FIX #6: Rating updates are delayed until admin moderation approval
+ */
+async function updateServiceRatings(review: any): Promise<void> {
+  const providerId = review.revieweeId?._id || review.revieweeId;
+  const serviceId = review.bookingId?.serviceId || review.serviceId;
+  const rating = review.rating;
+
+  if (!rating || rating < 1 || rating > 5) {
+    return; // Invalid rating, skip update
+  }
+
+  // Update provider profile stats
+  const providerProfile = await ProviderProfile.findOne({ userId: providerId });
+  if (providerProfile) {
+    const prev = providerProfile.reviewsData || {
+      averageRating: 0,
+      totalReviews: 0,
+      ratingDistribution: { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 },
+    };
+
+    const newTotal = (prev.averageRating || 0) * (prev.totalReviews || 0) + rating;
+    const newReviewCount = (prev.totalReviews || 0) + 1;
+    const newAverage = newTotal / newReviewCount;
+
+    const ratingKey = String(rating) as '1' | '2' | '3' | '4' | '5';
+    const currentCount = prev.ratingDistribution?.[ratingKey] || 0;
+
+    await ProviderProfile.findOneAndUpdate(
+      { userId: providerId },
+      {
+        $set: {
+          'reviewsData.averageRating': Math.round(newAverage * 10) / 10,
+          'reviewsData.totalReviews': newReviewCount,
+          [`reviewsData.ratingDistribution.${ratingKey}`]: currentCount + 1,
+        },
+      }
+    );
+  }
+
+  // Update per-service rating
+  if (serviceId) {
+    const service = await Service.findById(serviceId);
+    if (service?.rating) {
+      const prev = service.rating;
+      const newCount = (prev.count || 0) + 1;
+      const newAverage = ((prev.average || 0) * (prev.count || 0) + rating) / newCount;
+      const distKey = String(rating) as '1' | '2' | '3' | '4' | '5';
+      const distribution = prev.distribution ? { ...prev.distribution } : { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+      distribution[distKey] = (distribution[distKey] || 0) + 1;
+
+      await Service.findByIdAndUpdate(serviceId, {
+        $set: {
+          'rating.average': Math.round(newAverage * 10) / 10,
+          'rating.count': newCount,
+          'rating.distribution': distribution,
+        },
+      });
+    }
+  }
+}
+
+/**
  * Get reviews pending moderation
  * GET /api/admin/reviews/pending
  */
@@ -2537,6 +2796,18 @@ export const moderateReview = asyncHandler(async (req: Request, res: Response) =
       review.moderationStatus = 'approved';
       review.isHidden = false;
       review.moderationReason = reason || null;
+
+      // FIX #6: Update ratings only when review is approved
+      // This ensures ratings are moderated before being displayed
+      try {
+        await updateServiceRatings(review);
+      } catch (ratingError) {
+        logger.error('Failed to update service ratings after review approval', {
+          reviewId: id,
+          error: ratingError instanceof Error ? ratingError.message : String(ratingError)
+        });
+        // Don't fail the moderation action if rating update fails
+      }
       break;
 
     case 'reject':
@@ -2596,29 +2867,67 @@ export const moderateReview = asyncHandler(async (req: Request, res: Response) =
     timestamp: new Date().toISOString()
   });
 
-  // Notify provider if rejected (for visibility issues)
-  if (action === 'reject' || action === 'hide') {
+  // Notify reviewer (customer who wrote the review) if rejected
+  if (action === 'reject') {
+    const reviewerId = (review.reviewerId as any)?._id;
+    if (reviewerId) {
+      try {
+        const notificationService = new NotificationService();
+        await notificationService.createNotification({
+          recipientId: reviewerId.toString(),
+          type: 'review_rejected',
+          title: 'Your Review Was Not Approved',
+          message: `Your review was not approved: ${reason || 'It may have violated our community guidelines.'}`,
+          actionText: 'Write New Review',
+          actionUrl: `/bookings`,
+          metadata: { reviewId: id, action, reason }
+        });
+      } catch (notifError) {
+        logger.error('Failed to create reviewer notification for rejected review', {
+          reviewId: id,
+          error: notifError instanceof Error ? notifError.message : String(notifError)
+        });
+      }
+    }
+  }
+
+  // Notify reviewee (provider who received the review) if hidden
+  if (action === 'hide') {
     const revieweeId = (review.revieweeId as any)?._id;
     if (revieweeId) {
       try {
         const notificationService = new NotificationService();
         await notificationService.createNotification({
           recipientId: revieweeId.toString(),
-          type: 'system' as any, // review_moderation mapped to system type
-          title: 'Review Moderation Notice',
-          message: action === 'reject'
-            ? 'One of your reviews has been rejected due to policy violations.'
-            : 'One of your received reviews has been hidden by our moderation team.',
+          type: 'review_rejected',
+          title: 'Review Hidden',
+          message: 'One of your received reviews has been hidden by our moderation team.',
           actionText: 'View Details',
           actionUrl: `/provider/reviews`,
           metadata: { reviewId: id, action }
         });
       } catch (notifError) {
-        logger.error('Failed to create moderation notification', {
+        logger.error('Failed to create reviewee notification for hidden review', {
           reviewId: id,
           error: notifError instanceof Error ? notifError.message : String(notifError)
         });
       }
+    }
+  }
+
+  // FIX: Emit socket events for review moderation
+  const socketServer = getSocketServer();
+  if (socketServer) {
+    // Notify provider (reviewee) when review is approved or hidden
+    const providerId = (review.revieweeId as any)?._id?.toString();
+    if (providerId && (action === 'approve' || action === 'hide')) {
+      socketServer.emitReviewModerated(providerId, id, action, review.rating);
+    }
+
+    // Notify customer (reviewer) when review is rejected
+    const customerId = (review.reviewerId as any)?._id?.toString();
+    if (customerId && action === 'reject') {
+      socketServer.emitReviewModeratedToCustomer(customerId, id, action, reason);
     }
   }
 
@@ -3043,11 +3352,16 @@ export const approveWithdrawal = asyncHandler(async (req: Request, res: Response
   }
 
   // Start a MongoDB session for atomic operation
-  const mongoose = require('mongoose');
-  const session = await mongoose.startSession();
+  let session = await mongoose.startSession();
   session.startTransaction();
 
   try {
+    // Get user info for Stripe account lookup (before transaction modifications)
+    const user = await User.findById(wallet.userId).session(session);
+    if (!user) {
+      throw new ApiError(404, 'User not found');
+    }
+
     // Update transaction status to processing
     await Wallet.updateOne(
       { _id: walletId, 'transactions.id': transactionId },
@@ -3068,28 +3382,146 @@ export const approveWithdrawal = asyncHandler(async (req: Request, res: Response
           balance: -transaction.amount,
           pendingBalance: -transaction.amount,
         },
+        $set: {
+          lastWithdrawalAt: new Date(),
+        },
       },
       { session }
     );
 
+    // CRITICAL FIX: Actually create Stripe payout instead of simulating
+    let stripePayoutId: string | undefined;
+    let stripePayoutStatus: string = 'pending';
+
+    try {
+      // Get provider's Stripe account ID (for Connect transfers)
+      const stripeAccountId = user.stripeAccountId;
+
+      if (stripeAccountId) {
+        // Create payout to provider's Stripe account (Connect)
+        const payout = await stripe.payouts.create(
+          {
+            amount: Math.round(transaction.amount * 100), // Convert to cents
+            currency: (wallet.currency || 'aed').toLowerCase(),
+            destination: stripeAccountId,
+            metadata: {
+              withdrawalId: id,
+              walletId,
+              transactionId,
+              providerId: wallet.userId.toString(),
+              providerEmail: user.email || '',
+            },
+            description: `Withdrawal payout for ${user.email || wallet.userId.toString()}`,
+          },
+          {
+            idempotencyKey: `withdrawal-payout-${transactionId}` as string | undefined,
+          }
+        );
+
+        stripePayoutId = payout.id;
+        stripePayoutStatus = payout.status;
+
+        logger.info('Stripe payout created successfully', {
+          withdrawalId: id,
+          stripePayoutId: payout.id,
+          stripePayoutStatus: payout.status,
+          amount: transaction.amount,
+          currency: wallet.currency,
+          providerId: wallet.userId.toString(),
+          action: 'STRIPE_PAYOUT_CREATED',
+        });
+
+        // Update transaction with Stripe payout ID
+        await Wallet.updateOne(
+          { _id: walletId, 'transactions.id': transactionId },
+          {
+            $set: {
+              'transactions.$.stripePayoutId': payout.id,
+              'transactions.$.stripePayoutStatus': payout.status,
+              'transactions.$.stripePayoutCreatedAt': new Date(),
+              'transactions.$.status': payout.status === 'paid' ? 'completed' : 'processing',
+              'transactions.$.updatedAt': new Date(),
+            },
+          },
+          { session }
+        );
+
+        // If payout failed immediately, revert wallet changes
+        if (payout.status === 'failed') {
+          throw new ApiError(500, `Stripe payout failed: ${(payout as any).failure_message || 'Unknown error'}`);
+        }
+      } else {
+        // No Stripe account - this is an error condition
+        throw new ApiError(400, 'Provider does not have a Stripe account configured for payouts');
+      }
+    } catch (stripeError: unknown) {
+      // Abort transaction if Stripe payout fails
+      await session.abortTransaction();
+
+      // Revert wallet balance since payout failed
+      await Wallet.updateOne(
+        { _id: walletId },
+        {
+          $inc: {
+            balance: transaction.amount,
+            pendingBalance: transaction.amount,
+          },
+        }
+      );
+
+      // Reset transaction status
+      await Wallet.updateOne(
+        { _id: walletId, 'transactions.id': transactionId },
+        {
+          $set: {
+            'transactions.$.status': 'failed',
+            'transactions.$.failureReason': stripeError instanceof Error ? stripeError.message : 'Stripe payout creation failed',
+            'transactions.$.failureAt': new Date(),
+            'transactions.$.updatedAt': new Date(),
+          },
+        }
+      );
+
+      const errorMessage = stripeError instanceof Error ? stripeError.message : 'Stripe payout creation failed';
+      logger.error('Stripe payout creation failed', {
+        withdrawalId: id,
+        walletId,
+        transactionId,
+        amount: transaction.amount,
+        providerId: wallet.userId.toString(),
+        error: errorMessage,
+        action: 'STRIPE_PAYOUT_ERROR',
+      });
+
+      throw ApiError.internal(`Failed to process withdrawal: ${errorMessage}`);
+    }
+
+    // Commit transaction only after successful Stripe payout
     await session.commitTransaction();
 
-    // Get user info for notifications
-    const user = await User.findById(wallet.userId);
-
-    // Process Stripe payout (simulated for now)
-    logger.info('Processing withdrawal approval', {
+    logger.info('Withdrawal approved and payout initiated', {
       withdrawalId: id,
       walletId,
       transactionId,
       amount: transaction.amount,
+      currency: wallet.currency,
+      stripePayoutId,
+      stripePayoutStatus,
       providerId: wallet.userId.toString(),
       action: 'WITHDRAWAL_APPROVED',
     });
 
-    // Emit socket event to provider
+    // FIX 3: Emit notification and withdrawal:approved socket event
     const socketServer = getSocketServer();
     if (socketServer && user) {
+      // Emit specific withdrawal:approved event
+      socketServer.emitWithdrawalApproved(
+        wallet.userId.toString(),
+        id,
+        transaction.amount,
+        wallet.currency
+      );
+      // Also emit generic notification
       socketServer.emitToUser(wallet.userId.toString(), 'notification:new', {
         id: `wd-approve-${Date.now()}`,
         type: 'system' as const,
@@ -3097,15 +3529,6 @@ export const approveWithdrawal = asyncHandler(async (req: Request, res: Response
         message: `Your withdrawal request for ${transaction.amount} ${wallet.currency} has been approved and is being processed.`,
         timestamp: new Date(),
         read: false,
-      });
-
-      // Emit withdrawal specific event
-      (socketServer as any).emitToUser?.(wallet.userId.toString(), 'withdrawal:approved', {
-        withdrawalId: id,
-        amount: transaction.amount,
-        currency: wallet.currency,
-        status: 'processing',
-        processedAt: new Date().toISOString(),
       });
     }
 
@@ -3165,18 +3588,41 @@ export const approveWithdrawal = asyncHandler(async (req: Request, res: Response
       message: 'Withdrawal approved successfully',
       data: {
         withdrawalId: id,
-        status: 'processing',
+        status: stripePayoutStatus === 'paid' ? 'completed' : 'processing',
         amount: transaction.amount,
         currency: wallet.currency,
         newBalance: wallet.balance - transaction.amount,
-        estimatedCompletion: '2-3 business days',
+        stripePayoutId,
+        estimatedCompletion: stripePayoutStatus === 'paid' ? 'Immediate' : '2-3 business days',
       },
     });
-  } catch (error: any) {
-    await session.abortTransaction();
-    throw new ApiError(500, `Failed to approve withdrawal: ${error.message}`);
+  } catch (error: unknown) {
+    // Only abort if transaction is still active and hasn't been ended
+    const sessionInTransaction = (session as any)?.inTransaction;
+    if (session && typeof sessionInTransaction === 'function' && sessionInTransaction() && !session.hasEnded) {
+      try {
+        await session.abortTransaction();
+      } catch (abortError) {
+        logger.error('Failed to abort transaction', {
+          withdrawalId: id,
+          error: abortError instanceof Error ? abortError.message : String(abortError),
+        });
+      }
+    }
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    throw ApiError.internal(`Failed to approve withdrawal: ${errorMessage}`);
   } finally {
-    session.endSession();
+    // Only end session if it hasn't ended yet
+    if (session && !session.hasEnded) {
+      try {
+        await session.endSession();
+      } catch (endError) {
+        logger.error('Failed to end session', {
+          withdrawalId: id,
+          error: endError instanceof Error ? endError.message : String(endError),
+        });
+      }
+    }
   }
 });
 
@@ -3266,9 +3712,18 @@ export const rejectWithdrawal = asyncHandler(async (req: Request, res: Response)
     // Get user info for notifications
     const user = await User.findById(wallet.userId);
 
-    // Emit socket event to provider
+    // FIX: Emit withdrawal:rejected socket event and notification
     const socketServer = getSocketServer();
     if (socketServer && user) {
+      // Emit specific withdrawal:rejected event
+      socketServer.emitWithdrawalRejected(
+        wallet.userId.toString(),
+        id,
+        transaction.amount,
+        wallet.currency,
+        reason
+      );
+      // Also emit generic notification
       socketServer.emitToUser(wallet.userId.toString(), 'notification:new', {
         id: `wd-reject-${Date.now()}`,
         type: 'system' as const,
@@ -3276,16 +3731,6 @@ export const rejectWithdrawal = asyncHandler(async (req: Request, res: Response)
         message: `Your withdrawal request for ${transaction.amount} ${wallet.currency} has been rejected. Reason: ${reason}`,
         timestamp: new Date(),
         read: false,
-      });
-
-      // Emit withdrawal specific event
-      (socketServer as any).emitToUser?.(wallet.userId.toString(), 'withdrawal:rejected', {
-        withdrawalId: id,
-        amount: transaction.amount,
-        currency: wallet.currency,
-        status: 'rejected',
-        reason: reason,
-        rejectedAt: new Date().toISOString(),
       });
     }
 

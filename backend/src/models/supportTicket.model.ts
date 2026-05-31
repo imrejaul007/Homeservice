@@ -19,6 +19,9 @@ export interface ITicketMessage {
 }
 
 export interface ISupportTicket extends Document {
+  // Multi-tenant support
+  tenantId?: mongoose.Types.ObjectId;
+
   // Core Fields
   ticketNumber: string;
   userId: mongoose.Types.ObjectId;
@@ -73,6 +76,13 @@ export interface ISupportTicketModel extends Model<ISupportTicket> {
 
 const SupportTicketSchema = new Schema<ISupportTicket>(
   {
+    // Multi-tenant support
+    tenantId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Tenant',
+      index: true
+    },
+
     ticketNumber: {
       type: String,
       unique: true,

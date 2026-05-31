@@ -3,11 +3,55 @@
  *
  * Zustand store for payment state management with error handling,
  * loading states, and payment in-progress tracking.
+ * Uses Capacitor-safe storage for cross-platform compatibility.
  */
 
 import { create } from 'zustand';
-import { persist, createJSONStorage } from 'zustand/middleware';
+import { persist, createJSONStorage, type StateStorage } from 'zustand/middleware';
 import { immer } from 'zustand/middleware/immer';
+import { Capacitor } from '@capacitor/core';
+import { Preferences } from '@capacitor/preferences';
+
+/**
+ * Capacitor-safe Zustand storage adapter for payment store
+ */
+const capacitorPaymentStorage: StateStorage = {
+  getItem: async (name: string): Promise<string | null> => {
+    if (Capacitor.isNativePlatform()) {
+      try {
+        const result = await Preferences.get({ key: name });
+        return result.value;
+      } catch {
+        return null;
+      }
+    }
+    // Browser fallback
+    if (typeof window !== 'undefined' && window.localStorage) {
+      return localStorage.getItem(name);
+    }
+    return null;
+  },
+  setItem: async (name: string, value: string): Promise<void> => {
+    if (Capacitor.isNativePlatform()) {
+      await Preferences.set({ key: name, value });
+    } else {
+      // Browser fallback
+      if (typeof window !== 'undefined' && window.localStorage) {
+        localStorage.setItem(name, value);
+      }
+    }
+  },
+  removeItem: async (name: string): Promise<void> => {
+    if (Capacitor.isNativePlatform()) {
+      await Preferences.remove({ key: name });
+    } else {
+      // Browser fallback
+      if (typeof window !== 'undefined' && window.localStorage) {
+        localStorage.removeItem(name);
+      }
+    }
+  },
+};
 
 // =============================================================================
 // Types
@@ -243,7 +287,7 @@ export const usePaymentStore = create<PaymentState>()(
     {
       name: 'payment-storage',
       version: 1,
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => capacitorPaymentStorage),
       partialize: (state) => ({
         // Only persist non-sensitive data
         errors: state.errors.slice(-5), // Keep only last 5 errors

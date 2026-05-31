@@ -10,7 +10,7 @@ export function useKeyboard() {
     if (!Capacitor.isNativePlatform()) {
       // Web fallback - check visual viewport
       const handleResize = () => {
-        const visualViewport = (window as any).visualViewport;
+        const visualViewport = window.visualViewport;
         if (visualViewport) {
           const isOpen = window.innerHeight > visualViewport.height + 100;
           setIsKeyboardVisible(isOpen);
@@ -18,9 +18,9 @@ export function useKeyboard() {
         }
       };
 
-      (window as any).visualViewport?.addEventListener('resize', handleResize);
+      window.visualViewport?.addEventListener('resize', handleResize);
       return () => {
-        (window as any).visualViewport?.removeEventListener('resize', handleResize);
+        window.visualViewport?.removeEventListener('resize', handleResize);
       };
     }
 

@@ -1,7 +1,8 @@
 import Service from '../models/service.model';
 import ProviderProfile from '../models/providerProfile.model';
 import ServiceCategory from '../models/serviceCategory.model';
-import { getMeiliClient, INDEXES, isMeiliSearchConfigured } from '../config/meilisearch';
+import { getMeiliClient, resetMeiliClient, INDEXES, isMeiliSearchConfigured } from '../config/meilisearch';
+import { cache } from '../config/redis';
 import logger from '../utils/logger';
 
 /**
@@ -12,6 +13,20 @@ import logger from '../utils/logger';
 const escapeRegex = (str: string): string => {
   if (!str) return '';
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+};
+
+/** Safe error metadata for logging (avoids circular Axios/socket refs) */
+const toSearchErrorMeta = (error: unknown): { message: string; code?: string; status?: number } => {
+  const err = error as { message?: string; code?: string; response?: { status?: number } };
+  return {
+    message: err?.message ?? String(error),
+    code: err?.code,
+    status: err?.response?.status,
+  };
+};
+
+const logSearchError = (context: string, error: unknown): void => {
+  logger.error(context, toSearchErrorMeta(error));
 };
 
 // ============================================
@@ -221,14 +236,15 @@ export const expandQueryWithSynonyms = (query: string): string[] => {
 
 /**
  * Get all searchable terms from the database for typo tolerance
- * This is cached for performance
+ * This is cached for performance with bounded memory usage
  */
 let cachedSearchTerms: string[] | null = null;
 let cacheTimestamp: number = 0;
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const MAX_CACHED_TERMS = 10000; // Maximum number of search terms to cache (prevents unbounded growth)
 
 /**
- * Refresh the cached search terms
+ * Refresh the cached search terms with bounded cache size
  */
 export const refreshSearchTermsCache = async (): Promise<void> => {
   try {
@@ -260,10 +276,19 @@ export const refreshSearchTermsCache = async (): Promise<void> => {
       terms.add(canonical);
     }
 
-    cachedSearchTerms = Array.from(terms);
+    // Convert to array and enforce bounded cache limit
+    let termArray = Array.from(terms);
+
+    // Enforce max cache size to prevent unbounded memory growth
+    if (termArray.length > MAX_CACHED_TERMS) {
+      logger.warn(`Search terms cache exceeded limit (${termArray.length}), truncating to ${MAX_CACHED_TERMS}`);
+      termArray = termArray.slice(0, MAX_CACHED_TERMS);
+    }
+
+    cachedSearchTerms = termArray;
     cacheTimestamp = Date.now();
 
-    logger.debug(`Refreshed search terms cache: ${cachedSearchTerms.length} terms`);
+    logger.debug(`Refreshed search terms cache: ${cachedSearchTerms.length} terms (limit: ${MAX_CACHED_TERMS})`);
   } catch (error) {
     logger.error('Failed to refresh search terms cache:', error);
   }
@@ -297,120 +322,260 @@ interface SearchAnalytics {
 }
 
 /**
- * In-memory search analytics (in production, use Redis or a dedicated analytics DB)
+ * Redis-backed search analytics (prevents unbounded memory growth)
+ * Uses sorted sets and lists with TTL for efficient tracking
  */
-const searchAnalytics: SearchAnalytics = {
-  totalSearches: 0,
-  zeroResultSearches: 0,
-  refinementCount: 0,
-  averageClickPosition: 0,
-  topQueries: [],
-  zeroResultQueries: [],
-  queryRefinements: [],
+const SEARCH_ANALYTICS_TTL = 7 * 24 * 60 * 60; // 7 days retention
+const TOP_QUERIES_LIMIT = 100;
+const ZERO_RESULT_LIMIT = 500;
+const REFINEMENTS_LIMIT = 1000;
+
+interface RedisSearchAnalytics {
+  getTotalSearches(): Promise<number>;
+  getZeroResultSearches(): Promise<number>;
+  getRefinementCount(): Promise<number>;
+  getAverageClickPosition(): Promise<number>;
+  getTopQueries(limit?: number): Promise<Array<{ query: string; count: number }>>;
+  getZeroResultQueries(limit?: number): Promise<Array<{ query: string; count: number; timestamp: number }>>;
+  getQueryRefinements(limit?: number): Promise<Array<{ original: string; refined: string; timestamp: number }>>;
+  incrementTotalSearches(): Promise<void>;
+  incrementZeroResultSearches(): Promise<void>;
+  incrementRefinementCount(): Promise<void>;
+  recordClickPosition(position: number): Promise<void>;
+  addTopQuery(query: string): Promise<void>;
+  addZeroResultQuery(query: string): Promise<void>;
+  addQueryRefinement(original: string, refined: string): Promise<void>;
+  getAll(): Promise<SearchAnalytics>;
+  reset(): Promise<void>;
+}
+
+const createRedisSearchAnalytics = (): RedisSearchAnalytics => {
+  const getClient = () => cache.client;
+
+  return {
+    async getTotalSearches() {
+      const client = getClient();
+      if (!client) return 0;
+      return parseInt(await client.get('analytics:search:total') || '0', 10);
+    },
+
+    async getZeroResultSearches() {
+      const client = getClient();
+      if (!client) return 0;
+      return parseInt(await client.get('analytics:search:zeroResults') || '0', 10);
+    },
+
+    async getRefinementCount() {
+      const client = getClient();
+      if (!client) return 0;
+      return parseInt(await client.get('analytics:search:refinements') || '0', 10);
+    },
+
+    async getAverageClickPosition() {
+      const client = getClient();
+      if (!client) return 0;
+      const sum = parseFloat(await client.get('analytics:search:clickSum') || '0');
+      const count = parseInt(await client.get('analytics:search:clickCount') || '0', 10);
+      return count > 0 ? sum / count : 0;
+    },
+
+    async getTopQueries(limit = TOP_QUERIES_LIMIT) {
+      const client = getClient();
+      if (!client) return [];
+      const results = await client.zrevrange('analytics:search:topQueries', 0, limit - 1, 'WITHSCORES');
+      const queries: Array<{ query: string; count: number }> = [];
+      for (let i = 0; i < results.length; i += 2) {
+        queries.push({ query: results[i], count: parseInt(results[i + 1], 10) });
+      }
+      return queries;
+    },
+
+    async getZeroResultQueries(limit = ZERO_RESULT_LIMIT) {
+      const client = getClient();
+      if (!client) return [];
+      const keys = await client.lrange('analytics:search:zeroResultList', 0, limit - 1);
+      return keys.map(k => JSON.parse(k) as { query: string; count: number; timestamp: number });
+    },
+
+    async getQueryRefinements(limit = REFINEMENTS_LIMIT) {
+      const client = getClient();
+      if (!client) return [];
+      const keys = await client.lrange('analytics:search:refinementList', 0, limit - 1);
+      return keys.map(k => JSON.parse(k) as { original: string; refined: string; timestamp: number });
+    },
+
+    async incrementTotalSearches() {
+      const client = getClient();
+      if (!client) return;
+      await client.incr('analytics:search:total');
+      await client.expire('analytics:search:total', SEARCH_ANALYTICS_TTL);
+    },
+
+    async incrementZeroResultSearches() {
+      const client = getClient();
+      if (!client) return;
+      await client.incr('analytics:search:zeroResults');
+      await client.expire('analytics:search:zeroResults', SEARCH_ANALYTICS_TTL);
+    },
+
+    async incrementRefinementCount() {
+      const client = getClient();
+      if (!client) return;
+      await client.incr('analytics:search:refinements');
+      await client.expire('analytics:search:refinements', SEARCH_ANALYTICS_TTL);
+    },
+
+    async recordClickPosition(position: number) {
+      const client = getClient();
+      if (!client) return;
+      await client.incrbyfloat('analytics:search:clickSum', position);
+      await client.incr('analytics:search:clickCount');
+      await client.expire('analytics:search:clickSum', SEARCH_ANALYTICS_TTL);
+      await client.expire('analytics:search:clickCount', SEARCH_ANALYTICS_TTL);
+    },
+
+    async addTopQuery(query: string) {
+      const client = getClient();
+      if (!client) return;
+      await client.zincrby('analytics:search:topQueries', 1, query);
+      await client.expire('analytics:search:topQueries', SEARCH_ANALYTICS_TTL);
+      // Trim to prevent unbounded growth
+      const count = await client.zcard('analytics:search:topQueries');
+      if (count > TOP_QUERIES_LIMIT * 2) {
+        await client.zremrangebyrank('analytics:search:topQueries', 0, count - TOP_QUERIES_LIMIT - 1);
+      }
+    },
+
+    async addZeroResultQuery(query: string) {
+      const client = getClient();
+      if (!client) return;
+      const entry = JSON.stringify({ query, count: 1, timestamp: Date.now() });
+      await client.lpush('analytics:search:zeroResultList', entry);
+      await client.ltrim('analytics:search:zeroResultList', 0, ZERO_RESULT_LIMIT - 1);
+      await client.expire('analytics:search:zeroResultList', SEARCH_ANALYTICS_TTL);
+    },
+
+    async addQueryRefinement(original: string, refined: string) {
+      const client = getClient();
+      if (!client) return;
+      const entry = JSON.stringify({ original, refined, timestamp: Date.now() });
+      await client.lpush('analytics:search:refinementList', entry);
+      await client.ltrim('analytics:search:refinementList', 0, REFINEMENTS_LIMIT - 1);
+      await client.expire('analytics:search:refinementList', SEARCH_ANALYTICS_TTL);
+    },
+
+    async getAll() {
+      return {
+        totalSearches: await this.getTotalSearches(),
+        zeroResultSearches: await this.getZeroResultSearches(),
+        refinementCount: await this.getRefinementCount(),
+        averageClickPosition: await this.getAverageClickPosition(),
+        topQueries: await this.getTopQueries(),
+        zeroResultQueries: await this.getZeroResultQueries(),
+        queryRefinements: await this.getQueryRefinements(),
+      };
+    },
+
+    async reset() {
+      const client = getClient();
+      if (!client) return;
+      await client.del(
+        'analytics:search:total',
+        'analytics:search:zeroResults',
+        'analytics:search:refinements',
+        'analytics:search:clickSum',
+        'analytics:search:clickCount',
+        'analytics:search:topQueries',
+        'analytics:search:zeroResultList',
+        'analytics:search:refinementList'
+      );
+    },
+  };
+};
+
+// Singleton instance
+let searchAnalyticsInstance: RedisSearchAnalytics | null = null;
+
+const getSearchAnalyticsInstance = (): RedisSearchAnalytics => {
+  if (!searchAnalyticsInstance) {
+    searchAnalyticsInstance = createRedisSearchAnalytics();
+  }
+  return searchAnalyticsInstance;
 };
 
 /**
- * Track a search query
+ * Track a search query (async Redis-backed tracking)
  * @param query - The search query
  * @param resultCount - Number of results returned
  * @param previousQuery - Previous query if this is a refinement (optional)
  */
-export const trackSearch = (
+export const trackSearch = async (
   query: string,
   resultCount: number,
   previousQuery?: string
-): void => {
+): Promise<void> => {
   if (!query) return;
 
   const normalizedQuery = query.toLowerCase().trim();
+  const analytics = getSearchAnalyticsInstance();
 
   // Update total searches
-  searchAnalytics.totalSearches++;
+  await analytics.incrementTotalSearches();
 
   // Track top queries
-  const topQuery = searchAnalytics.topQueries.find(q => q.query === normalizedQuery);
-  if (topQuery) {
-    topQuery.count++;
-  } else {
-    searchAnalytics.topQueries.push({ query: normalizedQuery, count: 1 });
-    // Keep only top 100 queries
-    if (searchAnalytics.topQueries.length > 100) {
-      searchAnalytics.topQueries.sort((a, b) => b.count - a.count);
-      searchAnalytics.topQueries = searchAnalytics.topQueries.slice(0, 100);
-    }
-  }
+  await analytics.addTopQuery(normalizedQuery);
 
   // Track zero-result searches
   if (resultCount === 0) {
-    searchAnalytics.zeroResultSearches++;
+    await analytics.incrementZeroResultSearches();
+    await analytics.addZeroResultQuery(normalizedQuery);
 
-    const zeroResult = searchAnalytics.zeroResultQueries.find(q => q.query === normalizedQuery);
-    if (zeroResult) {
-      zeroResult.count++;
-    } else {
-      searchAnalytics.zeroResultQueries.push({
-        query: normalizedQuery,
-        count: 1,
-        timestamp: Date.now(),
-      });
-
-      // Log zero-result search for investigation
-      logger.info('Zero-result search detected', {
-        query: normalizedQuery,
-        timestamp: new Date().toISOString(),
-      });
-
-      // Keep only recent 500 zero-result queries
-      if (searchAnalytics.zeroResultQueries.length > 500) {
-        searchAnalytics.zeroResultQueries.sort((a, b) => b.timestamp - a.timestamp);
-        searchAnalytics.zeroResultQueries = searchAnalytics.zeroResultQueries.slice(0, 500);
-      }
-    }
+    // Log zero-result search for investigation
+    logger.info('Zero-result search detected', {
+      query: normalizedQuery,
+      timestamp: new Date().toISOString(),
+    });
   }
 
   // Track query refinements (user modified their search)
   if (previousQuery && previousQuery.toLowerCase().trim() !== normalizedQuery) {
-    searchAnalytics.refinementCount++;
-
-    searchAnalytics.queryRefinements.push({
-      original: previousQuery.toLowerCase().trim(),
-      refined: normalizedQuery,
-      timestamp: Date.now(),
-    });
+    await analytics.incrementRefinementCount();
+    await analytics.addQueryRefinement(previousQuery.toLowerCase().trim(), normalizedQuery);
 
     // Log refinement pattern
     logger.debug('Search refinement', {
       from: previousQuery,
       to: normalizedQuery,
     });
-
-    // Keep only recent 1000 refinements
-    if (searchAnalytics.queryRefinements.length > 1000) {
-      searchAnalytics.queryRefinements.sort((a, b) => b.timestamp - a.timestamp);
-      searchAnalytics.queryRefinements = searchAnalytics.queryRefinements.slice(0, 1000);
-    }
   }
 };
 
 /**
- * Get search analytics summary
+ * Get search analytics summary (async Redis-backed)
  */
-export const getSearchAnalytics = (): SearchAnalytics => {
-  return { ...searchAnalytics };
+export const getSearchAnalytics = async (): Promise<SearchAnalytics> => {
+  const analytics = getSearchAnalyticsInstance();
+  return analytics.getAll();
 };
 
 /**
- * Analyze refinement patterns
+ * Analyze refinement patterns (async Redis-backed)
  * @returns Analysis of how users refine their searches
  */
-export const analyzeRefinementPatterns = (): {
+export const analyzeRefinementPatterns = async (): Promise<{
   commonRefinements: Array<{ from: string; to: string; count: number }>;
   averageRefinementsPerSession: number;
   mostAbandonedQueryPattern: string | null;
-} => {
+}> => {
+  const analytics = getSearchAnalyticsInstance();
+  const queryRefinements = await analytics.getQueryRefinements(1000);
+  const zeroResultQueries = await analytics.getZeroResultQueries(500);
+  const totalSearches = await analytics.getTotalSearches();
+  const refinementCount = await analytics.getRefinementCount();
+
   const refinementCounts = new Map<string, number>();
 
-  for (const ref of searchAnalytics.queryRefinements) {
+  for (const ref of queryRefinements) {
     const key = `${ref.original} -> ${ref.refined}`;
     refinementCounts.set(key, (refinementCounts.get(key) || 0) + 1);
   }
@@ -424,10 +589,10 @@ export const analyzeRefinementPatterns = (): {
     .slice(0, 10);
 
   // Calculate abandoned query patterns (queries that lead to zero results)
-  const abandonedPatterns = searchAnalytics.zeroResultQueries
+  const abandonedPatterns = zeroResultQueries
     .filter(z => {
       // Check if this query was later refined
-      return !searchAnalytics.queryRefinements.some(
+      return !queryRefinements.some(
         r => r.original === z.query && r.refined !== z.query
       );
     })
@@ -435,13 +600,13 @@ export const analyzeRefinementPatterns = (): {
 
   return {
     commonRefinements,
-    averageRefinementsPerSession: searchAnalytics.totalSearches > 0
-      ? searchAnalytics.refinementCount / Math.ceil(searchAnalytics.totalSearches / 10)
+    averageRefinementsPerSession: totalSearches > 0
+      ? refinementCount / Math.ceil(totalSearches / 10)
       : 0,
     mostAbandonedQueryPattern: abandonedPatterns.length > 0
       ? abandonedPatterns.sort((a, b) => {
-          const countA = searchAnalytics.zeroResultQueries.find(z => z.query === a)?.count || 0;
-          const countB = searchAnalytics.zeroResultQueries.find(z => z.query === b)?.count || 0;
+          const countA = zeroResultQueries.find(z => z.query === a)?.count || 0;
+          const countB = zeroResultQueries.find(z => z.query === b)?.count || 0;
           return countB - countA;
         })[0]
       : null,
@@ -672,6 +837,20 @@ export interface SearchOptions {
   tags?: string[];
 }
 
+const buildMongoSort = (sortBy?: SearchOptions['sortBy']): Record<string, 1 | -1> => {
+  switch (sortBy) {
+    case 'price_asc':
+      return { 'price.amount': 1 };
+    case 'price_desc':
+      return { 'price.amount': -1 };
+    case 'rating':
+      return { 'rating.average': -1 };
+    case 'popular':
+    default:
+      return { 'searchMetadata.popularityScore': -1 };
+  }
+};
+
 // ============================================
 // SEARCH RESULTS INTERFACE
 // ============================================
@@ -810,7 +989,8 @@ export const initializeIndexes = async (): Promise<void> => {
 
     logger.info('Meilisearch indexes initialized successfully');
   } catch (error) {
-    logger.error('Failed to initialize Meilisearch indexes:', error);
+    logSearchError('Failed to initialize Meilisearch indexes', error);
+    resetMeiliClient();
   }
 };
 
@@ -1052,7 +1232,8 @@ export const searchServices = async (
       correctionApplied,
     };
   } catch (error) {
-    logger.error('Meilisearch search failed, using fallback:', error);
+    logSearchError('Meilisearch search failed, using MongoDB fallback', error);
+    resetMeiliClient();
     const results = await fallbackSearch(primaryQuery, options);
     trackSearch(query, results.estimatedTotalHits, previousQuery);
     return results;
@@ -1092,7 +1273,8 @@ export const getSearchSuggestions = async (
 
     return Array.from(new Set<string>(suggestions));
   } catch (error) {
-    logger.error('Failed to get search suggestions:', error);
+    logSearchError('Meilisearch suggestions failed, using MongoDB fallback', error);
+    resetMeiliClient();
     return getMongoSuggestions(query, limit);
   }
 };
@@ -1225,7 +1407,8 @@ export const searchServicesWithGeo = async (
         };
       }
     } catch (error) {
-      logger.error('Meilisearch geo search failed, using fallback:', error);
+      logSearchError('Meilisearch geo search failed, using fallback', error);
+      resetMeiliClient();
     }
   }
 
@@ -1384,6 +1567,7 @@ const fallbackSearch = async (
       minPrice,
       maxPrice,
       minRating,
+      sortBy,
       tags,
     } = options;
 
@@ -1414,8 +1598,10 @@ const fallbackSearch = async (
       searchQuery.tags = { $in: tags };
     }
 
+    const sort = buildMongoSort(sortBy);
+
     const [services, total] = await Promise.all([
-      Service.find(searchQuery).skip(offset).limit(limit).lean(),
+      Service.find(searchQuery).sort(sort).skip(offset).limit(limit).lean(),
       Service.countDocuments(searchQuery),
     ]);
 
@@ -1437,7 +1623,7 @@ const fallbackSearch = async (
       didYouMean,
     };
   } catch (error) {
-    logger.error('Fallback search failed:', error);
+    logSearchError('MongoDB fallback search failed', error);
     return {
       hits: [],
       estimatedTotalHits: 0,

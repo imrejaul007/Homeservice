@@ -428,13 +428,30 @@ export const cache = {
     }
   },
   async keys(pattern: string): Promise<string[]> {
+    // FIX: Use SCAN instead of KEYS command to avoid blocking Redis
+    // KEYS blocks the entire Redis instance and is O(N) - dangerous in production
     if (cacheRedis && redisAvailable) {
       try {
-        return await cacheRedis.keys(pattern);
+        const matchingKeys: string[] = [];
+        let cursor = 0;
+
+        do {
+          const [nextCursor, keys] = await cacheRedis.scan(
+            cursor,
+            'MATCH',
+            pattern,
+            'COUNT',
+            100
+          );
+          cursor = parseInt(nextCursor, 10);
+          matchingKeys.push(...keys);
+        } while (cursor !== 0);
+
+        return matchingKeys;
       } catch (err) {
-        logger.warn(`Redis keys failed for pattern ${pattern}`, {
+        logger.warn(`Redis SCAN failed for pattern ${pattern}, falling back to memory`, {
           pattern,
-          action: 'REDIS_KEYS_FAILED',
+          action: 'REDIS_SCAN_FAILED',
           error: (err as Error).message,
         });
       }

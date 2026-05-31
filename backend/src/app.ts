@@ -37,6 +37,11 @@ import healthRoutes from './routes/health.routes';
 import swaggerUi from 'swagger-ui-express';
 import { swaggerSpec } from './config/swagger';
 
+// FIX: Import and initialize workflows to connect them to the event bus
+// These modules self-register their event listeners when imported
+import './workflows/bookingWorkflow';
+import './workflows/paymentWorkflow';
+
 // Load environment variables
 dotenv.config({ path: path.join(__dirname, '../.env') });
 
@@ -101,8 +106,8 @@ const corsOptions = {
     'X-Requested-With',
     'X-Correlation-ID',
     'x-correlation-id',
-    'skipAuth',
-    'skipauth',
+    'X-Tenant',
+    'x-tenant',
     'x-csrf-token',
     'x-2fa-token',
     'stripe-signature',

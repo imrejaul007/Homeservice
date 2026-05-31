@@ -126,7 +126,13 @@ const redactSensitiveData = (obj: unknown, seen = new WeakSet()): Record<string,
     const lowerKey = key.toLowerCase();
     if (sensitiveFields.some(field => lowerKey.includes(field))) {
       result[key] = '[REDACTED]';
-    } else if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+    } else if (Array.isArray(value)) {
+      result[key] = value.map((item) =>
+        typeof item === 'object' && item !== null
+          ? redactSensitiveData(item, seen)
+          : item
+      );
+    } else if (typeof value === 'object' && value !== null) {
       result[key] = redactSensitiveData(value, seen);
     } else {
       result[key] = value;

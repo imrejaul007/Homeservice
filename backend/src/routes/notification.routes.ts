@@ -6,6 +6,7 @@ import Joi from 'joi';
 import { ApiError, ERROR_CODES } from '../utils/ApiError';
 import logger from '../utils/logger';
 import { notificationAnalyticsService } from '../services/notificationAnalytics.service';
+import { notificationService, NotificationType } from '../services/notification.service';
 
 const router = Router();
 
@@ -36,6 +37,40 @@ const notificationIdParamSchema = Joi.object({
     'string.empty': 'Notification ID is required',
     'any.required': 'Notification ID is required',
   }),
+});
+
+const sendNotificationSchema = Joi.object({
+  userId: Joi.string().required().messages({
+    'string.empty': 'User ID is required',
+    'any.required': 'User ID is required',
+  }),
+  type: Joi.string().valid(
+    'booking_request', 'booking_confirmed', 'booking_cancelled', 'booking_rejected',
+    'booking_started', 'booking_completed', 'booking_reminder', 'message_received',
+    'review_received', 'review_rejected', 'promotion', 'loyalty_update',
+    'provider_approved', 'provider_rejected', 'provider_suspended',
+    'provider_document_verified', 'provider_document_rejected',
+    'service_approved', 'service_rejected', 'service_updated',
+    'new_provider_submission', 'new_service_pending',
+    'dispute_received', 'dispute_created', 'dispute_evidence_added',
+    'dispute_assigned', 'dispute_resolved', 'withdrawal',
+    'withdrawal_approved', 'withdrawal_rejected'
+  ).required().messages({
+    'any.only': 'Invalid notification type',
+    'any.required': 'Notification type is required',
+  }),
+  title: Joi.string().required().min(1).max(200).messages({
+    'string.empty': 'Title is required',
+    'any.required': 'Title is required',
+    'string.max': 'Title must be 200 characters or less',
+  }),
+  message: Joi.string().required().min(1).max(1000).messages({
+    'string.empty': 'Message is required',
+    'any.required': 'Message is required',
+    'string.max': 'Message must be 1000 characters or less',
+  }),
+  data: Joi.object().optional(),
+  channels: Joi.array().items(Joi.string().valid('in_app', 'email', 'sms', 'push')).optional(),
 });
 
 // ============================================
@@ -273,21 +308,22 @@ const markAsRead = asyncHandler(async (req: Request, res: Response) => {
   }
 
   const notifications: Notification[] = (userDoc as any).notifications || [];
-  const notification = notifications.find(n => n._id.toString() === notificationId);
+  const notificationIndex = notifications.findIndex(n => n._id.toString() === notificationId);
 
-  if (!notification) {
+  if (notificationIndex === -1) {
     throw ApiError.notFound('Notification not found', ERROR_CODES.NOT_FOUND);
   }
 
-  notification.isRead = true;
-  notification.readAt = new Date();
+  // FIX: Update the notification in place and save
+  notifications[notificationIndex].isRead = true;
+  notifications[notificationIndex].readAt = new Date();
   (userDoc as any).notifications = notifications;
   await userDoc.save({ validateBeforeSave: false });
 
   res.json({
     success: true,
     message: 'Notification marked as read',
-    data: { notification },
+    data: { notification: notifications[notificationIndex] },
   });
 });
 
@@ -542,6 +578,48 @@ const unregisterDevice = asyncHandler(async (req: Request, res: Response) => {
 });
 
 // ============================================
+// Send Notification Endpoint
+// ============================================
+
+const sendNotification = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+  const { error, value } = sendNotificationSchema.validate(req.body);
+  if (error) {
+    res.status(400).json({
+      success: false,
+      message: error.details[0].message,
+    });
+    return;
+  }
+
+  const { userId, type, title, message, data, channels } = value;
+
+  // Verify target user exists
+  const targetUser = await User.findById(userId);
+  if (!targetUser) {
+    res.status(404).json({
+      success: false,
+      message: 'User not found',
+    });
+    return;
+  }
+
+  // Send the notification
+  await notificationService.createNotification({
+    recipientId: userId,
+    type: type as NotificationType,
+    title,
+    message,
+    metadata: data,
+    channels: channels as any,
+  });
+
+  res.json({
+    success: true,
+    message: 'Notification sent successfully',
+  });
+});
+
+// ============================================
 // Routes
 // ============================================
 
@@ -560,6 +638,12 @@ router.patch('/preferences',
 router.get('/',
   authMiddleware.authenticate,
   getNotifications
+);
+
+// Send notification endpoint (admin/provider only)
+router.post('/send',
+  authMiddleware.authenticate,
+  sendNotification
 );
 
 router.get('/unread-count',

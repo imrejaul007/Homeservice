@@ -25,6 +25,8 @@ import { useToastActions } from '../../components/common/Toast';
 import { cn } from '../../lib/utils';
 import { formatPrice } from '../../utils/currency';
 import { EmptyState } from '../../components/common/EmptyState';
+import { ROASDashboard } from '../../components/analytics/provider/ROASDashboard';
+import { RepeatCustomerRate } from '../../components/analytics/provider/RepeatCustomerRate';
 
 const EMPTY_ANALYTICS: ProviderInsightsAnalytics = {
   overview: {
@@ -73,7 +75,7 @@ const ProviderAnalyticsPage: React.FC = () => {
 
   useEffect(() => {
     if (user?.role !== 'provider') {
-      navigate('/dashboard');
+      navigate('/provider/dashboard'); // FIX: Was '/dashboard'
     }
   }, [user, navigate]);
 
@@ -484,6 +486,14 @@ const ProviderAnalyticsPage: React.FC = () => {
                       </table>
                     </div>
                   )}
+                </div>
+              </div>
+
+              <div className="mt-8">
+                {/* ROAS Dashboard & Repeat Customer Rate */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+                  <ROASDashboard providerId={user?._id} timeRange={timeRange} />
+                  <RepeatCustomerRate providerId={user?._id} timeRange="90d" />
                 </div>
               </div>
 

@@ -1,0 +1,13 @@
+﻿
+> home-service-backend@1.0.0 build
+> tsc
+
+src/services/bankVerification.service.ts(517,11): error TS2739: Type 'Record<string, unknown>' is missing the following properties from type '{ dailyUsed: number; monthlyUsed: number; lastReset: Date; }': dailyUsed, monthlyUsed, lastReset
+src/services/corporateWallet.service.ts(478,5): error TS2322: Type '{ employeeId: string; employeeName: string; employeeEmail: string; department: string | undefined; totalSpent: number; monthlyLimit: number | undefined; usedThisMonth: number | undefined; bookingCount: number | undefined; }[]' is not assignable to type 'EmployeeSpending[]'.
+  Type '{ employeeId: string; employeeName: string; employeeEmail: string; department: string | undefined; totalSpent: number; monthlyLimit: number | undefined; usedThisMonth: number | undefined; bookingCount: number | undefined; }' is not assignable to type 'EmployeeSpending'.
+    Types of property 'usedThisMonth' are incompatible.
+      Type 'number | undefined' is not assignable to type 'number'.
+        Type 'undefined' is not assignable to type 'number'.
+src/services/rescheduleFee.service.ts(71,5): error TS2741: Property 'maxHoursBeforeService' is missing in type '{ minHoursBeforeService: number; surchargePercent: number; label: string; }' but required in type '{ minHoursBeforeService: number; maxHoursBeforeService: number; surchargePercent: number; label: string; }'.
+src/services/rescheduleFee.service.ts(72,5): error TS2741: Property 'maxHoursBeforeService' is missing in type '{ minHoursBeforeService: number; surchargePercent: number; label: string; }' but required in type '{ minHoursBeforeService: number; maxHoursBeforeService: number; surchargePercent: number; label: string; }'.
+src/services/reviewVelocityMonitor.service.ts(677,32): error TS18048: 'r.flags.length' is possibly 'undefined'.

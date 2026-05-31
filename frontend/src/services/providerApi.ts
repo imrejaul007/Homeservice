@@ -19,6 +19,26 @@ const analyticsApi = axios.create({
   withCredentials: true,
 });
 
+// Request deduplication map (MAJOR PERFORMANCE FIX)
+const pendingRequests = new Map<string, Promise<unknown>>();
+
+/**
+ * Get deduplicated request - returns existing promise if request is in progress
+ */
+function getDeduplicatedRequest<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
+  const existing = pendingRequests.get(key);
+  if (existing) {
+    return existing as Promise<T>;
+  }
+
+  const promise = fetcher().finally(() => {
+    pendingRequests.delete(key);
+  }) as Promise<T>;
+
+  pendingRequests.set(key, promise);
+  return promise;
+}
+
 // Generate correlation ID for request tracing
 const generateCorrelationId = () => {
   return `req-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
@@ -127,46 +147,62 @@ export const providerApi = {
   /**
    * Get full provider profile by ID
    * GET /api/providers/:id
+   * Uses request deduplication to prevent multiple simultaneous requests
    */
   getProviderById: async (id: string): Promise<ProviderResponse> => {
-    const response = await api.get(`/${id}`);
-    return response.data;
+    const requestKey = `provider:${id}`;
+    return getDeduplicatedRequest(requestKey, async () => {
+      const response = await api.get(`/${id}`);
+      return response.data as ProviderResponse;
+    });
   },
 
   /**
    * Get providers by category slug
    * GET /api/providers/category/:slug
+   * Uses request deduplication to prevent multiple simultaneous requests
    */
   getProvidersByCategory: async (
     categorySlug: string,
     options?: GetProvidersOptions
   ): Promise<ProvidersByCategoryResponse> => {
-    const response = await api.get(`/category/${categorySlug}`, { params: options });
-    return response.data;
+    const requestKey = `providers:category:${categorySlug}:${JSON.stringify(options || {})}`;
+    return getDeduplicatedRequest(requestKey, async () => {
+      const response = await api.get(`/category/${categorySlug}`, { params: options });
+      return response.data as ProvidersByCategoryResponse;
+    });
   },
 
   /**
    * Get providers by subcategory
    * GET /api/providers/subcategory/:categorySlug/:subcategorySlug
+   * Uses request deduplication to prevent multiple simultaneous requests
    */
   getProvidersBySubcategory: async (
     categorySlug: string,
     subcategorySlug: string,
     options?: GetProvidersOptions
   ): Promise<ProvidersBySubcategoryResponse> => {
-    const response = await api.get(`/subcategory/${categorySlug}/${subcategorySlug}`, {
-      params: options,
+    const requestKey = `providers:subcategory:${categorySlug}:${subcategorySlug}:${JSON.stringify(options || {})}`;
+    return getDeduplicatedRequest(requestKey, async () => {
+      const response = await api.get(`/subcategory/${categorySlug}/${subcategorySlug}`, {
+        params: options,
+      });
+      return response.data as ProvidersBySubcategoryResponse;
     });
-    return response.data;
   },
 
   /**
    * Get featured providers
    * GET /api/providers/featured
+   * Uses request deduplication to prevent multiple simultaneous requests
    */
   getFeaturedProviders: async (limit?: number): Promise<FeaturedProvidersResponse> => {
-    const response = await api.get('/featured', { params: { limit } });
-    return response.data;
+    const requestKey = `providers:featured:${limit || 'all'}`;
+    return getDeduplicatedRequest(requestKey, async () => {
+      const response = await api.get('/featured', { params: { limit } });
+      return response.data as FeaturedProvidersResponse;
+    });
   },
 };
 
@@ -225,13 +261,13 @@ export const providerAnalyticsApi = {
 
   /**
    * Get provider insights analytics page data
-   * GET /api/provider/insights?period=7d|30d|90d
+   * GET /api/provider/analytics/insights?period=7d|30d|90d
    */
   getProviderInsights: async (
     period: '7d' | '30d' | '90d' = '30d',
   ): Promise<{ success: boolean; data: ProviderInsightsAnalytics }> => {
-    const response = await analyticsApi.get('/insights', {
-      params: { period: period === '7d' ? 'week' : period === '30d' ? 'month' : 'quarter' },
+    const response = await analyticsApi.get('/analytics/insights', {
+      params: { period },
     });
     return response.data;
   },

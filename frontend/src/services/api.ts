@@ -3,6 +3,42 @@ import { sanitizeHtml, secureStorage, isSecureContext } from '@/lib/security';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
+// CSRF token storage
+let csrfToken: string | null = null;
+
+// HTTP methods that require CSRF protection (state-changing operations)
+const CSRF_SAFE_METHODS = ['GET', 'HEAD', 'OPTIONS', 'TRACE'];
+const CSRF_PROTECTED_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE'];
+
+// Fetch CSRF token from server
+const fetchCsrfToken = async (): Promise<string | null> => {
+  try {
+    const response = await axios.get(`${API_URL}/auth/csrf-token`, {
+      withCredentials: true,
+    });
+    return response.data?.csrfToken || null;
+  } catch {
+    return null;
+  }
+};
+
+// Get CSRF token (from memory or fetch if not present)
+const getCsrfToken = async (): Promise<string | null> => {
+  if (csrfToken) return csrfToken;
+
+  // Try to get from cookie (where server sets it)
+  const cookies = document.cookie.split(';');
+  const csrfCookie = cookies.find(c => c.trim().startsWith('csrf_token='));
+  if (csrfCookie) {
+    csrfToken = csrfCookie.split('=')[1];
+    return csrfToken;
+  }
+
+  // Fetch from server
+  csrfToken = await fetchCsrfToken();
+  return csrfToken;
+};
+
 // Retry configuration
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000;
@@ -67,6 +103,14 @@ const clearAuth = () => {
   } catch {
     // Silent fail
   }
+  // Clear CSRF token on logout
+  csrfToken = null;
+};
+
+// Refresh CSRF token (call after login or when token expires)
+const refreshCsrfToken = async (): Promise<string | null> => {
+  csrfToken = await fetchCsrfToken();
+  return csrfToken;
 };
 
 // Generate correlation ID for request tracing
@@ -95,17 +139,25 @@ const initAuthHeader = () => {
 // Call initialization after api is created
 initAuthHeader();
 
-// Token refresh management
-let isRefreshing = false;
-let refreshSubscribers: Array<(token: string) => void> = [];
+// Token refresh management - FIX: Use Promise-based queue to prevent race conditions
+let refreshPromise: Promise<string | null> | null = null;
+let refreshPromiseResolve: ((token: string | null) => void) | null = null;
 
-const addRefreshSubscriber = (callback: (token: string) => void) => {
-  refreshSubscribers.push(callback);
+const getRefreshPromise = (): Promise<string | null> => {
+  if (!refreshPromise) {
+    refreshPromise = new Promise<string | null>((resolve) => {
+      refreshPromiseResolve = resolve;
+    });
+  }
+  return refreshPromise;
 };
 
-const onRefreshed = (token: string) => {
-  refreshSubscribers.map((callback) => callback(token));
-  refreshSubscribers = [];
+const resolveRefreshPromise = (token: string | null): void => {
+  if (refreshPromiseResolve) {
+    refreshPromiseResolve(token);
+  }
+  refreshPromise = null;
+  refreshPromiseResolve = null;
 };
 
 // Retry logic for failed requests
@@ -133,9 +185,9 @@ const retryRequest = async (config: InternalAxiosRequestConfig, retryCount: numb
   return axios(config).then((response) => response.data);
 };
 
-// Request interceptor - Add auth token and correlation ID
+// Request interceptor - Add auth token, correlation ID, and CSRF token
 api.interceptors.request.use(
-  (config) => {
+  async (config) => {
     // Add correlation ID for request tracing
     const correlationId = generateCorrelationId();
     config.headers['X-Correlation-ID'] = correlationId;
@@ -144,6 +196,15 @@ api.interceptors.request.use(
     const tokens = getAuthTokens();
     if (tokens?.accessToken) {
       config.headers.Authorization = `Bearer ${tokens.accessToken}`;
+    }
+
+    // Add CSRF token for state-changing requests (mutations)
+    const method = config.method?.toUpperCase();
+    if (method && CSRF_PROTECTED_METHODS.includes(method)) {
+      const token = await getCsrfToken();
+      if (token) {
+        config.headers['X-CSRF-Token'] = token;
+      }
     }
 
     // Sanitize URL params (basic XSS prevention)
@@ -171,13 +232,16 @@ api.interceptors.response.use(
   async (error: AxiosError) => {
     const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean; _retryCount?: number };
 
-    // Log the error for debugging (sanitized)
-    console.error('API Error:', {
-      url: originalRequest?.url,
-      status: error.response?.status,
-      message: error.message,
-      correlationId: originalRequest?.headers?.['X-Correlation-ID'],
-    });
+    // Log unexpected errors (skip noisy 404s from optional dashboard resources)
+    const status = error.response?.status;
+    if (status !== 404) {
+      console.error('API Error:', {
+        url: originalRequest?.url,
+        status,
+        message: error.message,
+        correlationId: originalRequest?.headers?.['X-Correlation-ID'],
+      });
+    }
 
     // Handle network errors with retry
     if (!error.response && shouldRetry(error)) {
@@ -190,45 +254,75 @@ api.interceptors.response.use(
       }
     }
 
-    // Handle 401 Unauthorized - Token refresh
+    // Handle 401 Unauthorized - Token refresh with proper Promise-based queue
     if (error.response?.status === 401 && !originalRequest._retry) {
-      if (isRefreshing) {
-        return new Promise((resolve) => {
-          addRefreshSubscriber((token: string) => {
-            originalRequest.headers.Authorization = `Bearer ${token}`;
-            resolve(api(originalRequest));
+      originalRequest._retry = true;
+
+      // If a refresh is already in progress, wait for it
+      if (refreshPromise) {
+        return getRefreshPromise()
+          .then((token) => {
+            if (token) {
+              originalRequest.headers.Authorization = `Bearer ${token}`;
+              return api(originalRequest);
+            }
+            // Refresh failed, redirect to login
+            if (typeof window !== 'undefined') {
+              window.location.href = '/login?reason=session_expired';
+            }
+            return Promise.reject(error);
+          })
+          .catch(() => {
+            if (typeof window !== 'undefined') {
+              window.location.href = '/login?reason=session_expired';
+            }
+            return Promise.reject(error);
           });
-        });
       }
 
-      originalRequest._retry = true;
-      isRefreshing = true;
+      // No refresh in progress, start one
+      const tokens = getAuthTokens();
+      if (!tokens?.refreshToken) {
+        // No refresh token, redirect to login
+        clearAuth();
+        if (typeof window !== 'undefined') {
+          window.location.href = '/login?reason=session_expired';
+        }
+        return Promise.reject(error);
+      }
+
+      // Create refresh promise to prevent concurrent refresh attempts
+      getRefreshPromise();
 
       try {
-        const tokens = getAuthTokens();
-        if (tokens?.refreshToken) {
-          const response = await axios.post(`${API_URL}/auth/refresh-token`, {
-            refreshToken: tokens.refreshToken,
-          });
+        const response = await axios.post(`${API_URL}/auth/refresh-token`, {
+          refreshToken: tokens.refreshToken,
+        }, {
+          timeout: 10000, // 10 second timeout for refresh
+        });
 
-          const newTokens = response.data.data.tokens;
-          updateAuthTokens(newTokens);
+        const newTokens = response.data.data.tokens;
+        updateAuthTokens(newTokens);
 
-          api.defaults.headers.common.Authorization = `Bearer ${newTokens.accessToken}`;
-          originalRequest.headers.Authorization = `Bearer ${newTokens.accessToken}`;
-          onRefreshed(newTokens.accessToken);
+        api.defaults.headers.common.Authorization = `Bearer ${newTokens.accessToken}`;
 
-          return api(originalRequest);
-        }
+        // Resolve waiting requests with the new token
+        resolveRefreshPromise(newTokens.accessToken);
+
+        // Retry the original request
+        originalRequest.headers.Authorization = `Bearer ${newTokens.accessToken}`;
+        return api(originalRequest);
       } catch (refreshError) {
         console.error('Token refresh failed:', refreshError);
         clearAuth();
 
+        // Reject all waiting requests
+        resolveRefreshPromise(null);
+
         if (typeof window !== 'undefined') {
           window.location.href = '/login?reason=session_expired';
         }
-      } finally {
-        isRefreshing = false;
+        return Promise.reject(error);
       }
     }
 
@@ -338,8 +432,8 @@ export const apiService = {
   },
 };
 
-// Export typed API instance
-export { api };
+// Export typed API instance and CSRF utilities
+export { api, getCsrfToken, refreshCsrfToken, clearAuth };
 
 // Default export
 export default apiService;

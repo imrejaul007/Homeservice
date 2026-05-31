@@ -2,6 +2,10 @@ import mongoose, { Document, Schema, Model } from 'mongoose';
 
 export interface IBookingNotification extends Document {
   _id: mongoose.Types.ObjectId;
+
+  // FIX: Add multi-tenant support
+  tenantId?: mongoose.Types.ObjectId;
+
   bookingId: mongoose.Types.ObjectId; // Reference to Booking
   recipientId: mongoose.Types.ObjectId; // User ID (customer, provider, or admin)
 
@@ -9,7 +13,10 @@ export interface IBookingNotification extends Document {
   type: 'booking_request' | 'booking_confirmed' | 'booking_cancelled' | 'booking_reminder' |
         'booking_completed' | 'booking_rejected' | 'booking_updated' | 'payment_received' |
         'review_request' | 'provider_arrived' | 'service_started' | 'message_received' |
-        'schedule_changed' | 'cancellation_request';
+        'schedule_changed' | 'cancellation_request' | 'booking_started' | 'booking_rescheduled' |
+        'booking_no_show' | 'withdrawal_processed' | 'withdrawal_approved' | 'withdrawal_rejected' |
+        'dispute_evidence_added' | 'dispute_assigned' | 'service_approved' | 'service_rejected' |
+        'provider_approved' | 'provider_rejected';
 
   priority: 'low' | 'normal' | 'high' | 'urgent';
   category: 'booking' | 'payment' | 'communication' | 'reminder' | 'update';
@@ -128,6 +135,13 @@ export interface IBookingNotification extends Document {
 
 const notificationSchema = new Schema<IBookingNotification>(
   {
+    // FIX: Add multi-tenant support
+    tenantId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Tenant',
+      index: true
+    },
+
     bookingId: {
       type: Schema.Types.ObjectId,
       ref: 'Booking',
@@ -149,7 +163,10 @@ const notificationSchema = new Schema<IBookingNotification>(
         'booking_request', 'booking_confirmed', 'booking_cancelled', 'booking_reminder',
         'booking_completed', 'booking_rejected', 'booking_updated', 'payment_received',
         'review_request', 'provider_arrived', 'service_started', 'message_received',
-        'schedule_changed', 'cancellation_request'
+        'schedule_changed', 'cancellation_request', 'booking_started', 'booking_rescheduled',
+        'booking_no_show', 'withdrawal_processed', 'withdrawal_approved', 'withdrawal_rejected',
+        'dispute_evidence_added', 'dispute_assigned', 'service_approved', 'service_rejected',
+        'provider_approved', 'provider_rejected'
       ],
       required: [true, 'Notification type is required'],
       index: true
@@ -375,6 +392,11 @@ notificationSchema.index({ 'channels.sms.deliveryStatus': 1 });
 
 // Composite indexes for complex queries
 notificationSchema.index({ recipientId: 1, type: 1, status: 1 });
+
+// FIX: Add tenant isolation indexes
+notificationSchema.index({ tenantId: 1, recipientId: 1 });
+notificationSchema.index({ tenantId: 1, type: 1 });
+notificationSchema.index({ tenantId: 1, status: 1 });
 
 // ===================================
 // VIRTUAL PROPERTIES

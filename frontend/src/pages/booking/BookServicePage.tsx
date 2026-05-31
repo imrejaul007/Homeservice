@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { AlertCircle } from 'lucide-react';
 import NavigationHeader from '../../components/layout/NavigationHeader';
@@ -6,7 +6,7 @@ import Footer from '../../components/layout/Footer';
 import BookingFormWizard from '../../components/booking/BookingFormWizard';
 import { useAuthStore } from '../../stores/authStore';
 import type { Service } from '../../types/search';
-import { API_BASE_URL } from '../../config/api';
+import { searchApi } from '../../services/searchApi';
 
 const BookServicePage: React.FC = () => {
   const { serviceId } = useParams<{ serviceId: string }>();
@@ -17,6 +17,9 @@ const BookServicePage: React.FC = () => {
   const [service, setService] = useState<Service | null>(location.state?.service || null);
   const [loading, setLoading] = useState(!service);
   const [error, setError] = useState<string | null>(null);
+
+  // FIX: Generate client-side idempotency key to prevent duplicate bookings on rapid clicks
+  const idempotencyKey = useMemo(() => crypto.randomUUID(), []);
 
   useEffect(() => {
     if (!service && serviceId) {
@@ -29,15 +32,13 @@ const BookServicePage: React.FC = () => {
       setLoading(true);
       setError(null);
 
-      // Use the correct search API endpoint to fetch service details
-      const response = await fetch(`${API_BASE_URL}/search/service/${serviceId}`);
+      // Use the searchApi service to fetch service details
+      const response = await searchApi.getServiceById(serviceId);
 
-      if (response.ok) {
-        const data = await response.json();
-        setService(data.data.service);
+      if (response.success) {
+        setService(response.data.service);
       } else {
-        const errorData = await response.json();
-        setError(errorData.message || 'Failed to fetch service details');
+        setError('Failed to fetch service details');
       }
     } catch (error) {
       console.error('Error fetching service:', error);
@@ -143,6 +144,7 @@ const BookServicePage: React.FC = () => {
       onSuccess={handleBookingSuccess}
       onCancel={handleCancel}
       guestMode={isGuest}
+      idempotencyKey={idempotencyKey}
     />
   );
 };

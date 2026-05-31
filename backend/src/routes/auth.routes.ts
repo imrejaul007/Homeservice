@@ -15,8 +15,9 @@ import {
   handleFileUploadError,
   uploadConfig
 } from '../middleware/validation.middleware';
-import { authLimiter, passwordResetLimiter, otpLimiter, twoFactorVerifyLimiter } from '../middleware/rateLimiter';
+import { authLimiter, passwordResetLimiter, otpLimiter, twoFactorVerifyLimiter, registrationLimiter } from '../middleware/rateLimiter';
 import { verifyCaptcha, getCaptchaSiteKey } from '../middleware/captcha.middleware';
+import { csrfMiddleware } from '../middleware/csrf.middleware';
 
 const router = express.Router();
 
@@ -29,14 +30,16 @@ router.get('/captcha-config', getCaptchaSiteKey);
 
 // Registration Routes
 router.post('/register/customer',
-  authLimiter,
+  registrationLimiter,
+  ...csrfMiddleware,
   verifyCaptcha({ required: true, skipIfDisabled: true }),
   validateCustomerRegistration,
   authController.registerCustomer
 );
 
 router.post('/register/provider',
-  authLimiter,
+  registrationLimiter,
+  ...csrfMiddleware,
   verifyCaptcha({ required: true, skipIfDisabled: true }),
   ...validateProviderRegistrationWithoutFiles,
   handleFileUploadError,
@@ -46,6 +49,7 @@ router.post('/register/provider',
 // Login Route
 router.post('/login',
   authLimiter,
+  ...csrfMiddleware,
   verifyCaptcha({ required: true, skipIfDisabled: true }),
   validateLogin,
   authController.login
@@ -54,6 +58,7 @@ router.post('/login',
 // Password Reset Routes
 router.post('/forgot-password',
   passwordResetLimiter,
+  ...csrfMiddleware,
   verifyCaptcha({ required: true, skipIfDisabled: true }),
   validateForgotPassword,
   authController.forgotPassword
@@ -61,6 +66,7 @@ router.post('/forgot-password',
 
 router.post('/reset-password',
   passwordResetLimiter,
+  ...csrfMiddleware,
   verifyCaptcha({ required: true, skipIfDisabled: true }),
   validateResetPassword,
   authController.resetPassword
@@ -69,6 +75,7 @@ router.post('/reset-password',
 // Email Verification Routes
 router.post('/verify-email',
   otpLimiter,
+  ...csrfMiddleware,
   verifyCaptcha({ required: false, skipIfDisabled: true }),
   validateEmailVerification,
   authController.verifyEmail
@@ -76,6 +83,7 @@ router.post('/verify-email',
 
 router.post('/resend-verification',
   otpLimiter,
+  ...csrfMiddleware,
   verifyCaptcha({ required: true, skipIfDisabled: true }),
   validateResendVerification,
   authController.resendVerificationEmail

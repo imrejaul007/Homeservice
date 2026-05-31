@@ -138,7 +138,7 @@ const FavoritesPage: React.FC = () => {
                           />
                         ) : (
                           <div className="w-16 h-16 rounded-full bg-gradient-to-br from-nilin-coral to-nilin-rose flex items-center justify-center text-white text-xl font-medium">
-                            {favorite.provider?.firstName?.[0]}{favorite.provider?.lastName?.[0]}
+                            {favorite.provider?.firstName?.[0] ?? ''}{favorite.provider?.lastName?.[0] ?? ''}
                           </div>
                         )}
                         {/* Rating Badge */}

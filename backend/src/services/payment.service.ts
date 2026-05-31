@@ -11,6 +11,7 @@ import { circuitBreaker, CIRCUIT_NAMES, withCircuitBreaker, createCircuitBreaker
 import { withRetry, withTimeout, retryConfigs } from '../utils/retry.util';
 import { getPaymentFallbackState, queuePaymentRetry } from './fallback.service';
 import { Money } from '../domain/value-objects/money';
+import { sendPaymentReceiptEmail } from './email.service';
 
 /**
  * Map Stripe decline codes to user-friendly error messages for customers
@@ -466,6 +467,19 @@ interface RefundResult {
 
 /**
  * Create a payment intent for a booking with circuit breaker, retry, and idempotency
+ *
+ * IMPLEMENTATION STATUS: This function IS IMPLEMENTED and uses real Stripe API calls.
+ * - Creates Stripe PaymentIntent with proper currency conversion (amounts in cents)
+ * - Uses circuit breaker pattern for fault tolerance
+ * - Implements idempotency to prevent duplicate charges
+ * - Stores payment intent ID on booking record
+ *
+ * REMAINING WORK for production:
+ * 1. Integrate with frontend payment flow (collect card details via Stripe Elements)
+ * 2. Handle webhook events for async payment confirmation
+ * 3. Implement 3D Secure authentication for additional security
+ * 4. Add support for multiple currencies with dynamic conversion
+ * 5. Implement dispute/chargeback handling
  */
 export const createPaymentIntent = async (
   bookingId: string,
@@ -888,6 +902,46 @@ export const handleWebhookEvent = async (event: Stripe.Event): Promise<{ handled
           booking.payment.status = 'completed';
           booking.payment.paidAt = new Date();
           await booking.save();
+
+          // Send payment receipt email to customer
+          try {
+            const populatedBooking = await Booking.findById(booking._id)
+              .populate('customerId', 'firstName lastName email')
+              .populate('providerId', 'firstName lastName')
+              .populate('serviceId', 'name') as any;
+
+            if (populatedBooking?.customerId) {
+              const customer = populatedBooking.customerId as any;
+              const provider = populatedBooking.providerId as any;
+              const service = populatedBooking.serviceId as any;
+
+              await sendPaymentReceiptEmail({
+                bookingId: populatedBooking._id.toString(),
+                bookingNumber: populatedBooking.bookingNumber,
+                customerName: `${customer.firstName} ${customer.lastName}`,
+                customerEmail: customer.email,
+                providerName: provider ? `${provider.firstName} ${provider.lastName}` : 'Provider',
+                serviceName: service?.name || populatedBooking.serviceName || 'Service',
+                scheduledDate: populatedBooking.scheduledDate.toISOString(),
+                scheduledTime: populatedBooking.scheduledTime,
+                totalAmount: populatedBooking.pricing.totalAmount,
+                currency: populatedBooking.pricing.currency || 'AED',
+                transactionId: paymentIntent.id,
+                paidAt: new Date(),
+              });
+
+              logger.info('Payment receipt email sent', {
+                bookingId: booking._id,
+                customerEmail: customer.email,
+              });
+            }
+          } catch (emailError) {
+            // Log but don't fail the webhook - email failure shouldn't block payment confirmation
+            logger.error('Failed to send payment receipt email', {
+              bookingId: booking._id,
+              error: (emailError as Error).message,
+            });
+          }
 
           logger.info('Webhook: Payment succeeded', {
             bookingId: booking._id,

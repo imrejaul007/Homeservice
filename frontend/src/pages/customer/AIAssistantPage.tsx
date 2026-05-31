@@ -1,9 +1,52 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowLeft, Sparkles, MessageCircle, Lightbulb, Zap, Calendar, Search } from 'lucide-react';
-import AIChatWidget from '../../components/home/AIChatWidget';
+import { ArrowLeft, Sparkles, MessageCircle, Lightbulb, Zap, Calendar, Search, Bot } from 'lucide-react';
+import { toast } from 'react-hot-toast';
 
 const AIAssistantPage: React.FC = () => {
+  const [input, setInput] = useState<string>('');
+  const [messages, setMessages] = useState<Array<{id: string; role: 'user' | 'assistant'; content: string; timestamp: Date}>>([
+    { id: '1', role: 'assistant', content: "Hi! I'm your NILIN AI assistant. How can I help you today?", timestamp: new Date() }
+  ]);
+
+  const handleSendMessage = async (content: string) => {
+    if (!content.trim()) return;
+
+    const userMessage = {
+      id: Date.now().toString(),
+      role: 'user' as const,
+      content: content.trim(),
+      timestamp: new Date()
+    };
+
+    setMessages(prev => [...prev, userMessage]);
+    setInput('');
+
+    try {
+      const response = await fetch('/api/ai/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: content })
+      });
+
+      if (!response.ok) throw new Error('Failed to get response');
+
+      const data = await response.json();
+
+      const assistantMessage = {
+        id: (Date.now() + 1).toString(),
+        role: 'assistant' as const,
+        content: data.message || "I'm sorry, I couldn't process your request.",
+        timestamp: new Date()
+      };
+
+      setMessages(prev => [...prev, assistantMessage]);
+    } catch (error) {
+      toast.error('Failed to send message');
+      setMessages(prev => prev.filter(m => m.id !== userMessage.id));
+    }
+  };
+
   const quickQuestions = [
     { icon: Calendar, text: 'Book a cleaning service', query: 'I need a cleaning service' },
     { icon: Search, text: 'Find massage near me', query: 'massage services nearby' },
@@ -35,14 +78,7 @@ const AIAssistantPage: React.FC = () => {
             <button
               key={index}
               className="bg-white rounded-xl p-4 shadow-sm flex flex-col items-center gap-2 hover:shadow-md transition-shadow"
-              onClick={() => {
-                // Scroll to chat input
-                const input = document.getElementById('ai-chat-input');
-                if (input) {
-                  (input as HTMLInputElement).value = item.query;
-                  input.scrollIntoView({ behavior: 'smooth' });
-                }
-              }}
+              onClick={() => handleSendMessage(item.query)}
             >
               <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center">
                 <item.icon className="w-5 h-5 text-indigo-600" />
@@ -70,14 +106,21 @@ const AIAssistantPage: React.FC = () => {
 
           {/* Chat messages area */}
           <div className="h-64 p-4 overflow-y-auto">
-            <div className="flex gap-3 mb-4">
-              <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center flex-shrink-0">
-                <Sparkles className="w-4 h-4 text-indigo-600" />
+            {messages.map((msg) => (
+              <div key={msg.id} className={`flex gap-3 mb-4 ${msg.role === 'user' ? 'justify-end' : ''}`}>
+                {msg.role === 'assistant' && (
+                  <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center flex-shrink-0">
+                    <Bot className="w-4 h-4 text-indigo-600" />
+                  </div>
+                )}
+                <div className={`p-3 rounded-2xl max-w-[80%] ${msg.role === 'user' ? 'bg-indigo-500 text-white rounded-tr-none' : 'bg-gray-100 rounded-tl-none'}`}>
+                  <p className="text-sm">{msg.content}</p>
+                  <span className={`text-xs ${msg.role === 'user' ? 'text-white/70' : 'text-gray-500'}`}>
+                    {msg.timestamp.toLocaleTimeString()}
+                  </span>
+                </div>
               </div>
-              <div className="bg-gray-100 rounded-2xl rounded-tl-none p-3 max-w-[80%]">
-                <p className="text-sm">Hi! I'm your NILIN AI assistant. How can I help you today?</p>
-              </div>
-            </div>
+            ))}
           </div>
 
           {/* Chat Input */}
@@ -86,10 +129,21 @@ const AIAssistantPage: React.FC = () => {
               <input
                 id="ai-chat-input"
                 type="text"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSendMessage(input);
+                  }
+                }}
                 placeholder="Ask me anything..."
                 className="flex-1 px-4 py-3 bg-gray-100 rounded-full outline-none focus:ring-2 focus:ring-indigo-200"
               />
-              <button className="w-12 h-12 bg-indigo-500 text-white rounded-full flex items-center justify-center hover:bg-indigo-600 transition-colors">
+              <button
+                onClick={() => handleSendMessage(input)}
+                className="w-12 h-12 bg-indigo-500 text-white rounded-full flex items-center justify-center hover:bg-indigo-600 transition-colors"
+              >
                 <MessageCircle className="w-5 h-5" />
               </button>
             </div>
@@ -104,6 +158,7 @@ const AIAssistantPage: React.FC = () => {
           {['Best cleaning service?', 'How to save on booking?', 'Recommend a spa'].map((suggestion, i) => (
             <button
               key={i}
+              onClick={() => handleSendMessage(suggestion)}
               className="px-3 py-1.5 bg-gray-100 rounded-full text-xs text-gray-600 hover:bg-gray-200"
             >
               {suggestion}

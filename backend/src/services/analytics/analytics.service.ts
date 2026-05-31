@@ -228,26 +228,36 @@ export const getProviderAnalytics = async (period: string = 'month', req?: Reque
       userMatch.tenantId = tenantId;
     }
 
-    const [totalProviders, providersByRole] = await Promise.all([
-      User.countDocuments(userMatch),
-      User.aggregate([
-        { $match: userMatch },
-        {
-          $lookup: {
-            from: 'providerprofiles',
-            localField: '_id',
-            foreignField: 'userId',
-            as: 'profile',
+    // FIX: Single aggregation pipeline instead of multiple queries (N+1 fix)
+    const providerStats = await User.aggregate([
+      { $match: userMatch },
+      {
+        $lookup: {
+          from: 'providerprofiles',
+          localField: '_id',
+          foreignField: 'userId',
+          as: 'profile',
+        },
+      },
+      { $unwind: { path: '$profile', preserveNullAndEmptyArrays: true } },
+      {
+        $lookup: {
+          from: 'services',
+          localField: '_id',
+          foreignField: 'provider',
+          as: 'services',
+        },
+      },
+      {
+        $group: {
+          _id: '$profile.verificationStatus',
+          count: { $sum: 1 },
+          avgRating: { $avg: '$profile.rating.average' },
+          newCount: {
+            $sum: { $cond: [{ $gte: ['$createdAt', startOfMonth] }, 1, 0] }
           },
         },
-        { $unwind: '$profile' },
-        {
-          $group: {
-            _id: '$profile.verificationStatus',
-            count: { $sum: 1 },
-          },
-        },
-      ]),
+      },
     ]);
 
     const providersByStatus = {
@@ -257,47 +267,64 @@ export const getProviderAnalytics = async (period: string = 'month', req?: Reque
       suspended: 0,
     };
 
-    providersByRole.forEach((group: any) => {
+    let totalProviders = 0;
+    let newProvidersThisMonth = 0;
+
+    providerStats.forEach((group: any) => {
+      totalProviders += group.count;
+      newProvidersThisMonth += group.newCount || 0;
       if (group._id === 'pending') providersByStatus.pending = group.count;
       else if (group._id === 'approved') providersByStatus.approved = group.count;
       else if (group._id === 'rejected') providersByStatus.rejected = group.count;
       else if (group._id === 'suspended') providersByStatus.suspended = group.count;
     });
 
-    const newProvidersQuery: any = { ...userMatch, createdAt: { $gte: startOfMonth } };
-    const [newProviders, topRated] = await Promise.all([
-      User.countDocuments(newProvidersQuery),
-      User.aggregate([
-        { $match: userMatch },
-        {
-          $lookup: {
-            from: 'services',
-            localField: '_id',
-            foreignField: 'provider',
-            as: 'services',
-          },
+    // FIX: Single query for top rated using service aggregation instead of nested queries
+    const topRated = await Booking.aggregate([
+      { $match: { status: 'completed' } },
+      {
+        $group: {
+          _id: '$providerId',
+          totalBookings: { $sum: 1 },
         },
-        { $unwind: '$services' },
-        {
-          $group: {
-            _id: '$_id',
-            name: { $first: '$firstName' },
-            rating: { $avg: '$services.rating.average' },
-            totalBookings: { $sum: '$services.totalBookings' },
-          },
+      },
+      {
+        $lookup: {
+          from: 'users',
+          localField: '_id',
+          foreignField: '_id',
+          as: 'user',
         },
-        { $sort: { rating: -1 } },
-        { $limit: 10 },
-      ]),
+      },
+      { $unwind: { path: '$user', preserveNullAndEmptyArrays: true } },
+      {
+        $lookup: {
+          from: 'providerprofiles',
+          localField: '_id',
+          foreignField: 'userId',
+          as: 'profile',
+        },
+      },
+      { $unwind: { path: '$profile', preserveNullAndEmptyArrays: true } },
+      {
+        $project: {
+          _id: 1,
+          name: { $ifNull: ['$user.firstName', 'Unknown'] },
+          rating: { $ifNull: ['$profile.rating.average', 0] },
+          totalBookings: 1,
+        },
+      },
+      { $sort: { totalBookings: -1 } },
+      { $limit: 10 },
     ]);
 
     return {
       totalProviders,
       activeProviders: providersByStatus.approved,
-      newProvidersThisMonth: newProviders,
+      newProvidersThisMonth,
       topRatedProviders: topRated.map((p: any) => ({
         id: p._id.toString(),
-        name: `${p.name}`,
+        name: p.name,
         rating: p.rating || 0,
         totalBookings: p.totalBookings || 0,
       })),
@@ -613,15 +640,33 @@ export const getServiceAnalytics = async (req?: Request): Promise<ServiceAnalyti
   }, ttl);
 };
 
-// Clear analytics cache
+// Clear analytics cache using SCAN (non-blocking)
 export const clearAnalyticsCache = async (): Promise<void> => {
   try {
-    const keys = await cache.keys('analytics:*');
-    if (keys.length > 0) {
-      await cache.del(...keys);
-    }
+    const client = cache.client;
+    if (!client) return;
+
+    let cursor = 0;
+    let deletedCount = 0;
+
+    do {
+      const [nextCursor, keys] = await client.scan(
+        cursor,
+        'MATCH',
+        'analytics:*',
+        'COUNT',
+        100
+      );
+      cursor = parseInt(nextCursor, 10);
+
+      if (keys.length > 0) {
+        await client.del(...keys);
+        deletedCount += keys.length;
+      }
+    } while (cursor !== 0);
+
     logger.info('Analytics cache cleared', {
-      keysDeleted: keys.length,
+      keysDeleted: deletedCount,
       action: 'ANALYTICS_CACHE_CLEARED',
     });
   } catch (error) {

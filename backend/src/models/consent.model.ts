@@ -3,6 +3,9 @@ import mongoose, { Schema, Document } from 'mongoose';
 export type ConsentType = 'terms' | 'privacy' | 'marketing' | 'cookies' | 'data_processing';
 
 export interface IConsent extends Document {
+  // Multi-tenant support
+  tenantId?: mongoose.Types.ObjectId;
+
   userId: mongoose.Types.ObjectId;
   type: ConsentType;
   granted: boolean;
@@ -21,6 +24,13 @@ export interface IConsent extends Document {
 
 const consentSchema = new Schema<IConsent>(
   {
+    // Multi-tenant support
+    tenantId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Tenant',
+      index: true
+    },
+
     userId: {
       type: Schema.Types.ObjectId,
       ref: 'User',
@@ -92,6 +102,9 @@ consentSchema.index({ userId: 1, granted: 1 });
 consentSchema.index({ type: 1, version: 1 });
 consentSchema.index({ timestamp: -1 });
 consentSchema.index({ withdrawalDate: 1 });
+
+// Tenant isolation indexes
+consentSchema.index({ tenantId: 1, userId: 1 });
 
 const Consent = mongoose.model<IConsent>('Consent', consentSchema);
 

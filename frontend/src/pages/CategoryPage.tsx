@@ -6,6 +6,7 @@ import Footer from '../components/layout/Footer';
 import { useCategory } from '../hooks/useCategories';
 import SubcategoryCard from '../components/category/SubcategoryCard';
 import { CATEGORY_IMAGES } from '../constants/images';
+import { PageErrorBoundary } from '../components/common/PageErrorBoundary';
 
 // Loading skeleton
 const CategoryPageSkeleton: React.FC = () => (
@@ -135,32 +136,34 @@ const CategoryPage: React.FC = () => {
         </div>
 
         {/* Subcategory Grid */}
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8 md:py-10">
-          <h2 className="text-lg md:text-xl font-bold text-nilin-charcoal mb-6 animate-nilin-in" style={{animationDelay: '0.2s'}}>
-            Choose a service
-          </h2>
+        <PageErrorBoundary pageName={`${category.name} Category`}>
+          <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8 md:py-10">
+            <h2 className="text-lg md:text-xl font-bold text-nilin-charcoal mb-6 animate-nilin-in" style={{animationDelay: '0.2s'}}>
+              Choose a service
+            </h2>
 
-          {subcategories.length > 0 ? (
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-4 md:gap-5">
-              {subcategories.map((subcategory: any, index: number) => (
-                <div key={subcategory.slug} className="animate-nilin-in hover-lift" style={{animationDelay: `${0.2 + index * 0.05}s`}}>
-                  <SubcategoryCard
-                    subcategory={subcategory}
-                    categorySlug={slug}
-                    onClick={() => handleSubcategoryClick(subcategory.slug)}
-                  />
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="glass-nilin rounded-nilin p-12 text-center shadow-nilin animate-nilin-in">
-              <div className="w-16 h-16 rounded-nilin bg-gradient-to-br from-nilin-blush to-nilin-coral flex items-center justify-center mx-auto mb-4">
-                <Folder className="w-8 h-8 text-white" />
+            {subcategories.length > 0 ? (
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-4 md:gap-5">
+                {subcategories.map((subcategory: any, index: number) => (
+                  <div key={subcategory.slug} className="animate-nilin-in hover-lift" style={{animationDelay: `${0.2 + index * 0.05}s`}}>
+                    <SubcategoryCard
+                      subcategory={subcategory}
+                      categorySlug={slug}
+                      onClick={() => handleSubcategoryClick(subcategory.slug)}
+                    />
+                  </div>
+                ))}
               </div>
-              <p className="text-nilin-warmGray">No services available in this category yet.</p>
-            </div>
-          )}
-        </div>
+            ) : (
+              <div className="glass-nilin rounded-nilin p-12 text-center shadow-nilin animate-nilin-in">
+                <div className="w-16 h-16 rounded-nilin bg-gradient-to-br from-nilin-blush to-nilin-coral flex items-center justify-center mx-auto mb-4">
+                  <Folder className="w-8 h-8 text-white" />
+                </div>
+                <p className="text-nilin-warmGray">No services available in this category yet.</p>
+              </div>
+            )}
+          </div>
+        </PageErrorBoundary>
       </main>
 
       <Footer />

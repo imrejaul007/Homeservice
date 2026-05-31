@@ -1,6 +1,9 @@
 import mongoose, { Schema, Document } from 'mongoose';
 
 export interface ISubscription extends Document {
+  // Multi-tenant support
+  tenantId?: mongoose.Types.ObjectId;
+
   providerId: mongoose.Types.ObjectId;
   plan: 'basic' | 'standard' | 'premium' | 'enterprise';
   status: 'active' | 'paused' | 'cancelled' | 'trial' | 'expired';
@@ -134,6 +137,13 @@ export const PLAN_PRICES = {
 
 const subscriptionSchema = new Schema<ISubscription>(
   {
+    // Multi-tenant support
+    tenantId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Tenant',
+      index: true
+    },
+
     providerId: {
       type: Schema.Types.ObjectId,
       ref: 'User',
@@ -261,6 +271,10 @@ subscriptionSchema.index({
   autoRenew: 1,
   nextBillingDate: 1
 });
+
+// Tenant isolation indexes
+subscriptionSchema.index({ tenantId: 1, status: 1 });
+subscriptionSchema.index({ tenantId: 1, providerId: 1 });
 
 const Subscription = mongoose.model<ISubscription>('Subscription', subscriptionSchema);
 

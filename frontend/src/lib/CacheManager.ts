@@ -55,6 +55,8 @@ class CacheManagerService {
   private config: CacheConfig;
   private stats: CacheStats;
   private estimatedSize: number = 0;
+  // Max access order array size to prevent memory leak (MAJOR PERFORMANCE FIX)
+  private static readonly MAX_ACCESS_ORDER_SIZE = 1000;
 
   private constructor(options: CacheOptions = {}) {
     this.cache = new Map();
@@ -191,8 +193,12 @@ class CacheManagerService {
     this.cache.set(key, entry);
     this.estimatedSize += size;
 
-    // Update access order
+    // Update access order - with bounds checking (MAJOR PERFORMANCE FIX)
     if (this.config.enableLRU) {
+      // Prevent unbounded growth during bulk operations
+      if (this.accessOrder.length >= CacheManagerService.MAX_ACCESS_ORDER_SIZE) {
+        this.rebuildAccessOrder();
+      }
       this.accessOrder.push(key);
     }
 
@@ -352,13 +358,37 @@ class CacheManagerService {
 
   /**
    * Update access order for LRU
+   * Uses circular buffer pattern to prevent unbounded memory growth
    */
   private updateAccessOrder(key: string): void {
     const index = this.accessOrder.indexOf(key);
     if (index !== -1) {
       this.accessOrder.splice(index, 1);
     }
+
+    // Prevent unbounded growth: if accessOrder is too large, trim oldest entries
+    // that are no longer in the cache
+    if (this.accessOrder.length >= CacheManagerService.MAX_ACCESS_ORDER_SIZE) {
+      this.rebuildAccessOrder();
+    }
+
     this.accessOrder.push(key);
+  }
+
+  /**
+   * Rebuild access order from actual cache keys
+   * Called when accessOrder array grows too large
+   */
+  private rebuildAccessOrder(): void {
+    // Keep only keys that still exist in cache, maintain relative order
+    const validKeys: string[] = [];
+    for (const key of this.accessOrder) {
+      if (this.cache.has(key)) {
+        validKeys.push(key);
+      }
+    }
+    // Keep at most half the max size to prevent frequent rebuilds
+    this.accessOrder = validKeys.slice(-Math.floor(CacheManagerService.MAX_ACCESS_ORDER_SIZE / 2));
   }
 
   /**

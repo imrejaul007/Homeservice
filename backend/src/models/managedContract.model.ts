@@ -1,6 +1,39 @@
 import mongoose, { Schema, Document } from 'mongoose';
 
 // ============================================
+// COUNTER MODEL FOR ATOMIC NUMBER GENERATION
+// ============================================
+
+// Counter document interface - _id is string (not ObjectId)
+interface ICounterDoc {
+  _id: string;
+  seq: number;
+}
+
+const counterSchema = new Schema<ICounterDoc>({
+  _id: { type: String, required: true },
+  seq: { type: Number, default: 0 },
+});
+
+// Ensure compound index for counter queries
+counterSchema.index({ _id: 1 });
+
+const Counter = mongoose.model<ICounterDoc>('ContractCounter', counterSchema);
+
+/**
+ * Atomic counter for contract numbers using findOneAndUpdate with $inc
+ * This prevents race conditions when multiple contracts are created simultaneously
+ */
+async function getNextContractSequenceValue(sequenceName: string): Promise<number> {
+  const result = await Counter.findOneAndUpdate(
+    { _id: sequenceName },
+    { $inc: { seq: 1 } },
+    { new: true, upsert: true, returnDocument: 'after' }
+  );
+  return result.seq;
+}
+
+// ============================================
 // Type Definitions
 // ============================================
 
@@ -377,16 +410,19 @@ managedContractSchema.index({ endDate: 1, status: 1 });
 
 // ============================================
 // Helper function to generate contract number
+// FIX: Use atomic counter instead of random + while loop
 // ============================================
 
 const generateContractNumber = async (): Promise<string> => {
   const date = new Date();
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
-  const random = Math.floor(Math.random() * 10000)
-    .toString()
-    .padStart(4, '0');
-  return `MC-${year}${month}-${random}`;
+
+  // Use atomic counter for sequential numbering
+  const counterKey = `managed-contract-${year}${month}`;
+  const sequenceNumber = await getNextContractSequenceValue(counterKey);
+
+  return `MC-${year}${month}-${String(sequenceNumber).padStart(6, '0')}`;
 };
 
 // ============================================
@@ -395,22 +431,8 @@ const generateContractNumber = async (): Promise<string> => {
 
 managedContractSchema.pre('save', async function (next) {
   if (this.isNew && !this.contractNumber) {
-    let contractNumber = await generateContractNumber();
-    // Ensure uniqueness
-    let exists = await mongoose
-      .model('ManagedContract')
-      .findOne({ contractNumber })
-      .lean();
-
-    while (exists) {
-      contractNumber = await generateContractNumber();
-      exists = await mongoose
-        .model('ManagedContract')
-        .findOne({ contractNumber })
-        .lean();
-    }
-
-    this.contractNumber = contractNumber;
+    // Generate contract number - atomic, no race condition
+    this.contractNumber = await generateContractNumber();
   }
   next();
 });

@@ -44,8 +44,8 @@
     <domain-config cleartextTrafficPermitted="false">
         <domain includeSubdomains="true">api.nilin.app</domain>
         <domain includeSubdomains="true">nilin.app</domain>
+        <domain includeSubdomains="true">homeservice-1.onrender.com</domain>
         <domain includeSubdomains="true">homeservice-9mcs.onrender.com</domain>
-        <domain includeSubdomains="true">render.com</domain>
 
         <!--
           Certificate pinning configuration

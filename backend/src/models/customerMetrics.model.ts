@@ -114,6 +114,11 @@ export interface ICustomerMetrics extends Document {
   riskLevel: 'low' | 'medium' | 'high' | 'critical';
   riskFactors: string[];
 
+  // Security extensions used by fraud/breach services
+  fraudFlags?: Array<string | Record<string, unknown>>;
+  securityFlags?: Array<{ type: string; detectedAt: Date; resolved?: boolean; severity?: string; resolvedAt?: Date; description?: string }>;
+  passwordCompromised?: boolean;
+
   // Timestamps
   createdAt: Date;
   updatedAt: Date;

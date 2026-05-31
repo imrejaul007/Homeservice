@@ -2,11 +2,51 @@ import mongoose, { Document, Schema, Model } from 'mongoose';
 import { Types } from 'mongoose';
 import { ApiError, ERROR_CODES } from '../utils/ApiError';
 
+// ===================================
+// COUNTER MODEL FOR ATOMIC NUMBER GENERATION
+// ===================================
+
+// Counter document interface - _id is string (not ObjectId)
+interface ICounterDoc {
+  _id: string;
+  seq: number;
+}
+
+const counterSchema = new Schema<ICounterDoc>({
+  _id: { type: String, required: true },
+  seq: { type: Number, default: 0 },
+});
+
+// Ensure compound index for counter queries
+counterSchema.index({ _id: 1 });
+
+const Counter = mongoose.model<ICounterDoc>('PayoutCounter', counterSchema);
+
+/**
+ * Atomic counter for payout numbers using findOneAndUpdate with $inc
+ * This prevents race conditions when multiple payouts are created simultaneously
+ */
+async function getNextPayoutSequenceValue(sequenceName: string): Promise<number> {
+  const result = await Counter.findOneAndUpdate(
+    { _id: sequenceName },
+    { $inc: { seq: 1 } },
+    { new: true, upsert: true, returnDocument: 'after' }
+  );
+  return result.seq;
+}
+
 export interface IPayout extends Document {
   _id: Types.ObjectId;
+
+  // Multi-tenant support
+  tenantId?: Types.ObjectId;
+
   payoutNumber: string;
   providerId: Types.ObjectId;
   settlementId?: Types.ObjectId;
+
+  // Booking IDs that contributed to this payout (for traceability)
+  bookingIds: Types.ObjectId[];
 
   // Amount information
   amount: number;
@@ -34,6 +74,7 @@ export interface IPayout extends Document {
   // Scheduling
   scheduledDate: Date;
   processedDate?: Date;
+  processedAt?: Date;
 
   // Failure tracking
   failures: Array<{
@@ -67,6 +108,9 @@ export interface IPayout extends Document {
   processedBy?: Types.ObjectId;
   notes?: string;
 
+  // Idempotency support
+  idempotencyKey?: string;
+
   // Virtual
   isRetryable: boolean;
   canBeCancelled: boolean;
@@ -83,6 +127,7 @@ export interface IPayout extends Document {
 export interface PayoutModel extends Model<IPayout> {
   findDuePayouts(batchSize?: number): Promise<IPayout[]>;
   findRetriablePayouts(batchSize?: number): Promise<IPayout[]>;
+  findByIdempotencyKey(idempotencyKey: string): Promise<IPayout | null>;
 }
 
 interface PayoutMethod {
@@ -92,6 +137,13 @@ interface PayoutMethod {
 
 const payoutSchema = new Schema<IPayout>(
   {
+    // Multi-tenant support
+    tenantId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Tenant',
+      index: true,
+    },
+
     payoutNumber: {
       type: String,
       unique: true,
@@ -111,6 +163,12 @@ const payoutSchema = new Schema<IPayout>(
       ref: 'Settlement',
       index: true,
     },
+
+    // Booking IDs that contributed to this payout (for traceability)
+    bookingIds: [{
+      type: Schema.Types.ObjectId,
+      ref: 'Booking',
+    }],
 
     amount: {
       type: Number,
@@ -160,6 +218,10 @@ const payoutSchema = new Schema<IPayout>(
     },
 
     processedDate: {
+      type: Date,
+    },
+
+    processedAt: {
       type: Date,
     },
 
@@ -239,6 +301,15 @@ const payoutSchema = new Schema<IPayout>(
     },
 
     notes: String,
+
+    // Idempotency key for preventing duplicate processing
+    // FIX: Added unique constraint to prevent duplicate idempotency keys
+    idempotencyKey: {
+      type: String,
+      index: true,
+      sparse: true, // Only index non-null values
+      unique: true, // Prevents duplicate idempotency keys
+    },
   },
   {
     timestamps: true,
@@ -253,6 +324,7 @@ const payoutSchema = new Schema<IPayout>(
 
 // Query optimization indexes
 payoutSchema.index({ providerId: 1, status: 1, scheduledDate: 1 });
+payoutSchema.index({ providerId: 1, status: 1 }); // For provider payout status queries
 payoutSchema.index({ status: 1, scheduledDate: 1 });
 payoutSchema.index({ providerId: 1, createdAt: -1 });
 
@@ -261,6 +333,16 @@ payoutSchema.index({ status: 1, nextRetryDate: 1 });
 
 // Provider payout history
 payoutSchema.index({ providerId: 1, processedDate: -1 });
+
+// Tenant isolation indexes
+payoutSchema.index({ tenantId: 1, providerId: 1 });
+payoutSchema.index({ tenantId: 1, status: 1 });
+
+// Idempotency key index for duplicate detection
+payoutSchema.index({ idempotencyKey: 1, status: 1 });
+
+// FIX: Add index for processedAt for date-range queries
+payoutSchema.index({ processedAt: 1 });
 
 // ===================================
 // VIRTUAL PROPERTIES
@@ -283,23 +365,21 @@ payoutSchema.virtual('canBeCancelled').get(function() {
 // INSTANCE METHODS
 // ===================================
 
-// Generate unique payout number
+// Generate unique payout number using atomic counter
+// FIX: Use findOneAndUpdate with $inc to prevent race conditions
 payoutSchema.methods.generatePayoutNumber = async function(): Promise<string> {
   const date = new Date();
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
 
-  // Count payouts for the day
-  const startOfDay = new Date(year, date.getMonth(), date.getDate());
-  const endOfDay = new Date(year, date.getMonth(), date.getDate() + 1);
+  // Create a unique counter key for each day (e.g., "payout-20240528")
+  const counterKey = `payout-${year}${month}${day}`;
 
-  const todayPayoutsCount = await mongoose.model('Payout').countDocuments({
-    createdAt: { $gte: startOfDay, $lt: endOfDay },
-  });
+  // Atomic increment - no race condition possible
+  const sequenceNumber = await getNextPayoutSequenceValue(counterKey);
 
-  const sequenceNumber = String(todayPayoutsCount + 1).padStart(4, '0');
-  return `PYT-${year}${month}${day}-${sequenceNumber}`;
+  return `PYT-${year}${month}${day}-${String(sequenceNumber).padStart(4, '0')}`;
 };
 
 // Add failure record
@@ -307,6 +387,11 @@ payoutSchema.methods.addFailure = async function(
   reason: string,
   errorCode?: string
 ): Promise<void> {
+  // State validation: cannot fail a completed or cancelled payout
+  if (this.status === 'completed' || this.status === 'cancelled') {
+    throw new Error('Cannot fail a completed or cancelled payout');
+  }
+
   this.currentRetryCount += 1;
   this.failures.push({
     reason,
@@ -330,6 +415,11 @@ payoutSchema.methods.addFailure = async function(
 
 // Mark as processing
 payoutSchema.methods.markAsProcessing = async function(processedBy?: Types.ObjectId): Promise<void> {
+  // State validation: payout must be pending, scheduled, or failed
+  if (!['pending', 'scheduled', 'failed'].includes(this.status)) {
+    throw new Error('Payout must be pending, scheduled, or failed to start processing');
+  }
+
   this.status = 'processing';
   this.processedBy = processedBy;
   await this.save();
@@ -340,6 +430,11 @@ payoutSchema.methods.markAsCompleted = async function(
   stripePayoutId?: string,
   processedBy?: Types.ObjectId
 ): Promise<void> {
+  // State validation: payout must be processing before completion
+  if (this.status !== 'processing') {
+    throw new Error('Payout must be processing before completion');
+  }
+
   this.status = 'completed';
   this.processedDate = new Date();
   this.processedBy = processedBy;
@@ -424,6 +519,17 @@ payoutSchema.statics.getProviderPayoutSummary = async function(
     };
     return acc;
   }, {} as Record<string, { count: number; totalAmount: number }>);
+};
+
+// Find payout by idempotency key (for duplicate detection)
+payoutSchema.statics.findByIdempotencyKey = async function(
+  this: Model<IPayout>,
+  idempotencyKey: string
+): Promise<IPayout | null> {
+  return this.findOne({
+    idempotencyKey,
+    status: { $in: ['processing', 'completed'] },
+  });
 };
 
 // ===================================

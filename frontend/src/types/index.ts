@@ -11,6 +11,9 @@ export * from './location.types';
 export * from './provider';
 export * from './service';
 
+// Chat Types
+export * from './chat';
+
 // Offer types (exclude ApiResponse to avoid conflict)
 export type { Offer, ClaimedOffer, ClaimResponse, ValidationResult } from './offer';
 import type { Offer, ClaimedOffer, ClaimResponse, ValidationResult } from './offer';

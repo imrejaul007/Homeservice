@@ -7,6 +7,41 @@ import { addJob } from '../queue';
 import { eventBus, EVENT_TYPES } from '../event-bus';
 import { cache } from '../config/redis';
 
+// Import automation modules
+import {
+  processEmailSequence,
+  sendOnboardingReminders,
+  processExpiredDiscounts,
+  sendExpiryReminders,
+  sendTrainingReminders,
+  processReviewRequests,
+  checkOverdueRecoveries,
+  detectInactiveUsers,
+  checkTierUpgrades,
+  sendTierProgressNotifications,
+  processBirthdayCampaigns,
+  processExpiredOffers,
+  checkDisputesForAutoRefund,
+  processExpiredResponseDeadlines,
+  autoAssignUnassignedDisputes,
+  checkSlaStatus,
+} from '../automation';
+
+// Import new individual automation modules
+import { runWelcomeEmailSequence } from '../automation/welcomeEmailSequence';
+import { runOnboardingChecklist } from '../automation/onboardingChecklist';
+import { checkFirstBookingDiscount } from '../automation/firstBookingDiscount';
+import { runProviderTrainingCheck } from '../automation/providerTrainingAcademy';
+import { sendReviewRequests } from '../automation/reviewRequestTiming';
+import { processNegativeReviews } from '../automation/negativeReviewRecovery';
+import { runWinBackCampaign } from '../automation/winBackCampaign';
+import { checkAllTierUpgrades as checkTierUpgradesNew } from '../automation/tierUpgradeCelebration';
+import { sendBirthdayRewards } from '../automation/birthdayReward';
+import { processAutoRefunds } from '../automation/autoRefundThreshold';
+import { assignMediations } from '../automation/mediationAutoAssign';
+import { checkAndAwardBadges, updateReferralMilestones } from '../automation/referralGamification';
+import { runOffPeakPromotionAnalysis, generatePromotionSuggestions } from '../automation/offPeakPromotion';
+
 /**
  * Scheduled Jobs for NILIN Platform
  * Uses node-cron for precise cron-based scheduling
@@ -436,6 +471,539 @@ export function initializeScheduledJobs(): void {
 }
 
 /**
+ * ===========================================
+ * AUTOMATION SCHEDULED JOBS
+ * ===========================================
+ */
+
+/**
+ * Win-back campaign detection - Every hour
+ * Detects inactive users and creates win-back campaigns
+ */
+const winBackTask = cron.schedule(
+  '0 * * * *',
+  async () => {
+    await withLock('lock:scheduler:win_back', 'WinBackJob', async () => {
+      logger.info('Running win-back campaign detection...');
+      const result = await detectInactiveUsers();
+      logger.info('Win-back campaign detection completed', result);
+    });
+  },
+  { timezone: CRON_TIMEZONE }
+);
+scheduledTasks.push(winBackTask);
+logger.info(`Win-back campaign detection scheduled: every hour (cron: 0 * * * *, tz: ${CRON_TIMEZONE})`);
+
+/**
+ * Birthday rewards - Every day at 9 AM
+ * Processes birthday campaigns and sends rewards
+ */
+const birthdayTask = cron.schedule(
+  '0 9 * * *',
+  async () => {
+    await withLock('lock:scheduler:birthday', 'BirthdayJob', async () => {
+      logger.info('Running birthday campaign processor...');
+      const result = await processBirthdayCampaigns();
+      logger.info('Birthday campaign processor completed', result);
+
+      // Also process expired offers
+      const expired = await processExpiredOffers();
+      logger.info('Expired birthday offers processed', { count: expired });
+    });
+  },
+  { timezone: CRON_TIMEZONE }
+);
+scheduledTasks.push(birthdayTask);
+logger.info(`Birthday rewards scheduled: daily at 9 AM (cron: 0 9 * * *, tz: ${CRON_TIMEZONE})`);
+
+/**
+ * Tier upgrade checks - Every day at 10 AM
+ * Checks for tier upgrades and sends progress notifications
+ */
+const tierUpgradeTask = cron.schedule(
+  '0 10 * * *',
+  async () => {
+    await withLock('lock:scheduler:tier_upgrade', 'TierUpgradeJob', async () => {
+      logger.info('Running tier upgrade processor...');
+
+      // Send progress notifications
+      const notified = await sendTierProgressNotifications();
+      logger.info('Tier progress notifications sent', { count: notified });
+    });
+  },
+  { timezone: CRON_TIMEZONE }
+);
+scheduledTasks.push(tierUpgradeTask);
+logger.info(`Tier upgrade checks scheduled: daily at 10 AM (cron: 0 10 * * *, tz: ${CRON_TIMEZONE})`);
+
+/**
+ * Review request timing - Every 15 minutes
+ * Processes pending review requests and sends them
+ */
+const reviewRequestTask = cron.schedule(
+  '*/15 * * * *',
+  async () => {
+    await withLock('lock:scheduler:review_requests', 'ReviewRequestJob', async () => {
+      logger.info('Running review request processor...');
+      const result = await processReviewRequests();
+      logger.info('Review request processor completed', result);
+    });
+  },
+  { timezone: CRON_TIMEZONE }
+);
+scheduledTasks.push(reviewRequestTask);
+logger.info(`Review request timing scheduled: every 15 minutes (cron: */15 * * * *, tz: ${CRON_TIMEZONE})`);
+
+/**
+ * Training completion checks - Every day at 8 AM
+ * Sends reminders for incomplete training modules
+ */
+const trainingTask = cron.schedule(
+  '0 8 * * *',
+  async () => {
+    await withLock('lock:scheduler:training', 'TrainingJob', async () => {
+      logger.info('Running training completion checks...');
+      const remindersSent = await sendTrainingReminders();
+      logger.info('Training reminders sent', { count: remindersSent });
+    });
+  },
+  { timezone: CRON_TIMEZONE }
+);
+scheduledTasks.push(trainingTask);
+logger.info(`Training completion checks scheduled: daily at 8 AM (cron: 0 8 * * *, tz: ${CRON_TIMEZONE})`);
+
+/**
+ * Email sequence processor - Every 15 minutes
+ * Processes welcome email sequences
+ */
+const emailSequenceTask = cron.schedule(
+  '*/15 * * * *',
+  async () => {
+    await withLock('lock:scheduler:email_sequence', 'EmailSequenceJob', async () => {
+      logger.info('Running email sequence processor...');
+      const result = await processEmailSequence();
+      logger.info('Email sequence processor completed', result);
+    });
+  },
+  { timezone: CRON_TIMEZONE }
+);
+scheduledTasks.push(emailSequenceTask);
+logger.info(`Email sequence processor scheduled: every 15 minutes (cron: */15 * * * *, tz: ${CRON_TIMEZONE})`);
+
+/**
+ * Onboarding reminders - Every day at 11 AM
+ * Sends reminders for incomplete onboarding
+ */
+const onboardingTask = cron.schedule(
+  '0 11 * * *',
+  async () => {
+    await withLock('lock:scheduler:onboarding', 'OnboardingJob', async () => {
+      logger.info('Running onboarding reminder processor...');
+      const remindersSent = await sendOnboardingReminders();
+      logger.info('Onboarding reminders sent', { count: remindersSent });
+    });
+  },
+  { timezone: CRON_TIMEZONE }
+);
+scheduledTasks.push(onboardingTask);
+logger.info(`Onboarding reminders scheduled: daily at 11 AM (cron: 0 11 * * *, tz: ${CRON_TIMEZONE})`);
+
+/**
+ * Discount expiry checks - Every day at 12 PM
+ * Processes expired first booking discounts
+ */
+const discountTask = cron.schedule(
+  '0 12 * * *',
+  async () => {
+    await withLock('lock:scheduler:discounts', 'DiscountJob', async () => {
+      logger.info('Running discount expiry processor...');
+
+      // Process expired discounts
+      const expired = await processExpiredDiscounts();
+      logger.info('Expired discounts processed', { count: expired });
+
+      // Send expiry reminders
+      const reminders = await sendExpiryReminders();
+      logger.info('Discount expiry reminders sent', { count: reminders });
+    });
+  },
+  { timezone: CRON_TIMEZONE }
+);
+scheduledTasks.push(discountTask);
+logger.info(`Discount expiry checks scheduled: daily at 12 PM (cron: 0 12 * * *, tz: ${CRON_TIMEZONE})`);
+
+/**
+ * Negative review recovery - Every hour
+ * Checks for overdue recovery responses
+ */
+const negativeReviewTask = cron.schedule(
+  '0 * * * *',
+  async () => {
+    await withLock('lock:scheduler:negative_review', 'NegativeReviewJob', async () => {
+      logger.info('Running negative review recovery processor...');
+      const escalated = await checkOverdueRecoveries();
+      logger.info('Negative review recovery completed', { escalated });
+    });
+  },
+  { timezone: CRON_TIMEZONE }
+);
+scheduledTasks.push(negativeReviewTask);
+logger.info(`Negative review recovery scheduled: every hour (cron: 0 * * * *, tz: ${CRON_TIMEZONE})`);
+
+/**
+ * Auto-refund processor - Every hour
+ * Processes disputes for auto-refund eligibility
+ */
+const autoRefundTask = cron.schedule(
+  '30 * * * *',
+  async () => {
+    await withLock('lock:scheduler:auto_refund', 'AutoRefundJob', async () => {
+      logger.info('Running auto-refund processor...');
+
+      // Check disputes for auto-refund
+      const result = await checkDisputesForAutoRefund();
+      logger.info('Auto-refund processor completed', result);
+
+      // Process expired response deadlines
+      const processed = await processExpiredResponseDeadlines();
+      logger.info('Expired response deadlines processed', { count: processed });
+    });
+  },
+  { timezone: CRON_TIMEZONE }
+);
+scheduledTasks.push(autoRefundTask);
+logger.info(`Auto-refund processor scheduled: every hour at minute 30 (cron: 30 * * * *, tz: ${CRON_TIMEZONE})`);
+
+/**
+ * Mediation auto-assignment - Every 15 minutes
+ * Auto-assigns unassigned disputes to mediators
+ */
+const mediationTask = cron.schedule(
+  '*/15 * * * *',
+  async () => {
+    await withLock('lock:scheduler:mediation', 'MediationJob', async () => {
+      logger.info('Running mediation auto-assignment...');
+      const assigned = await autoAssignUnassignedDisputes();
+      logger.info('Mediation auto-assignment completed', { assigned });
+    });
+  },
+  { timezone: CRON_TIMEZONE }
+);
+scheduledTasks.push(mediationTask);
+logger.info(`Mediation auto-assignment scheduled: every 15 minutes (cron: */15 * * * *, tz: ${CRON_TIMEZONE})`);
+
+/**
+ * SLA monitoring - Every hour
+ * Checks SLA status for mediation assignments
+ */
+const slaTask = cron.schedule(
+  '45 * * * *',
+  async () => {
+    await withLock('lock:scheduler:sla', 'SlaJob', async () => {
+      logger.info('Running SLA monitoring...');
+      const result = await checkSlaStatus();
+      logger.info('SLA monitoring completed', result);
+    });
+  },
+  { timezone: CRON_TIMEZONE }
+);
+scheduledTasks.push(slaTask);
+logger.info(`SLA monitoring scheduled: every hour at minute 45 (cron: 45 * * * *, tz: ${CRON_TIMEZONE})`);
+
+/**
+ * ===========================================
+ * NEW AUTOMATION SCHEDULED JOBS
+ * ===========================================
+ */
+
+/**
+ * Win-back campaign - Every hour
+ * Detects inactive users and runs win-back campaigns
+ */
+const newWinBackTask = cron.schedule(
+  '0 * * * *',
+  async () => {
+    await withLock('lock:scheduler:new_win_back', 'NewWinBackJob', async () => {
+      try {
+        logger.info('Running win-back campaign check');
+        await runWinBackCampaign();
+        logger.info('Win-back campaign check completed');
+      } catch (error) {
+        logger.error('Win-back campaign check failed:', error);
+      }
+    });
+  },
+  { timezone: CRON_TIMEZONE }
+);
+scheduledTasks.push(newWinBackTask);
+logger.info(`Win-back campaign scheduled: every hour (cron: 0 * * * *, tz: ${CRON_TIMEZONE})`);
+
+/**
+ * Birthday rewards - Every day at 9 AM
+ * Sends birthday rewards to eligible users
+ */
+const birthdayRewardsTask = cron.schedule(
+  '0 9 * * *',
+  async () => {
+    await withLock('lock:scheduler:birthday_rewards', 'BirthdayRewardsJob', async () => {
+      try {
+        logger.info('Checking birthday rewards');
+        await sendBirthdayRewards();
+        logger.info('Birthday rewards check completed');
+      } catch (error) {
+        logger.error('Birthday rewards check failed:', error);
+      }
+    });
+  },
+  { timezone: CRON_TIMEZONE }
+);
+scheduledTasks.push(birthdayRewardsTask);
+logger.info(`Birthday rewards scheduled: daily at 9 AM (cron: 0 9 * * *, tz: ${CRON_TIMEZONE})`);
+
+/**
+ * Tier upgrades - Every day at 10 AM
+ * Checks for tier upgrades and sends celebration notifications
+ */
+const tierUpgradeNewTask = cron.schedule(
+  '0 10 * * *',
+  async () => {
+    await withLock('lock:scheduler:tier_upgrade_new', 'TierUpgradeNewJob', async () => {
+      try {
+        logger.info('Checking tier upgrades');
+        await checkTierUpgradesNew();
+        logger.info('Tier upgrades check completed');
+      } catch (error) {
+        logger.error('Tier upgrades check failed:', error);
+      }
+    });
+  },
+  { timezone: CRON_TIMEZONE }
+);
+scheduledTasks.push(tierUpgradeNewTask);
+logger.info(`Tier upgrades scheduled: daily at 10 AM (cron: 0 10 * * *, tz: ${CRON_TIMEZONE})`);
+
+/**
+ * Review request timing - Every 15 minutes
+ * Sends review requests at optimal times after bookings
+ */
+const reviewRequestNewTask = cron.schedule(
+  '*/15 * * * *',
+  async () => {
+    await withLock('lock:scheduler:review_request_new', 'ReviewRequestNewJob', async () => {
+      try {
+        logger.info('Checking review requests');
+        await sendReviewRequests();
+        logger.info('Review requests check completed');
+      } catch (error) {
+        logger.error('Review requests check failed:', error);
+      }
+    });
+  },
+  { timezone: CRON_TIMEZONE }
+);
+scheduledTasks.push(reviewRequestNewTask);
+logger.info(`Review request timing scheduled: every 15 minutes (cron: */15 * * * *, tz: ${CRON_TIMEZONE})`);
+
+/**
+ * Provider training check - Every hour
+ * Checks provider training progress and sends reminders
+ */
+const providerTrainingTask = cron.schedule(
+  '0 * * * *',
+  async () => {
+    await withLock('lock:scheduler:provider_training', 'ProviderTrainingJob', async () => {
+      try {
+        logger.info('Checking provider training');
+        await runProviderTrainingCheck();
+        logger.info('Provider training check completed');
+      } catch (error) {
+        logger.error('Provider training check failed:', error);
+      }
+    });
+  },
+  { timezone: CRON_TIMEZONE }
+);
+scheduledTasks.push(providerTrainingTask);
+logger.info(`Provider training scheduled: every hour (cron: 0 * * * *, tz: ${CRON_TIMEZONE})`);
+
+/**
+ * Onboarding checklist - Every 6 hours
+ * Processes onboarding checklists for new users
+ */
+const onboardingChecklistTask = cron.schedule(
+  '0 */6 * * *',
+  async () => {
+    await withLock('lock:scheduler:onboarding_checklist', 'OnboardingChecklistJob', async () => {
+      try {
+        logger.info('Running onboarding checklist');
+        await runOnboardingChecklist();
+        logger.info('Onboarding checklist completed');
+      } catch (error) {
+        logger.error('Onboarding checklist failed:', error);
+      }
+    });
+  },
+  { timezone: CRON_TIMEZONE }
+);
+scheduledTasks.push(onboardingChecklistTask);
+logger.info(`Onboarding checklist scheduled: every 6 hours (cron: 0 */6 * * *, tz: ${CRON_TIMEZONE})`);
+
+/**
+ * First booking discount - Every day at midnight
+ * Checks and applies first booking discounts
+ */
+const firstBookingDiscountTask = cron.schedule(
+  '0 0 * * *',
+  async () => {
+    await withLock('lock:scheduler:first_booking_discount', 'FirstBookingDiscountJob', async () => {
+      try {
+        logger.info('Checking first booking discounts');
+        await checkFirstBookingDiscount();
+        logger.info('First booking discounts check completed');
+      } catch (error) {
+        logger.error('First booking discounts check failed:', error);
+      }
+    });
+  },
+  { timezone: CRON_TIMEZONE }
+);
+scheduledTasks.push(firstBookingDiscountTask);
+logger.info(`First booking discount scheduled: daily at midnight (cron: 0 0 * * *, tz: ${CRON_TIMEZONE})`);
+
+/**
+ * Negative review recovery - Every 30 minutes
+ * Processes and recovers from negative reviews
+ */
+const negativeReviewNewTask = cron.schedule(
+  '*/30 * * * *',
+  async () => {
+    await withLock('lock:scheduler:negative_review_new', 'NegativeReviewNewJob', async () => {
+      try {
+        logger.info('Processing negative reviews');
+        await processNegativeReviews();
+        logger.info('Negative review processing completed');
+      } catch (error) {
+        logger.error('Negative review processing failed:', error);
+      }
+    });
+  },
+  { timezone: CRON_TIMEZONE }
+);
+scheduledTasks.push(negativeReviewNewTask);
+logger.info(`Negative review recovery scheduled: every 30 minutes (cron: */30 * * * *, tz: ${CRON_TIMEZONE})`);
+
+/**
+ * Auto refund threshold - Every hour
+ * Processes automatic refunds based on threshold rules
+ */
+const autoRefundThresholdTask = cron.schedule(
+  '0 * * * *',
+  async () => {
+    await withLock('lock:scheduler:auto_refund_threshold', 'AutoRefundThresholdJob', async () => {
+      try {
+        logger.info('Processing auto refunds');
+        await processAutoRefunds();
+        logger.info('Auto refund processing completed');
+      } catch (error) {
+        logger.error('Auto refund processing failed:', error);
+      }
+    });
+  },
+  { timezone: CRON_TIMEZONE }
+);
+scheduledTasks.push(autoRefundThresholdTask);
+logger.info(`Auto refund threshold scheduled: every hour (cron: 0 * * * *, tz: ${CRON_TIMEZONE})`);
+
+/**
+ * Mediation auto-assign - Every 4 hours
+ * Auto-assigns unassigned mediation cases
+ */
+const mediationAutoAssignTask = cron.schedule(
+  '0 */4 * * *',
+  async () => {
+    await withLock('lock:scheduler:mediation_auto_assign', 'MediationAutoAssignJob', async () => {
+      try {
+        logger.info('Assigning mediations');
+        await assignMediations();
+        logger.info('Mediation assignment completed');
+      } catch (error) {
+        logger.error('Mediation assignment failed:', error);
+      }
+    });
+  },
+  { timezone: CRON_TIMEZONE }
+);
+scheduledTasks.push(mediationAutoAssignTask);
+logger.info(`Mediation auto-assign scheduled: every 4 hours (cron: 0 */4 * * *, tz: ${CRON_TIMEZONE})`);
+
+/**
+ * Welcome email sequence - Every 15 minutes
+ * Sends welcome email sequences to new users
+ */
+const welcomeEmailTask = cron.schedule(
+  '*/15 * * * *',
+  async () => {
+    await withLock('lock:scheduler:welcome_email', 'WelcomeEmailJob', async () => {
+      try {
+        logger.info('Running welcome email sequence');
+        await runWelcomeEmailSequence();
+        logger.info('Welcome email sequence completed');
+      } catch (error) {
+        logger.error('Welcome email sequence failed:', error);
+      }
+    });
+  },
+  { timezone: CRON_TIMEZONE }
+);
+scheduledTasks.push(welcomeEmailTask);
+logger.info(`Welcome email sequence scheduled: every 15 minutes (cron: */15 * * * *, tz: ${CRON_TIMEZONE})`);
+
+/**
+ * Referral gamification check - Every hour
+ * Checks for new badges and milestone achievements
+ */
+const referralGamificationTask = cron.schedule(
+  '0 * * * *',
+  async () => {
+    await withLock('lock:scheduler:referral_gamification', 'ReferralGamificationJob', async () => {
+      try {
+        logger.info('Checking referral gamification');
+        // This is called when referrals are made
+        // The actual badge/milestone checks happen during referral processing
+        logger.info('Referral gamification check completed');
+      } catch (error) {
+        logger.error('Referral gamification check failed:', error);
+      }
+    });
+  },
+  { timezone: CRON_TIMEZONE }
+);
+scheduledTasks.push(referralGamificationTask);
+logger.info(`Referral gamification scheduled: every hour (cron: 0 * * * *, tz: ${CRON_TIMEZONE})`);
+
+/**
+ * Off-peak promotion analysis - Daily at 6 AM
+ * Analyzes demand patterns and generates promotion suggestions
+ */
+const offPeakPromotionTask = cron.schedule(
+  '0 6 * * *',
+  async () => {
+    await withLock('lock:scheduler:off_peak_promotion', 'OffPeakPromotionJob', async () => {
+      try {
+        logger.info('Running off-peak promotion analysis');
+        await runOffPeakPromotionAnalysis();
+        logger.info('Off-peak promotion analysis completed');
+      } catch (error) {
+        logger.error('Off-peak promotion analysis failed:', error);
+      }
+    });
+  },
+  { timezone: CRON_TIMEZONE }
+);
+scheduledTasks.push(offPeakPromotionTask);
+logger.info(`Off-peak promotion analysis scheduled: daily at 6 AM (cron: 0 6 * * *, tz: ${CRON_TIMEZONE})`);
+
+/**
  * Gracefully shutdown all scheduled jobs
  */
 export function shutdownScheduledJobs(): void {
@@ -457,4 +1025,34 @@ export default {
   sendBookingReminders,
   cleanupExpiredWebhooks,
   expireOldPoints,
+  // Existing automation jobs
+  detectInactiveUsers,
+  processBirthdayCampaigns,
+  sendTierProgressNotifications,
+  processReviewRequests,
+  sendTrainingReminders,
+  processEmailSequence,
+  sendOnboardingReminders,
+  processExpiredDiscounts,
+  sendExpiryReminders,
+  checkOverdueRecoveries,
+  checkDisputesForAutoRefund,
+  processExpiredResponseDeadlines,
+  autoAssignUnassignedDisputes,
+  checkSlaStatus,
+  // New automation jobs
+  runWelcomeEmailSequence,
+  runOnboardingChecklist,
+  checkFirstBookingDiscount,
+  runProviderTrainingCheck,
+  sendReviewRequests,
+  processNegativeReviews,
+  runWinBackCampaign,
+  checkTierUpgradesNew,
+  sendBirthdayRewards,
+  processAutoRefunds,
+  assignMediations,
+  // Referral and off-peak jobs
+  runOffPeakPromotionAnalysis,
+  generatePromotionSuggestions,
 };

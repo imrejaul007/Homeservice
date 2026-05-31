@@ -107,67 +107,183 @@ const emailCircuitBreaker = createCircuitBreaker('email-service', {
   halfOpenMaxAttempts: 3,
 });
 
-// Email queue for failed emails
+// Email queue for failed emails with improved retry logic
 interface QueuedEmail {
   to: string;
   subject: string;
   html: string;
+  text?: string;
   attempt: number;
+  maxAttempts: number;
   lastAttempt: Date;
+  nextRetry: Date;
   error?: string;
+  priority: 'high' | 'normal' | 'low';
+  metadata?: {
+    userId?: string;
+    bookingId?: string;
+    type: string;
+  };
 }
 
 const failedEmailQueue: QueuedEmail[] = [];
 const EMAIL_QUEUE_MAX_SIZE = 1000;
 const EMAIL_RETRY_INTERVAL = 5 * 60 * 1000; // 5 minutes
+const MAX_EMAIL_ATTEMPTS = 5;
+const RETRY_DELAYS = [60 * 1000, 5 * 60 * 1000, 15 * 60 * 1000, 30 * 60 * 1000, 60 * 60 * 1000];
 
-export const queueFailedEmail = async (email: Omit<QueuedEmail, 'attempt' | 'lastAttempt'>): Promise<void> => {
-  if (failedEmailQueue.length >= EMAIL_QUEUE_MAX_SIZE) {
-    logger.warn('Email queue full, dropping email', { to: email.to, subject: email.subject });
-    return;
+// FIX: Priority queue helpers
+function getNextRetryDelay(attempt: number): number {
+  return RETRY_DELAYS[Math.min(attempt, RETRY_DELAYS.length - 1)];
+}
+
+function shouldRetry(email: QueuedEmail): boolean {
+  return email.attempt < email.maxAttempts && Date.now() >= email.nextRetry.getTime();
+}
+
+function sortQueue(): void {
+  failedEmailQueue.sort((a, b) => {
+    const priorityOrder = { high: 0, normal: 1, low: 2 };
+    const priorityDiff = priorityOrder[a.priority] - priorityOrder[b.priority];
+    if (priorityDiff !== 0) return priorityDiff;
+    return a.nextRetry.getTime() - b.nextRetry.getTime();
+  });
+}
+
+// FIX: Improved email queue with deduplication and priority
+export const queueFailedEmail = async (
+  email: Omit<QueuedEmail, 'attempt' | 'lastAttempt' | 'nextRetry' | 'maxAttempts' | 'priority'>
+): Promise<{ queued: boolean; position?: number }> => {
+  // Check for duplicate email in queue (prevent duplicate sends)
+  const existingIndex = failedEmailQueue.findIndex(q => q.to === email.to && q.subject === email.subject);
+  if (existingIndex !== -1) {
+    const existing = failedEmailQueue[existingIndex];
+    if (existing.attempt < existing.maxAttempts) {
+      existing.lastAttempt = new Date();
+      existing.nextRetry = new Date(Date.now() + getNextRetryDelay(existing.attempt));
+      sortQueue();
+      return { queued: true, position: existingIndex + 1 };
+    }
   }
 
-  failedEmailQueue.push({
+  if (failedEmailQueue.length >= EMAIL_QUEUE_MAX_SIZE) {
+    // Remove oldest low-priority email to make room
+    const lowPriorityIndex = failedEmailQueue.findIndex(e => e.priority === 'low');
+    if (lowPriorityIndex !== -1) {
+      logger.warn('Email queue full, removing oldest low-priority email', {
+        to: failedEmailQueue[lowPriorityIndex].to
+      });
+      failedEmailQueue.splice(lowPriorityIndex, 1);
+    } else {
+      logger.error('Email queue full, cannot add email', { to: email.to });
+      return { queued: false };
+    }
+  }
+
+  const queuedEmail: QueuedEmail = {
     ...email,
     attempt: 0,
+    maxAttempts: MAX_EMAIL_ATTEMPTS,
     lastAttempt: new Date(),
+    nextRetry: new Date(Date.now() + getNextRetryDelay(0)),
+    priority: email.metadata?.type === 'booking' ? 'high' : 'normal'
+  };
+
+  failedEmailQueue.push(queuedEmail);
+  sortQueue();
+
+  const position = failedEmailQueue.findIndex(q => q === queuedEmail) + 1;
+  logger.info('Email queued for retry', {
+    to: email.to,
+    position,
+    total: failedEmailQueue.length
   });
 
-  logger.info('Email queued for retry', { to: email.to, subject: email.subject });
+  return { queued: true, position };
 };
 
-const processEmailQueue = async (): Promise<void> => {
-  if (failedEmailQueue.length === 0) return;
+// FIX: Improved queue processing with exponential backoff
+const processEmailQueue = async (): Promise<{ processed: number; succeeded: number; failed: number }> => {
+  const stats = { processed: 0, succeeded: 0, failed: 0 };
+  const now = Date.now();
 
-  const email = failedEmailQueue[0];
+  // Get emails that are ready to retry
+  const readyEmails = failedEmailQueue.filter(e => e.nextRetry.getTime() <= now);
+  // Process up to 10 emails per cycle
+  const batch = readyEmails.slice(0, 10);
 
-  try {
-    const result = await withRetry(
-      () => sendEmailInternal(email.to, email.subject, email.html),
-      retryConfigs.quick
-    );
+  for (const email of batch) {
+    stats.processed++;
 
-    if (result.success) {
-      failedEmailQueue.shift();
-      logger.info('Queued email sent successfully', { to: email.to });
-    } else {
+    try {
+      const result = await withRetry(
+        () => sendEmailInternal(email.to, email.subject, email.html, email.text),
+        retryConfigs.quick
+      );
+
+      if (result.success) {
+        const index = failedEmailQueue.indexOf(email);
+        if (index !== -1) failedEmailQueue.splice(index, 1);
+        stats.succeeded++;
+        logger.info('Queued email sent successfully', {
+          to: email.to,
+          attempts: email.attempt + 1
+        });
+      } else {
+        email.attempt++;
+        email.lastAttempt = new Date();
+        email.nextRetry = new Date(Date.now() + getNextRetryDelay(email.attempt));
+        email.error = result.error?.message;
+
+        if (email.attempt >= email.maxAttempts) {
+          const index = failedEmailQueue.indexOf(email);
+          if (index !== -1) failedEmailQueue.splice(index, 1);
+          stats.failed++;
+          logger.error('Email permanently failed after max attempts', {
+            to: email.to,
+            lastError: email.error
+          });
+        }
+      }
+    } catch (error) {
       email.attempt++;
       email.lastAttempt = new Date();
-      email.error = result.error?.message;
+      email.nextRetry = new Date(Date.now() + getNextRetryDelay(email.attempt));
+      email.error = error instanceof Error ? error.message : 'Unknown error';
 
-      if (email.attempt >= 3) {
-        logger.error('Email permanently failed', { to: email.to, attempts: email.attempt });
-        failedEmailQueue.shift();
-        // Could notify admin or save to database for later review
+      if (email.attempt >= email.maxAttempts) {
+        const index = failedEmailQueue.indexOf(email);
+        if (index !== -1) failedEmailQueue.splice(index, 1);
+        stats.failed++;
       }
+
+      logger.error('Failed to process queued email', { to: email.to, error: email.error });
     }
-  } catch (error) {
-    logger.error('Failed to process queued email', { error });
   }
+
+  return stats;
 };
 
 // Process queue every 5 minutes
-setInterval(processEmailQueue, EMAIL_RETRY_INTERVAL);
+setInterval(async () => {
+  try {
+    const stats = await processEmailQueue();
+    if (stats.processed > 0) {
+      logger.info('Email queue processed', stats);
+    }
+  } catch (error) {
+    logger.error('Email queue processing error', { error });
+  }
+}, EMAIL_RETRY_INTERVAL);
+
+// Export queue stats for monitoring
+export const getEmailQueueStats = (): {
+  size: number;
+  emailsReadyToRetry: number;
+} => ({
+  size: failedEmailQueue.length,
+  emailsReadyToRetry: failedEmailQueue.filter(e => e.nextRetry.getTime() <= Date.now()).length
+});
 
 // NILIN Brand Colors
 const BRAND_COLORS = {
@@ -182,6 +298,7 @@ const BRAND_COLORS = {
   success: '#10B981',      // Emerald-500
   warning: '#F59E0B',      // Amber-500
   error: '#EF4444',        // Red-500
+  border: '#E5E7EB',       // Gray-200
 };
 
 // Retry configuration
@@ -273,7 +390,7 @@ const validateUnsubscribeToken = (token: string): { userId: string; emailType: s
 /**
  * Get unsubscribe URL for a specific email type
  */
-const getUnsubscribeUrl = (userId: string, emailType: 'marketing' | 'promotions' | 'newsletters' = 'marketing'): string => {
+export const getUnsubscribeUrl = (userId: string, emailType: 'marketing' | 'promotions' | 'newsletters' = 'marketing'): string => {
   const baseUrl = process.env.FRONTEND_URL || process.env.CLIENT_URL || 'https://nilin.com';
   const token = generateUnsubscribeToken(userId, emailType);
   return `${baseUrl}/unsubscribe?token=${token}&type=${emailType}`;
@@ -1255,6 +1372,182 @@ export const sendLoyaltyPointsEmail = async (
   await sendEmail(email, subject, html);
 };
 
+// ============================================
+// Payment Receipt Email
+// ============================================
+
+interface PaymentReceiptData {
+  bookingId: string;
+  bookingNumber: string;
+  customerName: string;
+  customerEmail: string;
+  providerName: string;
+  serviceName: string;
+  scheduledDate: string;
+  scheduledTime: string;
+  totalAmount: number;
+  currency: string;
+  transactionId: string;
+  paidAt: Date;
+}
+
+/**
+ * Send payment receipt email after successful payment
+ */
+export const sendPaymentReceiptEmail = async (data: PaymentReceiptData): Promise<void> => {
+  const {
+    bookingNumber,
+    customerName,
+    customerEmail,
+    providerName,
+    serviceName,
+    scheduledDate,
+    scheduledTime,
+    totalAmount,
+    currency,
+    transactionId,
+    paidAt,
+  } = data;
+
+  const formattedDate = new Date(scheduledDate).toLocaleDateString('en-AE', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
+
+  const formattedTime = scheduledTime;
+  const formattedAmount = new Intl.NumberFormat('en-AE', {
+    style: 'currency',
+    currency: currency,
+  }).format(totalAmount);
+
+  const formattedPaidAt = new Date(paidAt).toLocaleString('en-AE', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  });
+
+  const viewBookingUrl = `${FRONTEND_URL_FALLBACK}/customer/bookings/${data.bookingId}`;
+
+  const subject = `Payment Receipt - Booking #${bookingNumber}`;
+
+  const html = `
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Payment Receipt</title>
+    </head>
+    <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: ${BRAND_COLORS.background};">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width: 600px; margin: 0 auto; background-color: ${BRAND_COLORS.white}; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
+        <tr>
+          <td style="background: linear-gradient(135deg, ${BRAND_COLORS.primary} 0%, ${BRAND_COLORS.primaryDark} 100%); padding: 32px 24px; text-align: center;">
+            <h1 style="margin: 0; font-size: 28px; font-weight: 700; color: ${BRAND_COLORS.white}; letter-spacing: -0.5px;">NILIN</h1>
+            <p style="margin: 8px 0 0; color: rgba(255,255,255,0.9); font-size: 14px;">Payment Receipt</p>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 32px 24px;">
+            <p style="margin: 0 0 24px; color: ${BRAND_COLORS.text}; font-size: 16px; line-height: 1.6;">
+              Dear ${escapeHtml(customerName)},
+            </p>
+            <p style="margin: 0 0 24px; color: ${BRAND_COLORS.text}; font-size: 16px; line-height: 1.6;">
+              Thank you for your payment! Your booking has been confirmed.
+            </p>
+
+            <!-- Receipt Details -->
+            <div style="background-color: ${BRAND_COLORS.background}; border-radius: 12px; padding: 24px; margin: 24px 0;">
+              <h2 style="margin: 0 0 16px; color: ${BRAND_COLORS.text}; font-size: 18px; font-weight: 600;">Receipt Details</h2>
+
+              <table style="width: 100%; border-collapse: collapse;">
+                <tr>
+                  <td style="padding: 8px 0; color: ${BRAND_COLORS.textLight}; font-size: 14px;">Booking Number</td>
+                  <td style="padding: 8px 0; color: ${BRAND_COLORS.text}; font-size: 14px; font-weight: 600; text-align: right;">#${escapeHtml(bookingNumber)}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 8px 0; color: ${BRAND_COLORS.textLight}; font-size: 14px;">Transaction ID</td>
+                  <td style="padding: 8px 0; color: ${BRAND_COLORS.text}; font-size: 14px; text-align: right; font-family: monospace;">${escapeHtml(transactionId)}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 8px 0; color: ${BRAND_COLORS.textLight}; font-size: 14px;">Paid On</td>
+                  <td style="padding: 8px 0; color: ${BRAND_COLORS.text}; font-size: 14px; text-align: right;">${escapeHtml(formattedPaidAt)}</td>
+                </tr>
+              </table>
+            </div>
+
+            <!-- Booking Details -->
+            <div style="background-color: ${BRAND_COLORS.background}; border-radius: 12px; padding: 24px; margin: 24px 0;">
+              <h2 style="margin: 0 0 16px; color: ${BRAND_COLORS.text}; font-size: 18px; font-weight: 600;">Booking Details</h2>
+
+              <table style="width: 100%; border-collapse: collapse;">
+                <tr>
+                  <td style="padding: 8px 0; color: ${BRAND_COLORS.textLight}; font-size: 14px;">Service</td>
+                  <td style="padding: 8px 0; color: ${BRAND_COLORS.text}; font-size: 14px; font-weight: 600; text-align: right;">${escapeHtml(serviceName)}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 8px 0; color: ${BRAND_COLORS.textLight}; font-size: 14px;">Provider</td>
+                  <td style="padding: 8px 0; color: ${BRAND_COLORS.text}; font-size: 14px; text-align: right;">${escapeHtml(providerName)}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 8px 0; color: ${BRAND_COLORS.textLight}; font-size: 14px;">Date</td>
+                  <td style="padding: 8px 0; color: ${BRAND_COLORS.text}; font-size: 14px; text-align: right;">${escapeHtml(formattedDate)}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 8px 0; color: ${BRAND_COLORS.textLight}; font-size: 14px;">Time</td>
+                  <td style="padding: 8px 0; color: ${BRAND_COLORS.text}; font-size: 14px; text-align: right;">${escapeHtml(formattedTime)}</td>
+                </tr>
+                <tr style="border-top: 1px solid ${BRAND_COLORS.border};">
+                  <td style="padding: 16px 0 8px; color: ${BRAND_COLORS.text}; font-size: 16px; font-weight: 600;">Total Paid</td>
+                  <td style="padding: 16px 0 8px; color: ${BRAND_COLORS.primary}; font-size: 20px; font-weight: 700; text-align: right;">${formattedAmount}</td>
+                </tr>
+              </table>
+            </div>
+
+            <div style="text-align: center; margin: 32px 0;">
+              <a href="${viewBookingUrl}" style="display: inline-block; padding: 14px 32px; background: ${BRAND_COLORS.primary}; color: ${BRAND_COLORS.white}; text-decoration: none; font-weight: 600; font-size: 16px; border-radius: 8px;">View Booking Details</a>
+            </div>
+
+            <p style="margin: 24px 0 0; color: ${BRAND_COLORS.textLight}; font-size: 14px; line-height: 1.6;">
+              If you have any questions about your booking or payment, please contact our support team.
+            </p>
+          </td>
+        </tr>
+      </table>
+    </body>
+    </html>
+  `;
+
+  const text = `
+Payment Receipt - Booking #${bookingNumber}
+
+Dear ${customerName},
+
+Thank you for your payment! Your booking has been confirmed.
+
+RECEIPT DETAILS
+----------------
+Booking Number: #${bookingNumber}
+Transaction ID: ${transactionId}
+Paid On: ${formattedPaidAt}
+
+BOOKING DETAILS
+---------------
+Service: ${serviceName}
+Provider: ${providerName}
+Date: ${formattedDate}
+Time: ${formattedTime}
+
+Total Paid: ${formattedAmount}
+
+View booking details: ${viewBookingUrl}
+
+If you have any questions, please contact our support team.
+  `;
+
+  await sendEmail(customerEmail, subject, html, text);
+};
+
 // Add the remaining template functions
 const getBookingAcceptedTemplate = (firstName: string, booking: any): EmailTemplate => {
   const safeFirstName = escapeHtml(firstName);
@@ -2198,6 +2491,153 @@ const getProviderRejectionTemplate = (
 };
 
 // ============================================
+// Withdrawal/Payout Emails
+// ============================================
+
+export interface WithdrawalApprovedEmailData {
+  to: string;
+  providerName: string;
+  amount: number;
+  currency: string;
+  payoutNumber: string;
+}
+
+/**
+ * Send withdrawal/payout approved email to provider
+ */
+export const sendWithdrawalApproved = async (data: WithdrawalApprovedEmailData): Promise<void> => {
+  const { to, providerName, amount, currency, payoutNumber } = data;
+  const template = getWithdrawalApprovedTemplate(providerName, amount, currency, payoutNumber);
+  await sendEmail(to, template.subject, template.html, template.text);
+};
+
+const getWithdrawalApprovedTemplate = (
+  providerName: string,
+  amount: number,
+  currency: string,
+  payoutNumber: string
+): EmailTemplate => {
+  const safeProviderName = escapeHtml(providerName);
+  const formattedAmount = `${currency} ${amount.toFixed(2)}`;
+  const viewPayoutUrl = `${FRONTEND_URL_FALLBACK || FRONTEND_URL}/provider/payouts/${payoutNumber}`;
+
+  return {
+    subject: `Withdrawal Approved - ${formattedAmount}`,
+    html: `
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Withdrawal Approved</title>
+      </head>
+      <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: ${BRAND_COLORS.background};">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width: 600px; margin: 0 auto; background-color: ${BRAND_COLORS.white}; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
+          <!-- Header -->
+          <tr>
+            <td style="background: linear-gradient(135deg, ${BRAND_COLORS.success} 0%, #059669 100%); padding: 32px 24px; text-align: center;">
+              <h1 style="margin: 0; font-size: 28px; font-weight: 700; color: ${BRAND_COLORS.white};">NILIN</h1>
+              <p style="margin: 8px 0 0; color: rgba(255,255,255,0.9); font-size: 14px;">Withdrawal Approved</p>
+            </td>
+          </tr>
+          <!-- Content -->
+          <tr>
+            <td style="padding: 32px 24px;">
+              <h2 style="margin: 0 0 16px; color: ${BRAND_COLORS.text}; font-size: 24px;">Congratulations, ${safeProviderName}!</h2>
+              <p style="margin: 0 0 24px; color: ${BRAND_COLORS.textLight}; font-size: 16px; line-height: 1.6;">
+                Your withdrawal request has been approved and processed successfully.
+              </p>
+
+              <!-- Amount Card -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background: linear-gradient(135deg, ${BRAND_COLORS.success} 0%, #059669 100%); border-radius: 12px; padding: 24px; margin: 24px 0;">
+                <tr>
+                  <td style="text-align: center;">
+                    <p style="margin: 0 0 8px; font-size: 14px; color: rgba(255,255,255,0.9); text-transform: uppercase; letter-spacing: 1px;">Amount Transferred</p>
+                    <p style="margin: 0; font-size: 36px; font-weight: 700; color: ${BRAND_COLORS.white};">${formattedAmount}</p>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Details Card -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background: ${BRAND_COLORS.background}; border-radius: 12px; padding: 24px; margin: 24px 0;">
+                <tr>
+                  <td>
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+                      <tr>
+                        <td style="padding: 8px 0; border-bottom: 1px solid #E5E7EB;">
+                          <span style="color: ${BRAND_COLORS.textLight};">Payout Number</span>
+                        </td>
+                        <td style="padding: 8px 0; border-bottom: 1px solid #E5E7EB; text-align: right;">
+                          <strong style="color: ${BRAND_COLORS.text};">${escapeHtml(payoutNumber)}</strong>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 8px 0; border-bottom: 1px solid #E5E7EB;">
+                          <span style="color: ${BRAND_COLORS.textLight};">Status</span>
+                        </td>
+                        <td style="padding: 8px 0; border-bottom: 1px solid #E5E7EB; text-align: right;">
+                          <span style="color: ${BRAND_COLORS.success}; font-weight: 600;">Approved</span>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 8px 0;">
+                          <span style="color: ${BRAND_COLORS.textLight};">Date</span>
+                        </td>
+                        <td style="padding: 8px 0; text-align: right;">
+                          <strong style="color: ${BRAND_COLORS.text};">${new Date().toLocaleDateString()}</strong>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+              <p style="margin: 0 0 24px; color: ${BRAND_COLORS.textLight}; font-size: 14px;">
+                The funds should appear in your account within 1-3 business days, depending on your bank's processing time.
+              </p>
+
+              <!-- CTA Button -->
+              <table role="presentation" cellspacing="0" cellpadding="0" style="margin: 0 auto;">
+                <tr>
+                  <td style="border-radius: 8px; background: ${BRAND_COLORS.primary}; text-align: center;">
+                    <a href="${viewPayoutUrl}" style="display: inline-block; padding: 14px 32px; color: ${BRAND_COLORS.white}; text-decoration: none; font-weight: 600; font-size: 16px;">View Payout Details</a>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <!-- Footer -->
+          <tr>
+            <td style="padding: 24px; background: ${BRAND_COLORS.background}; text-align: center;">
+              <p style="margin: 0; color: ${BRAND_COLORS.textLight}; font-size: 12px;">
+                &copy; ${new Date().getFullYear()} NILIN. All rights reserved.<br>
+                <span style="color: ${BRAND_COLORS.primary};">Transforming home services, one booking at a time.</span>
+              </p>
+            </td>
+          </tr>
+        </table>
+      </body>
+      </html>
+    `,
+    text: `
+      Congratulations, ${providerName}!
+
+      Your withdrawal request has been approved and processed successfully.
+
+      Amount: ${formattedAmount}
+      Payout Number: ${payoutNumber}
+      Date: ${new Date().toLocaleDateString()}
+
+      The funds should appear in your account within 1-3 business days.
+
+      View payout details: ${viewPayoutUrl}
+
+      &copy; ${new Date().getFullYear()} NILIN
+    `,
+  };
+};
+
+// ============================================
 // Unsubscribe Handler
 // ============================================
 
@@ -2261,6 +2701,7 @@ export const processUnsubscribeToken = async (token: string): Promise<{
 };
 
 export default {
+  sendEmail,
   // Auth emails
   sendVerificationEmail,
   sendWelcomeEmail,
@@ -2288,6 +2729,12 @@ export default {
 
   // Loyalty emails
   sendLoyaltyPointsEmail,
+
+  // Payment emails
+  sendPaymentReceiptEmail,
+
+  // Withdrawal/Payout emails
+  sendWithdrawalApproved,
 
   // Batch sending
   sendBatch,

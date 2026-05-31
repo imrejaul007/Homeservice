@@ -1,6 +1,7 @@
 import { PushNotifications } from '@capacitor/push-notifications';
 import type { Token, PushNotificationSchema, ActionPerformed } from '@capacitor/push-notifications';
 import { Capacitor } from '@capacitor/core';
+import { Preferences } from '@capacitor/preferences';
 import toast from 'react-hot-toast';
 import { offlineSync, type ActionType } from './OfflineSync';
 
@@ -8,18 +9,40 @@ const MAX_QUEUE_SIZE = 500;
 const MAX_QUEUE_AGE_DAYS = 7;
 const PERMISSION_KEY = 'notification_permission';
 
-const loadPermission = (): string => {
+// Capacitor-safe storage helpers
+const isNative = typeof window !== 'undefined' && Capacitor.isNativePlatform();
+
+async function loadPermission(): Promise<string> {
   try {
-    const stored = localStorage.getItem(PERMISSION_KEY);
-    return stored ? JSON.parse(stored) : 'default';
+    if (isNative) {
+      const result = await Preferences.get({ key: PERMISSION_KEY });
+      return result.value ? JSON.parse(result.value) : 'default';
+    }
+    // Browser fallback
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const stored = localStorage.getItem(PERMISSION_KEY);
+      return stored ? JSON.parse(stored) : 'default';
+    }
+    return 'default';
   } catch {
     return 'default';
   }
-};
+}
 
-const savePermission = (permission: string): void => {
-  localStorage.setItem(PERMISSION_KEY, JSON.stringify(permission));
-};
+async function savePermission(permission: string): Promise<void> {
+  try {
+    if (isNative) {
+      await Preferences.set({ key: PERMISSION_KEY, value: JSON.stringify(permission) });
+    } else {
+      // Browser fallback
+      if (typeof window !== 'undefined' && window.localStorage) {
+        localStorage.setItem(PERMISSION_KEY, JSON.stringify(permission));
+      }
+    }
+  } catch (error) {
+    console.error('[Notifications] Failed to save permission:', error);
+  }
+}
 
 export interface NotificationPayload {
   title: string;
@@ -48,16 +71,27 @@ class NotificationService {
   private readonly OFFLINE_QUEUE_KEY = 'nilin_offline_notifications';
 
   constructor() {
-    this.loadOfflineQueue();
+    void this.loadOfflineQueue();
     this.setupNetworkListeners();
   }
 
   /**
-   * Load queued notifications from storage
+   * Load queued notifications from storage (Capacitor-safe)
    */
-  private loadOfflineQueue(): void {
+  private async loadOfflineQueue(): Promise<void> {
     try {
-      const stored = localStorage.getItem(this.OFFLINE_QUEUE_KEY);
+      let stored: string | null = null;
+
+      if (isNative) {
+        const result = await Preferences.get({ key: this.OFFLINE_QUEUE_KEY });
+        stored = result.value;
+      } else {
+        // Browser fallback
+        if (typeof window !== 'undefined' && window.localStorage) {
+          stored = localStorage.getItem(this.OFFLINE_QUEUE_KEY);
+        }
+      }
+
       if (stored) {
         const parsed: [string, QueuedNotification][] = JSON.parse(stored);
         this.offlineQueue = new Map(parsed);
@@ -71,12 +105,21 @@ class NotificationService {
   }
 
   /**
-   * Save offline queue to storage
+   * Save offline queue to storage (Capacitor-safe)
    */
-  private saveOfflineQueue(): void {
+  private async saveOfflineQueue(): Promise<void> {
     try {
       const entries = Array.from(this.offlineQueue.entries());
-      localStorage.setItem(this.OFFLINE_QUEUE_KEY, JSON.stringify(entries));
+      const serialized = JSON.stringify(entries);
+
+      if (isNative) {
+        await Preferences.set({ key: this.OFFLINE_QUEUE_KEY, value: serialized });
+      } else {
+        // Browser fallback
+        if (typeof window !== 'undefined' && window.localStorage) {
+          localStorage.setItem(this.OFFLINE_QUEUE_KEY, serialized);
+        }
+      }
     } catch (error) {
       console.error('[Notifications] Failed to save offline queue:', error);
     }
@@ -272,7 +315,7 @@ class NotificationService {
     try {
       const result = await PushNotifications.requestPermissions();
       const permission = result.receive === 'granted' ? 'granted' : 'denied';
-      savePermission(permission);
+      await savePermission(permission);
       return permission;
     } catch (error) {
       console.error('[Notifications] Permission request failed:', error);

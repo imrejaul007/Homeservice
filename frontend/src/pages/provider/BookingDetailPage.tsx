@@ -45,6 +45,8 @@ const ProviderBookingDetailPage: React.FC<BookingDetailPageProps> = ({ isProvide
   } = useBookingStore();
 
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [showRejectModal, setShowRejectModal] = useState(false);
+  const [showCancelModal, setShowCancelModal] = useState(false);
 
   useEffect(() => {
     if (bookingId) {
@@ -80,7 +82,12 @@ const ProviderBookingDetailPage: React.FC<BookingDetailPageProps> = ({ isProvide
 
   const handleRejectBooking = async () => {
     if (!currentBooking) return;
-    if (!window.confirm('Are you sure you want to reject this booking?')) return;
+    setShowRejectModal(true);
+  };
+
+  const handleConfirmReject = async () => {
+    if (!currentBooking) return;
+    setShowRejectModal(false);
     setActionLoading('reject');
     try {
       await rejectBooking(currentBooking._id, { reason: 'Provider unavailable' });
@@ -123,7 +130,12 @@ const ProviderBookingDetailPage: React.FC<BookingDetailPageProps> = ({ isProvide
 
   const handleCancelBooking = async () => {
     if (!currentBooking) return;
-    if (!window.confirm('Are you sure you want to cancel this booking?')) return;
+    setShowCancelModal(true);
+  };
+
+  const handleConfirmCancel = async () => {
+    if (!currentBooking) return;
+    setShowCancelModal(false);
     setActionLoading('cancel');
     try {
       await cancelBooking(currentBooking._id, { reason: 'Provider cancelled' });
@@ -512,6 +524,54 @@ const ProviderBookingDetailPage: React.FC<BookingDetailPageProps> = ({ isProvide
       </div>
 
       <Footer />
+
+      {/* Reject Booking Confirmation Modal */}
+      {showRejectModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+            <h3 className="text-lg font-semibold text-nilin-charcoal mb-4">Reject Booking</h3>
+            <p className="text-nilin-warmGray mb-6">Are you sure you want to reject this booking? The customer will be notified.</p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setShowRejectModal(false)}
+                className="px-4 py-2 text-nilin-warmGray hover:bg-nilin-muted rounded-lg transition-colors"
+              >
+                Keep Booking
+              </button>
+              <button
+                onClick={handleConfirmReject}
+                className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
+              >
+                Reject Booking
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Cancel Booking Confirmation Modal */}
+      {showCancelModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+            <h3 className="text-lg font-semibold text-nilin-charcoal mb-4">Cancel Booking</h3>
+            <p className="text-nilin-warmGray mb-6">Are you sure you want to cancel this booking? The customer will be notified.</p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setShowCancelModal(false)}
+                className="px-4 py-2 text-nilin-warmGray hover:bg-nilin-muted rounded-lg transition-colors"
+              >
+                Keep Booking
+              </button>
+              <button
+                onClick={handleConfirmCancel}
+                className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
+              >
+                Cancel Booking
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

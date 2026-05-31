@@ -4,7 +4,7 @@ import Service from '../models/service.model';
 import ServiceCategory from '../models/serviceCategory.model';
 import Booking from '../models/booking.model';
 import ProviderProfile from '../models/providerProfile.model';
-import User from '../models/user.model';
+import User, { IUser } from '../models/user.model';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
 import logger from '../utils/logger';
@@ -15,9 +15,116 @@ import {
 } from '../utils/sanitizeProviderGeo';
 import { getSocketServer } from '../socket';
 import { NotificationService } from '../services/notification.service';
+import { cache, isRedisAvailable } from '../config/redis';
+import { escapeRegex } from '../utils/formatBookingListItem';
 
-// Helper function to validate and normalize category/subcategory against database
-const validateAndNormalizeCategorySubcategory = async (category: string, subcategory?: string) => {
+const CATEGORIES_CACHE_KEY = 'categories:all:active';
+const CATEGORIES_CACHE_TTL = 300; // 5 minutes
+
+// ===================================
+// SECURITY: IDOR Protection Helpers
+// ===================================
+
+interface ServiceOwnershipResult {
+  service: any;
+  isOwner: boolean;
+  isAdmin: boolean;
+}
+
+/**
+ * SECURITY FIX: Reusable helper for verifying service ownership
+ * Prevents IDOR vulnerabilities by ensuring users can only access their own services
+ * Admins can access any service
+ *
+ * @param serviceId - The service ID to verify
+ * @param user - The authenticated user from request
+ * @returns Object containing the service (if found) and ownership flags
+ * @throws ApiError with 404 if service not found OR user lacks access
+ */
+async function verifyServiceOwnership(
+  serviceId: string,
+  user: IUser
+): Promise<ServiceOwnershipResult> {
+  const userId = user._id.toString();
+  const isAdmin = user.role === 'admin';
+
+  // Admins can access any service - query without providerId restriction
+  const query = isAdmin
+    ? { _id: serviceId }
+    : { _id: serviceId, providerId: userId };
+
+  const service = await Service.findOne(query).lean();
+
+  // SECURITY FIX: Return same error for both "not found" and "not owned"
+  // This prevents ID enumeration attacks
+  if (!service) {
+    throw new ApiError(404, 'Service not found or access denied');
+  }
+
+  return {
+    service,
+    isOwner: service.providerId?.toString() === userId,
+    isAdmin,
+  };
+}
+
+/**
+ * SECURITY: Verify portfolio item ownership
+ * Ensures portfolio items belong to the requesting provider
+ */
+async function verifyPortfolioItemOwnership(
+  itemId: string,
+  userId: mongoose.Types.ObjectId
+): Promise<{ providerProfile: any; item: any; itemIndex: number }> {
+  const providerProfile = await ProviderProfile.findOne({ userId });
+
+  if (!providerProfile) {
+    throw new ApiError(404, 'Provider profile not found');
+  }
+
+  const itemIndex = providerProfile.portfolio?.featured.findIndex(
+    (item: any) => item._id?.toString() === itemId || item._id === itemId
+  );
+
+  if (itemIndex === -1 || itemIndex === undefined) {
+    // Use generic message to prevent enumeration
+    throw new ApiError(404, 'Portfolio item not found or access denied');
+  }
+
+  const item = providerProfile.portfolio.featured[itemIndex];
+
+  return { providerProfile, item, itemIndex };
+}
+
+interface CategoryCache {
+  categoryMap: Map<string, { exactName: string; subcategoryMap: Map<string, string> }>;
+  cachedAt: number;
+}
+
+// Helper to get categories from cache or database
+async function getCategoriesFromCache(): Promise<CategoryCache> {
+  try {
+    if (isRedisAvailable()) {
+      const cached = await cache.get(CATEGORIES_CACHE_KEY);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        // Convert plain object back to Map
+        const categoryMap = new Map<string, { exactName: string; subcategoryMap: Map<string, string> }>();
+        for (const [key, value] of Object.entries(parsed.categoryMap)) {
+          const v = value as { exactName: string; subcategoryMap: Record<string, string> };
+          categoryMap.set(key, {
+            exactName: v.exactName,
+            subcategoryMap: new Map(Object.entries(v.subcategoryMap))
+          });
+        }
+        return { categoryMap, cachedAt: parsed.cachedAt };
+      }
+    }
+  } catch (error) {
+    logger.warn('Failed to read categories from cache', { error });
+  }
+
+  // Fetch from database
   const allCategories = await ServiceCategory.find({ isActive: true }).lean();
   const categoryMap = new Map<string, { exactName: string; subcategoryMap: Map<string, string> }>();
 
@@ -33,6 +140,34 @@ const validateAndNormalizeCategorySubcategory = async (category: string, subcate
       subcategoryMap: subcatMap
     });
   }
+
+  const result: CategoryCache = { categoryMap, cachedAt: Date.now() };
+
+  // Cache the result
+  try {
+    if (isRedisAvailable()) {
+      // Convert Maps to plain objects for JSON serialization
+      const cacheObj = {
+        categoryMap: Object.fromEntries(
+          Array.from(categoryMap.entries()).map(([key, value]) => [
+            key,
+            { exactName: value.exactName, subcategoryMap: Object.fromEntries(value.subcategoryMap) }
+          ])
+        ),
+        cachedAt: result.cachedAt
+      };
+      await cache.set(CATEGORIES_CACHE_KEY, JSON.stringify(cacheObj), CATEGORIES_CACHE_TTL);
+    }
+  } catch (error) {
+    logger.warn('Failed to cache categories', { error });
+  }
+
+  return result;
+}
+
+// Helper function to validate and normalize category/subcategory against database
+const validateAndNormalizeCategorySubcategory = async (category: string, subcategory?: string) => {
+  const { categoryMap } = await getCategoriesFromCache();
 
   const catLower = category?.toLowerCase();
   const catData = categoryMap.get(catLower);
@@ -99,7 +234,7 @@ export const getMyServices = asyncHandler(async (req: Request, res: Response) =>
   } = req.query;
 
   // Build query
-  const query: any = { providerId: (req.user as any)._id.toString() };
+  const query: any = { providerId: (req.user as IUser)._id.toString() };
 
   if (status && status !== 'all') {
     query.status = status as string;
@@ -121,15 +256,18 @@ export const getMyServices = asyncHandler(async (req: Request, res: Response) =>
 
   // Category filter
   if (category && category !== 'all') {
-    query.category = { $regex: new RegExp(category as string, 'i') };
+    // FIX: Escape regex special characters to prevent regex injection
+    query.category = { $regex: new RegExp(escapeRegex(category as string), 'i') };
   }
 
   // Search filter
   if (search) {
+    // FIX: Escape regex special characters to prevent regex injection
+    const escapedSearch = escapeRegex(search as string);
     query.$or = [
-      { name: { $regex: new RegExp(search as string, 'i') } },
-      { description: { $regex: new RegExp(search as string, 'i') } },
-      { category: { $regex: new RegExp(search as string, 'i') } }
+      { name: { $regex: new RegExp(escapedSearch, 'i') } },
+      { description: { $regex: new RegExp(escapedSearch, 'i') } },
+      { category: { $regex: new RegExp(escapedSearch, 'i') } }
     ];
   }
   
@@ -201,27 +339,25 @@ export const getMyServices = asyncHandler(async (req: Request, res: Response) =>
 });
 
 /**
- * Get specific service by ID (provider must own the service)
+ * Get specific service by ID
  * GET /api/provider/services/:id
+ * SECURITY FIX: Uses verifyServiceOwnership helper to prevent IDOR
+ * Admins can access any service, providers can only access their own
  */
 export const getServiceById = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
-  
+  const user = req.user as IUser;
+
   try {
-    const service = await Service.findOne({
-      _id: id,
-      providerId: (req.user as any)._id.toString()
-    }).lean();
-    
-    if (!service) {
-      throw new ApiError(404, 'Service not found or access denied');
-    }
-    
+    // SECURITY: Use reusable helper for ownership verification
+    const { service } = await verifyServiceOwnership(id, user);
+
     res.json({
       success: true,
       data: { service }
     });
   } catch (error: any) {
+    if (error instanceof ApiError) throw error;
     throw new ApiError(500, 'Failed to fetch service details', error.message);
   }
 });
@@ -235,12 +371,12 @@ export const createService = asyncHandler(async (req: Request, res: Response) =>
     logger.debug('Starting service creation', {
       context: 'ProviderController',
       action: 'CREATE_SERVICE_START',
-      userId: (req.user as any)?._id?.toString(),
+      userId: (req.user as IUser)?._id?.toString(),
     });
 
     // Get provider's location from their profile
     const ProviderProfile = require('../models/providerProfile.model').default;
-    const providerProfile = await ProviderProfile.findOne({ userId: (req.user as any)._id });
+    const providerProfile = await ProviderProfile.findOne({ userId: (req.user as IUser)._id });
 
     if (!providerProfile?.locationInfo?.primaryAddress) {
       throw new ApiError(400, 'Provider location not found. Please complete your profile first.');
@@ -249,7 +385,7 @@ export const createService = asyncHandler(async (req: Request, res: Response) =>
     logger.debug('Provider profile location found', {
       context: 'ProviderController',
       action: 'PROVIDER_LOCATION_FOUND',
-      userId: (req.user as any)?._id?.toString(),
+      userId: (req.user as IUser)?._id?.toString(),
     });
 
     // Validate and normalize category/subcategory against database (single source of truth)
@@ -340,9 +476,9 @@ export const createService = asyncHandler(async (req: Request, res: Response) =>
       },
       status: 'pending_review', // Require admin approval for all new services
       isActive: false, // ✅ FIX: Keep inactive until admin approval
-      providerId: (req.user as any)._id.toString(),
-      createdBy: (req.user as any)._id,
-      updatedBy: (req.user as any)._id,
+      providerId: (req.user as IUser)._id.toString(),
+      createdBy: (req.user as IUser)._id,
+      updatedBy: (req.user as IUser)._id,
       // Initialize search metadata
       searchMetadata: {
         searchCount: 0,
@@ -371,7 +507,7 @@ export const createService = asyncHandler(async (req: Request, res: Response) =>
     // Notify admins about new service pending review
     const socketServer = getSocketServer();
     if (socketServer) {
-      const providerId = (req.user as any)._id.toString();
+      const providerId = (req.user as IUser)._id.toString();
       socketServer.emitNewServicePending(service._id.toString(), providerId, service.name);
     }
 
@@ -379,7 +515,7 @@ export const createService = asyncHandler(async (req: Request, res: Response) =>
       context: 'ProviderController',
       action: 'SERVICE_CREATED',
       serviceId: service._id.toString(),
-      userId: (req.user as any)?._id?.toString(),
+      userId: (req.user as IUser)?._id?.toString(),
     });
 
     res.status(201).json({
@@ -391,7 +527,7 @@ export const createService = asyncHandler(async (req: Request, res: Response) =>
     logger.error('Error creating service', {
       context: 'ProviderController',
       action: 'CREATE_SERVICE_ERROR',
-      userId: (req.user as any)?._id?.toString(),
+      userId: (req.user as IUser)?._id?.toString(),
       error: error.message,
     });
     if (error.name === 'ValidationError') {
@@ -404,20 +540,16 @@ export const createService = asyncHandler(async (req: Request, res: Response) =>
 /**
  * Update existing service
  * PUT /api/provider/services/:id
+ * SECURITY FIX: Uses verifyServiceOwnership helper to prevent IDOR
+ * Admins can update any service, providers can only update their own
  */
 export const updateService = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
-  
+  const user = req.user as IUser;
+
   try {
-    // Check if service exists and belongs to provider
-    const existingService = await Service.findOne({
-      _id: id,
-      providerId: (req.user as any)._id.toString()
-    });
-    
-    if (!existingService) {
-      throw new ApiError(404, 'Service not found or access denied');
-    }
+    // SECURITY: Use reusable helper for ownership verification
+    const { service: existingService, isAdmin } = await verifyServiceOwnership(id, user);
 
     // Validate and normalize category/subcategory if being updated
     if (req.body.category || req.body.subcategory) {
@@ -446,7 +578,7 @@ export const updateService = asyncHandler(async (req: Request, res: Response) =>
 
     const updateData: Record<string, unknown> = {
       ...providerEditableFields,
-      updatedBy: (req.user as any)._id,
+      updatedBy: user._id,
       updatedAt: new Date(),
     };
 
@@ -454,18 +586,49 @@ export const updateService = asyncHandler(async (req: Request, res: Response) =>
       updateData.isActive = updateData.status === 'active';
     }
 
+    // FIX: Track if status changed to notify admins
+    const previousStatus = existingService.status;
+    const newStatus = updateData.status as string | undefined;
+    const statusChanged = previousStatus !== newStatus && newStatus !== undefined;
+
     const service = await Service.findByIdAndUpdate(
       id,
       updateData,
       { new: true, runValidators: true }
     ).lean();
-    
+
+    // FIX: Emit socket event when service status changes to notify admins
+    if (statusChanged && service) {
+      const socketServer = getSocketServer();
+      const providerId = user._id.toString();
+
+      if (socketServer) {
+        // Emit event for admin dashboard to refresh pending services list
+        socketServer.emitServiceStatusChanged(
+          service._id.toString(),
+          providerId,
+          service.name,
+          service.status
+        );
+      }
+
+      logger.info('Service status changed by provider', {
+        context: 'ProviderController',
+        action: 'SERVICE_STATUS_CHANGED',
+        serviceId: service._id.toString(),
+        providerId,
+        previousStatus,
+        newStatus: service.status,
+      });
+    }
+
     res.json({
       success: true,
-      message: 'Service updated successfully',
+      message: isAdmin ? 'Service updated successfully (admin override)' : 'Service updated successfully',
       data: { service }
     });
   } catch (error: any) {
+    if (error instanceof ApiError) throw error;
     throw new ApiError(500, 'Failed to update service', error.message);
   }
 });
@@ -473,19 +636,16 @@ export const updateService = asyncHandler(async (req: Request, res: Response) =>
 /**
  * Delete service permanently
  * DELETE /api/provider/services/:id
+ * SECURITY FIX: Uses verifyServiceOwnership helper to prevent IDOR
+ * Admins can delete any service, providers can only delete their own
  */
 export const deleteService = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
-  
+  const user = req.user as IUser;
+
   try {
-    const service = await Service.findOne({
-      _id: id,
-      providerId: (req.user as any)._id.toString()
-    });
-    
-    if (!service) {
-      throw new ApiError(404, 'Service not found or access denied');
-    }
+    // SECURITY: Use reusable helper for ownership verification
+    const { service, isAdmin } = await verifyServiceOwnership(id, user);
 
     const openBooking = await Booking.findOne({
       serviceId: service._id,
@@ -498,12 +658,14 @@ export const deleteService = asyncHandler(async (req: Request, res: Response) =>
         'Cannot delete this service while it has active bookings. Cancel or complete them first.'
       );
     }
-    
+
     await Service.findByIdAndDelete(id);
-    
+
     res.json({
       success: true,
-      message: 'Service permanently deleted'
+      message: isAdmin
+        ? 'Service permanently deleted (admin action)'
+        : 'Service permanently deleted'
     });
   } catch (error: any) {
     if (error instanceof ApiError) throw error;
@@ -514,48 +676,45 @@ export const deleteService = asyncHandler(async (req: Request, res: Response) =>
 /**
  * Toggle service status (active/inactive)
  * PATCH /api/provider/services/:id/status
+ * SECURITY FIX: Uses verifyServiceOwnership helper to prevent IDOR
+ * Admins can toggle any service status, providers can only toggle their own
  */
 export const toggleServiceStatus = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
   const { status } = req.body;
+  const user = req.user as IUser;
 
   // Validate status against SERVICE_STATUS constants
   const validStatuses = ['active', 'inactive'];
   if (!validStatuses.includes(status)) {
     throw new ApiError(400, 'Invalid status. Must be: ' + validStatuses.join(', '));
   }
-  
+
   try {
-    // Check if service exists and belongs to provider
-    const service = await Service.findOne({
-      _id: id,
-      providerId: (req.user as any)._id.toString()
-    });
-    
-    if (!service) {
-      throw new ApiError(404, 'Service not found or access denied');
-    }
-    
+    // SECURITY: Use reusable helper for ownership verification
+    await verifyServiceOwnership(id, user);
+
     const updateData: any = {
       status,
-      updatedBy: (req.user as any)._id,
+      updatedBy: user._id,
       updatedAt: new Date()
     };
-    
+
     updateData.isActive = status === 'active';
-    
+
     const updatedService = await Service.findByIdAndUpdate(
       id,
       updateData,
       { new: true }
     ).lean();
-    
+
     res.json({
       success: true,
       message: `Service status updated to ${status}`,
       data: { service: updatedService }
     });
   } catch (error: any) {
+    if (error instanceof ApiError) throw error;
     throw new ApiError(500, 'Failed to update service status', error.message);
   }
 });
@@ -567,21 +726,17 @@ export const toggleServiceStatus = asyncHandler(async (req: Request, res: Respon
 /**
  * Get service-specific analytics
  * GET /api/provider/services/:id/analytics
+ * SECURITY FIX: Uses verifyServiceOwnership helper to prevent IDOR
+ * Admins can view any service analytics, providers can only view their own
  */
 export const getServiceAnalytics = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
-  
+  const user = req.user as IUser;
+
   try {
-    // Check if service exists and belongs to provider
-    const service = await Service.findOne({
-      _id: id,
-      providerId: (req.user as any)._id.toString()
-    }).lean();
-    
-    if (!service) {
-      throw new ApiError(404, 'Service not found or access denied');
-    }
-    
+    // SECURITY: Use reusable helper for ownership verification
+    const { service } = await verifyServiceOwnership(id, user);
+
     const totalViews = service.searchMetadata.searchCount;
     const totalClicks = service.searchMetadata.clickCount;
     const totalBookings = service.searchMetadata.bookingCount;
@@ -594,12 +749,13 @@ export const getServiceAnalytics = asyncHandler(async (req: Request, res: Respon
       bookingRate: totalClicks > 0 ? (totalBookings / totalClicks) * 100 : 0,
       popularityScore: service.searchMetadata.popularityScore,
     };
-    
+
     res.json({
       success: true,
       data: { analytics }
     });
   } catch (error: any) {
+    if (error instanceof ApiError) throw error;
     throw new ApiError(500, 'Failed to fetch service analytics', error.message);
   }
 });
@@ -610,7 +766,7 @@ export const getServiceAnalytics = asyncHandler(async (req: Request, res: Respon
  */
 export const getProviderInsightsAnalytics = asyncHandler(
   async (req: Request, res: Response) => {
-    const providerId = (req.user as any)._id.toString();
+    const providerId = (req.user as IUser)._id.toString();
     const periodParam = String(req.query.period || '30d');
     const period = (['7d', '30d', '90d'].includes(periodParam)
       ? periodParam
@@ -634,7 +790,7 @@ export const getProviderInsightsAnalytics = asyncHandler(
  */
 export const getOverviewAnalytics = asyncHandler(async (req: Request, res: Response) => {
   try {
-    const providerId = (req.user as any)._id.toString();
+    const providerId = (req.user as IUser)._id.toString();
 
     // Get all provider services
     const services = await Service.find({
@@ -845,7 +1001,7 @@ export const getOverviewAnalytics = asyncHandler(async (req: Request, res: Respo
 export const getProviderOnboardingStatus = asyncHandler(async (req: Request, res: Response) => {
   try {
     // Use authenticated user, or allow query param for admin fallback
-    let providerId = (req.user as any)._id?.toString();
+    let providerId = (req.user as IUser)._id?.toString();
     if (!providerId && req.query.providerId) {
       providerId = req.query.providerId as string;
     }
@@ -871,18 +1027,33 @@ export const getProviderOnboardingStatus = asyncHandler(async (req: Request, res
 /**
  * Get provider's own verification status
  * GET /api/provider/verification
+ * SECURITY FIX: Users can only access their own verification status unless they are admin
  */
 export const getProviderVerification = asyncHandler(async (req: Request, res: Response) => {
   try {
-    // Use authenticated user, or allow query param for admin fallback
-    let providerId = (req.user as any)._id?.toString();
-    if (!providerId && req.query.providerId) {
-      providerId = req.query.providerId as string;
+    const requestingUser = req.user as IUser;
+    const requestingUserId = requestingUser._id?.toString();
+
+    // SECURITY FIX: Only allow users to access their own verification status
+    // Admins can access any provider's verification via provider-ops routes
+    if (!requestingUserId) {
+      throw new ApiError(401, 'User authentication required');
     }
 
-    if (!providerId) {
-      throw new ApiError(401, 'Provider ID not found');
+    // SECURITY FIX: Remove the ability for non-admin users to query other providers
+    // This was an IDOR vulnerability - users could access any provider's documents
+    const requestedProviderId = req.query.providerId as string | undefined;
+
+    // If providerId is specified, only admins can access other providers' verification
+    if (requestedProviderId && requestedProviderId !== requestingUserId) {
+      // Only admins can view other providers' verification status
+      if (requestingUser.role !== 'admin') {
+        throw new ApiError(403, 'Access denied. You can only view your own verification status.');
+      }
     }
+
+    // Use authenticated user's ID (or query param for admin)
+    const providerId = requestedProviderId || requestingUserId;
 
     // Import here to avoid circular dependency
     const { providerOpsService } = await import('../services/providerOps.service');
@@ -894,6 +1065,7 @@ export const getProviderVerification = asyncHandler(async (req: Request, res: Re
       data: documentStatus
     });
   } catch (error: any) {
+    if (error instanceof ApiError) throw error;
     throw new ApiError(500, 'Failed to fetch verification status', error.message);
   }
 });
@@ -903,7 +1075,7 @@ export const getProviderVerification = asyncHandler(async (req: Request, res: Re
  * POST /api/provider/verification/documents
  */
 export const uploadVerificationDocument = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)._id;
+  const providerId = (req.user as IUser)._id;
 
   const { documentType, documentUrl } = req.body;
 
@@ -963,7 +1135,7 @@ export const uploadVerificationDocument = asyncHandler(async (req: Request, res:
  * POST /api/provider/verification/submit
  */
 export const submitVerification = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)._id;
+  const providerId = (req.user as IUser)._id;
 
   const providerProfile = await ProviderProfile.findOne({ userId: providerId });
   if (!providerProfile) {
@@ -990,7 +1162,7 @@ export const submitVerification = asyncHandler(async (req: Request, res: Respons
   const businessName = (providerProfile.businessInfo as any)?.businessName || 'Unknown Provider';
 
   if (socketServer) {
-    socketServer.emitNewProviderSubmission(providerId, businessName);
+    socketServer.emitNewProviderSubmission(providerId.toString(), businessName);
   }
 
   // Create notification for admins
@@ -1030,7 +1202,7 @@ export const submitVerification = asyncHandler(async (req: Request, res: Respons
  * GET /api/provider/portfolio
  */
 export const getPortfolioItems = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)._id;
+  const providerId = (req.user as IUser)._id;
 
   const providerProfile = await ProviderProfile.findOne({ userId: providerId });
   if (!providerProfile) {
@@ -1050,7 +1222,7 @@ export const getPortfolioItems = asyncHandler(async (req: Request, res: Response
  * POST /api/provider/portfolio
  */
 export const createPortfolioItem = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)._id;
+  const providerId = (req.user as IUser)._id;
   const { title, description, category, images, tags, clientTestimonial, isVisible = true } = req.body;
 
   if (!title) {
@@ -1102,24 +1274,15 @@ export const createPortfolioItem = asyncHandler(async (req: Request, res: Respon
 /**
  * Update an existing portfolio item
  * PUT /api/provider/portfolio/:itemId
+ * SECURITY FIX: Uses verifyPortfolioItemOwnership helper to prevent IDOR
  */
 export const updatePortfolioItem = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)._id;
+  const user = req.user as IUser;
   const { itemId } = req.params;
   const { title, description, category, images, tags, clientTestimonial, isVisible } = req.body;
 
-  const providerProfile = await ProviderProfile.findOne({ userId: providerId });
-  if (!providerProfile) {
-    throw new ApiError(404, 'Provider profile not found');
-  }
-
-  const itemIndex = providerProfile.portfolio?.featured.findIndex(
-    (item: any) => item._id?.toString() === itemId || item._id === itemId
-  );
-
-  if (itemIndex === -1 || itemIndex === undefined) {
-    throw new ApiError(404, 'Portfolio item not found');
-  }
+  // SECURITY: Use reusable helper for ownership verification
+  const { providerProfile, itemIndex } = await verifyPortfolioItemOwnership(itemId, user._id);
 
   // Update fields if provided
   if (title) providerProfile.portfolio.featured[itemIndex].title = title;
@@ -1146,15 +1309,14 @@ export const updatePortfolioItem = asyncHandler(async (req: Request, res: Respon
 /**
  * Delete a portfolio item
  * DELETE /api/provider/portfolio/:itemId
+ * SECURITY FIX: Uses verifyPortfolioItemOwnership helper to prevent IDOR
  */
 export const deletePortfolioItem = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)._id;
+  const user = req.user as IUser;
   const { itemId } = req.params;
 
-  const providerProfile = await ProviderProfile.findOne({ userId: providerId });
-  if (!providerProfile) {
-    throw new ApiError(404, 'Provider profile not found');
-  }
+  // SECURITY: Use reusable helper for ownership verification
+  const { providerProfile } = await verifyPortfolioItemOwnership(itemId, user._id);
 
   const initialLength = providerProfile.portfolio?.featured?.length || 0;
   providerProfile.portfolio.featured = providerProfile.portfolio.featured.filter(
@@ -1162,7 +1324,7 @@ export const deletePortfolioItem = asyncHandler(async (req: Request, res: Respon
   );
 
   if (providerProfile.portfolio.featured.length === initialLength) {
-    throw new ApiError(404, 'Portfolio item not found');
+    throw new ApiError(404, 'Portfolio item not found or already deleted');
   }
 
   await providerProfile.save();
@@ -1176,23 +1338,14 @@ export const deletePortfolioItem = asyncHandler(async (req: Request, res: Respon
 /**
  * Add images to an existing portfolio item
  * PATCH /api/provider/portfolio/:itemId/images
+ * SECURITY FIX: Uses verifyPortfolioItemOwnership helper to prevent IDOR
  */
 export const addPortfolioImage = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)._id;
+  const user = req.user as IUser;
   const { itemId } = req.params;
 
-  const providerProfile = await ProviderProfile.findOne({ userId: providerId });
-  if (!providerProfile) {
-    throw new ApiError(404, 'Provider profile not found');
-  }
-
-  const item = providerProfile.portfolio?.featured.find(
-    (i: any) => i._id?.toString() === itemId || i._id === itemId
-  );
-
-  if (!item) {
-    throw new ApiError(404, 'Portfolio item not found');
-  }
+  // SECURITY: Use reusable helper for ownership verification
+  const { providerProfile, item } = await verifyPortfolioItemOwnership(itemId, user._id);
 
   // Process uploaded files
   if (req.files && Array.isArray(req.files)) {
@@ -1215,23 +1368,14 @@ export const addPortfolioImage = asyncHandler(async (req: Request, res: Response
 /**
  * Remove an image from a portfolio item
  * DELETE /api/provider/portfolio/:itemId/images/:imageId
+ * SECURITY FIX: Uses verifyPortfolioItemOwnership helper to prevent IDOR
  */
 export const removePortfolioImage = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)._id;
+  const user = req.user as IUser;
   const { itemId, imageId } = req.params;
 
-  const providerProfile = await ProviderProfile.findOne({ userId: providerId });
-  if (!providerProfile) {
-    throw new ApiError(404, 'Provider profile not found');
-  }
-
-  const item = providerProfile.portfolio?.featured.find(
-    (i: any) => i._id?.toString() === itemId || i._id === itemId
-  );
-
-  if (!item) {
-    throw new ApiError(404, 'Portfolio item not found');
-  }
+  // SECURITY: Use reusable helper for ownership verification
+  const { providerProfile, item } = await verifyPortfolioItemOwnership(itemId, user._id);
 
   const initialLength = item.images?.length || 0;
   item.images = (item.images || []).filter((img: any) => {
@@ -1240,7 +1384,7 @@ export const removePortfolioImage = asyncHandler(async (req: Request, res: Respo
   });
 
   if (item.images.length === initialLength) {
-    throw new ApiError(404, 'Image not found');
+    throw new ApiError(404, 'Image not found in this portfolio item');
   }
 
   await providerProfile.save();
@@ -1261,7 +1405,7 @@ export const removePortfolioImage = asyncHandler(async (req: Request, res: Respo
  * GET /api/provider/settings
  */
 export const getProviderSettings = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)._id;
+  const providerId = (req.user as IUser)._id;
 
   const providerProfile = await ProviderProfile.findOne({ userId: providerId });
   if (!providerProfile) {
@@ -1295,7 +1439,7 @@ export const getProviderSettings = asyncHandler(async (req: Request, res: Respon
  * PATCH /api/provider/settings
  */
 export const updateProviderSettings = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)._id;
+  const providerId = (req.user as IUser)._id;
   const {
     businessSettings,
     locationInfo,

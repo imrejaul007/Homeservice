@@ -16,6 +16,7 @@ import {
   expandQueryWithSynonyms,
   GeoSearchOptions,
 } from '../services/search.service';
+import { escapeRegex } from '../utils/formatBookingListItem';
 
 // ===================================
 // INTERFACES & TYPES
@@ -243,7 +244,9 @@ export const getSearchSuggestions = asyncHandler(async (req: Request, res: Respo
 
     // Fallback to MongoDB suggestions
     // Build tenant filter for suggestions
-    const tenantMatch: any = { isActive: true, name: { $regex: new RegExp(q as string, 'i') } };
+    // FIX: Escape regex special characters to prevent regex injection
+    const escapedQ = escapeRegex(q as string);
+    const tenantMatch: any = { isActive: true, name: { $regex: new RegExp(escapedQ, 'i') } };
     if (!tenantContext.isAdmin && tenantContext.tenantId) {
       tenantMatch.tenantId = tenantContext.tenantId;
     }
@@ -270,8 +273,9 @@ export const getSearchSuggestions = asyncHandler(async (req: Request, res: Respo
       categoryMatch.tenantId = tenantContext.tenantId;
     }
     categoryMatch.$or = [
-      { name: { $regex: new RegExp(q as string, 'i') } },
-      { 'subcategories.name': { $regex: new RegExp(q as string, 'i') } }
+      // FIX: Use escaped search term to prevent regex injection
+      { name: { $regex: new RegExp(escapedQ, 'i') } },
+      { 'subcategories.name': { $regex: new RegExp(escapedQ, 'i') } }
     ];
 
     // Get category suggestions
@@ -333,10 +337,13 @@ export const getTrendingServices = asyncHandler(async (req: Request, res: Respon
       query.tenantId = tenantContext.tenantId;
     }
 
+    // PERFORMANCE FIX: Add projection to limit fields returned
     const trendingServices = await Service.find(query)
-    .populate('provider', 'firstName lastName avatar rating')
-    .sort({ 'searchMetadata.popularityScore': -1, 'searchMetadata.searchCount': -1 })
-    .limit(Number(limit));
+      .select('name category subcategory shortDescription price duration images rating searchMetadata providerId')
+      .populate('providerId', 'firstName lastName avatar')
+      .sort({ 'searchMetadata.popularityScore': -1, 'searchMetadata.searchCount': -1 })
+      .limit(Number(limit))
+      .lean();
 
     res.json({
       success: true,
@@ -707,19 +714,46 @@ export const getServiceById = asyncHandler(async (req: Request, res: Response) =
       serviceQuery.tenantId = tenantContext.tenantId;
     }
 
+    // PERFORMANCE FIX: Add projection to limit fields returned
+    const serviceProjection = {
+      name: 1,
+      category: 1,
+      subcategory: 1,
+      description: 1,
+      shortDescription: 1,
+      price: 1,
+      duration: 1,
+      durationOptions: 1,
+      images: 1,
+      tags: 1,
+      requirements: 1,
+      includedItems: 1,
+      addOns: 1,
+      location: 1,
+      availability: 1,
+      rating: 1,
+      searchMetadata: 1,
+      isPopular: 1,
+      isFeatured: 1,
+      providerId: 1,
+    };
+
     // First get the service - only show active approved services to customers
-    const service = await Service.findOne(serviceQuery).lean();
+    const service = await Service.findOne(serviceQuery, serviceProjection).lean();
 
     if (!service) {
       throw new ApiError(404, 'Service not found or not available');
     }
 
-    // Get provider details from ProviderProfile and User
-    const providerProfile = await ProviderProfile.findOne({ 
-      userId: service.providerId 
-    }).lean();
-    
-    const providerUser = await User.findById(service.providerId).lean();
+    // PERFORMANCE FIX: Batch fetch provider data to avoid N+1 queries
+    const [providerProfile, providerUser] = await Promise.all([
+      ProviderProfile.findOne({ userId: service.providerId })
+        .select('instagramStyleProfile.profilePhoto businessInfo businessType verificationStatus')
+        .lean(),
+      User.findById(service.providerId)
+        .select('firstName lastName')
+        .lean(),
+    ]);
 
     // Combine service with provider information
     const serviceWithProvider = {
@@ -736,28 +770,24 @@ export const getServiceById = asyncHandler(async (req: Request, res: Response) =
           businessType: providerProfile?.businessInfo?.businessType || 'individual'
         },
         rating: {
-          average: (providerProfile as any)?.rating?.average || 0,
-          count: (providerProfile as any)?.rating?.totalReviews || 0
+          average: (providerProfile as any)?.reviewsData?.averageRating || 0,
+          count: (providerProfile as any)?.reviewsData?.totalReviews || 0
         }
       }
     };
-    
-    // Increment click count in background
-    setImmediate(async () => {
-      try {
-        await Service.findByIdAndUpdate(id, {
-          $inc: { 'searchMetadata.clickCount': 1 }
-        });
-      } catch (error) {
-        logger.error('Error incrementing click count', {
-          context: 'SearchController',
-          action: 'INCREMENT_CLICK_ERROR',
-          serviceId: id,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
+
+    // Increment click count in background (non-blocking)
+    Service.findByIdAndUpdate(id, {
+      $inc: { 'searchMetadata.clickCount': 1 }
+    }).catch((error) => {
+      logger.error('Error incrementing click count', {
+        context: 'SearchController',
+        action: 'INCREMENT_CLICK_ERROR',
+        serviceId: id,
+        error: error instanceof Error ? error.message : String(error),
+      });
     });
-    
+
     res.json({
       success: true,
       data: { service: serviceWithProvider }
@@ -805,19 +835,21 @@ export const trackServiceClick = asyncHandler(async (req: Request, res: Response
  */
 export const getPopularServices = asyncHandler(async (req: Request, res: Response) => {
   const { limit = 20, category } = req.query;
-  
+
   try {
     let query: any = { isActive: true, status: 'active', isPopular: true }; // ✅ SECURITY FIX: Only show approved services in popular
     if (category) {
       query.category = category;
     }
-    
+
+    // PERFORMANCE FIX: Add projection to limit fields returned
     const popularServices = await Service.find(query)
-      .populate('provider', 'firstName lastName avatar rating')
+      .select('name category subcategory shortDescription price duration images rating searchMetadata providerId isFeatured')
+      .populate('providerId', 'firstName lastName avatar')
       .sort({ 'searchMetadata.popularityScore': -1, 'rating.average': -1 })
       .limit(Number(limit))
       .lean();
-    
+
     res.json({
       success: true,
       data: { services: popularServices }
@@ -839,22 +871,24 @@ export const getServicesByCategory = asyncHandler(async (req: Request, res: Resp
   try {
     const { query, countQuery } = buildServiceSearchQuery(filters, tenantContext);
     const sortQuery = buildSortQuery(filters);
-    
+
+    // PERFORMANCE FIX: Add projection to limit fields returned
     const [services, totalCount] = await Promise.all([
       Service.find(query)
-        .populate('provider', 'firstName lastName avatar rating')
+        .select('name category subcategory shortDescription price duration images rating tags providerId isPopular isFeatured searchMetadata')
+        .populate('providerId', 'firstName lastName avatar')
         .sort(sortQuery)
         .skip((filters.page - 1) * filters.limit)
         .limit(filters.limit)
         .lean(),
       Service.countDocuments(countQuery)
     ]);
-    
+
     const totalPages = Math.ceil(totalCount / filters.limit);
-    
+
     // Track search counts in background
     incrementSearchCounts(services);
-    
+
     const response: SearchResponse = {
       success: true,
       data: {
@@ -867,7 +901,7 @@ export const getServicesByCategory = asyncHandler(async (req: Request, res: Resp
         }
       }
     };
-    
+
     res.json(response);
   } catch (error: any) {
     throw new ApiError(500, 'Failed to get services by category', error.message);
@@ -914,7 +948,7 @@ export const getSearchAnalyticsSummary = asyncHandler(async (req: Request, res: 
   }
 
   try {
-    const analytics = getSearchAnalytics();
+    const analytics = await getSearchAnalytics();
 
     // Calculate zero-result rate
     const zeroResultRate = analytics.totalSearches > 0
@@ -932,9 +966,9 @@ export const getSearchAnalyticsSummary = asyncHandler(async (req: Request, res: 
         },
         topQueries: analytics.topQueries.slice(0, 20),
         zeroResultQueries: analytics.zeroResultQueries
-          .sort((a, b) => b.count - a.count)
+          .sort((a: { count: number }, b: { count: number }) => b.count - a.count)
           .slice(0, 20)
-          .map(q => ({
+          .map((q: { query: string; count: number; timestamp: number }) => ({
             query: q.query,
             count: q.count,
             lastSeen: new Date(q.timestamp).toISOString()
@@ -965,7 +999,7 @@ export const getRefinementPatterns = asyncHandler(async (req: Request, res: Resp
   }
 
   try {
-    const patterns = analyzeRefinementPatterns();
+    const patterns = await analyzeRefinementPatterns();
 
     res.json({
       success: true,
@@ -1070,14 +1104,14 @@ export const getZeroResultSearches = asyncHandler(async (req: Request, res: Resp
   const { limit = 50, minCount = 1 } = req.query;
 
   try {
-    const analytics = getSearchAnalytics();
+    const analytics = await getSearchAnalytics();
 
     // Filter by minimum count and sort by count descending
     const zeroResults = analytics.zeroResultQueries
-      .filter(q => q.count >= Number(minCount))
-      .sort((a, b) => b.count - a.count)
+      .filter((q: { count: number }) => q.count >= Number(minCount))
+      .sort((a: { count: number }, b: { count: number }) => b.count - a.count)
       .slice(0, Number(limit))
-      .map(q => ({
+      .map((q: { query: string; count: number; timestamp: number }) => ({
         query: q.query,
         occurrences: q.count,
         firstSeen: new Date(q.timestamp).toISOString(),
@@ -1087,7 +1121,7 @@ export const getZeroResultSearches = asyncHandler(async (req: Request, res: Resp
     // Generate content opportunity report
     const contentOpportunities = zeroResults
       .filter(q => q.occurrences >= 3)
-      .map(q => ({
+      .map((q: { query: string; occurrences: number }) => ({
         searchTerm: q.query,
         frequency: q.occurrences,
         recommendation: `Consider adding services or content for: "${q.query}"`

@@ -4,9 +4,11 @@
  * Comprehensive offline synchronization service for NILIN Homeservice app.
  * Queues actions when offline, syncs when back online, handles conflicts.
  * Supports delta sync, priority queuing, and conflict resolution.
- * Uses localStorage for persistence.
+ * Uses Capacitor-safe storage for cross-platform compatibility.
  */
 
+import { Capacitor } from '@capacitor/core';
+import { Preferences } from '@capacitor/preferences';
 import { api } from './api';
 import { offlineStorage, type QueuedRequest } from './OfflineStorage';
 import { deltaSyncEngine } from './DeltaSyncEngine';
@@ -196,7 +198,7 @@ export interface SyncOptions {
 
 class OfflineSyncService {
   private static instance: OfflineSyncService;
-  private isOnline: boolean = navigator.onLine;
+  private isOnline: boolean = typeof navigator !== 'undefined' ? navigator.onLine : true;
   private isSyncing: boolean = false;
   private syncListeners: Set<(stats: SyncStats) => void> = new Set();
   private onlineListeners: Set<(isOnline: boolean) => void> = new Set();
@@ -208,6 +210,9 @@ class OfflineSyncService {
   private readonly MAX_RETRY_DELAY = 30000;
   private readonly RETRY_JITTER = 1000;
   private readonly STORAGE_KEY = 'nilin_offline_actions';
+  // Capacitor support
+  private isNative: boolean;
+  private memoryCache: Map<string, string> = new Map();
 
   // FIX #5: Storage size limit enforcement
   private readonly MAX_QUEUE_SIZE = 100; // Maximum actions in queue
@@ -309,6 +314,8 @@ class OfflineSyncService {
     // Create bound handlers for proper cleanup
     this.boundHandleOnline = () => this.handleOnline();
     this.boundHandleOffline = () => this.handleOffline();
+    // Initialize Capacitor flag
+    this.isNative = typeof window !== 'undefined' && Capacitor.isNativePlatform();
   }
 
   static getInstance(): OfflineSyncService {
@@ -541,13 +548,25 @@ class OfflineSyncService {
   }
 
   // ==========================================================================
-  // Storage Persistence
+  // Storage Persistence (Capacitor-safe)
   // ==========================================================================
 
   private async saveQueueToStorage(): Promise<void> {
     try {
       const actions = Array.from(this.actionQueue.entries());
-      localStorage.setItem(this.STORAGE_KEY, JSON.stringify(actions));
+      const serialized = JSON.stringify(actions);
+
+      // Always update memory cache
+      this.memoryCache.set(this.STORAGE_KEY, serialized);
+
+      if (this.isNative) {
+        await Preferences.set({ key: this.STORAGE_KEY, value: serialized });
+      } else {
+        // Web fallback
+        if (typeof window !== 'undefined' && window.localStorage) {
+          localStorage.setItem(this.STORAGE_KEY, serialized);
+        }
+      }
     } catch (error) {
       console.error('[OfflineSync] Failed to save queue to storage:', error);
     }
@@ -555,10 +574,25 @@ class OfflineSyncService {
 
   private async loadQueueFromStorage(): Promise<void> {
     try {
-      const stored = localStorage.getItem(this.STORAGE_KEY);
+      let stored: string | null = null;
+
+      // Check memory cache first
+      if (this.memoryCache.has(this.STORAGE_KEY)) {
+        stored = this.memoryCache.get(this.STORAGE_KEY) ?? null;
+      } else if (this.isNative) {
+        const result = await Preferences.get({ key: this.STORAGE_KEY });
+        stored = result.value;
+      } else {
+        // Web fallback
+        if (typeof window !== 'undefined' && window.localStorage) {
+          stored = localStorage.getItem(this.STORAGE_KEY);
+        }
+      }
+
       if (stored) {
         const actions: [string, PendingAction][] = JSON.parse(stored);
         this.actionQueue = new Map(actions);
+        this.memoryCache.set(this.STORAGE_KEY, stored);
 
         // Filter out old completed actions
         for (const [id, action] of this.actionQueue.entries()) {

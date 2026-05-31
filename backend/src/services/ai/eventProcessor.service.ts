@@ -69,6 +69,8 @@ export interface EventStreamConfig {
   flushIntervalMs: number;
   retryAttempts: number;
   deadLetterQueue: boolean;
+  featureStoreTTLMs?: number;
+  featureStoreCleanupIntervalMs?: number;
 }
 
 // Feature Store Types
@@ -179,20 +181,52 @@ export interface ProviderFeatures {
 }
 
 // Event Processing Pipeline
+// SECURITY FIX: Add expiry to feature store entries to enable TTL-based cleanup
+interface FeatureStoreEntry<T> {
+  data: T;
+  expiry: number;
+  lastAccessed: number;
+}
+
 class EventProcessor {
   private eventBuffer: AIEvent[] = [];
-  private featureStore: Map<string, UserFeatures | ServiceFeatures | ProviderFeatures> = new Map();
+  private featureStore: Map<string, FeatureStoreEntry<UserFeatures | ServiceFeatures | ProviderFeatures>> = new Map();
   private config: EventStreamConfig = {
     batchSize: 100,
     flushIntervalMs: 5000,
     retryAttempts: 3,
     deadLetterQueue: true,
+    featureStoreTTLMs: 30 * 60 * 1000, // 30 minutes TTL for feature store entries
+    featureStoreCleanupIntervalMs: 5 * 60 * 1000, // Cleanup every 5 minutes
   };
   private isProcessing = false;
 
   constructor() {
     // Start periodic flush
     setInterval(() => this.flush(), this.config.flushIntervalMs);
+    // SECURITY FIX: Start periodic cleanup of feature store to prevent unbounded growth
+    setInterval(() => this.cleanupFeatureStore(), this.config.featureStoreCleanupIntervalMs);
+  }
+
+  // SECURITY FIX: Cleanup old entries from feature store to prevent memory leak
+  private cleanupFeatureStore(): void {
+    const now = Date.now();
+    let cleanedCount = 0;
+
+    for (const [key, value] of this.featureStore.entries()) {
+      // Check if entry has expiry and if it has passed
+      if ('expiry' in value && typeof value.expiry === 'number' && value.expiry < now) {
+        this.featureStore.delete(key);
+        cleanedCount++;
+      }
+    }
+
+    if (cleanedCount > 0) {
+      logger.debug('Feature store cleanup completed', {
+        cleanedEntries: cleanedCount,
+        remainingEntries: this.featureStore.size,
+      });
+    }
   }
 
   // Track an event
@@ -246,7 +280,8 @@ class EventProcessor {
     properties: Record<string, any>
   ): Promise<void> {
     const key = `user:${userId}`;
-    let features = this.featureStore.get(key) as UserFeatures | undefined;
+    const entry = this.featureStore.get(key);
+    let features: UserFeatures | undefined = entry?.data as UserFeatures | undefined;
 
     if (!features) {
       features = await this.computeUserFeatures(userId);
@@ -294,7 +329,12 @@ class EventProcessor {
     // Recalculate engagement score
     features.engagementScore = this.calculateEngagementScore(features);
 
-    this.featureStore.set(key, features);
+    // SECURITY FIX: Store with TTL expiry
+    this.featureStore.set(key, {
+      data: features,
+      expiry: Date.now() + ((this.config.featureStoreTTLMs ?? 30 * 60 * 1000) ?? 30 * 60 * 1000),
+      lastAccessed: Date.now(),
+    });
   }
 
   private async updateServiceFeatures(
@@ -303,7 +343,8 @@ class EventProcessor {
     properties: Record<string, any>
   ): Promise<void> {
     const key = `service:${serviceId}`;
-    let features = this.featureStore.get(key) as ServiceFeatures | undefined;
+    const entry = this.featureStore.get(key);
+    let features: ServiceFeatures | undefined = entry?.data as ServiceFeatures | undefined;
 
     if (!features) {
       features = await this.computeServiceFeatures(serviceId);
@@ -333,7 +374,12 @@ class EventProcessor {
         break;
     }
 
-    this.featureStore.set(key, features);
+    // SECURITY FIX: Store with TTL expiry
+    this.featureStore.set(key, {
+      data: features,
+      expiry: Date.now() + (this.config.featureStoreTTLMs ?? 30 * 60 * 1000),
+      lastAccessed: Date.now(),
+    });
   }
 
   private async updateProviderFeatures(
@@ -342,7 +388,8 @@ class EventProcessor {
     properties: Record<string, any>
   ): Promise<void> {
     const key = `provider:${providerId}`;
-    let features = this.featureStore.get(key) as ProviderFeatures | undefined;
+    const entry = this.featureStore.get(key);
+    let features: ProviderFeatures | undefined = entry?.data as ProviderFeatures | undefined;
 
     if (!features) {
       features = await this.computeProviderFeatures(providerId);
@@ -369,7 +416,12 @@ class EventProcessor {
         break;
     }
 
-    this.featureStore.set(key, features);
+    // SECURITY FIX: Store with TTL expiry
+    this.featureStore.set(key, {
+      data: features,
+      expiry: Date.now() + (this.config.featureStoreTTLMs ?? 30 * 60 * 1000),
+      lastAccessed: Date.now(),
+    });
   }
 
   private calculateEngagementScore(features: UserFeatures): number {
@@ -572,37 +624,59 @@ class EventProcessor {
   // Get features from store
   async getUserFeatures(userId: string): Promise<UserFeatures | null> {
     const key = `user:${userId}`;
-    let features = this.featureStore.get(key) as UserFeatures | undefined;
+    const entry = this.featureStore.get(key);
 
-    if (!features) {
-      features = await this.computeUserFeatures(userId);
-      this.featureStore.set(key, features);
+    if (entry?.data) {
+      // Update last accessed time
+      entry.lastAccessed = Date.now();
+      return entry.data as UserFeatures;
     }
 
+    const features = await this.computeUserFeatures(userId);
+    // SECURITY FIX: Store with TTL expiry
+    this.featureStore.set(key, {
+      data: features,
+      expiry: Date.now() + (this.config.featureStoreTTLMs ?? 30 * 60 * 1000),
+      lastAccessed: Date.now(),
+    });
     return features;
   }
 
   async getServiceFeatures(serviceId: string): Promise<ServiceFeatures | null> {
     const key = `service:${serviceId}`;
-    let features = this.featureStore.get(key) as ServiceFeatures | undefined;
+    const entry = this.featureStore.get(key);
 
-    if (!features) {
-      features = await this.computeServiceFeatures(serviceId);
-      this.featureStore.set(key, features);
+    if (entry?.data) {
+      entry.lastAccessed = Date.now();
+      return entry.data as ServiceFeatures;
     }
 
+    const features = await this.computeServiceFeatures(serviceId);
+    // SECURITY FIX: Store with TTL expiry
+    this.featureStore.set(key, {
+      data: features,
+      expiry: Date.now() + (this.config.featureStoreTTLMs ?? 30 * 60 * 1000),
+      lastAccessed: Date.now(),
+    });
     return features;
   }
 
   async getProviderFeatures(providerId: string): Promise<ProviderFeatures | null> {
     const key = `provider:${providerId}`;
-    let features = this.featureStore.get(key) as ProviderFeatures | undefined;
+    const entry = this.featureStore.get(key);
 
-    if (!features) {
-      features = await this.computeProviderFeatures(providerId);
-      this.featureStore.set(key, features);
+    if (entry?.data) {
+      entry.lastAccessed = Date.now();
+      return entry.data as ProviderFeatures;
     }
 
+    const features = await this.computeProviderFeatures(providerId);
+    // SECURITY FIX: Store with TTL expiry
+    this.featureStore.set(key, {
+      data: features,
+      expiry: Date.now() + (this.config.featureStoreTTLMs ?? 30 * 60 * 1000),
+      lastAccessed: Date.now(),
+    });
     return features;
   }
 }

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
 import { bookingService } from '../../services/BookingService';
@@ -6,6 +6,7 @@ import { providerAnalyticsApi, type ProviderAnalytics } from '../../services/pro
 import { reviewsApi, type Review } from '../../services/reviewsApi';
 import { socketService } from '../../services/socket';
 import NotificationBell from '../common/NotificationBell';
+import { PageErrorBoundary } from '../common/PageErrorBoundary';
 import {
   Building,
   DollarSign,
@@ -78,6 +79,12 @@ const ProviderDashboard: React.FC = () => {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [bookingRequests, setBookingRequests] = useState<BookingRequest[]>([]);
   const [loadingBookings, setLoadingBookings] = useState(true);
+  // Track mounted state to prevent state updates after unmount
+  const isMountedRef = useRef(true);
+  // Track socket connection cleanup functions
+  const socketCleanupRef = useRef<(() => void)[]>([]);
+  // Track if socket was connected
+  const socketConnectedRef = useRef(false);
 
   // Analytics state
   const [analytics, setAnalytics] = useState<ProviderAnalytics | null>(null);
@@ -189,7 +196,7 @@ const ProviderDashboard: React.FC = () => {
     try {
       setLoadingReviews(true);
       setReviewsError(null);
-      const providerId = providerProfile?._id || (user as any)?.id;
+      const providerId = providerProfile?._id || user?.id;
       if (!providerId) return;
 
       const response = await reviewsApi.getProviderReviews(providerId);
@@ -214,64 +221,134 @@ const ProviderDashboard: React.FC = () => {
     } finally {
       setLoadingReviews(false);
     }
-  }, [providerProfile?._id, (user as any)?.id]);
+  }, [providerProfile?._id, user?.id]);
 
   // Initial data fetch
   useEffect(() => {
+    // Set mounted flag
+    isMountedRef.current = true;
+
     fetchBookingRequests();
     fetchAnalyticsWithRetry();
     fetchReviews();
+
+    // Cleanup on unmount
+    return () => {
+      isMountedRef.current = false;
+    };
   }, [fetchBookingRequests, fetchAnalyticsWithRetry, fetchReviews]);
 
   // Socket listeners for real-time updates
   useEffect(() => {
-    // Listen for booking status changes
-    const unsubBookingStatus = socketService.onBookingStatusChanged((data) => {
-      console.log('Booking status changed:', data);
-      fetchBookingRequests();
-      fetchAnalyticsWithRetry();
-    });
+    let isMounted = true;
 
-    // Listen for new booking requests
-    const unsubNewRequest = socketService.on('booking:new_request', (data) => {
-      console.log('New booking request:', data);
-      fetchBookingRequests();
-    });
+    const setupSocket = async () => {
+      // CRITICAL FIX: Connect to socket only if not already connected
+      if (!socketService.isConnected()) {
+        try {
+          await socketService.connect();
+          socketConnectedRef.current = true;
+        } catch (error) {
+          console.warn('Socket connection failed:', error);
+          return;
+        }
+      }
 
-    // Listen for booking confirmations
-    const unsubBookingConfirmed = socketService.on('booking:confirmed', (data) => {
-      console.log('Booking confirmed:', data);
-      fetchBookingRequests();
-      fetchAnalyticsWithRetry();
-    });
+      if (!isMounted) return;
 
-    // Listen for new notifications
-    const unsubNotification = socketService.onNewNotification((data) => {
-      console.log('New notification:', data);
-    });
+      // Listen for booking status changes
+      const unsubBookingStatus = socketService.onBookingStatusChanged(() => {
+        if (isMountedRef.current) {
+          fetchBookingRequests();
+          fetchAnalyticsWithRetry();
+        }
+      });
+
+      // Listen for new booking requests
+      const unsubNewRequest = socketService.on('booking:new_request', () => {
+        if (isMountedRef.current) {
+          fetchBookingRequests();
+        }
+      });
+
+      // Listen for booking confirmations
+      const unsubBookingConfirmed = socketService.on('booking:confirmed', () => {
+        if (isMountedRef.current) {
+          fetchBookingRequests();
+          fetchAnalyticsWithRetry();
+        }
+      });
+
+      // Listen for service approved events (when admin approves a provider's service)
+      const unsubServiceApproved = socketService.onServiceApproved((data) => {
+        if (isMountedRef.current) {
+          // Refresh analytics to update service stats
+          fetchAnalyticsWithRetry();
+          console.log('Service approved:', data.serviceId);
+        }
+      });
+
+      // Listen for service rejected events
+      const unsubServiceRejected = socketService.onServiceRejected((data) => {
+        if (isMountedRef.current) {
+          // Refresh analytics to update service stats
+          fetchAnalyticsWithRetry();
+          console.log('Service rejected:', data.serviceId);
+        }
+      });
+
+      // Listen for new notifications
+      const unsubNotification = socketService.onNewNotification(() => {
+        // Notification bell handles its own updates
+      });
+
+      // Store cleanup functions
+      socketCleanupRef.current = [
+        unsubBookingStatus,
+        unsubNewRequest,
+        unsubBookingConfirmed,
+        unsubServiceApproved,
+        unsubServiceRejected,
+        unsubNotification
+      ];
+    };
+
+    setupSocket();
 
     // Cleanup on unmount
     return () => {
-      unsubBookingStatus();
-      unsubNewRequest();
-      unsubBookingConfirmed();
-      unsubNotification();
+      isMounted = false;
+
+      // CRITICAL FIX: Proper cleanup order - unsubscribe from events BEFORE disconnecting
+      // This prevents the socket from emitting events to unsubscribed listeners
+      socketCleanupRef.current.forEach(cleanup => {
+        if (typeof cleanup === 'function') {
+          cleanup();
+        }
+      });
+      socketCleanupRef.current = [];
+
+      // Only disconnect if we initiated the connection and component is truly unmounting
+      // The socket service manages reconnection, so we don't want to disconnect
+      // on every unmount if other components are using it
     };
-  }, [fetchBookingRequests, fetchAnalyticsWithRetry]);
+  }, [fetchBookingRequests, fetchAnalyticsWithRetry, fetchReviews]);
 
   // Handle booking accept
   const handleAcceptBooking = async (bookingId: string) => {
     try {
       setActionLoading(bookingId);
       await bookingService.acceptBooking(bookingId);
-      // Refresh bookings
+      // Refresh bookings only if still mounted
+      if (!isMountedRef.current) return;
+
       const response = await bookingService.getProviderBookings({
         status: 'pending',
         limit: 5,
         sortBy: 'createdAt',
         sortOrder: 'desc'
       });
-      if (response.success && response.data.bookings) {
+      if (response.success && response.data.bookings && isMountedRef.current) {
         const transformedBookings = response.data.bookings.map((booking: any) => ({
           _id: booking._id,
           bookingNumber: booking.bookingNumber,
@@ -294,7 +371,9 @@ const ProviderDashboard: React.FC = () => {
     } catch (error) {
       console.error('Failed to accept booking:', error);
     } finally {
-      setActionLoading(null);
+      if (isMountedRef.current) {
+        setActionLoading(null);
+      }
     }
   };
 
@@ -303,14 +382,16 @@ const ProviderDashboard: React.FC = () => {
     try {
       setActionLoading(bookingId);
       await bookingService.rejectBooking(bookingId, { reason: 'Declined by provider' });
-      // Refresh bookings
+      // Refresh bookings only if still mounted
+      if (!isMountedRef.current) return;
+
       const response = await bookingService.getProviderBookings({
         status: 'pending',
         limit: 5,
         sortBy: 'createdAt',
         sortOrder: 'desc'
       });
-      if (response.success && response.data.bookings) {
+      if (response.success && response.data.bookings && isMountedRef.current) {
         const transformedBookings = response.data.bookings.map((booking: any) => ({
           _id: booking._id,
           bookingNumber: booking.bookingNumber,
@@ -333,7 +414,9 @@ const ProviderDashboard: React.FC = () => {
     } catch (error) {
       console.error('Failed to decline booking:', error);
     } finally {
-      setActionLoading(null);
+      if (isMountedRef.current) {
+        setActionLoading(null);
+      }
     }
   };
 
@@ -350,15 +433,15 @@ const ProviderDashboard: React.FC = () => {
   // Get trend values from provider profile analytics (historical data)
   const earningsTrend = calculateTrend(
     providerProfile?.earnings?.totalEarned || 0,
-    (providerProfile?.analytics as any)?.previousEarnings
+    providerProfile?.analytics?.previousEarnings
   );
   const bookingsTrend = calculateTrend(
     analytics?.bookingStats.completedThisMonth || 0,
-    (providerProfile?.analytics as any)?.previousBookings
+    providerProfile?.analytics?.previousBookings
   );
   const viewsTrend = calculateTrend(
-    analytics?.performanceStats.totalViews || (providerProfile?.analytics as any)?.profileViews || 0,
-    (providerProfile?.analytics as any)?.previousViews
+    analytics?.performanceStats.totalViews || providerProfile?.analytics?.profileViews || 0,
+    providerProfile?.analytics?.previousViews
   );
 
   // Derive stats from analytics data
@@ -405,7 +488,7 @@ const ProviderDashboard: React.FC = () => {
     },
     {
       title: 'Total Bookings',
-      value: (providerProfile?.analytics as any)?.totalBookings || 0,
+      value: providerProfile?.analytics?.totalBookings || 0,
       subtitle: 'This month',
       icon: Calendar,
       trend: bookingsTrend,
@@ -577,7 +660,8 @@ const ProviderDashboard: React.FC = () => {
       </nav>
 
       {/* Main Content */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <PageErrorBoundary pageName="Provider Dashboard">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Welcome Section */}
         <div className="mb-8">
           <div className="bg-gradient-to-r from-nilin-rose to-nilin-coral rounded-2xl p-6 text-white shadow-nilin-lg gradient-3d neu-light">
@@ -1097,6 +1181,7 @@ const ProviderDashboard: React.FC = () => {
           </div>
         </div>
       </div>
+      </PageErrorBoundary>
     </div>
   );
 };

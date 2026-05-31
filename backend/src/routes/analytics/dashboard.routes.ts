@@ -249,6 +249,7 @@ router.get('/geographic', authenticate, asyncHandler(async (req: Request, res: R
       totalBookings,
       totalRevenue,
       averageRevenuePerBooking: Math.round(avgRevenuePerBooking * 100) / 100,
+      topCity: data[0]?.city || data[0]?.region || 'N/A',
     },
     meta: {
       startDate: start.toISOString(),

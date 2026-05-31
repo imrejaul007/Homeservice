@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import mongoose from 'mongoose';
 import logger from '../utils/logger';
-import { getCircuitBreakerHealth, getAllBreakerMetrics } from '../services/circuitBreaker';
+import { getCircuitBreakerHealth, getAllCircuitBreakerStats } from '../services/circuitBreaker.service';
 
 /**
  * Metrics endpoint for monitoring and alerting systems
@@ -72,7 +72,7 @@ export const getMetrics = async (_req: Request, res: Response) => {
       // Circuit breaker health
       circuitBreakers: {
         ...getCircuitBreakerHealth(),
-        metrics: getAllBreakerMetrics(),
+        metrics: getAllCircuitBreakerStats(),
       },
     };
 

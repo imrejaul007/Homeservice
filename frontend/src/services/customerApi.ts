@@ -1,4 +1,17 @@
 import { api } from './api';
+import { AxiosError } from 'axios';
+
+// Error class for customer API errors
+export class CustomerApiError extends Error {
+  constructor(
+    message: string,
+    public statusCode?: number,
+    public code?: string
+  ) {
+    super(message);
+    this.name = 'CustomerApiError';
+  }
+}
 
 export interface Address {
   _id: string;
@@ -53,8 +66,15 @@ class CustomerApiService {
    * Get all addresses for the current user
    */
   async getAddresses(): Promise<AddressesResponse> {
-    const response = await api.get('/customers/addresses');
-    return response.data;
+    try {
+      const response = await api.get('/customers/addresses');
+      return response.data;
+    } catch (error) {
+      const err = error as AxiosError;
+      const message = (err.response?.data as { message?: string })?.message || err.message || 'Failed to fetch addresses';
+      console.error('[customerApi] getAddresses error:', message, err.response?.status);
+      throw new CustomerApiError(message, err.response?.status, 'GET_ADDRESSES_FAILED');
+    }
   }
 
   /**
@@ -70,8 +90,15 @@ class CustomerApiService {
     coordinates?: { lat: number; lng: number };
     isDefault?: boolean;
   }): Promise<{ success: boolean; data: { address: Address } }> {
-    const response = await api.post('/customers/addresses', address);
-    return response.data;
+    try {
+      const response = await api.post('/customers/addresses', address);
+      return response.data;
+    } catch (error) {
+      const err = error as AxiosError;
+      const message = (err.response?.data as { message?: string })?.message || err.message || 'Failed to add address';
+      console.error('[customerApi] addAddress error:', message, err.response?.status);
+      throw new CustomerApiError(message, err.response?.status, 'ADD_ADDRESS_FAILED');
+    }
   }
 
   /**
@@ -90,24 +117,45 @@ class CustomerApiService {
       isDefault: boolean;
     }>
   ): Promise<{ success: boolean; data: { address: Address } }> {
-    const response = await api.patch(`/customers/addresses/${addressId}`, updates);
-    return response.data;
+    try {
+      const response = await api.patch(`/customers/addresses/${addressId}`, updates);
+      return response.data;
+    } catch (error) {
+      const err = error as AxiosError;
+      const message = (err.response?.data as { message?: string })?.message || err.message || 'Failed to update address';
+      console.error('[customerApi] updateAddress error:', message, err.response?.status);
+      throw new CustomerApiError(message, err.response?.status, 'UPDATE_ADDRESS_FAILED');
+    }
   }
 
   /**
    * Delete an address
    */
   async deleteAddress(addressId: string): Promise<{ success: boolean; message: string }> {
-    const response = await api.delete(`/customers/addresses/${addressId}`);
-    return response.data;
+    try {
+      const response = await api.delete(`/customers/addresses/${addressId}`);
+      return response.data;
+    } catch (error) {
+      const err = error as AxiosError;
+      const message = (err.response?.data as { message?: string })?.message || err.message || 'Failed to delete address';
+      console.error('[customerApi] deleteAddress error:', message, err.response?.status);
+      throw new CustomerApiError(message, err.response?.status, 'DELETE_ADDRESS_FAILED');
+    }
   }
 
   /**
    * Set address as default
    */
   async setDefaultAddress(addressId: string): Promise<{ success: boolean }> {
-    const response = await api.patch(`/customers/addresses/${addressId}`, { isDefault: true });
-    return response.data;
+    try {
+      const response = await api.patch(`/customers/addresses/${addressId}`, { isDefault: true });
+      return response.data;
+    } catch (error) {
+      const err = error as AxiosError;
+      const message = (err.response?.data as { message?: string })?.message || err.message || 'Failed to set default address';
+      console.error('[customerApi] setDefaultAddress error:', message, err.response?.status);
+      throw new CustomerApiError(message, err.response?.status, 'SET_DEFAULT_ADDRESS_FAILED');
+    }
   }
 
   // ============================================
@@ -118,8 +166,15 @@ class CustomerApiService {
    * Get all payment methods
    */
   async getPaymentMethods(): Promise<PaymentMethodsResponse> {
-    const response = await api.get('/customers/payment-methods');
-    return response.data;
+    try {
+      const response = await api.get('/customers/payment-methods');
+      return response.data;
+    } catch (error) {
+      const err = error as AxiosError;
+      const message = (err.response?.data as { message?: string })?.message || err.message || 'Failed to fetch payment methods';
+      console.error('[customerApi] getPaymentMethods error:', message, err.response?.status);
+      throw new CustomerApiError(message, err.response?.status, 'GET_PAYMENT_METHODS_FAILED');
+    }
   }
 
   /**
@@ -130,24 +185,45 @@ class CustomerApiService {
     token: string; // Payment gateway token
     isDefault?: boolean;
   }): Promise<{ success: boolean; data: { paymentMethod: PaymentMethod } }> {
-    const response = await api.post('/customers/payment-methods', paymentMethod);
-    return response.data;
+    try {
+      const response = await api.post('/customers/payment-methods', paymentMethod);
+      return response.data;
+    } catch (error) {
+      const err = error as AxiosError;
+      const message = (err.response?.data as { message?: string })?.message || err.message || 'Failed to add payment method';
+      console.error('[customerApi] addPaymentMethod error:', message, err.response?.status);
+      throw new CustomerApiError(message, err.response?.status, 'ADD_PAYMENT_METHOD_FAILED');
+    }
   }
 
   /**
    * Delete a payment method
    */
   async deletePaymentMethod(paymentMethodId: string): Promise<{ success: boolean; message: string }> {
-    const response = await api.delete(`/customers/payment-methods/${paymentMethodId}`);
-    return response.data;
+    try {
+      const response = await api.delete(`/customers/payment-methods/${paymentMethodId}`);
+      return response.data;
+    } catch (error) {
+      const err = error as AxiosError;
+      const message = (err.response?.data as { message?: string })?.message || err.message || 'Failed to delete payment method';
+      console.error('[customerApi] deletePaymentMethod error:', message, err.response?.status);
+      throw new CustomerApiError(message, err.response?.status, 'DELETE_PAYMENT_METHOD_FAILED');
+    }
   }
 
   /**
    * Set payment method as default
    */
   async setDefaultPaymentMethod(paymentMethodId: string): Promise<{ success: boolean }> {
-    const response = await api.patch(`/customers/payment-methods/${paymentMethodId}`, { isDefault: true });
-    return response.data;
+    try {
+      const response = await api.patch(`/customers/payment-methods/${paymentMethodId}`, { isDefault: true });
+      return response.data;
+    } catch (error) {
+      const err = error as AxiosError;
+      const message = (err.response?.data as { message?: string })?.message || err.message || 'Failed to set default payment method';
+      console.error('[customerApi] setDefaultPaymentMethod error:', message, err.response?.status);
+      throw new CustomerApiError(message, err.response?.status, 'SET_DEFAULT_PAYMENT_METHOD_FAILED');
+    }
   }
 }
 

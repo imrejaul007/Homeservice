@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { toast } from 'react-hot-toast';
 import { ErrorBoundary } from '../../components/common/ErrorBoundary';
 import {
   ArrowLeft,
@@ -91,7 +92,9 @@ const RefundManagement: React.FC<RefundManagementProps> = () => {
       setRefunds(response.data);
       setPagination(response.pagination);
     } catch (err: any) {
-      setError(err.message || 'Failed to load refunds');
+      const message = err.message || 'Failed to load refunds';
+      setError(message);
+      toast.error(message);
     } finally {
       setIsLoading(false);
     }
@@ -106,6 +109,7 @@ const RefundManagement: React.FC<RefundManagementProps> = () => {
       }
     } catch (err) {
       console.error('Failed to load stats:', err);
+      toast.error(err instanceof Error ? err.message : 'Failed to load statistics. Please try again.');
     }
   }, []);
 
@@ -118,7 +122,9 @@ const RefundManagement: React.FC<RefundManagementProps> = () => {
         setSelectedRefund(response.data);
       }
     } catch (err: any) {
-      setError(err.message || 'Failed to load refund details');
+      const message = err.message || 'Failed to load refund details';
+      setError(message);
+      toast.error(message);
     } finally {
       setIsLoadingDetail(false);
     }
@@ -165,13 +171,16 @@ const RefundManagement: React.FC<RefundManagementProps> = () => {
         notes: processData.notes,
         rejectionReason: processData.rejectionReason,
       });
+      toast.success(`Refund ${processData.action === 'approve' ? 'approved' : 'rejected'} successfully`);
       await fetchRefunds();
       await fetchRefundDetail(selectedRefund._id);
       await fetchStats();
       setShowProcessModal(false);
       setProcessData({ action: 'approve', notes: '', rejectionReason: '' });
     } catch (err: any) {
-      setError(err.message || 'Failed to process refund');
+      const message = err.message || 'Failed to process refund';
+      setError(message);
+      toast.error(message);
     } finally {
       setIsProcessing(false);
     }

@@ -2,21 +2,32 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { Sparkles, MapPin, TrendingUp, Heart } from 'lucide-react';
-import { recommendationEngine } from '../../services/marketplace/RecommendationEngine';
+import { recommendationEngine, type ServiceRecommendation } from '../../services/marketplace/RecommendationEngine';
 import { useRetentionStore } from '../../services/product/RetentionService';
 
+interface ServiceItem {
+  id: string;
+  name: string;
+  image?: string;
+  price: number;
+  rating?: number;
+}
+
 interface SmartDiscoveryProps {
-  services: any[];
-  onServiceClick?: (service: any) => void;
+  services: ServiceItem[];
+  onServiceClick?: (service: ServiceItem) => void;
   title?: string;
   maxItems?: number;
 }
 
-const reasonConfig = {
+type RecommendationReason = ServiceRecommendation['reason'];
+
+const reasonConfig: Record<string, { icon: typeof Sparkles; color: string; bg: string; label: string }> = {
   personalized: { icon: Sparkles, color: 'text-purple-600', bg: 'bg-purple-50', label: 'For you' },
   nearby: { icon: MapPin, color: 'text-blue-600', bg: 'bg-blue-50', label: 'Near you' },
   trending: { icon: TrendingUp, color: 'text-green-600', bg: 'bg-green-50', label: 'Trending' },
   popular: { icon: Heart, color: 'text-nilin-coral', bg: 'bg-nilin-blush', label: 'Popular' },
+  similar: { icon: Sparkles, color: 'text-purple-600', bg: 'bg-purple-50', label: 'Similar' },
 };
 
 export function SmartDiscovery({
@@ -25,7 +36,7 @@ export function SmartDiscovery({
   title = 'Recommended for you',
   maxItems = 6
 }: SmartDiscoveryProps) {
-  const [recommendations, setRecommendations] = useState<any[]>([]);
+  const [recommendations, setRecommendations] = useState<ServiceRecommendation[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const { recentlyViewed, engagement } = useRetentionStore();
 
@@ -41,8 +52,8 @@ export function SmartDiscovery({
 
         const recs = await recommendationEngine.getServiceRecommendations(services, maxItems);
         setRecommendations(recs);
-      } catch (error) {
-        console.error('Recommendations error:', error);
+      } catch {
+        // Recommendations error silently handled
       } finally {
         setIsLoading(false);
       }
@@ -51,7 +62,7 @@ export function SmartDiscovery({
     if (services.length > 0) {
       fetchRecommendations();
     }
-  }, [services, recentlyViewed, engagement.favoriteServices]);
+  }, [services, recentlyViewed, engagement.favoriteServices, maxItems]);
 
   if (isLoading || recommendations.length === 0) {
     return null;
@@ -71,7 +82,7 @@ export function SmartDiscovery({
           const service = services.find(s => s.id === rec.id);
           if (!service) return null;
 
-          const reasonStyle = (reasonConfig as Record<string, typeof reasonConfig.popular>)[rec.reason] || reasonConfig.popular;
+          const reasonStyle = reasonConfig[rec.reason] || reasonConfig.popular;
           const ReasonIcon = reasonStyle.icon;
 
           return (

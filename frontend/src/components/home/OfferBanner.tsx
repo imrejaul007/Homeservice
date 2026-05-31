@@ -34,9 +34,10 @@ const OfferBanner: React.FC = () => {
         setOffers(data);
 
         // If API returns isClaimed status, use it
+        // FIX: Added isClaimed property to Offer type check
         const claimedFromApi = data
-          .filter((o: any) => o.isClaimed)
-          .map((o: any) => o._id);
+          .filter((o) => 'isClaimed' in o && o.isClaimed)
+          .map((o) => o._id);
         if (claimedFromApi.length > 0) {
           setClaimedOfferIds(claimedFromApi);
         }
@@ -51,8 +52,6 @@ const OfferBanner: React.FC = () => {
   const handleClaim = async (offer: Offer, e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    console.log('Claim clicked for:', offer.code, 'offerId:', offer._id);
-    console.log('isAuthenticated:', isAuthenticated);
 
     if (!isAuthenticated) {
       toast.error('Please sign in to claim offers');
@@ -64,7 +63,6 @@ const OfferBanner: React.FC = () => {
 
     try {
       const result = await offerService.claimOffer(offer._id);
-      console.log('Claim result:', result);
       if (result.success) {
         toast.success(result.message || 'Offer claimed! Redirecting to book...');
         setJustClaimed(offer._id);
@@ -79,8 +77,7 @@ const OfferBanner: React.FC = () => {
       } else {
         toast.error(result.message || 'Failed to claim offer');
       }
-    } catch (error: any) {
-      console.error('Claim error:', error);
+    } catch {
       toast.error('Failed to claim offer. Please try again.');
     } finally {
       setClaimingId(null);
@@ -119,7 +116,8 @@ const OfferBanner: React.FC = () => {
   };
 
   const hasServiceLinking = (offer: Offer): boolean => {
-    return (offer as any).applicableServices?.length > 0 || (offer as any).applicableCategories?.length > 0;
+    // FIX: Added parentheses to fix operator precedence warning
+    return (offer.applicableServices?.length ?? 0) > 0 || (offer.applicableCategories?.length ?? 0) > 0;
   };
 
   const renderSkeleton = () => (

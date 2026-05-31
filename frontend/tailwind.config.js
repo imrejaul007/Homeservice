@@ -127,6 +127,14 @@ export default {
           from: { opacity: 1, transform: 'translateX(0)' },
           to: { opacity: 0, transform: 'translateX(100%)' },
         },
+        "slide-in-right": {
+          from: { opacity: 0, transform: 'translateX(100%)' },
+          to: { opacity: 1, transform: 'translateX(0)' },
+        },
+        "slide-out-right": {
+          from: { opacity: 1, transform: 'translateX(0)' },
+          to: { opacity: 0, transform: 'translateX(100%)' },
+        },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
@@ -135,6 +143,8 @@ export default {
         "slide-up": "slide-up 0.4s ease-out",
         "toast-slide-in": "toast-slide-in 0.3s ease-out",
         "toast-fade-out": "toast-fade-out 0.2s ease-in forwards",
+        "slide-in-right": "slide-in-right 0.3s ease-out",
+        "slide-out-right": "slide-out-right 0.2s ease-in forwards",
       },
     },
   },

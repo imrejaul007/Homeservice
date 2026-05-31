@@ -67,10 +67,11 @@ const NotificationBell: React.FC<NotificationBellProps> = ({ userId, userRole = 
       setIsConnected(false);
     });
 
-    // Cleanup on unmount: unsubscribe and disconnect
+    // Cleanup on unmount: only unsubscribe, let singleton manage socket lifecycle
     return () => {
       unsubscribe?.();
-      socketService.disconnect();
+      // CRITICAL FIX: Do NOT disconnect socket here - it's a singleton shared across all components
+      // The socketService singleton manages its own lifecycle
     };
   }, [userId, handleNewNotification]);
 
@@ -83,8 +84,12 @@ const NotificationBell: React.FC<NotificationBellProps> = ({ userId, userRole = 
         params: { limit: 10 }
       });
       if (response.data?.success) {
-        setNotifications(response.data.data || []);
-        setUnreadCount(response.data.unreadCount || 0);
+        const payload = response.data.data;
+        const list = Array.isArray(payload)
+          ? payload
+          : payload?.notifications ?? [];
+        setNotifications(list);
+        setUnreadCount(payload?.unreadCount ?? response.data.unreadCount ?? 0);
       }
     } catch (error) {
       console.error('Failed to fetch notifications:', error);

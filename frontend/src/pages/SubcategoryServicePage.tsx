@@ -14,6 +14,7 @@ import ServicePrerequisites from '../components/service/ServicePrerequisites';
 import ServiceEquipment from '../components/service/ServiceEquipment';
 import ServiceFAQ from '../components/service/ServiceFAQ';
 import ServiceReviews from '../components/service/ServiceReviews';
+import { PageErrorBoundary } from '../components/common/PageErrorBoundary';
 import type { ProviderCard } from '../types/provider';
 
 // Subcategory type
@@ -205,7 +206,8 @@ const SubcategoryServicePage: React.FC = () => {
           </div>
         </div>
 
-        {/* Hero Section */}
+        <PageErrorBoundary pageName={`${displayName} Service`}>
+          {/* Hero Section */}
         <div className="relative h-[280px] md:h-[380px] overflow-hidden animate-nilin-in" style={{animationDelay: '0.1s'}}>
           <img
             src={heroImage}
@@ -322,6 +324,7 @@ const SubcategoryServicePage: React.FC = () => {
             <ServiceFAQ faqs={content.faqs} />
           </div>
         )}
+        </PageErrorBoundary>
 
         {/* Mobile Fixed Bottom Bar */}
         <div className="fixed bottom-0 left-0 right-0 bg-white/95 glass-nilin border-t border-nilin-blush/30 px-4 py-3 z-50 md:hidden shadow-nilin">

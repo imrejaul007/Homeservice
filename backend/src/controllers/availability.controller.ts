@@ -615,7 +615,7 @@ export const removeBlockedPeriod = asyncHandler(async (req: Request, res: Respon
 
 export const getProviderAvailableSlots = asyncHandler(async (req: Request, res: Response) => {
   const { providerId } = req.params;
-  const { date, duration = '60' } = req.query;
+  const { date, duration = '60', timezone: clientTimezone } = req.query;
 
   if (!providerId) {
     return res.status(400).json({
@@ -631,7 +631,21 @@ export const getProviderAvailableSlots = asyncHandler(async (req: Request, res: 
     });
   }
 
-  const requestDate = new Date(date as string);
+  // FIX: Get provider's timezone for consistent slot calculations
+  const providerTimezone = await getProviderTimezone(providerId);
+  const requestDateStr = date as string;
+
+  // Parse date - use provider's timezone for correct day of week
+  let requestDate: Date;
+  try {
+    requestDate = new Date(requestDateStr);
+    // Adjust for timezone offset to get correct day in provider's timezone
+    const tzOffset = getTimezoneOffset(providerTimezone);
+    requestDate = new Date(requestDate.getTime() + tzOffset);
+  } catch (e) {
+    requestDate = new Date(requestDateStr);
+  }
+
   const dayOfWeek = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'][requestDate.getDay()];
 
   const providerProfile = await ProviderProfile.findOne({ userId: providerId });
@@ -639,7 +653,7 @@ export const getProviderAvailableSlots = asyncHandler(async (req: Request, res: 
   if (!providerProfile || !providerProfile.availability?.schedule) {
     return res.json({
       success: true,
-      data: { slots: [] }
+      data: { slots: [], timezone: providerTimezone }
     });
   }
 
@@ -648,43 +662,63 @@ export const getProviderAvailableSlots = asyncHandler(async (req: Request, res: 
   if (!daySchedule?.isAvailable || !daySchedule.timeSlots) {
     return res.json({
       success: true,
-      data: { slots: [] }
+      data: { slots: [], timezone: providerTimezone }
     });
   }
 
-  const dateString = requestDate.toISOString().split('T')[0];
+  // FIX: Use timezone-aware date comparison
+  const dateString = requestDateStr.split('T')[0];
   const dateException = providerProfile.availability.exceptions.find(
-    exception => exception.date.toISOString().split('T')[0] === dateString
+    exception => {
+      const exceptionDateStr = exception.date instanceof Date
+        ? exception.date.toISOString().split('T')[0]
+        : String(exception.date).split('T')[0];
+      return exceptionDateStr === dateString;
+    }
   );
 
   if (dateException && dateException.type === 'unavailable') {
     return res.json({
       success: true,
-      data: { slots: [] }
+      data: { slots: [], timezone: providerTimezone }
     });
   }
 
+  // FIX: Calculate start/end of day in provider's timezone
+  const tzOffset = getTimezoneOffset(providerTimezone);
   const startOfDay = new Date(requestDate);
   startOfDay.setHours(0, 0, 0, 0);
+  const startOfDayUtc = new Date(startOfDay.getTime() - tzOffset);
+
   const endOfDay = new Date(requestDate);
   endOfDay.setHours(23, 59, 59, 999);
+  const endOfDayUtc = new Date(endOfDay.getTime() - tzOffset);
 
   const existingBookings = await Booking.find({
     providerId,
     scheduledDate: {
-      $gte: startOfDay,
-      $lte: endOfDay
+      $gte: startOfDayUtc,
+      $lte: endOfDayUtc
     },
     status: { $in: ['pending', 'confirmed', 'in_progress'] }
   });
 
   const availableSlots: string[] = [];
-  const slotDuration = parseInt(duration as string);
+  const slotDuration = parseInt(duration as string, 10);
 
-  // Filter past slots for today
+  // FIX: Validate slot duration
+  if (isNaN(slotDuration) || slotDuration < 15 || slotDuration > 480) {
+    return res.status(400).json({
+      success: false,
+      message: 'Duration must be between 15 and 480 minutes'
+    });
+  }
+
+  // FIX: Use timezone-aware current time comparison
   const now = new Date();
-  const isToday = requestDate.toISOString().split('T')[0] === now.toISOString().split('T')[0];
-  const nowMs = now.getTime();
+  const nowInProviderTz = new Date(now.getTime() + tzOffset);
+  const isToday = dateString === nowInProviderTz.toISOString().split('T')[0];
+  const nowMsInTz = nowInProviderTz.getTime();
 
   for (const timeSlot of daySchedule.timeSlots) {
     if (!timeSlot.startTime || !timeSlot.endTime) {
@@ -696,27 +730,33 @@ export const getProviderAvailableSlots = asyncHandler(async (req: Request, res: 
     }
 
     try {
-      const startHour = parseInt(timeSlot.startTime.split(':')[0]);
-      const startMinute = parseInt(timeSlot.startTime.split(':')[1]);
-      const endHour = parseInt(timeSlot.endTime.split(':')[0]);
-      const endMinute = parseInt(timeSlot.endTime.split(':')[1]);
+      const startHour = parseInt(timeSlot.startTime.split(':')[0], 10);
+      const startMinute = parseInt(timeSlot.startTime.split(':')[1], 10);
+      const endHour = parseInt(timeSlot.endTime.split(':')[0], 10);
+      const endMinute = parseInt(timeSlot.endTime.split(':')[1], 10);
 
-      let currentTime = new Date(requestDate);
-      currentTime.setHours(startHour, startMinute, 0, 0);
+      // Create slot times in provider's timezone
+      const slotStartBase = new Date(requestDate);
+      slotStartBase.setHours(startHour, startMinute, 0, 0);
 
       const slotEndTime = new Date(requestDate);
       slotEndTime.setHours(endHour, endMinute, 0, 0);
 
-      while (currentTime.getTime() + slotDuration * 60 * 1000 <= slotEndTime.getTime()) {
-        const slotStart = new Date(currentTime);
-        const slotEnd = new Date(currentTime.getTime() + slotDuration * 60 * 1000);
+      // Iterate through time slots
+      let currentSlotTime = new Date(slotStartBase);
+      const slotDurationMs = slotDuration * 60 * 1000;
+
+      while (currentSlotTime.getTime() + slotDurationMs <= slotEndTime.getTime()) {
+        const slotStart = new Date(currentSlotTime);
+        const slotEnd = new Date(currentSlotTime.getTime() + slotDurationMs);
 
         // Skip past slots for today
-        if (isToday && slotStart.getTime() <= nowMs) {
-          currentTime.setTime(currentTime.getTime() + slotDuration * 60 * 1000);
+        if (isToday && slotStart.getTime() <= nowMsInTz) {
+          currentSlotTime.setTime(currentSlotTime.getTime() + slotDurationMs);
           continue;
         }
 
+        // Check conflicts using timezone-aware comparison
         const hasConflict = existingBookings.some(booking => {
           const bookingStart = new Date(booking.scheduledDate);
           const bookingEnd = new Date(booking.estimatedEndTime);
@@ -724,18 +764,16 @@ export const getProviderAvailableSlots = asyncHandler(async (req: Request, res: 
         });
 
         if (!hasConflict) {
-          const timeString = slotStart.toLocaleTimeString('en-US', {
-            hour12: false,
-            hour: '2-digit',
-            minute: '2-digit'
-          });
+          const hours = String(slotStart.getHours()).padStart(2, '0');
+          const minutes = String(slotStart.getMinutes()).padStart(2, '0');
+          const timeString = `${hours}:${minutes}`;
 
           if (!availableSlots.includes(timeString)) {
             availableSlots.push(timeString);
           }
         }
 
-        currentTime.setTime(currentTime.getTime() + slotDuration * 60 * 1000);
+        currentSlotTime.setTime(currentSlotTime.getTime() + slotDurationMs);
       }
     } catch (error) {
       logger.error('Error processing time slot', {
@@ -750,9 +788,69 @@ export const getProviderAvailableSlots = asyncHandler(async (req: Request, res: 
 
   return res.json({
     success: true,
-    data: { slots: availableSlots }
+    data: { slots: availableSlots, timezone: providerTimezone }
   });
 });
+
+/**
+ * Get timezone offset in milliseconds for a given timezone string
+ * Returns the offset that should be ADDED to UTC to get local time in the target timezone
+ */
+function getTimezoneOffset(timezone: string): number {
+  // Common timezone offsets in milliseconds
+  const timezoneOffsets: Record<string, number> = {
+    'UTC': 0,
+    'GMT': 0,
+    'UAE': 4 * 60 * 60 * 1000,        // Dubai, Abu Dhabi
+    'Asia/Dubai': 4 * 60 * 60 * 1000,
+    'Asia/Abu_Dhabi': 4 * 60 * 60 * 1000,
+    'Asia/Kolkata': 5.5 * 60 * 60 * 1000, // India
+    'IST': 5.5 * 60 * 60 * 1000,
+    'Europe/London': 0,
+    'GMT+1': 1 * 60 * 60 * 1000,
+    'Europe/Paris': 1 * 60 * 60 * 1000,
+    'Europe/Berlin': 1 * 60 * 60 * 1000,
+    'US/Eastern': -5 * 60 * 60 * 1000,
+    'US/Pacific': -8 * 60 * 60 * 1000,
+  };
+
+  if (timezoneOffsets[timezone] !== undefined) {
+    return timezoneOffsets[timezone];
+  }
+
+  // Try to calculate from IANA timezone using Intl API
+  try {
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: 'numeric',
+      second: 'numeric',
+      hour12: false
+    });
+
+    // Get current time in target timezone
+    const parts = formatter.formatToParts(new Date());
+    const getPart = (type: string) => parseInt(parts.find(p => p.type === type)?.value || '0', 10);
+
+    const tzYear = getPart('year');
+    const tzMonth = getPart('month') - 1;
+    const tzDay = getPart('day');
+    const tzHour = getPart('hour');
+    const tzMinute = getPart('minute');
+    const tzSecond = getPart('second');
+
+    const tzDate = new Date(Date.UTC(tzYear, tzMonth, tzDay, tzHour, tzMinute, tzSecond));
+    const localDate = new Date();
+
+    return tzDate.getTime() - localDate.getTime();
+  } catch {
+    // Default to UTC+4 (UAE timezone)
+    return 4 * 60 * 60 * 1000;
+  }
+}
 
 export const checkTimeSlotAvailability = asyncHandler(async (req: Request, res: Response) => {
   const { providerId } = req.params;

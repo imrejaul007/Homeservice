@@ -1,10 +1,10 @@
-import { eventBus, EventTypes, DomainEvent } from './eventBus';
+import { eventBus, EVENT_TYPES, PlatformEvent } from '../event-bus/index';
 import { ApiError, ERROR_CODES } from '../utils/ApiError';
 import logger from '../utils/logger';
 
 export interface SagaStep {
-  execute(event: DomainEvent): Promise<void>;
-  compensate?(event: DomainEvent): Promise<void>;
+  execute(event: PlatformEvent): Promise<void>;
+  compensate?(event: PlatformEvent): Promise<void>;
 }
 
 export interface Saga {
@@ -20,7 +20,7 @@ class SagaOrchestrator {
     logger.debug('Saga registered', { context: 'SagaOrchestrator', sagaName: saga.name });
   }
 
-  async execute(sagaName: string, initialEvent: DomainEvent): Promise<void> {
+  async execute(sagaName: string, initialEvent: PlatformEvent): Promise<void> {
     const saga = this.sagas.get(sagaName);
     if (!saga) {
       throw ApiError.notFound(`Saga not found: ${sagaName}`, ERROR_CODES.NOT_FOUND);
@@ -72,13 +72,7 @@ export const bookingSaga: Saga = {
       execute: async (event) => {
         // Step 2: Reserve provider
         console.log('Saga: Reserving provider');
-        eventBus.publish({
-          id: `saga-${Date.now()}`,
-          type: EventTypes.BOOKING_CONFIRMED,
-          payload: event.payload,
-          metadata: event.metadata,
-          version: 1,
-        });
+        eventBus.publish(EVENT_TYPES.BOOKING_CONFIRMED, event.data, event.metadata);
       },
       compensate: async (event) => {
         console.log('Saga: Releasing provider');

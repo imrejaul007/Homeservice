@@ -32,8 +32,10 @@
   },
   "dependencies": {
     "@sentry/node": "^10.52.0",
+    "@socket.io/redis-adapter": "^8.3.0",
     "@types/node-cron": "^3.0.11",
     "@types/nodemailer": "^7.0.1",
+    "@types/pdfkit": "^0.17.6",
     "@types/socket.io": "^3.0.1",
     "axios": "^1.12.2",
     "bcryptjs": "^2.4.3",
@@ -62,6 +64,7 @@
     "node-cron": "^4.2.1",
     "nodemailer": "^7.0.6",
     "opossum": "^9.0.0",
+    "pdfkit": "^0.18.0",
     "qrcode": "^1.5.4",
     "resend": "^2.0.0",
     "socket.io": "^4.8.3",
@@ -70,6 +73,7 @@
     "swagger-jsdoc": "^6.2.0",
     "swagger-ui-express": "^5.0.0",
     "twilio": "^6.0.2",
+    "uuid": "^14.0.0",
     "winston": "^3.11.0"
   },
   "devDependencies": {

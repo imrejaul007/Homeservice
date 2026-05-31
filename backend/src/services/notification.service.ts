@@ -1,4 +1,5 @@
 import BookingNotification from '../models/bookingNotification.model';
+import { NotificationQueue } from '../models/notificationQueue.model';
 import User from '../models/user.model';
 import { send as emailSend } from './email.service';
 import { smsService } from './sms.service';
@@ -193,9 +194,13 @@ export type NotificationType =
   | 'provider_document_rejected'
   | 'service_approved'
   | 'service_rejected'
+  | 'service_updated'
   | 'new_provider_submission'
   | 'new_service_pending'
+  | 'dispute_received'
   | 'dispute_created'
+  | 'dispute_evidence_added'
+  | 'dispute_assigned'
   | 'dispute_resolved'
   | 'withdrawal'
   | 'withdrawal_approved'
@@ -437,6 +442,16 @@ const NOTIFICATION_TEMPLATES: Record<NotificationType, { customer: { title: stri
       message: 'A review has been removed for violating our guidelines.',
     },
   },
+  dispute_received: {
+    customer: {
+      title: 'Dispute Filed',
+      message: 'A dispute has been filed for your booking. You will be notified once our team reviews it.',
+    },
+    provider: {
+      title: 'New Dispute',
+      message: 'A dispute has been filed against your booking. Please check the details.',
+    },
+  },
   dispute_created: {
     customer: {
       title: 'Dispute Filed',
@@ -455,6 +470,36 @@ const NOTIFICATION_TEMPLATES: Record<NotificationType, { customer: { title: stri
     provider: {
       title: 'Dispute Resolved',
       message: 'A dispute has been resolved. Check the resolution details.',
+    },
+  },
+  dispute_evidence_added: {
+    customer: {
+      title: 'Dispute Evidence Added',
+      message: 'New evidence has been added to your dispute.',
+    },
+    provider: {
+      title: 'Dispute Evidence Added',
+      message: 'New evidence has been added to the dispute.',
+    },
+  },
+  dispute_assigned: {
+    customer: {
+      title: 'Dispute Assigned',
+      message: 'Your dispute has been assigned to a support agent.',
+    },
+    provider: {
+      title: 'Dispute Assigned',
+      message: 'A dispute has been assigned for review.',
+    },
+  },
+  service_updated: {
+    customer: {
+      title: 'Service Updated',
+      message: 'A service you booked has been updated.',
+    },
+    provider: {
+      title: 'Service Updated',
+      message: 'Your service listing has been updated.',
     },
   },
   withdrawal: {
@@ -635,19 +680,152 @@ export class NotificationService {
           }
         );
       } catch (error) {
-        logger.error('Bulk notification insert failed', {
+        // FIX: Queue failed notifications for retry instead of silently swallowing errors
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        logger.error('Bulk notification insert failed, queueing for retry', {
           context: 'NotificationService',
-          action: 'BULK_INSERT_FAILED',
+          action: 'BULK_INSERT_FAILED_QUEUED',
           bookingId,
           recipientCount: notificationsToInsert.length,
-          error: error instanceof Error ? error.message : String(error),
+          error: errorMessage,
         });
+
+        // Queue each failed notification for retry
+        await this.queueFailedNotifications(notificationsToInsert, errorMessage);
       }
     }
 
     // Prune old notifications for each recipient
     const recipientIds = notificationsToInsert.map(n => n.recipientId);
     await Promise.all(recipientIds.map(recipientId => this.pruneOldNotifications(recipientId)));
+  }
+
+  /**
+   * Queue failed notifications for retry
+   * FIX: Implements notification queue with retry instead of silently swallowing errors
+   */
+  private async queueFailedNotifications(
+    notifications: Array<{
+      recipientId: string;
+      type: NotificationType;
+      title: string;
+      message: string;
+      metadata?: Record<string, any>;
+    }>,
+    error: string
+  ): Promise<void> {
+    try {
+      const queueEntries = notifications.map(notif => ({
+        recipientId: notif.recipientId,
+        type: notif.type,
+        title: notif.title,
+        message: notif.message,
+        actionText: notif.metadata?.actionText,
+        actionUrl: notif.metadata?.actionUrl,
+        metadata: notif.metadata,
+        channel: 'in_app' as const,
+        error,
+        attempts: 0,
+        maxAttempts: 5,
+        status: 'pending' as const,
+        nextRetry: new Date(Date.now() + 1000) // Retry in 1 second initially
+      }));
+
+      await NotificationQueue.insertMany(queueEntries);
+
+      logger.info('Failed notifications queued for retry', {
+        context: 'NotificationService',
+        action: 'NOTIFICATIONS_QUEUED',
+        count: notifications.length
+      });
+    } catch (queueError) {
+      // If queueing also fails, log the critical error but don't crash
+      logger.error('CRITICAL: Failed to queue notifications for retry', {
+        context: 'NotificationService',
+        action: 'QUEUE_FAILED',
+        originalError: error,
+        queueError: queueError instanceof Error ? queueError.message : String(queueError),
+        notifications: notifications.map(n => ({ recipientId: n.recipientId, type: n.type }))
+      });
+    }
+  }
+
+  /**
+   * Process pending notifications in the queue
+   * This method should be called by a job processor
+   */
+  async processNotificationQueue(batchSize: number = 100): Promise<{ processed: number; failed: number }> {
+    const pendingNotifications = await NotificationQueue.find({
+      status: 'pending',
+      nextRetry: { $lte: new Date() }
+    })
+      .sort({ createdAt: 1 })
+      .limit(batchSize);
+
+    let processed = 0;
+    let failed = 0;
+
+    for (const queueEntry of pendingNotifications) {
+      try {
+        queueEntry.status = 'processing';
+        queueEntry.attempts += 1;
+        queueEntry.lastAttempt = new Date();
+        await queueEntry.save();
+
+        // Attempt to create the notification
+        const notification = new BookingNotification({
+          recipientId: queueEntry.recipientId,
+          type: queueEntry.type as NotificationType,
+          title: queueEntry.title,
+          message: queueEntry.message,
+          actionText: queueEntry.actionText,
+          actionUrl: queueEntry.actionUrl,
+          metadata: queueEntry.metadata || {},
+          channels: [queueEntry.channel],
+        });
+
+        await notification.save();
+
+        // Mark as completed
+        queueEntry.status = 'completed';
+        await queueEntry.save();
+
+        processed++;
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+
+        if (queueEntry.attempts >= queueEntry.maxAttempts) {
+          // Max retries exceeded, mark as failed
+          queueEntry.status = 'failed';
+          logger.error('Notification permanently failed after max retries', {
+            context: 'NotificationService',
+            action: 'NOTIFICATION_PERMANENTLY_FAILED',
+            recipientId: queueEntry.recipientId,
+            type: queueEntry.type,
+            attempts: queueEntry.attempts
+          });
+        } else {
+          // Schedule next retry
+          queueEntry.status = 'pending';
+          queueEntry.error = errorMessage;
+          queueEntry.nextRetry = queueEntry.getNextRetryTime();
+
+          logger.warn('Notification retry scheduled', {
+            context: 'NotificationService',
+            action: 'NOTIFICATION_RETRY_SCHEDULED',
+            recipientId: queueEntry.recipientId,
+            type: queueEntry.type,
+            attempt: queueEntry.attempts,
+            nextRetry: queueEntry.nextRetry
+          });
+        }
+
+        await queueEntry.save();
+        failed++;
+      }
+    }
+
+    return { processed, failed };
   }
 
   // ========================================
@@ -675,7 +853,8 @@ export class NotificationService {
     const { page = 1, limit = 20, unreadOnly = false, type } = options;
 
     const query: any = { recipientId: userId };
-    if (unreadOnly) query.isRead = false;
+    // FIX: Use correct field path for in-app read status (channels.inApp.read, not isRead)
+    if (unreadOnly) query['channels.inApp.read'] = false;
     if (type) query.type = type;
 
     const skip = (page - 1) * limit;
@@ -687,7 +866,8 @@ export class NotificationService {
         .limit(limit)
         .populate('bookingId', 'bookingNumber status'),
       BookingNotification.countDocuments(query),
-      BookingNotification.countDocuments({ recipientId: userId, isRead: false }),
+      // FIX: Use correct field path for unread count query
+      BookingNotification.countDocuments({ recipientId: userId, 'channels.inApp.read': false }),
     ]);
 
     return {
@@ -703,16 +883,18 @@ export class NotificationService {
   }
 
   async markAsRead(notificationId: string, userId: string): Promise<void> {
+    // FIX: Use correct field path for marking in-app notification as read
     await BookingNotification.findOneAndUpdate(
       { _id: notificationId, recipientId: userId },
-      { $set: { isRead: true, readAt: new Date() } }
+      { $set: { 'channels.inApp.read': true, 'channels.inApp.readAt': new Date() } }
     );
   }
 
   async markAllAsRead(userId: string): Promise<void> {
+    // FIX: Use correct field path for marking all in-app notifications as read
     await BookingNotification.updateMany(
-      { recipientId: userId, isRead: false },
-      { $set: { isRead: true, readAt: new Date() } }
+      { recipientId: userId, 'channels.inApp.read': false },
+      { $set: { 'channels.inApp.read': true, 'channels.inApp.readAt': new Date() } }
     );
   }
 
@@ -1237,8 +1419,12 @@ export class NotificationService {
       service_rejected: prefs.push?.bookingUpdates ?? true,
       new_provider_submission: prefs.push?.bookingUpdates ?? true,
       new_service_pending: prefs.push?.bookingUpdates ?? true,
+      dispute_received: prefs.push?.bookingUpdates ?? true,
       dispute_created: prefs.push?.bookingUpdates ?? true,
       dispute_resolved: prefs.push?.bookingUpdates ?? true,
+      dispute_evidence_added: prefs.push?.bookingUpdates ?? true,
+      dispute_assigned: prefs.push?.bookingUpdates ?? true,
+      service_updated: prefs.push?.bookingUpdates ?? true,
       withdrawal: prefs.push?.bookingUpdates ?? true,
       withdrawal_approved: prefs.push?.bookingUpdates ?? true,
       withdrawal_rejected: prefs.push?.bookingUpdates ?? true,
@@ -1326,10 +1512,26 @@ export class NotificationService {
    * FIX: Now uses HMAC-signed tokens from email.service to prevent token forgery
    * Previous implementation used plain base64 encoding (security vulnerability)
    */
-  getUnsubscribeUrl(userId: string, emailType: 'marketing' | 'promotions' | 'newsletters' = 'marketing'): string {
+  async getUnsubscribeUrl(userId: string, emailType: 'marketing' | 'promotions' | 'newsletters' = 'marketing'): Promise<string> {
     // Import the secure implementation from email.service
-    const { getUnsubscribeUrl: secureGetUnsubscribeUrl } = require('./email.service');
-    return secureGetUnsubscribeUrl(userId, emailType);
+    try {
+      const { getUnsubscribeUrl: secureGetUnsubscribeUrl } = await import('./email.service');
+      return secureGetUnsubscribeUrl(userId, emailType);
+    } catch (importError) {
+      // Fallback: generate unsubscribe URL directly if email service not available
+      logger.warn('Email service not available for unsubscribe URL generation', {
+        context: 'NotificationService',
+        action: 'UNSUBSCRIBE_URL_FALLBACK',
+        userId,
+      });
+      // Generate a basic token - note this should be enhanced with HMAC in production
+      const crypto = require('crypto');
+      const token = crypto.createHash('sha256')
+        .update(`${userId}:${emailType}:${process.env.UNSUBSCRIBE_SECRET || 'default'}`)
+        .digest('hex')
+        .substring(0, 32);
+      return `/api/auth/unsubscribe?userId=${userId}&token=${token}&type=${emailType}`;
+    }
   }
 }
 

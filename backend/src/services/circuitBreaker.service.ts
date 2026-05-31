@@ -250,3 +250,62 @@ export const withCircuitBreaker = <T>(
 export const getAllCircuitBreakerStats = (): CircuitBreakerStats[] => {
   return Array.from(circuitBreakers.values()).map(cb => cb.getStats());
 };
+
+// Get metrics for a specific circuit breaker
+export const getBreakerMetrics = (name: string): CircuitBreakerStats | null => {
+  const circuit = circuitBreakers.get(name);
+  if (!circuit) return null;
+  return circuit.getStats();
+};
+
+// Get all breaker metrics (alias for backward compatibility)
+export const getAllBreakerMetrics = (): CircuitBreakerStats[] => {
+  return getAllCircuitBreakerStats();
+};
+
+// Get health status of all circuit breakers
+export const getCircuitBreakerHealth = (): {
+  healthy: boolean;
+  breakers: Array<{
+    name: string;
+    state: CircuitState;
+    healthy: boolean;
+  }>;
+} => {
+  const breakers: Array<{
+    name: string;
+    state: CircuitState;
+    healthy: boolean;
+  }> = [];
+
+  let healthy = true;
+
+  for (const [name, circuit] of circuitBreakers.entries()) {
+    const state = circuit.getState();
+    const isHealthy = state !== CircuitState.OPEN;
+    breakers.push({
+      name,
+      state,
+      healthy: isHealthy,
+    });
+
+    if (!isHealthy) healthy = false;
+  }
+
+  return { healthy, breakers };
+};
+
+// Reset a specific circuit breaker
+export const resetCircuitBreaker = (name: string): boolean => {
+  const circuit = circuitBreakers.get(name);
+  if (!circuit) return false;
+  circuit.reset();
+  return true;
+};
+
+// Reset all circuit breakers
+export const resetAllCircuitBreakers = (): void => {
+  for (const [, circuit] of circuitBreakers.entries()) {
+    circuit.reset();
+  }
+};

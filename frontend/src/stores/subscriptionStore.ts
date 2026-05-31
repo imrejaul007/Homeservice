@@ -5,6 +5,7 @@ import {
   type Subscription,
   type Membership,
   type SubscriptionPlan,
+  type PlanType,
   getSubscription,
   subscribe,
   cancelSubscriptionSimple,
@@ -27,7 +28,7 @@ interface SubscriptionState {
   // Extended actions
   fetchMembership: () => Promise<void>;
   fetchPlans: () => Promise<void>;
-  changePlan: (plan: string, billingCycle?: 'monthly' | 'yearly') => Promise<boolean>;
+  changePlan: (plan: PlanType, billingCycle?: 'monthly' | 'yearly') => Promise<boolean>;
   reactivateSubscription: () => Promise<boolean>;
   checkPermission: (action: 'booking' | 'featuredListing') => Promise<boolean>;
   clearError: () => void;
@@ -48,8 +49,9 @@ export const useSubscriptionStore = create<SubscriptionState>()(
         try {
           const sub = await getSubscription();
           set({ subscription: sub, isLoading: false });
-        } catch (err: any) {
-          set({ error: err.message || 'Failed to fetch subscription', isLoading: false });
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : 'Failed to fetch subscription';
+          set({ error: message, isLoading: false });
         }
       },
 
@@ -59,8 +61,9 @@ export const useSubscriptionStore = create<SubscriptionState>()(
           await subscribe(tier);
           await get().fetchSubscription();
           return true;
-        } catch (err: any) {
-          set({ error: err.message || 'Failed to subscribe', isLoading: false });
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : 'Failed to subscribe';
+          set({ error: message, isLoading: false });
           return false;
         }
       },
@@ -71,8 +74,9 @@ export const useSubscriptionStore = create<SubscriptionState>()(
           await cancelSubscriptionSimple();
           await get().fetchSubscription();
           return true;
-        } catch (err: any) {
-          set({ error: err.message || 'Failed to cancel subscription', isLoading: false });
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : 'Failed to cancel subscription';
+          set({ error: message, isLoading: false });
           return false;
         }
       },
@@ -83,8 +87,9 @@ export const useSubscriptionStore = create<SubscriptionState>()(
           await upgradeSubscription(tier);
           await get().fetchSubscription();
           return true;
-        } catch (err: any) {
-          set({ error: err.message || 'Failed to upgrade subscription', isLoading: false });
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : 'Failed to upgrade subscription';
+          set({ error: message, isLoading: false });
           return false;
         }
       },
@@ -95,8 +100,9 @@ export const useSubscriptionStore = create<SubscriptionState>()(
         try {
           const response = await subscriptionApi.getMembership();
           set({ membership: response.data, isLoading: false });
-        } catch (err: any) {
-          set({ error: err.message || 'Failed to fetch membership', isLoading: false });
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : 'Failed to fetch membership';
+          set({ error: message, isLoading: false });
         }
       },
 
@@ -104,19 +110,26 @@ export const useSubscriptionStore = create<SubscriptionState>()(
         try {
           const response = await subscriptionApi.getPlans();
           set({ availablePlans: response.data });
-        } catch (err: any) {
-          set({ error: err.message || 'Failed to fetch plans' });
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : 'Failed to fetch plans';
+          set({ error: message });
         }
       },
 
       changePlan: async (plan: string, billingCycle = 'monthly') => {
         set({ isLoading: true, error: null });
         try {
-          const response = await subscriptionApi.changePlan(plan as any, { billingCycle });
+          // Validate plan is one of the allowed PlanType values
+          const validPlans: PlanType[] = ['free', 'basic', 'premium', 'enterprise'];
+          if (!validPlans.includes(plan as PlanType)) {
+            throw new Error(`Invalid plan: ${plan}. Must be one of: ${validPlans.join(', ')}`);
+          }
+          const response = await subscriptionApi.changePlan(plan as PlanType, { billingCycle });
           set({ subscription: response.data, isLoading: false });
           return true;
-        } catch (err: any) {
-          set({ error: err.message || 'Failed to change plan', isLoading: false });
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : 'Failed to change plan';
+          set({ error: message, isLoading: false });
           return false;
         }
       },
@@ -127,8 +140,9 @@ export const useSubscriptionStore = create<SubscriptionState>()(
           const response = await subscriptionApi.reactivateSubscription();
           set({ subscription: response.data, isLoading: false });
           return true;
-        } catch (err: any) {
-          set({ error: err.message || 'Failed to reactivate subscription', isLoading: false });
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : 'Failed to reactivate subscription';
+          set({ error: message, isLoading: false });
           return false;
         }
       },

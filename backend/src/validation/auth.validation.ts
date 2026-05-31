@@ -17,30 +17,63 @@ const passwordSchema = Joi.string()
   });
 
 // Email validation schema
+// FIX: Stricter email validation to prevent typos and improve deliverability
 const emailSchema = Joi.string()
-  .email({ tlds: { allow: false } })
+  .email({
+    tlds: { allow: ['com', 'net', 'org', 'edu', 'gov', 'io', 'co', 'ai', 'me', 'info', 'biz'] },
+    minDomainSegments: 2,
+    maxDomainSegments: 4,
+  })
   .lowercase()
-  .max(255)
+  .max(254)
+  .trim()
   .required()
   .messages({
-    'string.email': 'Please provide a valid email address',
-    'string.max': 'Email cannot exceed 255 characters',
-    'any.required': 'Email is required'
+    'string.email': 'Please provide a valid email address (e.g., user@example.com)',
+    'string.max': 'Email cannot exceed 254 characters',
+    'any.required': 'Email is required',
+    'string.empty': 'Email cannot be empty'
+  })
+  .custom((value, helpers) => {
+    // Additional sanitization - remove any invisible characters
+    const sanitized = value.replace(/[​-‍﻿]/g, '');
+    if (sanitized !== value) {
+      return sanitized;
+    }
+    return value;
   });
 
 // Phone validation schema
+// FIX: Stricter phone validation to prevent typos and ensure consistency
 const phoneSchema = Joi.string()
   .allow('', null)
   .optional()
   .custom((value, helpers) => {
     if (!value || value === '') return value; // Allow empty
-    if (!/^[\+]?[(]?[\d\s\-\(\)]{10,}$/.test(value)) {
+
+    // Normalize phone number - remove common formatting characters
+    const normalized = value.replace(/[\s\-\(\)\.]/g, '');
+
+    // Check for valid phone patterns
+    // Accepts: +1234567890, 1234567890, 001234567890 (country code variants)
+    // Minimum 10 digits, maximum 15 digits (E.164 standard)
+    const digitsOnly = normalized.replace(/[^\d]/g, '');
+
+    if (digitsOnly.length < 10 || digitsOnly.length > 15) {
       return helpers.error('string.pattern.base');
     }
-    return value;
+
+    // Check for invalid patterns (all same digit, too few unique digits, etc.)
+    const uniqueDigits = new Set(digitsOnly).size;
+    if (uniqueDigits < 3) {
+      return helpers.error('string.pattern.base');
+    }
+
+    // Format to consistent pattern (E.164 if international, or national format)
+    return digitsOnly.startsWith('+') ? digitsOnly : `+${digitsOnly}`;
   })
   .messages({
-    'string.pattern.base': 'Please provide a valid phone number'
+    'string.pattern.base': 'Please provide a valid phone number (10-15 digits, may include country code)'
   });
 
 // Name validation schema

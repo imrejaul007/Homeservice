@@ -37,25 +37,35 @@ export interface IProviderVerification extends Document {
     };
   }>;
 
-  // Background check status
-  backgroundCheck: {
-    status: 'pending' | 'in_progress' | 'passed' | 'failed';
-    provider: string; // Third-party provider name (e.g., 'checkr', 'sterling')
-    reportId?: string;
-    initiatedAt?: Date;
-    completedAt?: Date;
+  // Background checks - array to support multiple check types per provider
+  backgroundChecks: Array<{
+    checkId: string;
+    type: 'identity' | 'criminal' | 'address' | 'employment' | 'education' | 'financial' | 'reference';
+    status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'needs_review';
+    priority: 'low' | 'medium' | 'high' | 'urgent';
+    requestDate: Date;
+    completedDate?: Date;
+    expiryDate?: Date;
     result?: {
-      criminalCheck: boolean;
-      sexOffenderCheck: boolean;
-      sanctionsCheck: boolean;
-      notes?: string;
+      verified: boolean;
+      score: number;
+      details: string;
+      documents?: Array<{
+        type: string;
+        url: string;
+        verified: boolean;
+      }>;
     };
-  };
+    retryCount: number;
+    lastRetryDate?: Date;
+    assignedTo?: string;
+    notes: string;
+  }>;
 
   // Fraud detection flags
   fraudFlags: Array<{
     _id?: mongoose.Types.ObjectId;
-    type: 'duplicate_account' | 'suspicious_document' | 'unusual_pattern' | 'address_mismatch' | 'velocity_check_failed' | 'high_risk_country';
+    type: 'duplicate_account' | 'suspicious_document' | 'unusual_pattern' | 'address_mismatch' | 'velocity_check_failed' | 'high_risk_country' | 'inappropriate_content' | 'fake_portfolio';
     severity: 'low' | 'medium' | 'high' | 'critical';
     description: string;
     detectedAt: Date;
@@ -176,23 +186,53 @@ const providerVerificationSchema = new Schema<IProviderVerification>(
       },
     }],
 
-    backgroundCheck: {
+    backgroundChecks: [{
+      checkId: {
+        type: String,
+        required: true,
+      },
+      type: {
+        type: String,
+        enum: ['identity', 'criminal', 'address', 'employment', 'education', 'financial', 'reference'],
+        required: true,
+      },
       status: {
         type: String,
-        enum: ['pending', 'in_progress', 'passed', 'failed'],
+        enum: ['pending', 'in_progress', 'completed', 'failed', 'needs_review'],
         default: 'pending',
       },
-      provider: String,
-      reportId: String,
-      initiatedAt: Date,
-      completedAt: Date,
-      result: {
-        criminalCheck: Boolean,
-        sexOffenderCheck: Boolean,
-        sanctionsCheck: Boolean,
-        notes: String,
+      priority: {
+        type: String,
+        enum: ['low', 'medium', 'high', 'urgent'],
+        default: 'medium',
       },
-    },
+      requestDate: {
+        type: Date,
+        default: Date.now,
+      },
+      completedDate: Date,
+      expiryDate: Date,
+      result: {
+        verified: Boolean,
+        score: Number,
+        details: String,
+        documents: [{
+          type: String,
+          url: String,
+          verified: Boolean,
+        }],
+      },
+      retryCount: {
+        type: Number,
+        default: 0,
+      },
+      lastRetryDate: Date,
+      assignedTo: String,
+      notes: {
+        type: String,
+        default: '',
+      },
+    }],
 
     fraudFlags: [{
       type: {
@@ -288,7 +328,9 @@ const providerVerificationSchema = new Schema<IProviderVerification>(
 // Indexes for performance
 providerVerificationSchema.index({ status: 1, createdAt: -1 });
 providerVerificationSchema.index({ 'fraudFlags.resolved': 1, 'fraudFlags.severity': 1 });
-providerVerificationSchema.index({ 'backgroundCheck.status': 1 });
+providerVerificationSchema.index({ 'backgroundChecks.status': 1 });
+providerVerificationSchema.index({ 'backgroundChecks.type': 1 });
+providerVerificationSchema.index({ 'backgroundChecks.checkId': 1 }, { sparse: true });
 providerVerificationSchema.index({ expiresAt: 1 }, { sparse: true });
 providerVerificationSchema.index({ 'documents.type': 1, 'documents.verified': 1 });
 
@@ -345,11 +387,14 @@ providerVerificationSchema.virtual('verificationProgress').get(function() {
   // KYC Score (30%)
   progress += (this.kycScore / 100) * 30;
 
-  // Background check (30%)
-  if (this.backgroundCheck.status === 'passed') {
-    progress += 30;
-  } else if (this.backgroundCheck.status === 'in_progress') {
-    progress += 15;
+  // Background check (30%) - check if all required checks are completed
+  const completedChecks = this.backgroundChecks?.filter(c => c.status === 'completed').length || 0;
+  const totalChecks = this.backgroundChecks?.length || 0;
+  if (totalChecks > 0) {
+    const checkProgress = (completedChecks / totalChecks) * 30;
+    // Bonus if all checks passed
+    const allPassed = this.backgroundChecks.every(c => c.status === 'completed');
+    progress += allPassed ? 30 : checkProgress;
   }
 
   return Math.min(100, Math.round(progress));

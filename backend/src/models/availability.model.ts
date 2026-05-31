@@ -2,6 +2,10 @@ import mongoose, { Document, Schema, Model } from 'mongoose';
 
 export interface IAvailability extends Document {
   _id: mongoose.Types.ObjectId;
+
+  // Multi-tenant support
+  tenantId?: mongoose.Types.ObjectId;
+
   providerId: mongoose.Types.ObjectId;
 
   // Weekly Schedule
@@ -140,6 +144,13 @@ const BlockedPeriodSchema = new Schema({
 
 // Main availability schema
 const AvailabilitySchema = new Schema<IAvailability>({
+  // Multi-tenant support
+  tenantId: {
+    type: Schema.Types.ObjectId,
+    ref: 'Tenant',
+    index: true
+  },
+
   providerId: {
     type: Schema.Types.ObjectId,
     ref: 'User',
@@ -198,6 +209,33 @@ const AvailabilitySchema = new Schema<IAvailability>({
 
 // Indexes for query optimization
 AvailabilitySchema.index({ providerId: 1 }, { unique: true });
+
+// Tenant isolation indexes
+AvailabilitySchema.index({ tenantId: 1, providerId: 1 });
+
+// FIX: Add index for date override queries (efficient lookup by date)
+AvailabilitySchema.index({ 'dateOverrides.date': 1 });
+
+// FIX: Add index for blocked period queries
+AvailabilitySchema.index({ 'blockedPeriods.startDate': 1, 'blockedPeriods.endDate': 1 });
+
+// FIX: Add TTL index for auto-cleanup of old blocked periods (after 1 year)
+AvailabilitySchema.index({ 'blockedPeriods.createdAt': 1 }, { expireAfterSeconds: 31536000, partialFilterExpression: {} });
+
+// Pre-save hook to clean up expired blocked periods
+AvailabilitySchema.pre('save', function(next) {
+  const oneYearAgo = new Date();
+  oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+
+  // Filter out old blocked periods
+  if (this.blockedPeriods && this.blockedPeriods.length > 0) {
+    this.blockedPeriods = this.blockedPeriods.filter(
+      (period: any) => period.createdAt > oneYearAgo
+    );
+  }
+
+  next();
+});
 
 // Create and export the model
 const Availability: Model<IAvailability> = mongoose.model<IAvailability>('Availability', AvailabilitySchema);

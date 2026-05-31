@@ -2,6 +2,9 @@ import mongoose, { Schema, Document } from 'mongoose';
 import crypto from 'crypto';
 
 export interface IApiKey extends Document {
+  // Multi-tenant support
+  tenantId?: mongoose.Types.ObjectId;
+
   name: string;
   keyPrefix: string;
   keyHash: string;
@@ -28,6 +31,13 @@ export interface IApiKeyModel extends mongoose.Model<IApiKey> {
 
 const apiKeySchema = new Schema<IApiKey, IApiKeyModel>(
   {
+    // Multi-tenant support
+    tenantId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Tenant',
+      index: true
+    },
+
     name: {
       type: String,
       required: [true, 'API key name is required'],
@@ -100,6 +110,10 @@ const apiKeySchema = new Schema<IApiKey, IApiKeyModel>(
 // Compound indexes for efficient queries
 apiKeySchema.index({ userId: 1, isActive: 1 });
 apiKeySchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+
+// Tenant isolation indexes
+apiKeySchema.index({ tenantId: 1, userId: 1 });
+apiKeySchema.index({ tenantId: 1, isActive: 1 });
 
 /**
  * Generate a new API key

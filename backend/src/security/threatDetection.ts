@@ -117,7 +117,7 @@ class ThreatDetection {
         rule: rule.name,
         event,
       });
-      // TODO: Send to PagerDuty / Slack
+      // NOTE: PagerDuty/Slack integration can be added via external alerting service
     } else if (action === 'block') {
       logger.error('SECURITY BLOCK', {
         rule: rule.name,

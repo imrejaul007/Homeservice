@@ -5,6 +5,17 @@ import crypto from 'crypto';
 import logger from '../../utils/logger';
 import { ApiError, ERROR_CODES } from '../../utils/ApiError';
 
+// SECURITY FIX: Validate environment variable - only fail in production
+const ENCRYPTION_KEY = process.env.TWO_FA_ENCRYPTION_KEY;
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+
+if (IS_PRODUCTION && !ENCRYPTION_KEY) {
+  throw new Error('FATAL: TWO_FA_ENCRYPTION_KEY environment variable is required for 2FA functionality in production');
+}
+
+// Use a development fallback key if not set (NOT for production)
+const DEV_ENC_KEY = ENCRYPTION_KEY || 'dev_2fa_encryption_key_for_development_only';
+
 // Configuration for TOTP
 const TOTP_CONFIG = {
   // Time step in seconds (standard is 30)
@@ -221,9 +232,9 @@ export function encryptSecret(secret: string): string {
     throw ApiError.badRequest('Secret is required for encryption');
   }
 
-  // Get encryption key from environment
-  const encryptionKey = process.env.TWO_FA_ENCRYPTION_KEY;
-  if (!encryptionKey) {
+  // Get encryption key from environment (use fallback in development)
+  const encryptionKey = ENCRYPTION_KEY || DEV_ENC_KEY;
+  if (IS_PRODUCTION && !ENCRYPTION_KEY) {
     logger.error('TWO_FA_ENCRYPTION_KEY not configured', {
       context: 'TwoFactorService',
       action: 'MISSING_ENCRYPTION_KEY',
@@ -275,9 +286,9 @@ export function decryptSecret(encryptedSecret: string): string {
     throw ApiError.badRequest('Encrypted secret is required for decryption');
   }
 
-  // Get encryption key from environment
-  const encryptionKey = process.env.TWO_FA_ENCRYPTION_KEY;
-  if (!encryptionKey) {
+  // Get encryption key from environment (use fallback in development)
+  const encryptionKey = ENCRYPTION_KEY || DEV_ENC_KEY;
+  if (IS_PRODUCTION && !ENCRYPTION_KEY) {
     logger.error('TWO_FA_ENCRYPTION_KEY not configured for decryption', {
       context: 'TwoFactorService',
       action: 'MISSING_DECRYPTION_KEY',

@@ -47,6 +47,13 @@ export interface IDisputeTimeline {
 }
 
 export interface IDispute extends Document {
+  // Multi-tenant support
+  tenantId?: mongoose.Types.ObjectId;
+
+  // Soft delete support
+  isDeleted: boolean;
+  deletedAt?: Date;
+
   // Core Information
   disputeNumber: string;
   bookingId: Types.ObjectId;
@@ -88,6 +95,11 @@ export interface IDispute extends Document {
   // Escalation
   escalatedAt?: Date;
   escalationReason?: string;
+
+  // Reopening (for resolved/closed disputes)
+  reopenedAt?: Date;
+  reopenedBy?: Types.ObjectId;
+  reopenedReason?: string;
 
   // Timeline/Audit Trail
   timeline: IDisputeTimeline[];
@@ -137,6 +149,21 @@ export interface IDisputeModel extends Model<IDispute> {
 
 const disputeSchema = new Schema<IDispute>(
   {
+    // Multi-tenant support
+    tenantId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Tenant',
+      index: true,
+    },
+
+    // Soft delete support
+    isDeleted: {
+      type: Boolean,
+      default: false,
+      select: false
+    },
+    deletedAt: Date,
+
     disputeNumber: {
       type: String,
       required: true,
@@ -319,6 +346,16 @@ const disputeSchema = new Schema<IDispute>(
 
     escalationReason: String,
 
+    // Reopening fields
+    reopenedAt: Date,
+
+    reopenedBy: {
+      type: Schema.Types.ObjectId,
+      ref: 'User',
+    },
+
+    reopenedReason: String,
+
     timeline: [{
       action: {
         type: String,
@@ -370,6 +407,18 @@ disputeSchema.index({ 'respondent.userId': 1, status: 1 });
 disputeSchema.index({ assignedTo: 1, status: 1 });
 disputeSchema.index({ status: 1, priority: 1, createdAt: -1 });
 disputeSchema.index({ category: 1, status: 1 });
+
+// Tenant isolation indexes
+disputeSchema.index({ tenantId: 1, status: 1 });
+disputeSchema.index({ tenantId: 1, 'initiator.userId': 1 });
+disputeSchema.index({ tenantId: 1, 'respondent.userId': 1 });
+
+// Soft delete indexes
+disputeSchema.index({ isDeleted: 1, createdAt: -1 });
+disputeSchema.index({ isDeleted: 1, status: 1 });
+
+// FIX: Compound index on bookingId for efficient queries and cascade operations
+disputeSchema.index({ bookingId: 1, status: 1 });
 
 // Text index for search
 disputeSchema.index({ disputeNumber: 'text', reason: 'text', description: 'text' });
@@ -709,6 +758,26 @@ disputeSchema.statics.getStats = async function(startDate?: Date, endDate?: Date
 disputeSchema.pre('save', async function(next) {
   if (this.isNew && !this.disputeNumber) {
     this.disputeNumber = await (this.constructor as IDisputeModel).generateDisputeNumber();
+  }
+
+  // FIX: Validate bookingId refers to an existing (non-deleted) booking
+  if (this.isModified('bookingId') || this.isNew) {
+    const Booking = mongoose.model('Booking');
+    const booking = await Booking.findById(this.bookingId).select('_id isDeleted').lean();
+
+    const bookingDoc = booking as { _id: unknown; isDeleted?: boolean } | null;
+
+    if (!bookingDoc) {
+      const error = new Error('Booking not found') as Error & { name: string };
+      error.name = 'ValidationError';
+      return next(error);
+    }
+
+    if (bookingDoc.isDeleted === true) {
+      const error = new Error('Cannot create dispute for a deleted booking') as Error & { name: string };
+      error.name = 'ValidationError';
+      return next(error);
+    }
   }
 
   // Initialize timeline if new

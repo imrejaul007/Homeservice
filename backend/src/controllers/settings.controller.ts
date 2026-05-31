@@ -6,6 +6,7 @@ import { uploadBufferToCloudinary, deleteFromCloudinary } from '../utils/cloudin
 import PlatformSettings from '../models/settings.model';
 import logger from '../utils/logger';
 import { sendEmail } from '../services/email.service';
+import { IUser } from '../models/user.model';
 
 /**
  * Get all platform settings
@@ -25,7 +26,7 @@ export const getSettings = asyncHandler(async (_req: Request, res: Response) => 
  * PATCH /api/settings
  */
 export const updateSettings = asyncHandler(async (req: Request, res: Response) => {
-  const adminId = (req.user as any)?._id?.toString();
+  const adminId = (req.user as IUser)?._id?.toString();
 
   if (!adminId) {
     throw new ApiError(401, 'Authentication required');
@@ -48,7 +49,7 @@ export const updateSettings = asyncHandler(async (req: Request, res: Response) =
  * POST /api/settings/reset
  */
 export const resetSettings = asyncHandler(async (req: Request, res: Response) => {
-  const adminId = (req.user as any)?._id?.toString();
+  const adminId = (req.user as IUser)?._id?.toString();
   const settings = await settingsService.resetSettings(adminId);
 
   res.json({
@@ -81,7 +82,7 @@ export const getSettingsHistory = asyncHandler(async (req: Request, res: Respons
  * POST /api/settings/upload-logo
  */
 export const uploadLogo = asyncHandler(async (req: Request, res: Response) => {
-  const adminId = (req.user as any)?._id?.toString();
+  const adminId = (req.user as IUser)?._id?.toString();
 
   if (!adminId) {
     throw new ApiError(401, 'Authentication required');
@@ -143,7 +144,7 @@ export const uploadLogo = asyncHandler(async (req: Request, res: Response) => {
  * DELETE /api/settings/logo
  */
 export const deleteLogo = asyncHandler(async (req: Request, res: Response) => {
-  const adminId = (req.user as any)?._id?.toString();
+  const adminId = (req.user as IUser)?._id?.toString();
 
   if (!adminId) {
     throw new ApiError(401, 'Authentication required');
@@ -197,7 +198,7 @@ export const exportSettings = asyncHandler(async (_req: Request, res: Response) 
  * POST /api/settings/import
  */
 export const importSettings = asyncHandler(async (req: Request, res: Response) => {
-  const adminId = (req.user as any)?._id?.toString();
+  const adminId = (req.user as IUser)?._id?.toString();
 
   if (!adminId) {
     throw new ApiError(401, 'Authentication required');
@@ -247,7 +248,7 @@ export const getSetting = asyncHandler(async (req: Request, res: Response) => {
  * POST /api/settings/test-email
  */
 export const testEmailConfig = asyncHandler(async (req: Request, res: Response) => {
-  const adminId = (req.user as any)?._id?.toString();
+  const adminId = (req.user as IUser)?._id?.toString();
 
   if (!adminId) {
     throw new ApiError(401, 'Authentication required');

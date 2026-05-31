@@ -4,6 +4,8 @@ import { immer } from 'zustand/middleware/immer';
 import type { AuthTokens, AuthUser, LoginCredentials, RegisterData } from '../services/AuthService';
 import type { BusinessInfo, LocationInfo, ServiceInput } from '../types/auth';
 import { secureStorage } from '@/lib/security';
+import { socketService } from '../services/SocketService';
+import logger from '../lib/logger';
 
 /**
  * Custom zustand storage adapter that uses secureStorage
@@ -143,6 +145,26 @@ export interface ProviderProfile {
     previousViews?: number;
     totalBookings?: number;
   };
+  // Settings properties
+  businessSettings?: {
+    autoAcceptBookings?: boolean;
+    maxAdvanceBookingDays?: number;
+    minBookingNoticeHours?: number;
+    cancellationPolicyHours?: number;
+  };
+  locationInfo?: {
+    serviceAreas?: Array<{
+      city: string;
+      state: string;
+      zipCode?: string;
+      coordinates?: { lat: number; lng: number };
+    }>;
+  };
+  privacySettings?: {
+    showEmail?: boolean;
+    showPhone?: boolean;
+    showReviewsPublicly?: boolean;
+  };
 }
 
 export interface AuthError {
@@ -176,7 +198,7 @@ export interface AuthState {
   resetPassword: (token: string, password: string, confirmPassword: string) => Promise<void>;
   verifyEmail: (token: string) => Promise<void>;
   resendVerification: (email: string) => Promise<void>;
-  refreshToken: () => Promise<void>;
+  refreshToken: () => Promise<boolean>;
   clearErrors: () => void;
   setError: (error: AuthError) => void;
   setLoading: (loading: boolean) => void;
@@ -353,6 +375,14 @@ export const useAuthStore = create<AuthState>()(
           // Cleanup event listener before clearing state
           store._cleanupTokenListener?.();
 
+          // FIX 6: Disconnect socket on logout to prevent memory leaks and stale connections
+          try {
+            socketService.disconnect();
+            logger.info('[Auth] Socket disconnected on logout');
+          } catch (socketError) {
+            console.error('Socket disconnect error:', socketError);
+          }
+
           set((state) => {
             state.user = null;
             state.customerProfile = null;
@@ -374,6 +404,14 @@ export const useAuthStore = create<AuthState>()(
         } finally {
           // Cleanup event listener before clearing state
           store._cleanupTokenListener?.();
+
+          // FIX 6: Disconnect socket on logout to prevent memory leaks and stale connections
+          try {
+            socketService.disconnect();
+            logger.info('[Auth] Socket disconnected on logout all');
+          } catch (socketError) {
+            console.error('Socket disconnect error:', socketError);
+          }
 
           set((state) => {
             state.user = null;
@@ -608,23 +646,36 @@ export const useAuthStore = create<AuthState>()(
         }
       },
 
-      refreshToken: async () => {
-        // This is now handled automatically by AuthService interceptors
-        // But we keep this method for backward compatibility
+      refreshToken: async (): Promise<boolean> => {
+        // This method handles manual token refresh
+        // Returns true if refresh was successful, false otherwise
         const authService = (await import('../services/AuthService')).default;
 
         try {
-          // AuthService handles refresh automatically through interceptors
-          // This method can be used for manual refresh if needed
           const tokens = get().tokens;
-          if (tokens?.refreshToken) {
-            await authService.post('/auth/refresh-token', {
-              refreshToken: tokens.refreshToken
-            });
+          if (!tokens?.refreshToken) {
+            console.error('No refresh token available');
+            return false;
           }
+
+          // Call the refresh endpoint
+          const response = await authService.post<{ tokens: AuthTokens; user: AuthUser }>('/auth/refresh-token', {
+            refreshToken: tokens.refreshToken
+          });
+
+          if (response.tokens) {
+            // Update tokens in store
+            set((state) => {
+              state.tokens = response.tokens;
+            });
+            return true;
+          }
+
+          return false;
         } catch (error) {
+          console.error('Token refresh failed:', error);
           // Auto-logout handled by AuthService
-          throw error;
+          return false;
         }
       },
 
@@ -730,6 +781,7 @@ export const useAuthStore = create<AuthState>()(
 
       // Token update handler reference for cleanup
       _tokenUpdateHandler: null as ((event: CustomEvent) => void) | null,
+      _initTimerId: null as ReturnType<typeof setTimeout> | null,
 
       // Initialize event listener for token updates from API service
       _initTokenListener: () => {
@@ -756,12 +808,20 @@ export const useAuthStore = create<AuthState>()(
           window.removeEventListener('auth-tokens-updated', store._tokenUpdateHandler as any);
           store._tokenUpdateHandler = null;
         }
+        // Clear the init timer if it exists
+        if (store._initTimerId !== null) {
+          clearTimeout(store._initTimerId);
+          store._initTimerId = null;
+        }
       },
       };
 
       // Initialize token listener when store is created
       if (typeof window !== 'undefined') {
-        setTimeout(() => store._initTokenListener(), 0);
+        store._initTimerId = setTimeout(() => {
+          store._initTokenListener();
+          store._initTimerId = null; // Clear reference after execution
+        }, 0);
       }
 
       return store;

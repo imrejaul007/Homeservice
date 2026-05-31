@@ -34,6 +34,7 @@ export interface BookingMetadataDTO {
   bookingSource?: string;
   deviceType?: string;
   sessionId?: string;
+  idempotencyKey?: string;
 }
 
 // ============================================
@@ -234,6 +235,19 @@ export interface CancellationResult {
   booking: BookingResponse;
   refundAmount: number;
   refundProcessingTime: string;
+  refundId?: string; // Added by atomic cancellation fix
+}
+
+/**
+ * Cancellation request data
+ * For registered users: requires customerId match
+ * For guest users: requires email match or valid cancellationToken
+ */
+export interface CancellationDataDTO {
+  reason?: string;
+  // For guest booking cancellation
+  cancellationToken?: string;
+  email?: string;
 }
 
 export interface GuestBookingResult {

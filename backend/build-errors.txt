@@ -1,0 +1,267 @@
+﻿
+> home-service-backend@1.0.0 build
+> tsc
+
+src/services/apiAccessPricing.service.ts(528,13): error TS7006: Parameter 'e' implicitly has an 'any' type.
+src/services/apiAccessPricing.service.ts(539,46): error TS7006: Parameter 'a' implicitly has an 'any' type.
+src/services/apiAccessPricing.service.ts(539,49): error TS7006: Parameter 'b' implicitly has an 'any' type.
+src/services/apiAccessPricing.service.ts(778,26): error TS2339: Property 'save' does not exist on type 'ApiSubscription'.
+src/services/backgroundCheck.service.ts(182,9): error TS2322: Type 'null' is not assignable to type '{ verified: boolean; score: number; details: string; documents?: { type: string; url: string; verified: boolean; }[] | undefined; } | undefined'.
+src/services/backgroundCheck.service.ts(209,5): error TS2322: Type '{ providerId: string; providerName: string; providerEmail: string; providerPhone: string; type: "address" | "identity" | "criminal" | "employment" | "education" | "financial" | "reference"; ... 6 more ...; id: string; }' is not assignable to type 'BackgroundCheck'.
+  Types of property 'requestDate' are incompatible.
+    Type 'Date' is not assignable to type 'string'.
+src/services/backgroundCheck.service.ts(565,5): error TS2322: Type 'null' is not assignable to type '{ verified: boolean; score: number; details: string; documents?: { type: string; url: string; verified: boolean; }[] | undefined; } | undefined'.
+src/services/bankVerification.service.ts(525,32): error TS2769: No overload matches this call.
+  Overload 1 of 4, '(value: string | number | Date): Date', gave the following error.
+    Argument of type 'unknown' is not assignable to parameter of type 'string | number | Date'.
+  Overload 2 of 4, '(value: string | number): Date', gave the following error.
+    Argument of type 'unknown' is not assignable to parameter of type 'string | number'.
+src/services/bankVerification.service.ts(538,57): error TS18046: 'stats.dailyUsed' is of type 'unknown'.
+src/services/bankVerification.service.ts(539,61): error TS18046: 'stats.monthlyUsed' is of type 'unknown'.
+src/services/bankVerification.service.ts(783,25): error TS2538: Type '{}' cannot be used as an index type.
+src/services/bankVerification.service.ts(783,54): error TS2538: Type '{}' cannot be used as an index type.
+src/services/bankVerification.service.ts(784,29): error TS2538: Type '{}' cannot be used as an index type.
+src/services/bookingDeposit.service.ts(357,5): error TS2739: Type '{}' is missing the following properties from type '{ performedBy: "customer" | "provider" | "admin" | "system"; reason: string; percentage?: number | undefined; }': performedBy, reason
+src/services/breachCheck.service.ts(354,7): error TS18048: 'metrics.securityFlags' is possibly 'undefined'.
+src/services/breachCheck.service.ts(357,9): error TS2353: Object literal may only specify known properties, and 'description' does not exist in type '{ type: string; detectedAt: Date; resolved?: boolean | undefined; severity?: string | undefined; resolvedAt?: Date | undefined; }'.
+src/services/breachCheck.service.ts(402,20): error TS18048: 'metrics.securityFlags' is possibly 'undefined'.
+src/services/bulkDiscount.service.ts(208,7): error TS2322: Type 'VolumeTier | null' is not assignable to type 'VolumeTier | undefined'.
+  Type 'null' is not assignable to type 'VolumeTier | undefined'.
+src/services/bulkDiscount.service.ts(209,7): error TS2322: Type 'VolumeTier | null' is not assignable to type 'VolumeTier | undefined'.
+  Type 'null' is not assignable to type 'VolumeTier | undefined'.
+src/services/bundleBooking.service.ts(601,33): error TS2345: Argument of type '{ bookingId: ObjectId; serviceId: ObjectId; serviceName: string; quantity: number; originalPrice: number; scheduledDate: string; scheduledTime?: string | undefined; status: string; usedAt: Date | null; }' is not assignable to parameter of type 'IBundleBookingService'.
+  Types of property 'status' are incompatible.
+    Type 'string' is not assignable to type '"pending" | "confirmed" | "in_progress" | "completed" | "cancelled"'.
+src/services/bundleSales.service.ts(542,7): error TS2322: Type '{ name: string; count: number; revenue: number; bundleId: string; bundleName: string; }[]' is not assignable to type '{ bundleId: string; bundleName: string; bookingCount: number; revenue: number; }[]'.
+  Property 'bookingCount' is missing in type '{ name: string; count: number; revenue: number; bundleId: string; bundleName: string; }' but required in type '{ bundleId: string; bundleName: string; bookingCount: number; revenue: number; }'.
+src/services/bundleSales.service.ts(543,7): error TS2322: Type '{ name: string; bundles: number; bookings: number; }[]' is not assignable to type '{ categoryId: string; categoryName: string; bundleCount: number; bookingCount: number; }[]'.
+  Type '{ name: string; bundles: number; bookings: number; }' is missing the following properties from type '{ categoryId: string; categoryName: string; bundleCount: number; bookingCount: number; }': categoryId, categoryName, bundleCount, bookingCount
+src/services/callbackRequest.service.ts(470,7): error TS7053: Element implicitly has an 'any' type because expression of type 'CallbackStatus' can't be used to index type '{ total: number; pending: number; scheduled: number; completed: number; cancelled: number; noAnswer: number; avgDuration: number; byCategory: Record<string, number>; }'.
+  Property 'in_progress' does not exist on type '{ total: number; pending: number; scheduled: number; completed: number; cancelled: number; noAnswer: number; avgDuration: number; byCategory: Record<string, number>; }'.
+src/services/cancellationInsurance.service.ts(699,36): error TS7006: Parameter 'p' implicitly has an 'any' type.
+src/services/chat.service.ts(172,90): error TS2554: Expected 2 arguments, but got 3.
+src/services/chat.service.ts(267,7): error TS2322: Type '(FlattenMaps<IMessage> & Required<{ _id: ObjectId; }> & { __v: number; })[]' is not assignable to type 'IMessage[]'.
+  Type 'FlattenMaps<IMessage> & Required<{ _id: ObjectId; }> & { __v: number; }' is not assignable to type 'IMessage'.
+    The types of 'collection.conn.db' are incompatible between these types.
+      Type 'FlattenMaps<Db> | undefined' is not assignable to type 'Db | undefined'.
+        Type 'FlattenMaps<Db>' is not assignable to type 'Db'.
+          Types of property 'client' are incompatible.
+            Type 'FlattenMaps<MongoClient>' is missing the following properties from type 'MongoClient': driverInfoList, _close
+src/services/chat.service.ts(533,60): error TS2345: Argument of type 'string' is not assignable to parameter of type 'ObjectId'.
+src/services/chat.service.ts(562,61): error TS2345: Argument of type 'string' is not assignable to parameter of type 'ObjectId'.
+src/services/chat.service.ts(706,46): error TS2345: Argument of type '"message:read"' is not assignable to parameter of type 'keyof ServerToClientEvents'.
+src/services/chat.service.ts(721,46): error TS2345: Argument of type '"message:deleted"' is not assignable to parameter of type 'keyof ServerToClientEvents'.
+src/services/chatAnalytics.service.ts(503,30): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(pipeline?: PipelineStage[] | undefined, options?: AggregateOptions | undefined): Aggregate<DailyChatStats[]>', gave the following error.
+    Argument of type '({ $match: Record<string, unknown>; $group?: undefined; $project?: undefined; $sort?: undefined; } | { $group: { _id: { $dateToString: { format: string; date: string; }; }; totalMessages: { $sum: number; }; uniqueUsers: { ...; }; uniqueConversations: { ...; }; }; $match?: undefined; $project?: undefined; $sort?: und...' is not assignable to parameter of type 'PipelineStage[]'.
+      Type '{ $match: Record<string, unknown>; $group?: undefined; $project?: undefined; $sort?: undefined; } | { $group: { _id: { $dateToString: { format: string; date: string; }; }; totalMessages: { $sum: number; }; uniqueUsers: { ...; }; uniqueConversations: { ...; }; }; $match?: undefined; $project?: undefined; $sort?: unde...' is not assignable to type 'PipelineStage'.
+        Type '{ $sort: { date: number; }; $match?: undefined; $group?: undefined; $project?: undefined; }' is not assignable to type 'PipelineStage'.
+          Type '{ $sort: { date: number; }; $match?: undefined; $group?: undefined; $project?: undefined; }' is not assignable to type 'Sort'.
+            Types of property '$sort' are incompatible.
+              Type '{ date: number; }' is not assignable to type 'Record<string, 1 | -1 | Meta>'.
+                Property 'date' is incompatible with index signature.
+                  Type 'number' is not assignable to type '1 | -1 | Meta'.
+  Overload 2 of 2, '(pipeline: PipelineStage[]): Aggregate<DailyChatStats[]>', gave the following error.
+    Argument of type '({ $match: Record<string, unknown>; $group?: undefined; $project?: undefined; $sort?: undefined; } | { $group: { _id: { $dateToString: { format: string; date: string; }; }; totalMessages: { $sum: number; }; uniqueUsers: { ...; }; uniqueConversations: { ...; }; }; $match?: undefined; $project?: undefined; $sort?: und...' is not assignable to parameter of type 'PipelineStage[]'.
+      Type '{ $match: Record<string, unknown>; $group?: undefined; $project?: undefined; $sort?: undefined; } | { $group: { _id: { $dateToString: { format: string; date: string; }; }; totalMessages: { $sum: number; }; uniqueUsers: { ...; }; uniqueConversations: { ...; }; }; $match?: undefined; $project?: undefined; $sort?: unde...' is not assignable to type 'PipelineStage'.
+        Type '{ $sort: { date: number; }; $match?: undefined; $group?: undefined; $project?: undefined; }' is not assignable to type 'PipelineStage'.
+          Type '{ $sort: { date: number; }; $match?: undefined; $group?: undefined; $project?: undefined; }' is not assignable to type 'Sort'.
+            Types of property '$sort' are incompatible.
+              Type '{ date: number; }' is not assignable to type 'Record<string, 1 | -1 | Meta>'.
+                Property 'date' is incompatible with index signature.
+                  Type 'number' is not assignable to type '1 | -1 | Meta'.
+src/services/chatAnalytics.service.ts(542,30): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(pipeline?: PipelineStage[] | undefined, options?: AggregateOptions | undefined): Aggregate<{ hour: number; count: number; }[]>', gave the following error.
+    Argument of type '({ $match: { isDeleted: boolean; createdAt: { $gte: Date; $lte: Date; }; }; $group?: undefined; $project?: undefined; $sort?: undefined; } | { $group: { _id: { $hour: string; }; count: { $sum: number; }; }; $match?: undefined; $project?: undefined; $sort?: undefined; } | { ...; } | { ...; })[]' is not assignable to parameter of type 'PipelineStage[]'.
+      Type '{ $match: { isDeleted: boolean; createdAt: { $gte: Date; $lte: Date; }; }; $group?: undefined; $project?: undefined; $sort?: undefined; } | { $group: { _id: { $hour: string; }; count: { $sum: number; }; }; $match?: undefined; $project?: undefined; $sort?: undefined; } | { ...; } | { ...; }' is not assignable to type 'PipelineStage'.
+        Type '{ $sort: { hour: number; }; $match?: undefined; $group?: undefined; $project?: undefined; }' is not assignable to type 'PipelineStage'.
+          Type '{ $sort: { hour: number; }; $match?: undefined; $group?: undefined; $project?: undefined; }' is not assignable to type 'Sort'.
+            Types of property '$sort' are incompatible.
+              Type '{ hour: number; }' is not assignable to type 'Record<string, 1 | -1 | Meta>'.
+                Property 'hour' is incompatible with index signature.
+                  Type 'number' is not assignable to type '1 | -1 | Meta'.
+  Overload 2 of 2, '(pipeline: PipelineStage[]): Aggregate<{ hour: number; count: number; }[]>', gave the following error.
+    Argument of type '({ $match: { isDeleted: boolean; createdAt: { $gte: Date; $lte: Date; }; }; $group?: undefined; $project?: undefined; $sort?: undefined; } | { $group: { _id: { $hour: string; }; count: { $sum: number; }; }; $match?: undefined; $project?: undefined; $sort?: undefined; } | { ...; } | { ...; })[]' is not assignable to parameter of type 'PipelineStage[]'.
+      Type '{ $match: { isDeleted: boolean; createdAt: { $gte: Date; $lte: Date; }; }; $group?: undefined; $project?: undefined; $sort?: undefined; } | { $group: { _id: { $hour: string; }; count: { $sum: number; }; }; $match?: undefined; $project?: undefined; $sort?: undefined; } | { ...; } | { ...; }' is not assignable to type 'PipelineStage'.
+        Type '{ $sort: { hour: number; }; $match?: undefined; $group?: undefined; $project?: undefined; }' is not assignable to type 'PipelineStage'.
+          Type '{ $sort: { hour: number; }; $match?: undefined; $group?: undefined; $project?: undefined; }' is not assignable to type 'Sort'.
+            Types of property '$sort' are incompatible.
+              Type '{ hour: number; }' is not assignable to type 'Record<string, 1 | -1 | Meta>'.
+                Property 'hour' is incompatible with index signature.
+                  Type 'number' is not assignable to type '1 | -1 | Meta'.
+src/services/chatAnalytics.service.ts(591,50): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(pipeline?: PipelineStage[] | undefined, options?: AggregateOptions | undefined): Aggregate<any[]>', gave the following error.
+    Argument of type '({ $match: { chatRoomId: ObjectId; isDeleted: boolean; }; $group?: undefined; $lookup?: undefined; $unwind?: undefined; $project?: undefined; $sort?: undefined; $limit?: undefined; } | { $group: { ...; }; ... 5 more ...; $limit?: undefined; } | ... 4 more ... | { ...; })[]' is not assignable to parameter of type 'PipelineStage[]'.
+      Type '{ $match: { chatRoomId: ObjectId; isDeleted: boolean; }; $group?: undefined; $lookup?: undefined; $unwind?: undefined; $project?: undefined; $sort?: undefined; $limit?: undefined; } | { $group: { ...; }; ... 5 more ...; $limit?: undefined; } | ... 4 more ... | { ...; }' is not assignable to type 'PipelineStage'.
+        Type '{ $sort: { messageCount: number; }; $match?: undefined; $group?: undefined; $lookup?: undefined; $unwind?: undefined; $project?: undefined; $limit?: undefined; }' is not assignable to type 'PipelineStage'.
+          Type '{ $sort: { messageCount: number; }; $match?: undefined; $group?: undefined; $lookup?: undefined; $unwind?: undefined; $project?: undefined; $limit?: undefined; }' is not assignable to type 'Unwind'.
+            Types of property '$unwind' are incompatible.
+              Type 'undefined' is not assignable to type 'string | { path: string; includeArrayIndex?: string | undefined; preserveNullAndEmptyArrays?: boolean | undefined; }'.
+  Overload 2 of 2, '(pipeline: PipelineStage[]): Aggregate<any[]>', gave the following error.
+    Argument of type '({ $match: { chatRoomId: ObjectId; isDeleted: boolean; }; $group?: undefined; $lookup?: undefined; $unwind?: undefined; $project?: undefined; $sort?: undefined; $limit?: undefined; } | { $group: { ...; }; ... 5 more ...; $limit?: undefined; } | ... 4 more ... | { ...; })[]' is not assignable to parameter of type 'PipelineStage[]'.
+      Type '{ $match: { chatRoomId: ObjectId; isDeleted: boolean; }; $group?: undefined; $lookup?: undefined; $unwind?: undefined; $project?: undefined; $sort?: undefined; $limit?: undefined; } | { $group: { ...; }; ... 5 more ...; $limit?: undefined; } | ... 4 more ... | { ...; }' is not assignable to type 'PipelineStage'.
+        Type '{ $sort: { messageCount: number; }; $match?: undefined; $group?: undefined; $lookup?: undefined; $unwind?: undefined; $project?: undefined; $limit?: undefined; }' is not assignable to type 'PipelineStage'.
+          Type '{ $sort: { messageCount: number; }; $match?: undefined; $group?: undefined; $lookup?: undefined; $unwind?: undefined; $project?: undefined; $limit?: undefined; }' is not assignable to type 'Unwind'.
+            Types of property '$unwind' are incompatible.
+              Type 'undefined' is not assignable to type 'string | { path: string; includeArrayIndex?: string | undefined; preserveNullAndEmptyArrays?: boolean | undefined; }'.
+src/services/chatModeration.service.ts(477,48): error TS2367: This comparison appears to be unintentional because the types '"low" | "medium"' and '"high"' have no overlap.
+src/services/corporateWallet.service.ts(478,5): error TS2322: Type '{ employeeId: string; employeeName: string | undefined; employeeEmail: string | undefined; department: string | undefined; totalSpent: number; monthlyLimit: number | undefined; usedThisMonth: number | undefined; bookingCount: number | undefined; }[]' is not assignable to type 'EmployeeSpending[]'.
+  Type '{ employeeId: string; employeeName: string | undefined; employeeEmail: string | undefined; department: string | undefined; totalSpent: number; monthlyLimit: number | undefined; usedThisMonth: number | undefined; bookingCount: number | undefined; }' is not assignable to type 'EmployeeSpending'.
+    Types of property 'employeeName' are incompatible.
+      Type 'string | undefined' is not assignable to type 'string'.
+        Type 'undefined' is not assignable to type 'string'.
+src/services/customerAnalytics.service.ts(218,45): error TS2365: Operator '+' cannot be applied to types 'string | number' and 'number'.
+src/services/equipmentRental.service.ts(551,51): error TS7006: Parameter 'r' implicitly has an 'any' type.
+src/services/equipmentRental.service.ts(1065,37): error TS7006: Parameter 'r' implicitly has an 'any' type.
+src/services/equipmentRental.service.ts(1066,40): error TS7006: Parameter 'r' implicitly has an 'any' type.
+src/services/equipmentRental.service.ts(1067,37): error TS7006: Parameter 'sum' implicitly has an 'any' type.
+src/services/equipmentRental.service.ts(1067,42): error TS7006: Parameter 'r' implicitly has an 'any' type.
+src/services/equipmentRental.service.ts(1072,27): error TS7006: Parameter 'sum' implicitly has an 'any' type.
+src/services/equipmentRental.service.ts(1072,32): error TS7006: Parameter 'r' implicitly has an 'any' type.
+src/services/equipmentRental.service.ts(1074,7): error TS2322: Type '{ name: string; count: number; revenue: number; equipmentId: string; }[]' is not assignable to type '{ equipmentId: string; name: string; rentalCount: number; revenue: number; }[]'.
+  Property 'rentalCount' is missing in type '{ name: string; count: number; revenue: number; equipmentId: string; }' but required in type '{ equipmentId: string; name: string; rentalCount: number; revenue: number; }'.
+src/services/equipmentRental.service.ts(1075,41): error TS7006: Parameter 'r' implicitly has an 'any' type.
+src/services/escalation.service.ts(574,13): error TS2551: Property 'in_progress' does not exist on type '{ total: number; pending: number; inProgress: number; resolved: number; byLevel: Record<EscalationLevel, number>; byTrigger: Record<EscalationTrigger, number>; avgResolutionTime: number; }'. Did you mean 'inProgress'?
+src/services/extendedWarranty.service.ts(722,20): error TS2339: Property 'save' does not exist on type 'WarrantyPolicy'.
+src/services/extendedWarranty.service.ts(766,53): error TS2552: Cannot find name 'claimId'. Did you mean 'claim'?
+src/services/extendedWarranty.service.ts(1017,36): error TS7006: Parameter 'p' implicitly has an 'any' type.
+src/services/extendedWarranty.service.ts(1038,39): error TS7006: Parameter 'p' implicitly has an 'any' type.
+src/services/extendedWarranty.service.ts(1039,40): error TS7006: Parameter 'p' implicitly has an 'any' type.
+src/services/featuredSearchBoost.service.ts(478,25): error TS7053: Element implicitly has an 'any' type because expression of type 'any' can't be used to index type 'Record<BoostDuration, number>'.
+src/services/featuredSearchBoost.service.ts(651,15): error TS7006: Parameter 'b' implicitly has an 'any' type.
+src/services/featuredSearchBoost.service.ts(652,14): error TS7006: Parameter 'a' implicitly has an 'any' type.
+src/services/featuredSearchBoost.service.ts(652,17): error TS7006: Parameter 'b' implicitly has an 'any' type.
+src/services/featuredSearchBoost.service.ts(654,12): error TS7006: Parameter 'b' implicitly has an 'any' type.
+src/services/featuredSearchBoost.service.ts(663,35): error TS7006: Parameter 'b' implicitly has an 'any' type.
+src/services/imageModeration.service.ts(519,9): error TS2322: Type '"inappropriate_content"' is not assignable to type '"duplicate_account" | "suspicious_document" | "unusual_pattern" | "address_mismatch" | "velocity_check_failed" | "high_risk_country"'.
+src/services/invoice.service.ts(678,47): error TS2339: Property 'sendEmail' does not exist on type '{ sendVerificationEmail: (email: string, firstName: string, verificationToken: string) => Promise<void>; sendWelcomeEmail: (email: string, firstName: string, role: string, userId?: string | undefined) => Promise<...>; ... 17 more ...; sendBatch: (emails: BatchEmailData[]) => Promise<...>; }'.
+src/services/invoice.service.ts(679,28): error TS2339: Property 'sendEmail' does not exist on type '{ sendVerificationEmail: (email: string, firstName: string, verificationToken: string) => Promise<void>; sendWelcomeEmail: (email: string, firstName: string, role: string, userId?: string | undefined) => Promise<...>; ... 17 more ...; sendBatch: (emails: BatchEmailData[]) => Promise<...>; }'.
+src/services/invoice.service.ts(745,45): error TS2339: Property 'sendEmail' does not exist on type '{ sendVerificationEmail: (email: string, firstName: string, verificationToken: string) => Promise<void>; sendWelcomeEmail: (email: string, firstName: string, role: string, userId?: string | undefined) => Promise<...>; ... 17 more ...; sendBatch: (emails: BatchEmailData[]) => Promise<...>; }'.
+src/services/invoice.service.ts(746,26): error TS2339: Property 'sendEmail' does not exist on type '{ sendVerificationEmail: (email: string, firstName: string, verificationToken: string) => Promise<void>; sendWelcomeEmail: (email: string, firstName: string, role: string, userId?: string | undefined) => Promise<...>; ... 17 more ...; sendBatch: (emails: BatchEmailData[]) => Promise<...>; }'.
+src/services/leadGenerationFee.service.ts(385,9): error TS7006: Parameter 'entry' implicitly has an 'any' type.
+src/services/liveChat.service.ts(276,12): error TS2352: Conversion of type '{ _id: Types.ObjectId; sessionId: string; customerId: Types.ObjectId; customerName: string; customerEmail: string; status: "ended"; endedAt: Date; tags: never[]; createdAt: Date; updatedAt: Date; }' to type 'ChatSession' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Property 'priority' is missing in type '{ _id: Types.ObjectId; sessionId: string; customerId: Types.ObjectId; customerName: string; customerEmail: string; status: "ended"; endedAt: Date; tags: never[]; createdAt: Date; updatedAt: Date; }' but required in type 'ChatSession'.
+src/services/liveChat.service.ts(331,24): error TS2345: Argument of type '{ position: number; estimatedWaitTime: number; priority: "normal"; customerId: string; sessionId: string; }' is not assignable to parameter of type 'QueueEntry'.
+  Property 'createdAt' is missing in type '{ position: number; estimatedWaitTime: number; priority: "normal"; customerId: string; sessionId: string; }' but required in type 'QueueEntry'.
+src/services/liveChat.service.ts(447,7): error TS2345: Argument of type '"system"' is not assignable to parameter of type '"text" | "image" | "file" | undefined'.
+src/services/liveChat.service.ts(476,14): error TS2551: Property 'sender' does not exist on type 'FlattenMaps<IMessage> & Required<{ _id: ObjectId; }> & { __v: number; }'. Did you mean 'senderId'?
+src/services/liveChat.service.ts(491,23): error TS2551: Property 'chatRoom' does not exist on type 'FlattenMaps<IMessage> & Required<{ _id: ObjectId; }> & { __v: number; }'. Did you mean 'chatRoomId'?
+src/services/liveChat.service.ts(493,21): error TS2551: Property 'sender' does not exist on type 'FlattenMaps<IMessage> & Required<{ _id: ObjectId; }> & { __v: number; }'. Did you mean 'senderId'?
+src/services/liveChat.service.ts(494,23): error TS2339: Property 'senderType' does not exist on type 'FlattenMaps<IMessage> & Required<{ _id: ObjectId; }> & { __v: number; }'.
+src/services/liveChat.service.ts(495,23): error TS2339: Property 'senderName' does not exist on type 'FlattenMaps<IMessage> & Required<{ _id: ObjectId; }> & { __v: number; }'.
+src/services/liveChat.service.ts(632,38): error TS2345: Argument of type '{ position: number; estimatedWaitTime: number; priority: ChatPriority; customerId: string; sessionId: string; }' is not assignable to parameter of type 'QueueEntry'.
+  Property 'createdAt' is missing in type '{ position: number; estimatedWaitTime: number; priority: ChatPriority; customerId: string; sessionId: string; }' but required in type 'QueueEntry'.
+src/services/loginAnomalyDetection.service.ts(578,7): error TS2741: Property 'isVPN' is missing in type '{ isNew: false; }' but required in type '{ isNew: boolean; city?: string | undefined; country?: string | undefined; isVPN: boolean; }'.
+src/services/loginAnomalyDetection.service.ts(617,7): error TS2741: Property 'isVPN' is missing in type '{ isNew: false; }' but required in type '{ isNew: boolean; city?: string | undefined; country?: string | undefined; isVPN: boolean; }'.
+src/services/notification.service.ts(233,7): error TS2739: Type '{ booking_request: { customer: { title: string; message: string; }; provider: { title: string; message: string; }; }; booking_confirmed: { customer: { title: string; message: string; }; provider: { title: string; message: string; }; }; ... 24 more ...; withdrawal_rejected: { ...; }; }' is missing the following properties from type 'Record<NotificationType, { customer: { title: string; message: string; }; provider: { title: string; message: string; }; }>': dispute_evidence_added, dispute_assigned, service_updated
+src/services/notification.service.ts(1370,5): error TS2739: Type '{ booking_request: true; booking_confirmed: boolean; booking_cancelled: boolean; booking_rejected: boolean; booking_started: boolean; booking_completed: boolean; booking_reminder: boolean; ... 19 more ...; withdrawal_rejected: boolean; }' is missing the following properties from type 'Record<NotificationType, boolean>': dispute_evidence_added, dispute_assigned, service_updated
+src/services/notifications/notificationDigest.service.ts(629,26): error TS2339: Property 'send' does not exist on type '{ sendVerificationEmail: (email: string, firstName: string, verificationToken: string) => Promise<void>; sendWelcomeEmail: (email: string, firstName: string, role: string, userId?: string | undefined) => Promise<...>; ... 17 more ...; sendBatch: (emails: BatchEmailData[]) => Promise<...>; }'.
+src/services/notificationTrigger.service.ts(456,7): error TS2353: Object literal may only specify known properties, and 'url' does not exist in type 'WebPushPayload'.
+src/services/notificationTrigger.service.ts(482,11): error TS2552: Cannot find name 'whatsappService'. Did you mean 'whatsAppService'?
+src/services/payoutEngine.service.ts(808,15): error TS2339: Property 'EmailService' does not exist on type 'typeof import("C:/Users/user/OneDrive/Desktop/rez-v5/Homeservice/backend/src/services/email.service")'.
+src/services/pdf.service.ts(624,39): error TS2339: Property 'currency' does not exist on type '{ primary: string; secondary: string; accent: string; text: string; lightText: string; background: string; border: string; }'.
+src/services/pdf.service.ts(806,14): error TS18048: 'customer' is possibly 'undefined'.
+src/services/pdf.service.ts(807,14): error TS18048: 'customer' is possibly 'undefined'.
+src/services/pdf.service.ts(809,9): error TS18048: 'customer' is possibly 'undefined'.
+src/services/pdf.service.ts(811,27): error TS18048: 'customer' is possibly 'undefined'.
+src/services/phoneIntelligence.service.ts(118,11): error TS2741: Property 'isPrepaid' is missing in type '{ phone: string; formatted: string; countryCode: string; nationalNumber: string; isValid: false; lineType: "unknown"; country: string; riskLevel: "low"; riskScore: number; riskFactors: never[]; checkedAt: Date; }' but required in type 'PhoneIntelligenceResult'.
+src/services/phoneIntelligence.service.ts(312,16): error TS2339: Property 'carrier' does not exist on type '{ lineType: "unknown" | "mobile" | "premium" | "landline" | "voip" | "toll_free"; }'.
+src/services/phoneIntelligence.service.ts(313,16): error TS2339: Property 'mcc' does not exist on type '{ lineType: "unknown" | "mobile" | "premium" | "landline" | "voip" | "toll_free"; }'.
+src/services/phoneIntelligence.service.ts(314,16): error TS2339: Property 'mnc' does not exist on type '{ lineType: "unknown" | "mobile" | "premium" | "landline" | "voip" | "toll_free"; }'.
+src/services/phoneIntelligence.service.ts(497,49): error TS2339: Property 'canReceiveSMS' does not exist on type 'PhoneIntelligenceResult'.
+src/services/photoSharing.service.ts(468,49): error TS7006: Parameter 'id' implicitly has an 'any' type.
+src/services/priorityMatchFee.service.ts(154,18): error TS2339: Property 'status' does not exist on type 'Document<unknown, {}, IProviderProfile, {}, {}> & IProviderProfile & Required<{ _id: ObjectId; }> & { __v: number; }'.
+src/services/priorityMatchFee.service.ts(160,47): error TS2339: Property 'averageRating' does not exist on type '{ profileViews: { date: Date; views: number; uniqueViews: number; }[]; bookingStats: { totalBookings: number; completedBookings: number; cancelledBookings: number; noShowBookings: number; averageBookingValue: number; repeatCustomerRate: number; }; revenueStats: { ...; }; customerMetrics: { ...; }; performanceMetrics...'.
+src/services/providerAnalytics.service.ts(207,42): error TS2339: Property 'serviceDetails' does not exist on type 'FlattenMaps<IBooking> & Required<{ _id: ObjectId; }> & { __v: number; }'.
+src/services/providerAnalytics.service.ts(405,47): error TS2339: Property 'rating' does not exist on type 'FlattenMaps<IProviderProfile> & Required<{ _id: ObjectId; }> & { __v: number; }'.
+src/services/quoteRequest.service.ts(643,15): error TS2339: Property 'subtotal' does not exist on type 'Partial<CreateQuoteInput>'.
+src/services/quoteRequest.service.ts(644,15): error TS2339: Property 'taxAmount' does not exist on type 'Partial<CreateQuoteInput>'.
+src/services/quoteRequest.service.ts(645,15): error TS2339: Property 'totalAmount' does not exist on type 'Partial<CreateQuoteInput>'.
+src/services/quoteRequest.service.ts(713,44): error TS7006: Parameter 'quote' implicitly has an 'any' type.
+src/services/receipt.service.ts(510,45): error TS2339: Property 'sendEmail' does not exist on type '{ sendVerificationEmail: (email: string, firstName: string, verificationToken: string) => Promise<void>; sendWelcomeEmail: (email: string, firstName: string, role: string, userId?: string | undefined) => Promise<...>; ... 17 more ...; sendBatch: (emails: BatchEmailData[]) => Promise<...>; }'.
+src/services/receipt.service.ts(511,26): error TS2339: Property 'sendEmail' does not exist on type '{ sendVerificationEmail: (email: string, firstName: string, verificationToken: string) => Promise<void>; sendWelcomeEmail: (email: string, firstName: string, role: string, userId?: string | undefined) => Promise<...>; ... 17 more ...; sendBatch: (emails: BatchEmailData[]) => Promise<...>; }'.
+src/services/refund.service.ts(571,15): error TS7006: Parameter 'r' implicitly has an 'any' type.
+src/services/refund.service.ts(1113,63): error TS2345: Argument of type 'ClientSession | undefined' is not assignable to parameter of type 'ClientSession | null'.
+  Type 'undefined' is not assignable to type 'ClientSession | null'.
+src/services/rescheduleFee.service.ts(73,39): error TS2561: Object literal may only specify known properties, but 'maxHoursBeforeService' does not exist in type '{ minHoursBeforeService: number; surchargePercent: number; label: string; }'. Did you mean to write 'minHoursBeforeService'?
+src/services/rescheduleFee.service.ts(354,72): error TS2345: Argument of type '"customer" | "provider" | "system"' is not assignable to parameter of type '"customer" | "provider" | undefined'.
+  Type '"system"' is not assignable to type '"customer" | "provider" | undefined'.
+src/services/rescheduleFee.service.ts(361,71): error TS2345: Argument of type '"customer" | "provider" | "system"' is not assignable to parameter of type '"customer" | "provider" | undefined'.
+  Type '"system"' is not assignable to type '"customer" | "provider" | undefined'.
+src/services/rescheduleFee.service.ts(576,9): error TS7053: Element implicitly has an 'any' type because expression of type 'any' can't be used to index type 'Record<RescheduleTier, { count: number; revenue: number; }>'.
+src/services/rescheduleFee.service.ts(577,9): error TS7053: Element implicitly has an 'any' type because expression of type 'any' can't be used to index type 'Record<RescheduleTier, { count: number; revenue: number; }>'.
+src/services/reviewDraft.service.ts(148,15): error TS2339: Property 'extendExpiration' does not exist on type 'Document<unknown, {}, IReviewDraft, {}, {}> & IReviewDraft & Required<{ _id: ObjectId; }> & { __v: number; }'.
+src/services/reviewDraft.service.ts(651,38): error TS2339: Property 'cleanupExpired' does not exist on type 'IReviewDraftModel'.
+src/services/reviewDraft.service.ts(668,44): error TS2339: Property 'getExpiringSoon' does not exist on type 'IReviewDraftModel'.
+src/services/reviewVelocityMonitor.service.ts(157,19): error TS18048: 'booking.customerId' is possibly 'undefined'.
+src/services/reviewVelocityMonitor.service.ts(672,11): error TS7034: Variable 'reviews' implicitly has type 'any[]' in some locations where its type cannot be determined.
+src/services/reviewVelocityMonitor.service.ts(674,31): error TS7005: Variable 'reviews' implicitly has an 'any[]' type.
+src/services/reviewVelocityMonitor.service.ts(678,25): error TS7005: Variable 'reviews' implicitly has an 'any[]' type.
+src/services/reviewVelocityMonitor.service.ts(682,26): error TS7005: Variable 'reviews' implicitly has an 'any[]' type.
+src/services/reviewVelocityMonitor.service.ts(747,30): error TS2339: Property 'sameIPReviews' does not exist on type '{ totalReviews: number; suspiciousReviews: number; alertsGenerated: number; avgRating: number; ratingDistribution: Record<number, number>; }'.
+src/services/reviewVelocityMonitor.service.ts(748,29): error TS2339: Property 'burstReviews' does not exist on type '{ totalReviews: number; suspiciousReviews: number; alertsGenerated: number; avgRating: number; ratingDistribution: Record<number, number>; }'.
+src/services/rushBookingFee.service.ts(250,33): error TS2551: Property 'same_day' does not exist on type '{ sameDay: { surchargePercent: number; label: string; priority: number; }; nextDay: { surchargePercent: number; label: string; priority: number; }; within48h: { surchargePercent: number; label: string; priority: number; }; standard: { ...; }; }'. Did you mean 'sameDay'?
+src/services/rushBookingFee.service.ts(327,44): error TS2551: Property 'same_day' does not exist on type '{ sameDay: { surchargePercent: number; label: string; priority: number; }; nextDay: { surchargePercent: number; label: string; priority: number; }; within48h: { surchargePercent: number; label: string; priority: number; }; standard: { ...; }; }'. Did you mean 'sameDay'?
+src/services/rushBookingFee.service.ts(569,7): error TS7053: Element implicitly has an 'any' type because expression of type 'any' can't be used to index type 'Record<RushTier, { count: number; revenue: number; }>'.
+src/services/rushBookingFee.service.ts(570,7): error TS7053: Element implicitly has an 'any' type because expression of type 'any' can't be used to index type 'Record<RushTier, { count: number; revenue: number; }>'.
+src/services/serviceAnalytics.service.ts(420,42): error TS2339: Property 'rating' does not exist on type 'FlattenMaps<{ searchCount: number; clickCount: number; bookingCount: number; popularityScore: number; lastSearched?: Date | undefined; searchKeywords: string[]; }>'.
+src/services/serviceAnalytics.service.ts(420,85): error TS2339: Property 'rating' does not exist on type 'FlattenMaps<{ searchCount: number; clickCount: number; bookingCount: number; popularityScore: number; lastSearched?: Date | undefined; searchKeywords: string[]; }>'.
+src/services/serviceAnalytics.service.ts(424,42): error TS2339: Property 'rating' does not exist on type 'FlattenMaps<{ searchCount: number; clickCount: number; bookingCount: number; popularityScore: number; lastSearched?: Date | undefined; searchKeywords: string[]; }>'.
+src/services/servicePackages.service.ts(839,7): error TS7053: Element implicitly has an 'any' type because expression of type 'any' can't be used to index type 'Record<PackageTier, number>'.
+src/services/servicePackages.service.ts(840,7): error TS7053: Element implicitly has an 'any' type because expression of type 'any' can't be used to index type 'Record<PackageTier, number>'.
+src/services/sessionManagement.service.ts(146,24): error TS2345: Argument of type 'Session' is not assignable to parameter of type '{ sessionId: string; token: string; device: string; browser?: string | undefined; os?: string | undefined; ip?: string | undefined; location?: string | undefined; userAgent?: string | undefined; ... 5 more ...; biometricVerified?: boolean | undefined; }'.
+  Property 'token' is missing in type 'Session' but required in type '{ sessionId: string; token: string; device: string; browser?: string | undefined; os?: string | undefined; ip?: string | undefined; location?: string | undefined; userAgent?: string | undefined; ... 5 more ...; biometricVerified?: boolean | undefined; }'.
+src/services/stockPhotoDetection.service.ts(453,9): error TS2322: Type '"fake_portfolio"' is not assignable to type '"duplicate_account" | "suspicious_document" | "unusual_pattern" | "address_mismatch" | "velocity_check_failed" | "high_risk_country"'.
+src/services/supportTicket.service.ts(171,25): error TS2339: Property 'toString' does not exist on type 'never'.
+src/services/supportTicket.service.ts(208,16): error TS2352: Conversion of type '(FlattenMaps<ISupportTicket> & Required<{ _id: ObjectId; }> & { __v: number; })[]' to type 'ISupportTicket[]' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type 'FlattenMaps<ISupportTicket> & Required<{ _id: ObjectId; }> & { __v: number; }' is not comparable to type 'ISupportTicket'.
+    The types of 'collection.db.client' are incompatible between these types.
+      Type 'FlattenMaps<MongoClient>' is missing the following properties from type 'MongoClient': driverInfoList, _close
+src/services/supportTicket.service.ts(237,30): error TS18046: 'query.createdAt' is of type 'unknown'.
+src/services/supportTicket.service.ts(238,28): error TS18046: 'query.createdAt' is of type 'unknown'.
+src/services/supportTicket.service.ts(257,16): error TS2352: Conversion of type '(FlattenMaps<ISupportTicket> & Required<{ _id: ObjectId; }> & { __v: number; })[]' to type 'ISupportTicket[]' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type 'FlattenMaps<ISupportTicket> & Required<{ _id: ObjectId; }> & { __v: number; }' is not comparable to type 'ISupportTicket'.
+    The types of 'collection.db.client' are incompatible between these types.
+      Type 'FlattenMaps<MongoClient>' is missing the following properties from type 'MongoClient': driverInfoList, _close
+src/services/tipping.service.ts(598,7): error TS7053: Element implicitly has an 'any' type because expression of type 'any' can't be used to index type 'Record<TipType, { count: number; total: number; }>'.
+src/services/tipping.service.ts(599,7): error TS7053: Element implicitly has an 'any' type because expression of type 'any' can't be used to index type 'Record<TipType, { count: number; total: number; }>'.
+src/services/trainingAcademy.service.ts(426,52): error TS7006: Parameter 'c' implicitly has an 'any' type.
+src/services/trainingAcademy.service.ts(427,55): error TS7006: Parameter 'c' implicitly has an 'any' type.
+src/services/trainingAcademy.service.ts(435,51): error TS7006: Parameter 'c' implicitly has an 'any' type.
+src/services/trainingAcademy.service.ts(441,57): error TS7006: Parameter 'c' implicitly has an 'any' type.
+src/services/trainingAcademy.service.ts(517,56): error TS7006: Parameter 'qs' implicitly has an 'any' type.
+src/services/trainingAcademy.service.ts(532,52): error TS7006: Parameter '_' implicitly has an 'any' type.
+src/services/trainingAcademy.service.ts(532,55): error TS7006: Parameter 'idx' implicitly has an 'any' type.
+src/services/trainingAcademy.service.ts(533,44): error TS7006: Parameter 'q' implicitly has an 'any' type.
+src/services/trainingAcademy.service.ts(538,52): error TS7006: Parameter 'sum' implicitly has an 'any' type.
+src/services/trainingAcademy.service.ts(538,57): error TS7006: Parameter 'qs' implicitly has an 'any' type.
+src/services/trustedDeviceFlow.service.ts(115,11): error TS2322: Type 'Date | undefined' is not assignable to type 'Date'.
+  Type 'undefined' is not assignable to type 'Date'.
+src/services/trustedDeviceFlow.service.ts(131,11): error TS2322: Type 'Date | undefined' is not assignable to type 'Date'.
+  Type 'undefined' is not assignable to type 'Date'.
+src/services/trustedDeviceFlow.service.ts(143,7): error TS2322: Type '{ id: string; name: any; lastActive: Date | undefined; } | undefined' is not assignable to type '{ id: string; name: string; lastActive: Date; trustedAt?: Date | undefined; } | undefined'.
+  Type '{ id: string; name: any; lastActive: Date | undefined; }' is not assignable to type '{ id: string; name: string; lastActive: Date; trustedAt?: Date | undefined; }'.
+    Types of property 'lastActive' are incompatible.
+      Type 'Date | undefined' is not assignable to type 'Date'.
+        Type 'undefined' is not assignable to type 'Date'.
+src/services/trustedDeviceFlow.service.ts(217,34): error TS2345: Argument of type '{ fingerprint: string; device: string; deviceType: "mobile" | "desktop" | "tablet"; browser: string | undefined; os: string | undefined; userAgent: string; ip: string; firstSeen: Date; lastActive: Date; isTrusted: boolean; verified: boolean; loginCount: number; }' is not assignable to parameter of type '{ fingerprint: string; userAgent: string; ip: string; firstSeen: Date; lastSeen: Date; isSuspicious: boolean; device?: string | undefined; deviceType?: "mobile" | "desktop" | "tablet" | undefined; ... 11 more ...; suspiciousReasons?: string[] | undefined; }'.
+  Type '{ fingerprint: string; device: string; deviceType: "mobile" | "desktop" | "tablet"; browser: string | undefined; os: string | undefined; userAgent: string; ip: string; firstSeen: Date; lastActive: Date; isTrusted: boolean; verified: boolean; loginCount: number; }' is missing the following properties from type '{ fingerprint: string; userAgent: string; ip: string; firstSeen: Date; lastSeen: Date; isSuspicious: boolean; device?: string | undefined; deviceType?: "mobile" | "desktop" | "tablet" | undefined; ... 11 more ...; suspiciousReasons?: string[] | undefined; }': lastSeen, isSuspicious
+src/services/trustedDeviceFlow.service.ts(369,9): error TS18046: 'pending.expiresAt' is of type 'unknown'.
+src/services/trustedDeviceFlow.service.ts(413,5): error TS2322: Type 'unknown' is not assignable to type 'string | undefined'.
+src/services/trustedDeviceFlow.service.ts(425,20): error TS18046: 'pending.fingerprint' is of type 'unknown'.
+src/services/trustedDeviceFlow.service.ts(433,7): error TS2322: Type 'unknown' is not assignable to type 'string | undefined'.
+src/services/voucher.service.ts(306,7): error TS2322: Type '{ id: string; code: string; name: string; description: string | undefined; type: VoucherType; discountValue: number; maxDiscount: number | undefined; currency: string | undefined; validFrom: Date; validUntil: Date; status: VoucherStatus; minimumOrderValue: number | undefined; }[]' is not assignable to type 'VoucherEntry[]'.
+  Type '{ id: string; code: string; name: string; description: string | undefined; type: VoucherType; discountValue: number; maxDiscount: number | undefined; currency: string | undefined; validFrom: Date; validUntil: Date; status: VoucherStatus; minimumOrderValue: number | undefined; }' is not assignable to type 'VoucherEntry'.
+    Types of property 'currency' are incompatible.
+      Type 'string | undefined' is not assignable to type 'string'.
+        Type 'undefined' is not assignable to type 'string'.
+src/services/voucher.service.ts(396,5): error TS2322: Type '{ id: string; code: string; name: string; description: string | undefined; type: VoucherType; discountValue: number; maxDiscount: number | undefined; currency: string | undefined; validFrom: Date; validUntil: Date; status: VoucherStatus; minimumOrderValue: number | undefined; }[]' is not assignable to type 'VoucherEntry[]'.
+  Type '{ id: string; code: string; name: string; description: string | undefined; type: VoucherType; discountValue: number; maxDiscount: number | undefined; currency: string | undefined; validFrom: Date; validUntil: Date; status: VoucherStatus; minimumOrderValue: number | undefined; }' is not assignable to type 'VoucherEntry'.
+    Types of property 'currency' are incompatible.
+      Type 'string | undefined' is not assignable to type 'string'.
+        Type 'undefined' is not assignable to type 'string'.
+src/services/vpnProxyDetection.service.ts(537,7): error TS2345: Argument of type 'number | undefined' is not assignable to parameter of type 'number'.
+  Type 'undefined' is not assignable to type 'number'.
+src/services/whiteLabelLicense.service.ts(905,31): error TS7053: Element implicitly has an 'any' type because expression of type 'any' can't be used to index type 'Record<LicenseTier, { monthly: number; quarterly: number; annually: number; setupFee: number; maxUsers: number; pricePerUser: number; features: string[]; }>'.
+src/socket/chat.handler.ts(787,50): error TS2345: Argument of type '[any]' is not assignable to parameter of type 'Parameters<DecorateAcknowledgementsWithMultipleResponses<ChatServerToClientEvents>[T]>'.
+src/socket/chat.handler.ts(801,42): error TS2345: Argument of type '[any]' is not assignable to parameter of type 'Parameters<DecorateAcknowledgementsWithMultipleResponses<ChatServerToClientEvents>[T]>'.

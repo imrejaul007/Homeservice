@@ -1,6 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
 import helmet from 'helmet';
-import cors from 'cors';
 import hpp from 'hpp';
 import { strictRateLimiter, perUserRateLimiter } from './rateLimiter';
 
@@ -21,30 +20,40 @@ export const securityMiddleware = [
         objectSrc: ["'none'"],
         mediaSrc: ["'self'"],
         frameSrc: ["'none'"],
+        baseUri: ["'self'"],
+        formAction: ["'self'"],
       },
     },
     crossOriginEmbedderPolicy: false,
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+    crossOriginOpenerPolicy: { policy: "same-origin" },
+    originAgentCluster: true,
+    dnsPrefetchControl: { allow: false },
+    frameguard: { action: "deny" },
+    hidePoweredBy: true,
+    hsts: {
+      maxAge: 31536000, // 1 year
+      includeSubDomains: true,
+      preload: true,
+    },
+    ieNoOpen: true,
+    noSniff: true,
+    permittedCrossDomainPolicies: { permittedPolicies: "none" },
+    referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+    xssFilter: true,
   }),
 
-  // CORS
-  cors({
-    origin: process.env.ALLOWED_ORIGINS?.split(',') || ['https://nilin.app'],
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: [
-      'Content-Type',
-      'Authorization',
-      'X-Tenant',
-      'X-Requested-With',
-      'X-Correlation-ID',
-      'x-correlation-id',
-      'skipAuth',
-      'skipauth',
-      'x-csrf-token',
-      'x-2fa-token',
-      'stripe-signature',
-    ],
-  }),
+  // Custom Permissions-Policy header (using res.setHeader since helmet may not support it directly)
+  (_req: Request, res: Response, next: NextFunction) => {
+    // Restrict sensitive browser features - only enable for self/origin
+    res.setHeader(
+      'Permissions-Policy',
+      'accelerometer=(), camera=(), geolocation=self, gyroscope=(), magnetometer=(), microphone=self, payment=self, usb=()'
+    );
+    next();
+  },
+
+  // CORS is configured once in app.ts (avoid duplicate preflight handlers)
 
   // Prevent HTTP parameter pollution
   hpp(),

@@ -1,7 +1,8 @@
-// Event Bus - Platform-wide event system with subscriptions
+﻿// Event Bus - Platform-wide event system with subscriptions
 
 import { EventEmitter } from 'events';
 import { v4 as uuidv4 } from 'uuid';
+import mongoose from 'mongoose';
 import logger from '../utils/logger';
 
 // Event Types
@@ -47,11 +48,13 @@ export const EVENT_TYPES = {
   DISPUTE_ESCALATED: 'dispute.escalated',
   DISPUTE_STATUS_CHANGED: 'dispute.status_changed',
   DISPUTE_RESOLVED: 'dispute.resolved',
+  DISPUTE_REOPENED: 'dispute.reopened',
   DISPUTE_CLOSED: 'dispute.closed',
 
   // Refund events
   REFUND_CREATED: 'refund.created',
   REFUND_TRIGGERED: 'refund.triggered',
+  REFUND_PENDING: 'refund.pending',
   REFUND_PROCESSED: 'refund.processed',
   REFUND_COMPLETED: 'refund.completed',
   REFUND_FAILED: 'refund.failed',
@@ -86,6 +89,7 @@ export const EVENT_TYPES = {
   PAYOUT_FAILED: 'payout.failed',
   PAYOUT_APPROVED: 'payout.approved',
   PAYOUT_REJECTED: 'payout.rejected',
+  WITHDRAWAL_REQUESTED: 'withdrawal.requested',
   WITHDRAWAL_APPROVED: 'withdrawal.approved',
   WITHDRAWAL_REJECTED: 'withdrawal.rejected',
 
@@ -104,8 +108,105 @@ export const EVENT_TYPES = {
   BUNDLE_PAUSED: 'bundle.paused',
   BUNDLE_ARCHIVED: 'bundle.archived',
 
+  // Rush Booking events
+  RUSH_BOOKING_APPLIED: 'rush_booking.applied',
+
+  // Equipment Rental events
+  EQUIPMENT_RENTAL_CREATED: 'equipment_rental.created',
+
+  // Extended Warranty events
+  EXTENDED_WARRANTY_PURCHASED: 'extended_warranty.purchased',
+  EXTENDED_WARRANTY_CLAIM_SUBMITTED: 'extended_warranty.claim_submitted',
+  EXTENDED_WARRANTY_CLAIM_PROCESSED: 'extended_warranty.claim_processed',
+
+  // White Label License events
+  WHITE_LABEL_LICENSE_CREATED: 'white_label.license_created',
+
+  // Bulk Discount events
+  BULK_DISCOUNT_APPLIED: 'bulk_discount.applied',
+
+  // Long Term Contract events
+  LONG_TERM_CONTRACT_CREATED: 'long_term_contract.created',
+
   // Stream/Analytics events
   STREAM_EVENT: 'stream.event',
+
+  // API & billing events
+  API_SUBSCRIPTION_CREATED: 'api.subscription_created',
+  INVOICE_SENT: 'invoice.sent',
+
+  // Beta features events
+  BETA_FEATURE_CREATED: 'beta.feature_created',
+  BETA_FEATURE_GRADUATED: 'beta.feature_graduated',
+  BETA_FEEDBACK_SUBMITTED: 'beta.feedback_submitted',
+
+  // Deposit events
+  DEPOSIT_CREATED: 'deposit.created',
+  DEPOSIT_RELEASED: 'deposit.released',
+  DEPOSIT_FORFEITED: 'deposit.forfeited',
+
+  // Bundle booking events
+  BUNDLE_BOOKED: 'bundle.booked',
+
+  // Insurance events
+  INSURANCE_PURCHASED: 'insurance.purchased',
+  INSURANCE_CLAIM_SUBMITTED: 'insurance.claim_submitted',
+  INSURANCE_CLAIM_PROCESSED: 'insurance.claim_processed',
+
+  // Corporate events
+  CORPORATE_ACCOUNT_REGISTERED: 'corporate.account_registered',
+
+  // Account recovery events
+  ACCOUNT_RECOVERY_REQUESTED: 'account.recovery_requested',
+  ACCOUNT_RECOVERY_ESCALATED: 'account.recovery_escalated',
+  ACCOUNT_RECOVERY_COMPLETED: 'account.recovery_completed',
+
+  // Featured boost events
+  FEATURED_BOOST_PURCHASED: 'featured_boost.purchased',
+
+  // Instant booking events
+  INSTANT_BOOKING_COMMISSION_CALCULATED: 'instant_booking.commission_calculated',
+
+  // Lead generation events
+  LEAD_CREDITS_REFUNDED: 'lead.credits_refunded',
+
+  // Scorecard events
+  SCORECARD_GENERATED: 'scorecard.generated',
+
+  // Photo sharing events
+  PHOTO_UPLOADED: 'photo.uploaded',
+
+  // Policy events
+  POLICY_CHANGE_CREATED: 'policy.change_created',
+  POLICY_NOTIFICATIONS_SENT: 'policy.notifications_sent',
+  POLICY_ACKNOWLEDGED: 'policy.acknowledged',
+  POLICY_REMINDER_SENT: 'policy.reminder_sent',
+
+  // Priority match events
+  PRIORITY_MATCH_CREATED: 'priority_match.created',
+
+  // Quote events
+  QUOTE_REQUEST_CREATED: 'quote.request_created',
+  QUOTE_SENT: 'quote.sent',
+  QUOTE_ACCEPTED: 'quote.accepted',
+
+  // Review events
+  REVIEW_SUBMITTED: 'review.submitted',
+
+  // Package events
+  PACKAGE_CREATED: 'package.created',
+
+  // Tipping events
+  TIP_CREATED: 'tip.created',
+  TIP_COMPLETED: 'tip.completed',
+  TIP_REFUNDED: 'tip.refunded',
+
+  // Training events
+  TRAINING_COURSE_CREATED: 'training.course_created',
+  CERTIFICATION_ISSUED: 'certification.issued',
+
+  // Verified badge events
+  VERIFIED_BADGE_PURCHASED: 'verified_badge.purchased',
 } as const;
 
 export type EventType = typeof EVENT_TYPES[keyof typeof EVENT_TYPES];
@@ -149,6 +250,60 @@ const DLQ_RETRY_CONFIG = {
   maxDelayMs: 300000, // 5 minutes max
   backoffMultiplier: 2,
 };
+
+// MongoDB collection for persistent DLQ storage
+let dlqCollection: mongoose.mongo.Collection | null = null;
+
+function getDLQCollection(): mongoose.mongo.Collection | null {
+  if (!dlqCollection && mongoose.connection.readyState === 1) {
+    try {
+      dlqCollection = mongoose.connection.collection('event_dlq');
+    } catch (error) {
+      logger.warn('Failed to get DLQ collection', {
+        error: error instanceof Error ? error.message : String(error),
+        action: 'DLQ_COLLECTION_ERROR',
+      });
+    }
+  }
+  return dlqCollection;
+}
+
+// HIGH SEVERITY FIX: Persist DLQ to MongoDB for durability across restarts
+async function addToPersistentDLQ(entry: DeadLetterEntry): Promise<void> {
+  const collection = getDLQCollection();
+  if (!collection) {
+    logger.warn('DLQ collection not available, DLQ entry not persisted', {
+      eventId: entry.event.eventId,
+      eventType: entry.event.eventType,
+      action: 'DLQ_PERSISTENCE_SKIPPED',
+    });
+    return;
+  }
+
+  try {
+    await collection.insertOne({
+      event: entry.event,
+      error: entry.error,
+      retryCount: entry.retryCount,
+      failedAt: entry.failedAt,
+      nextRetryAt: entry.nextRetryAt,
+      processed: false,
+    });
+
+    logger.debug('DLQ entry persisted to MongoDB', {
+      eventId: entry.event.eventId,
+      eventType: entry.event.eventType,
+      action: 'DLQ_PERSISTED',
+    });
+  } catch (error) {
+    logger.error('Failed to persist DLQ entry to MongoDB', {
+      eventId: entry.event.eventId,
+      eventType: entry.event.eventType,
+      error: error instanceof Error ? error.message : String(error),
+      action: 'DLQ_PERSISTENCE_ERROR',
+    });
+  }
+}
 
 class EventBus extends EventEmitter {
   private history: PlatformEvent[] = [];
@@ -306,14 +461,16 @@ class EventBus extends EventEmitter {
 
     // If all handlers failed, add to dead letter queue
     if (errors.length > 0 && errors.length === matchingSubscriptions.length) {
-      this.addToDeadLetterQueue(event, 'All handlers failed');
+      // Await the async DLQ add to ensure proper error handling
+      await this.addToDeadLetterQueue(event, 'All handlers failed');
     }
   }
 
   /**
    * Add failed event to dead letter queue
+   * HIGH SEVERITY FIX: Persists to MongoDB for durability across restarts
    */
-  private addToDeadLetterQueue(event: PlatformEvent, error: string): void {
+  private async addToDeadLetterQueue(event: PlatformEvent, error: string): Promise<void> {
     const entry: DeadLetterEntry = {
       event,
       error,
@@ -333,6 +490,15 @@ class EventBus extends EventEmitter {
       error,
       deadLetterQueueSize: this.deadLetterQueue.length,
       action: 'DEAD_LETTER_QUEUE_ADDED',
+    });
+
+    // Persist to MongoDB for durability (fire and forget, don't block on failure)
+    addToPersistentDLQ(entry).catch((persistError) => {
+      logger.error('Background DLQ persistence failed', {
+        eventId: event.eventId,
+        error: persistError instanceof Error ? persistError.message : String(persistError),
+        action: 'DLQ_BACKGROUND_PERSIST_ERROR',
+      });
     });
   }
 
@@ -628,6 +794,19 @@ async function getSocketEmitter() {
       const socket = socketModule.getSocketServer();
       if (socket) {
         socket.emitDisputeResolved(customerId, providerId, disputeId, resolution, resolutionType);
+      }
+    },
+    // SECURITY FIX: Added withdrawal emitter methods
+    emitWithdrawalApproved: (providerId: string, withdrawalId: string, amount: number, currency: string) => {
+      const socket = socketModule.getSocketServer();
+      if (socket) {
+        socket.emitWithdrawalApproved(providerId, withdrawalId, amount, currency);
+      }
+    },
+    emitWithdrawalRejected: (providerId: string, withdrawalId: string, amount: number, currency: string, reason: string) => {
+      const socket = socketModule.getSocketServer();
+      if (socket) {
+        socket.emitWithdrawalRejected(providerId, withdrawalId, amount, currency, reason);
       }
     },
   };
@@ -1339,6 +1518,140 @@ export const initializeEventSubscriptions = async (): Promise<void> => {
       });
     }
   }, 15); // Higher priority - immediate real-time delivery
+
+  // Socket: Emit payout completed to provider
+  // SECURITY FIX: Added subscriber for payout events
+  eventBus.subscribe('payout.completed', async (event) => {
+    try {
+      const data = event.data as {
+        payoutId?: string;
+        providerId?: string;
+        amount?: number;
+        stripePayoutId?: string;
+      };
+
+      if (data.payoutId && data.providerId) {
+        socketEmitter.emitWithdrawalApproved(
+          data.providerId,
+          data.payoutId,
+          data.amount || 0,
+          'AED'
+        );
+        logger.debug('Socket: Emitted payout completed to provider', {
+          payoutId: data.payoutId,
+          providerId: data.providerId,
+          action: 'SOCKET_PAYOUT_COMPLETED',
+        });
+      }
+    } catch (error) {
+      logger.error('Socket: Failed to emit payout:completed', {
+        eventId: event.eventId,
+        error: error instanceof Error ? error.message : String(error),
+        action: 'SOCKET_EMISSION_FAILED',
+      });
+    }
+  }, 15);
+
+  // Socket: Emit payout failed to provider
+  eventBus.subscribe('payout.failed', async (event) => {
+    try {
+      const data = event.data as {
+        payoutId?: string;
+        providerId?: string;
+        amount?: number;
+        reason?: string;
+      };
+
+      if (data.payoutId && data.providerId) {
+        socketEmitter.emitWithdrawalRejected(
+          data.providerId,
+          data.payoutId,
+          data.amount || 0,
+          'AED',
+          data.reason || 'Payout processing failed'
+        );
+        logger.debug('Socket: Emitted payout failed to provider', {
+          payoutId: data.payoutId,
+          providerId: data.providerId,
+          action: 'SOCKET_PAYOUT_FAILED',
+        });
+      }
+    } catch (error) {
+      logger.error('Socket: Failed to emit payout:failed', {
+        eventId: event.eventId,
+        error: error instanceof Error ? error.message : String(error),
+        action: 'SOCKET_EMISSION_FAILED',
+      });
+    }
+  }, 15);
+
+  // Socket: Emit withdrawal approved to provider
+  // SECURITY FIX: Added subscriber for withdrawal.approved event (published by admin.controller.ts)
+  eventBus.subscribe('withdrawal.approved', async (event) => {
+    try {
+      const data = event.data as {
+        withdrawalId?: string;
+        providerId?: string;
+        amount?: number;
+        currency?: string;
+      };
+
+      if (data.withdrawalId && data.providerId) {
+        socketEmitter.emitWithdrawalApproved(
+          data.providerId,
+          data.withdrawalId,
+          data.amount || 0,
+          data.currency || 'AED'
+        );
+        logger.debug('Socket: Emitted withdrawal approved to provider', {
+          withdrawalId: data.withdrawalId,
+          providerId: data.providerId,
+          action: 'SOCKET_WITHDRAWAL_APPROVED',
+        });
+      }
+    } catch (error) {
+      logger.error('Socket: Failed to emit withdrawal:approved', {
+        eventId: event.eventId,
+        error: error instanceof Error ? error.message : String(error),
+        action: 'SOCKET_EMISSION_FAILED',
+      });
+    }
+  }, 15);
+
+  // Socket: Emit withdrawal rejected to provider
+  // SECURITY FIX: Added subscriber for withdrawal.rejected event (published by admin.controller.ts)
+  eventBus.subscribe('withdrawal.rejected', async (event) => {
+    try {
+      const data = event.data as {
+        withdrawalId?: string;
+        providerId?: string;
+        amount?: number;
+        currency?: string;
+        reason?: string;
+      };
+
+      if (data.withdrawalId && data.providerId) {
+        socketEmitter.emitWithdrawalRejected(
+          data.providerId,
+          data.withdrawalId,
+          data.amount || 0,
+          data.currency || 'AED',
+          data.reason || 'Withdrawal rejected'
+        );
+        logger.debug('Socket: Emitted withdrawal rejected to provider', {
+          withdrawalId: data.withdrawalId,
+          providerId: data.providerId,
+          action: 'SOCKET_WITHDRAWAL_REJECTED',
+        });
+      }
+    } catch (error) {
+      logger.error('Socket: Failed to emit withdrawal:rejected', {
+        eventId: event.eventId,
+        error: error instanceof Error ? error.message : String(error),
+        action: 'SOCKET_EMISSION_FAILED',
+      });
+    }
+  }, 15);
 
   logger.info('Event subscriptions initialized', {
     subscriptionCount: eventBus.getSubscriptionCount(),

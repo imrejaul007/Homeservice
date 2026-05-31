@@ -3,6 +3,7 @@ import { toast } from 'react-hot-toast';
 import { api } from '../../services/api';
 import { formatPrice } from '../../utils/currency';
 import { ErrorBoundary } from '../../components/common/ErrorBoundary';
+import { AdminPageShell } from '../../components/admin/AdminPageShell';
 
 interface Coupon {
   _id: string;
@@ -298,18 +299,24 @@ const CouponManagement: React.FC = () => {
 
   return (
     <ErrorBoundary>
-      <div className="min-h-screen bg-gray-100 p-6">
-      <div className="max-w-7xl mx-auto">
-        {/* Header */}
-        <div className="flex justify-between items-center mb-6">
-          <h1 className="text-2xl font-bold text-gray-900">Coupon Management</h1>
+      <AdminPageShell
+        title="Coupon Management"
+        subtitle="Create and manage discount codes"
+        breadcrumbItems={[
+          { label: 'Admin', href: '/admin/dashboard' },
+          { label: 'Coupons', current: true },
+        ]}
+        headerActions={
           <button
+            type="button"
             onClick={() => { resetForm(); setEditingCoupon(null); setShowModal(true); }}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+            className="px-4 py-2 rounded-xl bg-gradient-to-r from-nilin-rose to-nilin-coral text-white text-sm font-medium font-sans"
           >
             Create Coupon
           </button>
-        </div>
+        }
+      >
+      <div className="space-y-6">
 
         {/* Stats Cards */}
         {stats && (
@@ -683,7 +690,7 @@ const CouponManagement: React.FC = () => {
           </div>
         </div>
       )}
-    </div>
+      </AdminPageShell>
     </ErrorBoundary>
   );
 };

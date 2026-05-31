@@ -1,6 +1,8 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
+import { useAuthStore } from '@/stores/authStore';
 import {
   analyticsApi,
   businessIntelligenceApi,
@@ -164,7 +166,8 @@ const CohortTable: React.FC<CohortTableProps> = ({ data, cohortType }) => {
     return 'bg-red-400';
   };
 
-  const maxPeriods = Math.max(...Object.values(cohortGroups).map((g) => g.length));
+  const cohortValues = Object.values(cohortGroups).map((g) => g.length);
+  const maxPeriods = cohortValues.length > 0 ? Math.max(...cohortValues) : 0;
 
   return (
     <div className="overflow-x-auto">
@@ -245,7 +248,8 @@ interface FunnelVizProps {
 }
 
 const FunnelViz: React.FC<FunnelVizProps> = ({ data }) => {
-  const maxCount = Math.max(...data.map((d) => d.count));
+  const dataCounts = data.map((d) => d.count);
+  const maxCount = dataCounts.length > 0 ? Math.max(...dataCounts) : 0;
 
   return (
     <div className="space-y-4">
@@ -370,6 +374,16 @@ const RFMSegmentBadge: React.FC<RFMSegmentBadgeProps> = ({ segment }) => {
 // ============================================
 
 const AnalyticsDashboard: React.FC = () => {
+  const { user } = useAuthStore();
+  const navigate = useNavigate();
+
+  // Permission guard - redirect non-admins to unauthorized page
+  useEffect(() => {
+    if (!user || user.role !== 'admin') {
+      navigate('/unauthorized');
+    }
+  }, [user, navigate]);
+
   const [activeTab, setActiveTab] = useState('overview');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -475,7 +489,7 @@ const AnalyticsDashboard: React.FC = () => {
   };
 
   // Calculate time series max for chart scaling
-  const maxRevenue = Math.max(...timeSeries.map((d) => d.revenue), 1);
+  const maxRevenue = timeSeries.length > 0 ? Math.max(...timeSeries.map((d) => d.revenue)) : 0;
 
   if (loading) {
     return (

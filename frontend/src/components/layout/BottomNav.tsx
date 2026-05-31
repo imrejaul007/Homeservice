@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Home, Search, Calendar, User, Wallet, Sparkles, BarChart3 } from 'lucide-react';
+import { Home, Search, Calendar, User, Wallet, Sparkles, BarChart3, Zap } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
 interface NavItem {
@@ -30,31 +30,22 @@ const navItems: NavItem[] = [
     activeIcon: <Calendar className="h-6 w-6" strokeWidth={2.5} />,
   },
   {
-    label: 'Wallet',
-    href: '/customer/wallet',
-    icon: <Wallet className="h-6 w-6" strokeWidth={1.5} />,
-    activeIcon: <Wallet className="h-6 w-6" strokeWidth={2.5} />,
+    label: 'Profile',
+    href: '/customer/profile',
+    icon: <User className="h-6 w-6" strokeWidth={1.5} />,
+    activeIcon: <User className="h-6 w-6" strokeWidth={2.5} />,
   },
 ];
+
+// FIX: Removed broken links - /customer/wallet, /customer/ai, /customer/analytics
+// These routes don't exist (feature frozen) - removed to prevent 404 navigation
 
 const moreNavItems: NavItem[] = [
   {
     label: 'SuperApp',
     href: '/customer/superapp',
-    icon: <Sparkles className="h-5 w-5" strokeWidth={1.5} />,
-    activeIcon: <Sparkles className="h-5 w-5" strokeWidth={2.5} />,
-  },
-  {
-    label: 'AI',
-    href: '/customer/ai',
-    icon: <Sparkles className="h-5 w-5" strokeWidth={1.5} />,
-    activeIcon: <Sparkles className="h-5 w-5" strokeWidth={2.5} />,
-  },
-  {
-    label: 'Activity',
-    href: '/customer/analytics',
-    icon: <BarChart3 className="h-5 w-5" strokeWidth={1.5} />,
-    activeIcon: <BarChart3 className="h-5 w-5" strokeWidth={2.5} />,
+    icon: <Zap className="h-5 w-5" strokeWidth={1.5} />,
+    activeIcon: <Zap className="h-5 w-5" strokeWidth={2.5} />,
   },
   {
     label: 'Profile',

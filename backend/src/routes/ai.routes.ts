@@ -1,9 +1,15 @@
 import { Router, Request, Response } from 'express';
-import { authenticate } from '../middleware/auth.middleware';
-import aiController from '../controllers/ai.controller';
+import { authenticate, requireRole } from '../middleware/auth.middleware';
+import { chat, getConversations, getConversation, deleteConversation } from '../controllers/ai.controller';
+import logger from '../utils/logger';
+import { asyncHandler } from '../utils/asyncHandler';
+import mongoose from 'mongoose';
 
 const router = Router();
-router.use(authenticate);
+// Note: Individual routes below have explicit authenticate middleware for security clarity
+
+// Validation helper for MongoDB ObjectId
+const isValidObjectId = (id: string): boolean => mongoose.Types.ObjectId.isValid(id);
 
 // Dynamic imports to avoid circular dependencies
 const getModels = async () => {
@@ -18,8 +24,9 @@ const getModels = async () => {
  * Get Business Insights
  * GET /api/ai/insights
  * Generates real insights from booking data
+ * @access Admin
  */
-router.get('/insights', async (_req: Request, res: Response) => {
+router.get('/insights', authenticate, requireRole('admin'), async (_req: Request, res: Response) => {
   try {
     const { Booking, Service } = await getModels();
 
@@ -52,24 +59,31 @@ router.get('/insights', async (_req: Request, res: Response) => {
       0
     );
 
-    // Get top performing services
-    const servicePerformance = await Booking.aggregate([
+    // Get top performing services with single aggregation (fixes N+1 query)
+    const topServices = await Booking.aggregate([
       { $match: { status: 'completed' } },
-      { $group: { _id: '$service', count: { $sum: 1 } } },
+      {
+        $group: { _id: '$serviceId', count: { $sum: 1 } }
+      },
       { $sort: { count: -1 } },
-      { $limit: 5 }
+      { $limit: 5 },
+      {
+        $lookup: {
+          from: 'services',
+          localField: '_id',
+          foreignField: '_id',
+          as: 'service'
+        }
+      },
+      { $unwind: { path: '$service', preserveNullAndEmptyArrays: true } },
+      {
+        $project: {
+          service: { $ifNull: ['$service.name', 'Unknown'] },
+          category: { $ifNull: ['$service.category', 'Unknown'] },
+          bookings: '$count'
+        }
+      }
     ]);
-
-    const topServices = await Promise.all(
-      servicePerformance.map(async (item) => {
-        const service = await Service.findById(item._id).select('name category');
-        return {
-          service: service?.name || 'Unknown',
-          category: service?.category || 'Unknown',
-          bookings: item.count
-        };
-      })
-    );
 
     // Calculate trends
     const completionRate = totalBookings > 0
@@ -148,7 +162,11 @@ router.get('/insights', async (_req: Request, res: Response) => {
       }
     });
   } catch (error) {
-    console.error('AI Insights Error:', error);
+    logger.error('AI Insights Error', {
+      context: 'AIRoutes',
+      action: 'AI_INSIGHTS_ERROR',
+      error: error instanceof Error ? error.message : String(error),
+    });
     res.status(500).json({
       success: false,
       message: 'Failed to generate insights'
@@ -160,10 +178,21 @@ router.get('/insights', async (_req: Request, res: Response) => {
  * Get Provider Score
  * GET /api/ai/provider/:id/score
  * Calculates real provider score from performance metrics
+ * @access Provider (own) or Admin
  */
-router.get('/provider/:id/score', async (req: Request, res: Response) => {
+router.get('/provider/:id/score', authenticate, requireRole(['admin', 'provider']), async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
+    const user = (req as any).user;
+
+    // Ownership check: only allow access to own data or admin
+    if (user.role !== 'admin' && user._id.toString() !== id) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. You can only view your own score.'
+      });
+    }
+
     const { Booking, ProviderProfile } = await getModels();
 
     // Get provider's bookings
@@ -261,12 +290,18 @@ router.get('/provider/:id/score', async (req: Request, res: Response) => {
         recommendation
       }
     });
+    return;
   } catch (error) {
-    console.error('Provider Score Error:', error);
+    logger.error('Provider Score Error', {
+      context: 'AIRoutes',
+      action: 'PROVIDER_SCORE_ERROR',
+      error: error instanceof Error ? error.message : String(error),
+    });
     res.status(500).json({
       success: false,
       message: 'Failed to calculate provider score'
     });
+    return;
   }
 });
 
@@ -274,8 +309,9 @@ router.get('/provider/:id/score', async (req: Request, res: Response) => {
  * Get User Churn Risk
  * GET /api/ai/user/:id/churn-risk
  * Calculates churn risk based on user behavior
+ * @access Admin
  */
-router.get('/user/:id/churn-risk', async (req: Request, res: Response) => {
+router.get('/user/:id/churn-risk', authenticate, requireRole('admin'), async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { User, Booking } = await getModels();
@@ -390,7 +426,11 @@ router.get('/user/:id/churn-risk', async (req: Request, res: Response) => {
       }
     });
   } catch (error) {
-    console.error('Churn Risk Error:', error);
+    logger.error('Churn Risk Error', {
+      context: 'AIRoutes',
+      action: 'CHURN_RISK_ERROR',
+      error: error instanceof Error ? error.message : String(error),
+    });
     res.status(500).json({
       success: false,
       message: 'Failed to calculate churn risk'
@@ -400,18 +440,106 @@ router.get('/user/:id/churn-risk', async (req: Request, res: Response) => {
 
 // ============================================
 // Customer AI Chat Routes
+// All endpoints require authentication
 // ============================================
 
 // Send message to AI assistant
-router.post('/chat', aiController.chat);
+// @access Authenticated users
+// @security Input validation, message length limits, conversation ownership check
+router.post('/chat', authenticate, asyncHandler(async (req: Request, res: Response) => {
+  // Validate request body
+  const message = req.body.message;
+  if (!message || typeof message !== 'string') {
+    return res.status(400).json({
+      success: false,
+      message: 'Message is required and must be a string'
+    });
+  }
 
-// Get all conversations
-router.get('/conversations', aiController.getConversations);
+  if (message.trim().length === 0) {
+    return res.status(400).json({
+      success: false,
+      message: 'Message cannot be empty'
+    });
+  }
 
-// Get single conversation
-router.get('/conversations/:conversationId', aiController.getConversation);
+  if (message.length > 2000) {
+    return res.status(400).json({
+      success: false,
+      message: 'Message exceeds maximum length of 2000 characters'
+    });
+  }
 
-// Delete conversation
-router.delete('/conversations/:conversationId', aiController.deleteConversation);
+  // Delegate to controller (already has auth/user check and IDOR protection)
+  return chat(req, res);
+}));
+
+// Get all conversations for authenticated user
+// @access Authenticated users - returns only their own conversations
+// @security Controller filters by userId - no IDOR risk
+router.get('/conversations', authenticate, (req: Request, res: Response) => {
+  const user = (req as any).user;
+
+  logger.info('Fetching conversations', {
+    context: 'AIRoutes',
+    action: 'GET_CONVERSATIONS',
+    userId: user._id.toString()
+  });
+
+  // Controller already filters by userId
+  return getConversations(req, res);
+});
+
+// Get single conversation with IDOR protection
+// @access Authenticated users - controller verifies ownership
+// @security Controller validates conversation ownership
+router.get('/conversations/:conversationId', authenticate, (req: Request, res: Response) => {
+  const user = (req as any).user;
+  const { conversationId } = req.params;
+
+  // Validate ObjectId format
+  if (!isValidObjectId(conversationId)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid conversation ID format'
+    });
+  }
+
+  logger.info('Fetching conversation', {
+    context: 'AIRoutes',
+    action: 'GET_CONVERSATION',
+    userId: user._id.toString(),
+    conversationId
+  });
+
+  // Controller verifies ownership before returning data
+  return getConversation(req, res);
+});
+
+// Delete conversation with IDOR protection
+// @access Authenticated users - controller verifies ownership
+// @security Controller validates conversation ownership
+router.delete('/conversations/:conversationId', authenticate, (req: Request, res: Response) => {
+  const user = (req as any).user;
+  const { conversationId } = req.params;
+
+  // Validate ObjectId format
+  if (!isValidObjectId(conversationId)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid conversation ID format'
+    });
+  }
+
+  logger.info('Deleting conversation', {
+    context: 'AIRoutes',
+    action: 'DELETE_CONVERSATION',
+    userId: user._id.toString(),
+    conversationId
+  });
+
+  // Controller verifies ownership before deletion
+  return deleteConversation(req, res);
+});
 
 export default router;

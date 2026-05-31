@@ -17,6 +17,8 @@
  *   import authService from './AuthService';
  *   await authService.login(credentials);
  */
+import { Capacitor } from '@capacitor/core';
+import { Preferences } from '@capacitor/preferences';
 import type {
   User,
   CustomerProfile,
@@ -33,6 +35,50 @@ import type {
   ReferralStats,
   ReferralReward
 } from '../types/api';
+
+// Capacitor-safe session storage helpers
+const isNative = typeof window !== 'undefined' && Capacitor.isNativePlatform();
+
+// In-memory fallback for SSR or when sessionStorage is unavailable
+const memoryStorage: Record<string, string> = {};
+
+async function safeSessionGetItem(key: string): Promise<string | null> {
+  if (isNative) {
+    try {
+      const result = await Preferences.get({ key });
+      return result.value;
+    } catch {
+      return null;
+    }
+  }
+  if (typeof window !== 'undefined' && window.sessionStorage) {
+    return sessionStorage.getItem(key);
+  }
+  return memoryStorage[key] || null;
+}
+
+async function safeSessionSetItem(key: string, value: string): Promise<void> {
+  if (isNative) {
+    await Preferences.set({ key, value });
+    return;
+  }
+  if (typeof window !== 'undefined' && window.sessionStorage) {
+    sessionStorage.setItem(key, value);
+  } else {
+    memoryStorage[key] = value;
+  }
+}
+
+async function safeSessionRemoveItem(key: string): Promise<void> {
+  if (isNative) {
+    await Preferences.remove({ key });
+    return;
+  }
+  if (typeof window !== 'undefined' && window.sessionStorage) {
+    sessionStorage.removeItem(key);
+  }
+  delete memoryStorage[key];
+}
 
 // API Response Types
 export interface ApiResponse<T = unknown> {
@@ -76,9 +122,9 @@ class AuthAPIService {
     this.baseURL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
   }
 
-  private getStoredTokens(): AuthTokens | null {
+  private async getStoredTokens(): Promise<AuthTokens | null> {
     try {
-      const stored = sessionStorage.getItem('auth-storage');
+      const stored = await safeSessionGetItem('auth-storage');
       if (stored) {
         const parsed = JSON.parse(stored);
         return parsed.state?.tokens || null;
@@ -89,13 +135,13 @@ class AuthAPIService {
     return null;
   }
 
-  private updateStoredTokens(tokens: AuthTokens): void {
+  private async updateStoredTokens(tokens: AuthTokens): Promise<void> {
     try {
-      const stored = sessionStorage.getItem('auth-storage');
+      const stored = await safeSessionGetItem('auth-storage');
       if (stored) {
         const parsed = JSON.parse(stored);
         parsed.state.tokens = tokens;
-        sessionStorage.setItem('auth-storage', JSON.stringify(parsed));
+        await safeSessionSetItem('auth-storage', JSON.stringify(parsed));
       }
     } catch (error) {
       console.error('Failed to update stored tokens:', error);
@@ -117,7 +163,7 @@ class AuthAPIService {
 
     // Add auth token if not skipped and available
     if (!options.skipAuth) {
-      const tokens = this.getStoredTokens();
+      const tokens = await this.getStoredTokens();
       if (tokens?.accessToken) {
         config.headers = {
           ...config.headers,
@@ -176,8 +222,8 @@ class AuthAPIService {
   }
 
   private async performTokenRefresh(): Promise<void> {
-    const tokens = this.getStoredTokens();
-    
+    const tokens = await this.getStoredTokens();
+
     if (!tokens?.refreshToken) {
       throw new Error('No refresh token available');
     }
@@ -192,7 +238,7 @@ class AuthAPIService {
       });
 
       if (response.success && response.data.tokens) {
-        this.updateStoredTokens(response.data.tokens);
+        await this.updateStoredTokens(response.data.tokens);
       } else {
         throw new Error('Invalid refresh response');
       }
@@ -202,9 +248,9 @@ class AuthAPIService {
     }
   }
 
-  private clearAuth(): void {
+  private async clearAuth(): Promise<void> {
     try {
-      const stored = sessionStorage.getItem('auth-storage');
+      const stored = await safeSessionGetItem('auth-storage');
       if (stored) {
         const parsed = JSON.parse(stored);
         parsed.state = {
@@ -215,7 +261,7 @@ class AuthAPIService {
           tokens: null,
           isAuthenticated: false,
         };
-        sessionStorage.setItem('auth-storage', JSON.stringify(parsed));
+        await safeSessionSetItem('auth-storage', JSON.stringify(parsed));
       }
     } catch (error) {
       console.error('Failed to clear auth:', error);
@@ -354,7 +400,7 @@ class AuthAPIService {
   }
 
   async refreshToken(): Promise<ApiResponse<{ tokens: AuthTokens }>> {
-    const tokens = this.getStoredTokens();
+    const tokens = await this.getStoredTokens();
     if (!tokens?.refreshToken) {
       throw new Error('No refresh token available');
     }
@@ -430,31 +476,31 @@ class AuthAPIService {
   }
 
   // Utility methods for token management
-  isTokenExpiring(minutes: number = 5): boolean {
-    const tokens = this.getStoredTokens();
+  async isTokenExpiring(minutes: number = 5): Promise<boolean> {
+    const tokens = await this.getStoredTokens();
     if (!tokens?.expiresAt) return true;
-    
+
     const expiryTime = new Date(tokens.expiresAt);
     const now = new Date();
     const thresholdTime = new Date(now.getTime() + (minutes * 60 * 1000));
-    
+
     return expiryTime <= thresholdTime;
   }
 
-  isTokenExpired(): boolean {
-    const tokens = this.getStoredTokens();
+  async isTokenExpired(): Promise<boolean> {
+    const tokens = await this.getStoredTokens();
     if (!tokens?.expiresAt) return true;
-    
+
     return new Date(tokens.expiresAt) <= new Date();
   }
 
-  getTokenTimeRemaining(): number {
-    const tokens = this.getStoredTokens();
+  async getTokenTimeRemaining(): Promise<number> {
+    const tokens = await this.getStoredTokens();
     if (!tokens?.expiresAt) return 0;
-    
+
     const expiryTime = new Date(tokens.expiresAt);
     const now = new Date();
-    
+
     return Math.max(0, expiryTime.getTime() - now.getTime());
   }
 

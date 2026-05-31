@@ -24,6 +24,7 @@ import Breadcrumb from '../../components/common/Breadcrumb';
 import { useAuthStore } from '../../stores/authStore';
 import { useToastActions } from '../../components/common/Toast';
 import { api } from '../../services/api';
+import { secureStorage } from '../../lib/security';
 import {
   serviceAreasToStrings,
   getPrimaryServiceLocationLabel,
@@ -102,7 +103,7 @@ const ProviderProfilePage: React.FC = () => {
   // Redirect if not a provider
   useEffect(() => {
     if (user?.role !== 'provider') {
-      navigate('/dashboard');
+      navigate('/provider/dashboard'); // FIX: Was '/dashboard'
     }
   }, [user, navigate]);
 
@@ -226,19 +227,17 @@ const ProviderProfilePage: React.FC = () => {
     formData.append('avatar', file);
 
     try {
-      // Get token from sessionStorage - SSR safe
-      const accessToken = typeof window !== 'undefined'
-        ? (() => {
-            const stored = sessionStorage.getItem('auth-storage');
-            if (!stored) return null;
-            try {
-              const tokens = JSON.parse(stored);
-              return tokens?.state?.tokens?.accessToken || null;
-            } catch {
-              return null;
-            }
-          })()
-        : null;
+      // Get token from secureStorage - SSR safe
+      const accessToken = (() => {
+        const stored = secureStorage.getItem('auth-storage');
+        if (!stored) return null;
+        try {
+          const tokens = JSON.parse(stored);
+          return tokens?.state?.tokens?.accessToken || null;
+        } catch {
+          return null;
+        }
+      })();
 
       if (!accessToken) {
         throw new Error('Authentication required');

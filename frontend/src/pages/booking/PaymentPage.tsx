@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, CheckCircle, CreditCard, Lock } from 'lucide-react';
+import { ArrowLeft, CheckCircle, CreditCard, Lock, AlertCircle } from 'lucide-react';
 import NavigationHeader from '../../components/layout/NavigationHeader';
 import Footer from '../../components/layout/Footer';
 import { StripePaymentWrapper } from '../../components/payment';
@@ -65,8 +65,14 @@ const PaymentPage: React.FC = () => {
     await fetchBookingDetails();
   };
 
-  const handlePaymentError = (error: string) => {
-    setError(error);
+  const handlePaymentError = (errorMessage: string) => {
+    // Set the error state for display
+    setError(errorMessage);
+
+    // Log payment failure for analytics/monitoring
+    if (bookingId) {
+      console.warn('Payment failed', { bookingId, error: errorMessage });
+    }
   };
 
   const handleBack = () => {
@@ -232,8 +238,18 @@ const PaymentPage: React.FC = () => {
 
           {/* Error Display */}
           {error && (
-            <div className="mt-4 p-4 bg-red-50 rounded-xl border border-red-200 text-center">
-              <p className="text-red-600">{error}</p>
+            <div className="mt-4 p-4 bg-red-50 rounded-xl border border-red-200 flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="text-red-700 font-medium">Payment Failed</p>
+                <p className="text-red-600 text-sm mt-1">{error}</p>
+                <button
+                  onClick={() => setError(null)}
+                  className="text-sm text-red-500 hover:text-red-700 underline mt-2"
+                >
+                  Dismiss
+                </button>
+              </div>
             </div>
           )}
         </div>

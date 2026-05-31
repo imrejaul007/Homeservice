@@ -318,14 +318,71 @@ const scheduleWebhookRetry = async (
 };
 
 /**
- * Check if webhook was already processed
- * Checks both Redis and MongoDB
+ * Check if webhook was already processed or is currently being processed
+ * Uses Redis for fast lookups, falls back to MongoDB
+ * FIX: Add WebhookOutbox check to prevent concurrent processing of same event
  */
+const WEBHOOK_PROCESSED_CACHE_TTL = 24 * 60 * 60; // 24 hours in seconds
+
 const checkWebhookProcessed = async (eventId: string): Promise<boolean> => {
   try {
-    // Check MongoDB ProcessedWebhook collection
+    // FIX: Check Redis cache first for fast lookups
+    const { cache, isRedisAvailable } = await import('../config/redis');
+    if (isRedisAvailable() && cache.client) {
+      const cached = await cache.client.get(`webhook:processed:${eventId}`);
+      if (cached) {
+        logger.debug('Webhook already processed (Redis cache hit)', { eventId });
+        return true;
+      }
+
+      // FIX: Also check for in-flight processing in Redis
+      const inFlight = await cache.client.get(`webhook:inflight:${eventId}`);
+      if (inFlight) {
+        logger.debug('Webhook currently being processed (Redis inflight check)', { eventId });
+        return true;
+      }
+
+      // FIX: Atomically mark as in-flight to prevent concurrent processing
+      // Only set if not already present (NX) with short TTL (30 seconds for processing timeout)
+      const marked = await cache.client.set(
+        `webhook:inflight:${eventId}`,
+        JSON.stringify({ startedAt: Date.now() }),
+        'EX',
+        30, // 30 second TTL - should be enough for processing
+        'NX'
+      );
+
+      if (!marked) {
+        // Another process is handling this event
+        logger.debug('Webhook currently being processed (set NX failed)', { eventId });
+        return true;
+      }
+    }
+
+    // Check WebhookOutbox for in-flight events (prevents processing same event twice)
+    const outboxEntry = await WebhookOutbox.findOne({ eventId }).lean();
+    if (outboxEntry) {
+      logger.debug('Webhook already in outbox (in-flight)', { eventId, status: outboxEntry.status });
+      // Refresh the Redis inflight marker
+      if (isRedisAvailable() && cache.client) {
+        await cache.client.expire(`webhook:inflight:${eventId}`, 30);
+      }
+      return true;
+    }
+
+    // Fallback to MongoDB ProcessedWebhook collection
     const processed = await mongoose.models.ProcessedWebhook?.findOne({ eventId });
     if (processed) {
+      // FIX: Cache the result in Redis for future lookups
+      if (isRedisAvailable() && cache.client) {
+        await cache.client.setex(
+          `webhook:processed:${eventId}`,
+          WEBHOOK_PROCESSED_CACHE_TTL,
+          '1'
+        );
+        // FIX: Remove inflight marker since processing is complete
+        await cache.client.del(`webhook:inflight:${eventId}`);
+      }
       return true;
     }
     return false;
@@ -340,6 +397,8 @@ const checkWebhookProcessed = async (eventId: string): Promise<boolean> => {
 
 /**
  * Mark webhook as processed
+ * FIX: Update Redis cache when marking as processed to maintain consistency
+ * FIX: Also clear the inflight marker to allow future processing if needed
  */
 const markWebhookProcessed = async (
   eventId: string,
@@ -347,6 +406,22 @@ const markWebhookProcessed = async (
 ): Promise<void> => {
   try {
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+
+    // FIX: Update both Redis and MongoDB for consistency
+    const { cache, isRedisAvailable } = await import('../config/redis');
+
+    // Update Redis cache immediately for fast future lookups
+    if (isRedisAvailable() && cache.client) {
+      // Set processed marker with full TTL
+      await cache.client.setex(
+        `webhook:processed:${eventId}`,
+        WEBHOOK_PROCESSED_CACHE_TTL,
+        '1'
+      );
+
+      // FIX: Remove inflight marker - processing is complete
+      await cache.client.del(`webhook:inflight:${eventId}`);
+    }
 
     await mongoose.models.ProcessedWebhook?.findOneAndUpdate(
       { eventId },

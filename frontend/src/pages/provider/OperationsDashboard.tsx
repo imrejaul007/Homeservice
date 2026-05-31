@@ -3,6 +3,9 @@ import { useState, useEffect, useCallback } from 'react';
 import { TrendingUp, AlertCircle, RefreshCw } from 'lucide-react';
 import { ErrorBoundary } from '../../components/common/ErrorBoundary';
 import { providerOpsApiService } from '../../services/providerOpsApi';
+import { TravelTimeTracking } from '../../components/analytics/provider/TravelTimeTracking';
+import { PeakHoursRevenue } from '../../components/analytics/provider/PeakHoursRevenue';
+import { useAuthStore } from '../../stores/authStore';
 
 interface ProviderOpsStats {
   totalEarnings: number;
@@ -16,6 +19,7 @@ interface ProviderOpsStats {
 }
 
 export function ProviderOperationsDashboard() {
+  const { user } = useAuthStore();
   const [stats, setStats] = useState<ProviderOpsStats>({
     totalEarnings: 0,
     pendingPayout: 0,
@@ -149,6 +153,12 @@ export function ProviderOperationsDashboard() {
             </div>
           </div>
         )}
+
+        {/* Travel Time Tracking */}
+        <TravelTimeTracking providerId={user?._id} timeRange="30d" />
+
+        {/* Peak Hours Revenue */}
+        <PeakHoursRevenue providerId={user?._id} timeRange="30d" />
       </div>
     </div>
     </ErrorBoundary>

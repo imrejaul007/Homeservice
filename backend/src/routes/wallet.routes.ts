@@ -16,8 +16,14 @@ router.get('/earnings/transactions', walletController.getTransactions);
 // Get earnings summary
 router.get('/earnings/summary', walletController.getEarningsSummary);
 
-// Request withdrawal
-router.post('/withdraw', walletController.requestWithdrawal);
+// Request withdrawal - SECURITY FIX: Only providers and admins can withdraw
+// Also requires 2FA verification for provider withdrawals
+router.post(
+  '/withdraw',
+  authMiddleware.requireRole(['provider', 'admin']),
+  authMiddleware.require2FAForProviderWithdrawal,
+  walletController.requestWithdrawal
+);
 
 // Add money to wallet
 router.post('/add-money', walletController.addMoney);

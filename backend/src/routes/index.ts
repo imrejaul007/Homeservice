@@ -13,6 +13,9 @@ import categoryRoutes from './category.routes';
 import paymentRoutes from './payment.routes';
 import analyticsRoutes from './analytics.routes';
 import dashboardRoutes from './analytics/dashboard.routes';
+import customerAnalyticsRoutes from './analytics/customer.routes';
+import providerAnalyticsRoutes from './analytics/provider.routes';
+import adminAnalyticsRoutes from './analytics/admin.routes';
 import biRoutes from './bi.routes';
 import churnRoutes from './churn.routes';
 import fraudRoutes from './fraud.routes';
@@ -45,6 +48,7 @@ import earningsAdminRoutes from './earnings.admin.routes';
 import gdprRoutes from './gdpr.routes';
 import demoRoutes from './demo.routes';
 import supportRoutes from './support.routes';
+import liveChatRoutes from './liveChat.routes';
 import marketplaceRoutes from './marketplace.routes';
 import addressRoutes from './address.routes';
 import streakRoutes from './streak.routes';
@@ -58,6 +62,20 @@ import auditRoutes from './audit.routes';
 import providerAdRoutes from './providerAd.routes';
 import managedContractRoutes from './managedContract.routes';
 import reportRoutes from './report.routes';
+import chatRoutes from './chat.routes';
+import bundleRoutes from './bundle.routes';
+import invoiceRoutes from './invoice.routes';
+import trendingRoutes from './trending.routes';
+import geolocationRoutes from './geolocation.routes';
+import leadRoutes from './lead.routes';
+import corporateRoutes from './corporate.routes';
+import fingerprintRoutes from './fingerprint.routes';
+import sessionRoutes from './session.routes';
+import automationRoutes from './automation.routes';
+import onboardingRoutes from './onboarding.routes';
+import winbackRoutes from './winback.routes';
+import automationAdminRoutes from './automationAdmin.routes';
+import healthRoutes from './health.routes';
 
 const router = Router();
 
@@ -94,6 +112,14 @@ router.get('/', (_req, res) => {
       ai: '/api/ai',
       apiKeys: '/api/api-keys',
       audit: '/api/audit',
+      invoices: '/api/invoices',
+      trending: '/api/trending',
+      nearby: '/api/nearby',
+      leads: '/api/leads',
+      corporate: '/api/corporate',
+      fingerprint: '/api/fingerprint',
+      sessions: '/api/sessions',
+      automation: '/api/automation',
       documentation: '/api-docs'
     }
   });
@@ -149,6 +175,15 @@ router.use('/analytics', analyticsRoutes);
 
 // Analytics Dashboard routes (detailed metrics)
 router.use('/analytics/dashboard', dashboardRoutes);
+
+// Customer Analytics routes
+router.use('/analytics/customer', customerAnalyticsRoutes);
+
+// Provider Analytics routes
+router.use('/analytics/provider', providerAnalyticsRoutes);
+
+// Admin Analytics routes
+router.use('/analytics/admin', adminAnalyticsRoutes);
 
 // Business Intelligence routes
 router.use('/bi', biRoutes);
@@ -237,6 +272,9 @@ router.use('/demo', demoRoutes);
 // Support routes
 router.use('/support', supportRoutes);
 
+// Live Chat routes
+router.use('/support/chat', liveChatRoutes);
+
 // Marketplace routes (booking, payments, subscriptions, analytics)
 router.use('/', marketplaceRoutes);
 
@@ -249,9 +287,7 @@ router.use('/webhooks/twilio', twilioWebhookRoutes);
 // Stripe webhook routes (payment events with IP allowlist)
 router.use('/webhooks/stripe', stripeWebhookRoutes);
 
-// Bundle routes - commented out until properly implemented
-// router.use('/bundles', bundleRoutes);
-
+// Bundle routes (implemented below)
 // Subscription routes - commented out until properly implemented
 // router.use('/subscriptions', subscriptionRoutes);
 // router.use('/membership', subscriptionRoutes);
@@ -279,5 +315,68 @@ router.use('/provider/managed-contracts', managedContractRoutes);
 
 // Scheduled Report routes (admin)
 router.use('/admin', reportRoutes);
+
+// Chat routes
+router.use('/chat', chatRoutes);
+
+// Bundle sales routes
+router.use('/bundles', bundleRoutes);
+
+// Invoice routes
+router.use('/invoices', invoiceRoutes);
+
+// Trending analytics routes
+router.use('/trending', trendingRoutes);
+
+// Geolocation/nearby providers routes
+router.use('/nearby', geolocationRoutes);
+
+// Lead generation routes
+router.use('/leads', leadRoutes);
+
+// Corporate B2B account routes
+router.use('/corporate', corporateRoutes);
+
+// ============================================
+// Customer Wallet Features Routes
+// ============================================
+import cashbackRoutes from './cashback.routes';
+import voucherRoutes from './voucher.routes';
+import autoTopupRoutes from './autoTopup.routes';
+import corporateWalletRoutes from './corporateWallet.routes';
+
+// Cashback routes
+router.use('/cashback', cashbackRoutes);
+
+// Voucher routes
+router.use('/vouchers', voucherRoutes);
+
+// Auto-topup routes
+router.use('/auto-topup', autoTopupRoutes);
+
+// Corporate wallet routes
+router.use('/corporate-wallet', corporateWalletRoutes);
+
+// Device fingerprinting routes
+router.use('/fingerprint', fingerprintRoutes);
+
+// Session management routes
+router.use('/sessions', sessionRoutes);
+
+// Automation management routes
+router.use('/automation', automationRoutes);
+
+// Customer onboarding routes
+router.use('/customer/onboarding', onboardingRoutes);
+
+// Win-back campaign routes
+router.use('/winback', winbackRoutes);
+
+// Health check routes (public)
+router.use('/', healthRoutes);
+
+// Admin automation management routes
+router.use('/admin/automation', automationAdminRoutes);
+router.use('/admin/automation/winback', winbackRoutes);
 
 export default router;

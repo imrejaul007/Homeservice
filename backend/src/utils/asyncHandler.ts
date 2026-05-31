@@ -1,9 +1,10 @@
 import type { Request, Response, NextFunction } from 'express';
 
-export function asyncHandler(
-  fn: (req: Request, res: Response, next: NextFunction) => Promise<unknown>
-): (req: Request, res: Response, next: NextFunction) => void {
-  return (req: Request, res: Response, next: NextFunction) => {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type ExpressHandler = (req: Request, res: Response, next: NextFunction) => any;
+
+export const asyncHandler = (fn: ExpressHandler): ExpressHandler => {
+  return (req: Request, res: Response, next: NextFunction): void => {
     Promise.resolve(fn(req, res, next)).catch(next);
   };
-}
+};

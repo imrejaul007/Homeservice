@@ -1,6 +1,8 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { ErrorBoundary } from '../../components/common/ErrorBoundary';
+import { useAuthStore } from '@/stores/authStore';
 import {
   Shield,
   Users,
@@ -175,6 +177,86 @@ const PERMISSION_CATEGORIES: Record<string, PermissionCategory> = {
       'consent:manage',
     ],
   },
+};
+
+// ============================================
+// Confirm Modal Component
+// ============================================
+
+interface ConfirmModalProps {
+  isOpen: boolean;
+  title: string;
+  message: string;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  variant?: 'danger' | 'warning' | 'info';
+  onConfirm: () => void;
+  onCancel: () => void;
+}
+
+const ConfirmModal: React.FC<ConfirmModalProps> = ({
+  isOpen,
+  title,
+  message,
+  confirmLabel = 'Confirm',
+  cancelLabel = 'Cancel',
+  variant = 'danger',
+  onConfirm,
+  onCancel,
+}) => {
+  if (!isOpen) return null;
+
+  const variantStyles = {
+    danger: {
+      button: 'bg-red-600 hover:bg-red-700 text-white',
+      icon: 'text-red-600',
+      bg: 'bg-red-50',
+    },
+    warning: {
+      button: 'bg-yellow-600 hover:bg-yellow-700 text-white',
+      icon: 'text-yellow-600',
+      bg: 'bg-yellow-50',
+    },
+    info: {
+      button: 'bg-blue-600 hover:bg-blue-700 text-white',
+      icon: 'text-blue-600',
+      bg: 'bg-blue-50',
+    },
+  };
+
+  const styles = variantStyles[variant];
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden">
+        <div className={`p-6 ${styles.bg}`}>
+          <div className="flex items-center gap-4">
+            <div className={`w-12 h-12 rounded-full flex items-center justify-center bg-white`}>
+              <AlertTriangle className={`w-6 h-6 ${styles.icon}`} />
+            </div>
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900">{title}</h3>
+              <p className="text-sm text-gray-600 mt-1">{message}</p>
+            </div>
+          </div>
+        </div>
+        <div className="p-4 bg-gray-50 flex justify-end gap-3">
+          <button
+            onClick={onCancel}
+            className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-100 transition-colors"
+          >
+            {cancelLabel}
+          </button>
+          <button
+            onClick={onConfirm}
+            className={`px-4 py-2 rounded-lg transition-colors ${styles.button}`}
+          >
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 };
 
 // ============================================
@@ -730,6 +812,16 @@ const UserListModal: React.FC<{
 // ============================================
 
 const PermissionManager: React.FC = () => {
+  const { user } = useAuthStore();
+  const navigate = useNavigate();
+
+  // Permission guard - redirect non-admins to unauthorized page
+  useEffect(() => {
+    if (!user || user.role !== 'admin') {
+      navigate('/unauthorized');
+    }
+  }, [user, navigate]);
+
   // State
   const [roles, setRoles] = useState<Role[]>([]);
   const [roleStats, setRoleStats] = useState<RoleStats[]>([]);
@@ -741,6 +833,10 @@ const PermissionManager: React.FC = () => {
   const [editingRole, setEditingRole] = useState<Role | null>(null);
   const [isUserListOpen, setIsUserListOpen] = useState(false);
   const [selectedRoleName, setSelectedRoleName] = useState('');
+  const [deleteConfirm, setDeleteConfirm] = useState<{ isOpen: boolean; roleId: string | null }>({
+    isOpen: false,
+    roleId: null,
+  });
 
   // Filters
   const [searchQuery, setSearchQuery] = useState('');
@@ -832,14 +928,21 @@ const PermissionManager: React.FC = () => {
   };
 
   const handleDeleteRole = async (roleId: string) => {
-    if (!confirm('Are you sure you want to delete this role?')) return;
+    setDeleteConfirm({ isOpen: true, roleId });
+  };
+
+  const confirmDeleteRole = async () => {
+    if (!deleteConfirm.roleId) return;
 
     try {
-      await api.delete(`/admin/rbac/roles/${roleId}`);
+      await api.delete(`/admin/rbac/roles/${deleteConfirm.roleId}`);
+      toast.success('Role deleted successfully');
       fetchRoles();
     } catch (err) {
       console.error('Failed to delete role:', err);
       toast.error('Failed to delete role. It may be in use by users.');
+    } finally {
+      setDeleteConfirm({ isOpen: false, roleId: null });
     }
   };
 
@@ -1063,6 +1166,18 @@ const PermissionManager: React.FC = () => {
         roleName={selectedRoleName}
         isOpen={isUserListOpen}
         onClose={() => setIsUserListOpen(false)}
+      />
+
+      {/* Delete Confirmation Modal */}
+      <ConfirmModal
+        isOpen={deleteConfirm.isOpen}
+        title="Delete Role"
+        message="Are you sure you want to delete this role? This action cannot be undone."
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        variant="danger"
+        onConfirm={confirmDeleteRole}
+        onCancel={() => setDeleteConfirm({ isOpen: false, roleId: null })}
       />
     </div>
     </ErrorBoundary>

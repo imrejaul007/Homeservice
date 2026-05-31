@@ -1,6 +1,9 @@
-
 import React, { useState, useEffect, useCallback } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { toast } from 'react-hot-toast';
 import { ErrorBoundary } from '../../components/common/ErrorBoundary';
+import { AdminPageShell } from '../../components/admin/AdminPageShell';
+import { useAuthStore } from '../../stores/authStore';
 import {
   Search,
   Filter,
@@ -843,7 +846,17 @@ const ProviderDetail: React.FC<{
 // ============================================
 
 const ProviderManagement: React.FC = () => {
-  // State
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const { user } = useAuthStore();
+
+  useEffect(() => {
+    if (!user || user.role !== 'admin') {
+      navigate('/unauthorized');
+    }
+  }, [user, navigate]);
+
+  const initialTab = searchParams.get('tab') || 'all';
   const [providers, setProviders] = useState<ProviderWithUser[]>([]);
   const [selectedProvider, setSelectedProvider] = useState<ProviderWithUser | null>(null);
   const [verification, setVerification] = useState<ProviderVerification | null>(null);
@@ -863,7 +876,14 @@ const ProviderManagement: React.FC = () => {
   const [showFilters, setShowFilters] = useState(false);
 
   // Status tabs
-  const [activeTab, setActiveTab] = useState<string>('all');
+  const [activeTab, setActiveTab] = useState<string>(initialTab);
+
+  useEffect(() => {
+    const tab = searchParams.get('tab');
+    if (tab) {
+      setActiveTab(tab);
+    }
+  }, [searchParams]);
 
   const tabs: ProviderTab[] = [
     { id: 'all', label: 'All', count: 0, color: 'bg-gray-100 text-gray-700' },
@@ -887,6 +907,7 @@ const ProviderManagement: React.FC = () => {
       setPagination(response.data.pagination);
     } catch (error) {
       console.error('Failed to fetch providers:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to fetch providers. Please try again.');
     } finally {
       setIsLoading(false);
     }
@@ -908,6 +929,7 @@ const ProviderManagement: React.FC = () => {
       setFraudFlags(fraudRes.data.flags);
     } catch (error) {
       console.error('Failed to fetch provider details:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to fetch provider details. Please try again.');
     }
   }, []);
 
@@ -928,20 +950,24 @@ const ProviderManagement: React.FC = () => {
   const handleApprove = async (providerId: string) => {
     try {
       await providerOpsApi.approveProvider(providerId);
+      toast.success('Provider approved successfully');
       fetchProviders();
       setSelectedProvider(null);
     } catch (error) {
       console.error('Failed to approve provider:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to approve provider. Please try again.');
     }
   };
 
   const handleReject = async (providerId: string, reason: string, notes: string) => {
     try {
       await providerOpsApi.rejectProvider(providerId, reason, notes);
+      toast.success('Provider rejected successfully');
       fetchProviders();
       setSelectedProvider(null);
     } catch (error) {
       console.error('Failed to reject provider:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to reject provider. Please try again.');
     }
   };
 
@@ -949,38 +975,46 @@ const ProviderManagement: React.FC = () => {
     try {
       const notes = (document.querySelector('textarea') as HTMLTextAreaElement)?.value;
       await providerOpsApi.suspendProvider(providerId, notes || 'Policy violation', 'temporary');
+      toast.success('Provider suspended successfully');
       fetchProviders();
       setSelectedProvider(null);
     } catch (error) {
       console.error('Failed to suspend provider:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to suspend provider. Please try again.');
     }
   };
 
   const handleReactivate = async (providerId: string) => {
     try {
       await providerOpsApi.reactivateProvider(providerId);
+      toast.success('Provider reactivated successfully');
       fetchProviders();
       setSelectedProvider(null);
     } catch (error) {
       console.error('Failed to reactivate provider:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to reactivate provider. Please try again.');
     }
   };
 
   const handleVerifyDocument = async (providerId: string, docId: string, verified: boolean) => {
     try {
       await providerOpsApi.verifyDocument(providerId, docId, verified);
+      toast.success(`Document ${verified ? 'verified' : 'rejected'} successfully`);
       fetchProviderDetails(providerId);
     } catch (error) {
       console.error('Failed to verify document:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to verify document. Please try again.');
     }
   };
 
   const handleRunFraudCheck = async (providerId: string) => {
     try {
       await providerOpsApi.runFraudCheck(providerId);
+      toast.success('Fraud check completed successfully');
       fetchProviderDetails(providerId);
     } catch (error) {
       console.error('Failed to run fraud check:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to run fraud check. Please try again.');
     }
   };
 
@@ -991,19 +1025,22 @@ const ProviderManagement: React.FC = () => {
 
   return (
     <ErrorBoundary>
-      <div className="min-h-screen bg-gray-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-          {/* Header */}
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">Provider Management</h1>
-            <p className="text-gray-500 mt-1">Manage provider verification, quality, and compliance</p>
+      <AdminPageShell
+        title="Provider Management"
+        subtitle="Review verifications, manage quality, and handle compliance"
+        breadcrumbItems={[
+          { label: 'Admin', href: '/admin/dashboard' },
+          { label: 'Providers', current: true },
+        ]}
+        pendingVerifications={activeTab === 'pending' ? pagination.total : undefined}
+      >
+        <div className="space-y-6">
+          <div className="flex items-center justify-end">
+            <button type="button" className="flex items-center px-4 py-2 bg-nilin-blush text-nilin-charcoal text-sm font-medium rounded-xl hover:bg-nilin-blush/80 border border-nilin-border/50">
+              <Download className="w-4 h-4 mr-2" />
+              Export
+            </button>
           </div>
-          <button className="flex items-center px-4 py-2 bg-gray-200 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-300">
-            <Download className="w-4 h-4 mr-2" />
-            Export
-          </button>
-        </div>
 
         {/* Status Tabs */}
         <div className="flex items-center gap-2 mb-6 overflow-x-auto pb-2">
@@ -1156,7 +1193,7 @@ const ProviderManagement: React.FC = () => {
           onRunFraudCheck={handleRunFraudCheck}
         />
       )}
-    </div>
+      </AdminPageShell>
     </ErrorBoundary>
   );
 };

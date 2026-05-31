@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { loadStripe } from '@stripe/stripe-js';
 import {
   Elements,
@@ -14,6 +14,53 @@ import PaymentService from '../../services/PaymentService';
 const stripePromise = loadStripe(
   import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY || 'pk_test_placeholder'
 );
+
+// ============================================
+// Payment Deduplication Prevention
+// ============================================
+interface PaymentPendingState {
+  timestamp: number;
+  bookingId: string;
+}
+
+// In-memory store for payment deduplication
+const pendingPayments: Map<string, PaymentPendingState> = new Map();
+const PAYMENT_DEDUP_WINDOW_MS = 30000; // 30 second deduplication window
+
+/**
+ * Check if a payment is already pending for this booking and mark it as pending
+ * Returns true if payment is already in progress
+ */
+const isPaymentAlreadyPending = (bookingId: string): boolean => {
+  const now = Date.now();
+  const existing = pendingPayments.get(bookingId);
+
+  // Check if payment exists and is within deduplication window
+  if (existing && (now - existing.timestamp) < PAYMENT_DEDUP_WINDOW_MS) {
+    return true;
+  }
+
+  // Mark this payment as pending
+  pendingPayments.set(bookingId, { timestamp: now, bookingId });
+
+  // Cleanup old entries
+  if (pendingPayments.size > 50) {
+    for (const [key, value] of pendingPayments.entries()) {
+      if ((now - value.timestamp) > PAYMENT_DEDUP_WINDOW_MS) {
+        pendingPayments.delete(key);
+      }
+    }
+  }
+
+  return false;
+};
+
+/**
+ * Clear pending payment state
+ */
+const clearPendingPayment = (bookingId: string): void => {
+  pendingPayments.delete(bookingId);
+};
 
 interface StripePaymentFormProps {
   bookingId: string;
@@ -70,12 +117,32 @@ const PaymentForm: React.FC<StripePaymentFormProps> = ({
   const [isComplete, setIsComplete] = useState(false);
   const [is3DSRequired, setIs3DSRequired] = useState(false);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // FIX: Ref-based duplicate submission prevention
+  const paymentInProgressRef = useRef(false);
 
+  const handleSubmit = useCallback(async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+
+    // FIX: Prevent duplicate payment submissions
     if (!stripe || !elements) {
       return;
     }
+
+    // Check if payment is already pending
+    if (isPaymentAlreadyPending(bookingId)) {
+      console.warn('Duplicate payment attempt detected');
+      const message = 'Payment is already being processed. Please wait.';
+      setErrorMessage(message);
+      onError(message);
+      return;
+    }
+
+    // Also check ref as backup
+    if (paymentInProgressRef.current) {
+      console.warn('Payment already in progress (ref)');
+      return;
+    }
+    paymentInProgressRef.current = true;
 
     setIsProcessing(true);
     setErrorMessage(null);
@@ -107,6 +174,7 @@ const PaymentForm: React.FC<StripePaymentFormProps> = ({
           case 'succeeded':
             // Payment successful
             setIsComplete(true);
+            clearPendingPayment(bookingId);
             onSuccess(paymentIntent.id);
             break;
 
@@ -129,21 +197,33 @@ const PaymentForm: React.FC<StripePaymentFormProps> = ({
             const declineMessage = getDeclineMessage(paymentIntent.last_payment_error?.decline_code);
             setErrorMessage(declineMessage);
             onError(declineMessage);
+            clearPendingPayment(bookingId);
             break;
 
           default:
             setErrorMessage('Payment status: ' + paymentIntent.status);
             onError('Unexpected payment status');
+            clearPendingPayment(bookingId);
         }
       }
     } catch (err: any) {
       const message = err.message || 'Failed to process payment.';
       setErrorMessage(message);
       onError(message);
+      clearPendingPayment(bookingId);
     } finally {
       setIsProcessing(false);
+      paymentInProgressRef.current = false;
     }
-  };
+  }, [stripe, elements, bookingId, onSuccess, onError]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      paymentInProgressRef.current = false;
+      clearPendingPayment(bookingId);
+    };
+  }, [bookingId]);
 
   /**
    * Map Stripe decline codes to user-friendly messages
@@ -310,7 +390,7 @@ const PaymentForm: React.FC<StripePaymentFormProps> = ({
         )}
         <button
           type="submit"
-          disabled={!stripe || isProcessing}
+          disabled={!stripe || isProcessing || paymentInProgressRef.current}
           className={cn(
             "flex-1 px-6 py-3 rounded-xl font-medium text-white transition-all",
             "bg-gradient-to-r from-nilin-rose to-nilin-coral",
@@ -319,24 +399,9 @@ const PaymentForm: React.FC<StripePaymentFormProps> = ({
             "flex items-center justify-center gap-2"
           )}
         >
-          {isProcessing ? (
+          {(isProcessing || paymentInProgressRef.current) ? (
             <>
-              <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
-                <circle
-                  className="opacity-25"
-                  cx="12"
-                  cy="12"
-                  r="10"
-                  stroke="currentColor"
-                  strokeWidth="4"
-                  fill="none"
-                />
-                <path
-                  className="opacity-75"
-                  fill="currentColor"
-                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                />
-              </svg>
+              <div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
               Processing...
             </>
           ) : (

@@ -1,9 +1,10 @@
-import mongoose, { Types } from 'mongoose';
+import mongoose, { Types, PipelineStage } from 'mongoose';
 import Booking from '../models/booking.model';
 import User from '../models/user.model';
 import Service from '../models/service.model';
 import ServiceCategory from '../models/serviceCategory.model';
 import { Commission } from '../models/commission.model';
+import { geographicLookupStages, DEFAULT_BOOKING_CITY, DEFAULT_BOOKING_COUNTRY } from '../utils/bookingLocation.util';
 import logger from '../utils/logger';
 import { cache, ANALYTICS_CACHE_TTL } from '../config/redis';
 import { withCache } from '../utils/queryOptimizer';
@@ -430,73 +431,84 @@ export class AnalyticsService {
       let currentValue = 0;
       let previousValue = 0;
 
+      // Run all metric queries in parallel for maximum efficiency
+      const [
+        currentRevenueAgg,
+        previousRevenueAgg,
+        currentBookings,
+        previousBookings,
+        currentCustomers,
+        previousCustomers,
+        currentProviders,
+        previousProviders,
+      ] = await Promise.all([
+        // Revenue - current period
+        Commission.aggregate([
+          {
+            $match: {
+              calculatedAt: { $gte: periods.current.start, $lte: periods.current.end },
+              status: { $in: ['calculated', 'pending', 'approved', 'paid'] },
+            },
+          },
+          { $group: { _id: null, total: { $sum: '$grossAmount' } } },
+        ]),
+        // Revenue - previous period
+        Commission.aggregate([
+          {
+            $match: {
+              calculatedAt: { $gte: periods.previous.start, $lte: periods.previous.end },
+              status: { $in: ['calculated', 'pending', 'approved', 'paid'] },
+            },
+          },
+          { $group: { _id: null, total: { $sum: '$grossAmount' } } },
+        ]),
+        // Bookings - current
+        Booking.countDocuments({
+          createdAt: { $gte: periods.current.start, $lte: periods.current.end },
+          status: 'completed',
+        }),
+        // Bookings - previous
+        Booking.countDocuments({
+          createdAt: { $gte: periods.previous.start, $lte: periods.previous.end },
+          status: 'completed',
+        }),
+        // Customers - current
+        User.countDocuments({
+          createdAt: { $gte: periods.current.start, $lte: periods.current.end },
+          role: 'customer',
+        }),
+        // Customers - previous
+        User.countDocuments({
+          createdAt: { $gte: periods.previous.start, $lte: periods.previous.end },
+          role: 'customer',
+        }),
+        // Providers - current
+        User.countDocuments({
+          createdAt: { $gte: periods.current.start, $lte: periods.current.end },
+          role: 'provider',
+        }),
+        // Providers - previous
+        User.countDocuments({
+          createdAt: { $gte: periods.previous.start, $lte: periods.previous.end },
+          role: 'provider',
+        }),
+      ]);
+
+      // Extract values based on metric
       switch (metric) {
         case 'revenue':
-          const [currentRevenue, previousRevenue] = await Promise.all([
-            Commission.aggregate([
-              {
-                $match: {
-                  calculatedAt: { $gte: periods.current.start, $lte: periods.current.end },
-                  status: { $in: ['calculated', 'pending', 'approved', 'paid'] },
-                },
-              },
-              { $group: { _id: null, total: { $sum: '$grossAmount' } } },
-            ]),
-            Commission.aggregate([
-              {
-                $match: {
-                  calculatedAt: { $gte: periods.previous.start, $lte: periods.previous.end },
-                  status: { $in: ['calculated', 'pending', 'approved', 'paid'] },
-                },
-              },
-              { $group: { _id: null, total: { $sum: '$grossAmount' } } },
-            ]),
-          ]);
-          currentValue = currentRevenue[0]?.total || 0;
-          previousValue = previousRevenue[0]?.total || 0;
+          currentValue = currentRevenueAgg[0]?.total || 0;
+          previousValue = previousRevenueAgg[0]?.total || 0;
           break;
-
         case 'bookings':
-          const [currentBookings, previousBookings] = await Promise.all([
-            Booking.countDocuments({
-              createdAt: { $gte: periods.current.start, $lte: periods.current.end },
-              status: 'completed',
-            }),
-            Booking.countDocuments({
-              createdAt: { $gte: periods.previous.start, $lte: periods.previous.end },
-              status: 'completed',
-            }),
-          ]);
           currentValue = currentBookings;
           previousValue = previousBookings;
           break;
-
         case 'customers':
-          const [currentCustomers, previousCustomers] = await Promise.all([
-            User.countDocuments({
-              createdAt: { $gte: periods.current.start, $lte: periods.current.end },
-              role: 'customer',
-            }),
-            User.countDocuments({
-              createdAt: { $gte: periods.previous.start, $lte: periods.previous.end },
-              role: 'customer',
-            }),
-          ]);
           currentValue = currentCustomers;
           previousValue = previousCustomers;
           break;
-
         case 'providers':
-          const [currentProviders, previousProviders] = await Promise.all([
-            User.countDocuments({
-              createdAt: { $gte: periods.current.start, $lte: periods.current.end },
-              role: 'provider',
-            }),
-            User.countDocuments({
-              createdAt: { $gte: periods.previous.start, $lte: periods.previous.end },
-              role: 'provider',
-            }),
-          ]);
           currentValue = currentProviders;
           previousValue = previousProviders;
           break;
@@ -677,36 +689,16 @@ export class AnalyticsService {
    * Get geographic distribution of business
    */
   async getGeographicDistribution(startDate: Date, endDate: Date): Promise<GeoDistribution[]> {
-    const cacheKey = `analytics:geo:${startDate.toISOString()}:${endDate.toISOString()}`;
+    const geographic = await getGeographicAnalytics(startDate, endDate);
 
-    return this.getCachedData(cacheKey, async () => {
-      const bookings = await Booking.aggregate([
-        {
-          $match: {
-            createdAt: { $gte: startDate, $lte: endDate },
-            status: 'completed',
-          },
-        },
-        {
-          $group: {
-            _id: '$location.address.country',
-            count: { $sum: 1 },
-            revenue: { $sum: '$pricing.totalAmount' },
-          },
-        },
-        { $sort: { revenue: -1 } },
-      ]);
-
-      const totalRevenue = bookings.reduce((sum, b) => sum + b.revenue, 0);
-
-      return bookings.map(b => ({
-        region: b._id || 'Unknown',
-        country: b._id || 'Unknown',
-        count: b.count,
-        revenue: b.revenue,
-        percentage: totalRevenue > 0 ? (b.revenue / totalRevenue) * 100 : 0,
-      }));
-    }, this.CACHE_TTL.LONG);
+    return geographic.byCity.map((city) => ({
+      region: city.city,
+      country: DEFAULT_BOOKING_COUNTRY,
+      city: city.city,
+      count: city.bookings,
+      revenue: city.revenue,
+      percentage: city.percentage,
+    }));
   }
 
   /**
@@ -1213,7 +1205,7 @@ export const getGeographicAnalytics = async (startDate: Date, endDate: Date): Pr
     return cached;
   }
 
-  // Aggregate by city/region from booking locations
+  // Aggregate by city/region with enriched location resolution
   const geoData = await Booking.aggregate([
     {
       $match: {
@@ -1221,26 +1213,26 @@ export const getGeographicAnalytics = async (startDate: Date, endDate: Date): Pr
         status: 'completed',
       },
     },
-    {
-      $lookup: {
-        from: 'users',
-        localField: 'customerId',
-        foreignField: '_id',
-        as: 'customer',
-      },
-    },
-    { $unwind: { path: '$customer', preserveNullAndEmptyArrays: true } },
+    ...geographicLookupStages(),
     {
       $group: {
         _id: {
-          city: { $ifNull: ['$location.address.city', '$customer.address.city', 'Unknown'] },
-          region: { $ifNull: ['$location.address.state', '$location.address.region', '$customer.address.state', 'Unknown'] },
+          city: '$resolvedCity',
+          region: '$resolvedRegion',
         },
         bookings: { $sum: 1 },
         revenue: { $sum: '$pricing.totalAmount' },
         customers: { $addToSet: '$customerId' },
-        avgLat: { $avg: { $ifNull: ['$location.coordinates.lat', '$customer.address.coordinates.lat', 0] } },
-        avgLng: { $avg: { $ifNull: ['$location.coordinates.lng', '$customer.address.coordinates.lng', 0] } },
+        avgLat: {
+          $avg: {
+            $arrayElemAt: ['$location.address.coordinates.coordinates', 1],
+          },
+        },
+        avgLng: {
+          $avg: {
+            $arrayElemAt: ['$location.address.coordinates.coordinates', 0],
+          },
+        },
       },
     },
     {

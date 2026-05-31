@@ -1,8 +1,11 @@
 import { Server as HttpServer } from 'http';
 import { Server, Socket } from 'socket.io';
+import { createAdapter } from '@socket.io/redis-adapter';
+import Redis from 'ioredis';
 import jwt from 'jsonwebtoken';
 import Joi from 'joi';
 import logger from '../utils/logger';
+import { ChatSocketHandler } from './chat.handler';
 
 // Types
 export interface AuthenticatedSocket extends Socket {
@@ -30,20 +33,64 @@ export interface NotificationEvent {
   read?: boolean;
 }
 
+// Chat Event Types
+export interface ChatMessageEvent {
+  messageId: string;
+  chatRoomId: string;
+  senderId: string;
+  receiverId: string;
+  content: string;
+  type: 'text' | 'image' | 'file' | 'system';
+  attachments?: Array<{
+    url: string;
+    filename: string;
+    mimeType: string;
+    size: number;
+  }>;
+  status: 'sent' | 'delivered' | 'read';
+  createdAt: Date;
+}
+
+export interface MessageReadEvent {
+  chatRoomId: string;
+  userId: string;
+  messageIds?: string[];
+  readAt: Date;
+}
+
+export interface TypingEvent {
+  chatRoomId: string;
+  userId: string;
+  userName?: string;
+}
+
 export interface ServerToClientEvents {
   // Booking events
   'booking:status_changed': (data: BookingEvent) => void;
   'booking:new_request': (data: { booking: BookingEvent; providerId: string }) => void;
   'booking:confirmed': (data: BookingEvent) => void;
   'booking:cancelled': (data: BookingEvent) => void;
+  'booking:completed': (data: BookingEvent) => void;
   'booking:reminder': (data: { bookingId: string; minutesUntil: number }) => void;
 
   // Notification events
   'notification:new': (data: NotificationEvent) => void;
   'notification:read': (data: { notificationId: string }) => void;
 
-  // Message events
+  // Message events (existing)
   'message:new': (data: { bookingId: string; message: string; senderId: string; timestamp: Date }) => void;
+
+  // Chat events
+  'chat:room_joined': (data: { chatRoomId: string }) => void;
+  'chat:room_left': (data: { chatRoomId: string }) => void;
+  'chat:message:new': (data: ChatMessageEvent) => void;
+  'chat:message:delivered': (data: { messageId: string; chatRoomId: string; deliveredAt: Date }) => void;
+  'chat:message:read': (data: MessageReadEvent) => void;
+  'chat:message:deleted': (data: { chatRoomId: string; messageId: string }) => void;
+  'chat:typing:start': (data: TypingEvent) => void;
+  'chat:typing:stop': (data: TypingEvent) => void;
+  'chat:presence:online': (data: { userId: string }) => void;
+  'chat:presence:offline': (data: { userId: string }) => void;
 
   // Connection events
   'connected': (data: { socketId: string }) => void;
@@ -60,6 +107,7 @@ export interface ServerToClientEvents {
   // Service status events (Admin → Provider)
   'service:approved': (data: { serviceId: string; providerId: string }) => void;
   'service:rejected': (data: { serviceId: string; providerId: string; reason: string }) => void;
+  'service:status_changed': (data: { serviceId: string; providerId: string; serviceName: string; status: string }) => void;
 
   // Admin notification events (Provider → Admin)
   'admin:new_provider_submission': (data: { providerId: string; providerName: string; submittedAt: Date }) => void;
@@ -69,10 +117,14 @@ export interface ServerToClientEvents {
   'dispute:new': (data: { disputeId: string; bookingId: string; disputeNumber: string; category: string; priority: string }) => void;
   'dispute:resolved': (data: { disputeId: string; resolution: string; resolutionType: string }) => void;
 
+  // Review moderation events (Admin → Provider/Customer)
+  'review:moderated': (data: { reviewId: string; providerId?: string; customerId?: string; action: string; rating?: number; reason?: string; timestamp: Date }) => void;
+
   // Withdrawal events (Admin → Provider)
-  'withdrawal:approved': (data: { withdrawalId: string; amount: number; currency: string; status: string; processedAt: string }) => void;
-  'withdrawal:rejected': (data: { withdrawalId: string; amount: number; currency: string; status: string; reason: string; rejectedAt: string }) => void;
-  'withdrawal:pending': (data: { withdrawalId: string; amount: number; currency: string; status: string }) => void;
+  // FIX #2: Added providerId to match frontend expectations for all withdrawal events
+  'withdrawal:approved': (data: { withdrawalId: string; providerId: string; amount: number; currency: string; status: string; processedAt: string }) => void;
+  'withdrawal:rejected': (data: { withdrawalId: string; providerId: string; amount: number; currency: string; status: string; reason: string; rejectedAt: string }) => void;
+  'withdrawal:pending': (data: { withdrawalId: string; providerId: string; amount: number; currency: string; status: string }) => void;
 
   // Admin notification events for withdrawals (Provider → Admin)
   'admin:new_withdrawal_request': (data: { withdrawalId: string; providerId: string; providerName: string; amount: number; currency: string; requestedAt: Date }) => void;
@@ -85,9 +137,35 @@ export interface ClientToServerEvents {
   'join:booking_room': (bookingId: string) => void;
   'leave:booking_room': (bookingId: string) => void;
 
-  // Typing indicators
+  // Chat room management
+  'join:chat_room': (chatRoomId: string) => void;
+  'leave:chat_room': (chatRoomId: string) => void;
+
+  // Chat messaging
+  'send:message': (data: {
+    chatRoomId: string;
+    receiverId: string;
+    content?: string;
+    type?: 'text' | 'image' | 'file';
+    bookingId?: string;
+    replyTo?: string;
+    attachments?: Array<{
+      url: string;
+      filename: string;
+      mimeType: string;
+      size: number;
+      thumbnailUrl?: string;
+    }>;
+  }) => void;
+  'mark:read': (data: { chatRoomId: string; messageIds?: string[] }) => void;
+
+  // Typing indicators (existing)
   'typing:start': (data: { bookingId: string }) => void;
   'typing:stop': (data: { bookingId: string }) => void;
+
+  // Chat typing indicators
+  'chat:typing:start': (data: { chatRoomId: string }) => void;
+  'chat:typing:stop': (data: { chatRoomId: string }) => void;
 
   // Acknowledgment
   'ack': (data: { event: string; status: 'success' | 'error'; message?: string }) => void;
@@ -211,6 +289,10 @@ class SocketServer {
   private readonly CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
   private readonly MAX_SOCKET_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
 
+  // Redis adapter clients
+  private pubClient: Redis | null = null;
+  private subClient: Redis | null = null;
+
   constructor(httpServer: HttpServer) {
     this.io = new Server(httpServer, {
       cors: {
@@ -228,7 +310,76 @@ class SocketServer {
 
     this.setupMiddleware();
     this.setupConnectionHandler();
+    this.setupChatHandler();
     this.startCleanupScheduler();
+
+    // Setup Redis adapter (optional - only if SOCKET_REDIS_ENABLED=true)
+    this.setupRedisAdapter();
+  }
+
+  /**
+   * Setup Redis adapter for Socket.IO to enable horizontal scaling.
+   * When enabled, multiple server instances can share socket state via Redis.
+   * Controlled by SOCKET_REDIS_ENABLED environment variable.
+   */
+  private async setupRedisAdapter(): Promise<void> {
+    // Skip if Redis adapter is not enabled
+    if (process.env.SOCKET_REDIS_ENABLED !== 'true') {
+      logger.info('Socket.io running without Redis adapter (single instance mode)', {
+        action: 'REDIS_ADAPTER_DISABLED'
+      });
+      return;
+    }
+
+    // Validate Redis URL
+    const redisUrl = process.env.REDIS_URL;
+    if (!redisUrl) {
+      logger.warn('SOCKET_REDIS_ENABLED is true but REDIS_URL is not set. Falling back to single instance mode.', {
+        action: 'REDIS_ADAPTER_CONFIG_MISSING'
+      });
+      return;
+    }
+
+    try {
+      // Create two Redis clients: one for publishing, one for subscribing
+      this.pubClient = new Redis(redisUrl);
+      this.subClient = new Redis(redisUrl);
+
+      // Set up error handlers for Redis clients
+      this.pubClient.on('error', (err: Error) => {
+        logger.error('Redis pubClient error', { error: err.message, action: 'REDIS_PUB_ERROR' });
+      });
+
+      this.subClient.on('error', (err: Error) => {
+        logger.error('Redis subClient error', { error: err.message, action: 'REDIS_SUB_ERROR' });
+      });
+
+      // Apply the Redis adapter to Socket.IO
+      this.io.adapter(createAdapter(this.pubClient, this.subClient));
+
+      logger.info('Socket.io Redis adapter connected successfully', {
+        action: 'REDIS_ADAPTER_CONNECTED',
+        redisUrl: redisUrl.replace(/:([^:@]+)@/, ':***@') // Mask password in logs
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.error('Failed to setup Redis adapter for Socket.io', {
+        error: errorMessage,
+        action: 'REDIS_ADAPTER_FAILED'
+      });
+      // Fall back to in-memory adapter (single instance mode)
+    }
+  }
+
+  // Chat Handler Setup
+  private chatHandler: ChatSocketHandler | null = null;
+
+  private setupChatHandler(): void {
+    this.chatHandler = new ChatSocketHandler(this.io as Server<any, any>);
+    logger.info('Chat socket handler initialized', {
+      context: 'SocketServer',
+      action: 'CHAT_HANDLER_INIT'
+    });
   }
 
   // Dead Letter Queue Methods
@@ -480,6 +631,9 @@ class SocketServer {
         userId: socket.userId,
         action: 'SOCKET_CONNECTED',
       });
+
+      // CRITICAL FIX: Emit 'connected' event to client as defined in ServerToClientEvents interface
+      socket.emit('connected', { socketId: socket.id });
 
       // Track user socket
       if (socket.userId) {
@@ -749,15 +903,25 @@ class SocketServer {
   }
 
   // Emit to admins
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // SECURITY FIX: Only emit to sockets with admin role, not everyone
   emitToAdmins<T extends keyof ServerToClientEvents>(event: T, data: any): boolean {
     try {
-      (this.io as any).emit(event, data);
-      logger.debug('Emitted event to all admins', {
-        event,
-        action: 'EMIT_TO_ADMINS',
-      });
-      return true;
+      let emitted = false;
+      // Iterate through all connected sockets and only emit to admin users
+      for (const socket of this.io.sockets.sockets.values()) {
+        const authSocket = socket as AuthenticatedSocket;
+        if (authSocket.userRole === 'admin') {
+          authSocket.emit(event, data);
+          emitted = true;
+        }
+      }
+      if (emitted) {
+        logger.debug('Emitted event to admins', {
+          event,
+          action: 'EMIT_TO_ADMINS',
+        });
+      }
+      return emitted;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.addToDeadLetterQueue(event, data, errorMessage);
@@ -802,6 +966,66 @@ class SocketServer {
       providerEmitted = this.emitToUser(booking.providerId.toString(), 'booking:status_changed', {
         ...eventData,
         userId: booking.providerId.toString(),
+      });
+    }
+
+    // FIX 1: Emit specific booking:confirmed event when status is 'confirmed'
+    if (booking.status === 'confirmed') {
+      if (booking.customerId) {
+        this.emitToUser(booking.customerId.toString(), 'booking:confirmed', {
+          ...eventData,
+          userId: booking.customerId.toString(),
+        });
+      }
+      if (booking.providerId) {
+        this.emitToUser(booking.providerId.toString(), 'booking:confirmed', {
+          ...eventData,
+          userId: booking.providerId.toString(),
+        });
+      }
+      logger.info('Emitted booking:confirmed event', {
+        bookingId: booking._id,
+        action: 'EMIT_BOOKING_CONFIRMED',
+      });
+    }
+
+    // FIX 2: Emit specific booking:cancelled event when status is 'cancelled'
+    if (booking.status === 'cancelled') {
+      if (booking.customerId) {
+        this.emitToUser(booking.customerId.toString(), 'booking:cancelled', {
+          ...eventData,
+          userId: booking.customerId.toString(),
+        });
+      }
+      if (booking.providerId) {
+        this.emitToUser(booking.providerId.toString(), 'booking:cancelled', {
+          ...eventData,
+          userId: booking.providerId.toString(),
+        });
+      }
+      logger.info('Emitted booking:cancelled event', {
+        bookingId: booking._id,
+        action: 'EMIT_BOOKING_CANCELLED',
+      });
+    }
+
+    // FIX: Emit specific booking:completed event when status is 'completed'
+    if (booking.status === 'completed') {
+      if (booking.customerId) {
+        this.emitToUser(booking.customerId.toString(), 'booking:completed', {
+          ...eventData,
+          userId: booking.customerId.toString(),
+        });
+      }
+      if (booking.providerId) {
+        this.emitToUser(booking.providerId.toString(), 'booking:completed', {
+          ...eventData,
+          userId: booking.providerId.toString(),
+        });
+      }
+      logger.info('Emitted booking:completed event', {
+        bookingId: booking._id,
+        action: 'EMIT_BOOKING_COMPLETED',
       });
     }
 
@@ -990,6 +1214,27 @@ class SocketServer {
     return emitted;
   }
 
+  // Emit service status changed event (to admins)
+  emitServiceStatusChanged(serviceId: string, providerId: string, serviceName: string, status: string): boolean {
+    let emitted = false;
+    for (const socket of this.io.sockets.sockets.values()) {
+      const authSocket = socket as AuthenticatedSocket;
+      if (authSocket.userRole === 'admin') {
+        authSocket.emit('service:status_changed', {
+          serviceId,
+          providerId,
+          serviceName,
+          status,
+        });
+        emitted = true;
+      }
+    }
+    if (emitted) {
+      logger.info('Emitted service status changed to admins', { serviceId, providerId, serviceName, status, action: 'EMIT_SERVICE_STATUS_CHANGED' });
+    }
+    return emitted;
+  }
+
   // =============================================================================
   // Admin Notification Events
   // =============================================================================
@@ -1098,9 +1343,11 @@ class SocketServer {
   // =============================================================================
 
   // Emit withdrawal approved event to provider
+  // SECURITY FIX: Added providerId to match frontend expectations
   emitWithdrawalApproved(providerId: string, withdrawalId: string, amount: number, currency: string): boolean {
     const emitted = this.emitToUser(providerId, 'withdrawal:approved', {
       withdrawalId,
+      providerId, // Include providerId for frontend to identify the provider
       amount,
       currency,
       status: 'processing',
@@ -1113,9 +1360,11 @@ class SocketServer {
   }
 
   // Emit withdrawal rejected event to provider
+  // SECURITY FIX: Added providerId to match frontend expectations
   emitWithdrawalRejected(providerId: string, withdrawalId: string, amount: number, currency: string, reason: string): boolean {
     const emitted = this.emitToUser(providerId, 'withdrawal:rejected', {
       withdrawalId,
+      providerId, // Include providerId for frontend to identify the provider
       amount,
       currency,
       status: 'rejected',
@@ -1124,6 +1373,22 @@ class SocketServer {
     });
     if (emitted) {
       logger.info('Emitted withdrawal rejected event', { providerId, withdrawalId, amount, reason, action: 'EMIT_WITHDRAWAL_REJECTED' });
+    }
+    return emitted;
+  }
+
+  // Emit withdrawal pending event to provider
+  // FIX #6: Added missing withdrawal:pending event emission
+  emitWithdrawalPending(providerId: string, withdrawalId: string, amount: number, currency: string): boolean {
+    const emitted = this.emitToUser(providerId, 'withdrawal:pending', {
+      withdrawalId,
+      providerId,
+      amount,
+      currency,
+      status: 'pending',
+    });
+    if (emitted) {
+      logger.info('Emitted withdrawal pending event', { providerId, withdrawalId, amount, action: 'EMIT_WITHDRAWAL_PENDING' });
     }
     return emitted;
   }
@@ -1151,8 +1416,38 @@ class SocketServer {
     return emitted;
   }
 
+  // Emit review moderated event to provider
+  emitReviewModerated(providerId: string, reviewId: string, action: string, rating: number): boolean {
+    const emitted = this.emitToUser(providerId, 'review:moderated', {
+      reviewId,
+      providerId,
+      action, // 'approved', 'hidden', 'rejected'
+      rating,
+      timestamp: new Date(),
+    });
+    if (emitted) {
+      logger.info('Emitted review moderated event', { providerId, reviewId, moderationAction: action, eventName: 'EMIT_REVIEW_MODERATED' });
+    }
+    return emitted;
+  }
+
+  // Emit review moderated event to customer (reviewer)
+  emitReviewModeratedToCustomer(customerId: string, reviewId: string, action: string, reason?: string): boolean {
+    const emitted = this.emitToUser(customerId, 'review:moderated', {
+      reviewId,
+      customerId,
+      action, // 'approved', 'hidden', 'rejected'
+      reason,
+      timestamp: new Date(),
+    });
+    if (emitted) {
+      logger.info('Emitted review moderated event to customer', { customerId, reviewId, moderationAction: action, eventName: 'EMIT_REVIEW_MODERATED_CUSTOMER' });
+    }
+    return emitted;
+  }
+
   // Graceful shutdown
-  shutdown(): void {
+  async shutdown(): Promise<void> {
     logger.info('Shutting down socket server', { action: 'SOCKET_SHUTDOWN' });
 
     // Stop cleanup intervals
@@ -1166,6 +1461,9 @@ class SocketServer {
       this.dlqCleanupInterval = null;
     }
 
+    // Shutdown chat handler
+    this.chatHandler = null;
+
     // Clear all Maps
     this.userSockets.clear();
     this.bookingRooms.clear();
@@ -1174,6 +1472,27 @@ class SocketServer {
 
     // Disconnect all sockets
     this.io.disconnectSockets(true);
+
+    // Close Redis connections if using Redis adapter
+    if (this.pubClient) {
+      try {
+        await this.pubClient.quit();
+        logger.info('Redis pubClient disconnected', { action: 'REDIS_PUB_DISCONNECTED' });
+      } catch (error) {
+        logger.warn('Error disconnecting Redis pubClient', { action: 'REDIS_PUB_DISCONNECT_ERROR' });
+      }
+      this.pubClient = null;
+    }
+
+    if (this.subClient) {
+      try {
+        await this.subClient.quit();
+        logger.info('Redis subClient disconnected', { action: 'REDIS_SUB_DISCONNECTED' });
+      } catch (error) {
+        logger.warn('Error disconnecting Redis subClient', { action: 'REDIS_SUB_DISCONNECT_ERROR' });
+      }
+      this.subClient = null;
+    }
 
     // Close the server
     this.io.close();

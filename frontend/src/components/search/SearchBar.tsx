@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Search, X, MapPin, Clock } from 'lucide-react';
-import { useSearchStore } from '@/store/searchStore';
+import { useSearchStore } from '@/stores/searchStore';
 import { cn } from '@/lib/utils';
 
 interface SearchBarProps {

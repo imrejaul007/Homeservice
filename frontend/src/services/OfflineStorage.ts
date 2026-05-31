@@ -3,8 +3,11 @@
  *
  * Handles caching of categories and services for offline access.
  * Queues failed API requests for retry when back online.
- * Uses localStorage as the storage backend for cross-platform compatibility.
+ * Uses Capacitor-safe storage for cross-platform compatibility (web + native).
  */
+
+import { Capacitor } from '@capacitor/core';
+import { Preferences } from '@capacitor/preferences';
 
 // =============================================================================
 // Types
@@ -43,6 +46,8 @@ class OfflineStorageService {
   private prefix: string;
   private defaultTTL: number;
   private maxItems: number;
+  private isNative: boolean;
+  private memoryCache: Map<string, string>;
 
   // Storage keys
   private readonly CATEGORIES_KEY = 'offline_categories';
@@ -53,10 +58,12 @@ class OfflineStorageService {
     this.prefix = config.prefix || 'nilin_offline';
     this.defaultTTL = config.ttl || 60 * 60 * 1000; // 1 hour
     this.maxItems = config.maxItems || 100;
+    this.isNative = Capacitor.isNativePlatform();
+    this.memoryCache = new Map();
   }
 
   // ==========================================================================
-  // Private Storage Helpers
+  // Private Storage Helpers (Capacitor-safe)
   // ==========================================================================
 
   private getStorageKey(key: string): string {
@@ -65,7 +72,29 @@ class OfflineStorageService {
 
   private async getStorageValue(key: string): Promise<string | null> {
     try {
-      return localStorage.getItem(key);
+      // Check memory cache first
+      if (this.memoryCache.has(key)) {
+        return this.memoryCache.get(key) ?? null;
+      }
+
+      if (this.isNative) {
+        const result = await Preferences.get({ key });
+        if (result.value) {
+          this.memoryCache.set(key, result.value);
+          return result.value;
+        }
+        return null;
+      } else {
+        // Web fallback
+        if (typeof window !== 'undefined' && window.localStorage) {
+          const value = localStorage.getItem(key);
+          if (value) {
+            this.memoryCache.set(key, value);
+          }
+          return value;
+        }
+        return null;
+      }
     } catch (error) {
       console.error('[OfflineStorage] Get error:', error);
       return null;
@@ -74,7 +103,17 @@ class OfflineStorageService {
 
   private async setStorageValue(key: string, value: string): Promise<void> {
     try {
-      localStorage.setItem(key, value);
+      // Always update memory cache
+      this.memoryCache.set(key, value);
+
+      if (this.isNative) {
+        await Preferences.set({ key, value });
+      } else {
+        // Web fallback
+        if (typeof window !== 'undefined' && window.localStorage) {
+          localStorage.setItem(key, value);
+        }
+      }
     } catch (error) {
       console.error('[OfflineStorage] Set error:', error);
     }
@@ -82,9 +121,52 @@ class OfflineStorageService {
 
   private async removeStorageValue(key: string): Promise<void> {
     try {
-      localStorage.removeItem(key);
+      // Remove from memory cache
+      this.memoryCache.delete(key);
+
+      if (this.isNative) {
+        await Preferences.remove({ key });
+      } else {
+        // Web fallback
+        if (typeof window !== 'undefined' && window.localStorage) {
+          localStorage.removeItem(key);
+        }
+      }
     } catch (error) {
       console.error('[OfflineStorage] Remove error:', error);
+    }
+  }
+
+  private async clearAllWithPrefix(): Promise<void> {
+    if (this.isNative) {
+      try {
+        const keys = await Preferences.keys();
+        for (const k of keys.keys) {
+          if (k.startsWith(this.prefix)) {
+            await Preferences.remove({ key: k });
+          }
+        }
+      } catch (error) {
+        console.error('[OfflineStorage] Clear error:', error);
+      }
+    } else {
+      // Web fallback
+      if (typeof window !== 'undefined' && window.localStorage) {
+        const keysToRemove: string[] = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (key && key.startsWith(this.prefix)) {
+            keysToRemove.push(key);
+          }
+        }
+        keysToRemove.forEach((key) => localStorage.removeItem(key));
+      }
+    }
+    // Clear memory cache
+    for (const key of this.memoryCache.keys()) {
+      if (key.startsWith(this.prefix)) {
+        this.memoryCache.delete(key);
+      }
     }
   }
 
@@ -149,15 +231,7 @@ class OfflineStorageService {
    * Clear all cached items
    */
   async clear(): Promise<void> {
-    // Clear all items with our prefix
-    const keysToRemove: string[] = [];
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key && key.startsWith(this.prefix)) {
-        keysToRemove.push(key);
-      }
-    }
-    keysToRemove.forEach((key) => localStorage.removeItem(key));
+    await this.clearAllWithPrefix();
   }
 
   // ==========================================================================

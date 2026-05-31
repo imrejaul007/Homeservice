@@ -98,7 +98,7 @@ class FavoritesApiService {
   /**
    * Update favorite notes
    */
-  async updateFavorite(providerId: string, notes?: string, category?: string): Promise<any> {
+  async updateFavorite(providerId: string, notes?: string, category?: string): Promise<{ success: boolean; message: string }> {
     const response = await api.patch(`/favorites/${providerId}`, {
       notes,
       category,

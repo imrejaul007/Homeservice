@@ -1,8 +1,17 @@
-import mongoose, { Document, Schema, Model } from 'mongoose';
+import mongoose, { Document, Schema, Model, ClientSession } from 'mongoose';
 import { sanitizeProviderGeo } from '../utils/sanitizeProviderGeo';
+import logger from '../utils/logger';
 
 export interface IProviderProfile extends Document {
+  // Multi-tenant support
+  tenantId?: mongoose.Types.ObjectId;
+
   userId: mongoose.Types.ObjectId;
+
+  // Optional media fields used by stock photo detection
+  portfolioImages?: string[];
+  profileImages?: string[];
+  coverImage?: string;
 
   // Provider Tier Level (for display and sorting)
   tier: 'elite' | 'premium' | 'standard';
@@ -485,8 +494,26 @@ export interface IProviderProfile extends Document {
   isDeleted: boolean;
 }
 
+// Static methods interface
+export interface IProviderProfileModel extends Model<IProviderProfile> {
+  findByUserId(userId: string): Promise<IProviderProfile | null>;
+  findVerifiedProviders(): Promise<IProviderProfile[]>;
+  findInServiceArea(lat: number, lng: number, maxDistance: number): Promise<IProviderProfile[]>;
+  recalculateBookingStats(userId: string | mongoose.Types.ObjectId): Promise<void>;
+  recalculateRevenueStats(userId: string | mongoose.Types.ObjectId): Promise<void>;
+  recalculateReviewsData(userId: string | mongoose.Types.ObjectId): Promise<void>;
+  recalculateAllAnalytics(userId: string | mongoose.Types.ObjectId): Promise<void>;
+}
+
 const providerProfileSchema = new Schema<IProviderProfile>(
   {
+    // Multi-tenant support
+    tenantId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Tenant',
+      index: true
+    },
+
     userId: {
       type: Schema.Types.ObjectId,
       ref: 'User',
@@ -828,6 +855,9 @@ const providerProfileSchema = new Schema<IProviderProfile>(
         2: { type: Number, default: 0 },
         1: { type: Number, default: 0 }
       },
+      // FIX: Limit recentReviews array to prevent unbounded document growth
+      // Only store the 20 most recent reviews for quick access
+      // NOTE: The limit is enforced in the recalculateReviewsData method
       recentReviews: [{
         customerId: { type: Schema.Types.ObjectId, ref: 'User' },
         bookingId: { type: Schema.Types.ObjectId, ref: 'Booking' },
@@ -1074,6 +1104,19 @@ providerProfileSchema.index({ 'analytics.performanceMetrics.qualityScore': -1 })
 providerProfileSchema.index({ 'instagramStyleProfile.followersCount': -1 });
 providerProfileSchema.index({ lastActiveAt: -1 });
 
+// Tenant isolation indexes
+providerProfileSchema.index({ tenantId: 1, 'verificationStatus.overall': 1 });
+providerProfileSchema.index({ tenantId: 1, isActive: 1 });
+
+// FIX: Add index for booking analytics queries (completed bookings by date)
+providerProfileSchema.index({ 'analytics.bookingStats.completedBookings': 1 });
+
+// FIX: Add index for revenue analytics queries
+providerProfileSchema.index({ 'analytics.revenueStats.totalEarnings': -1 });
+
+// FIX: Add index for profile views analytics
+providerProfileSchema.index({ 'analytics.profileViews.date': 1 });
+
 // Virtual for overall score combining ratings, verification, and activity
 providerProfileSchema.virtual('overallScore').get(function() {
   const ratingScore = (this.reviewsData.averageRating / 5) * 40;
@@ -1169,6 +1212,361 @@ providerProfileSchema.statics.findInServiceArea = function(lat: number, lng: num
   });
 };
 
-const ProviderProfile: Model<IProviderProfile> = mongoose.model<IProviderProfile>('ProviderProfile', providerProfileSchema);
+// ===================================
+// CASCADE DELETE HOOKS (CRITICAL)
+// ===================================
+// Clean up related documents when a provider profile is deleted
+
+/**
+ * Helper function to perform cascade cleanup when a provider profile is deleted
+ * CRITICAL: Prevents orphan records across all related collections
+ * NOTE: Financial records (Settlement, Payout, Commission) are intentionally NOT deleted
+ * for compliance and audit trail purposes
+ */
+async function performProviderProfileCascadeDelete(providerProfileId: mongoose.Types.ObjectId, userId: mongoose.Types.ObjectId): Promise<void> {
+  const session: ClientSession = await mongoose.startSession();
+  try {
+    session.startTransaction();
+
+    const Service = mongoose.model('Service');
+    const Availability = mongoose.model('Availability');
+    const Booking = mongoose.model('Booking');
+    const ProviderVerification = mongoose.model('ProviderVerification');
+
+    // Clean up services created by this provider (soft delete)
+    await Service.updateMany(
+      { providerId: userId },
+      {
+        $set: {
+          isDeleted: true,
+          deletedAt: new Date(),
+        }
+      },
+      { session }
+    );
+
+    // Clean up availability records for this provider
+    await Availability.deleteMany({ providerId: userId }, { session });
+
+    // FIX: Soft delete bookings for this provider (maintain audit trail)
+    await Booking.updateMany(
+      { providerId: userId },
+      {
+        $set: {
+          isDeleted: true,
+          deletedAt: new Date(),
+        }
+      },
+      { session }
+    );
+
+    // CRITICAL: Clean up provider verification records
+    await ProviderVerification.deleteMany({ providerId: userId }, { session });
+
+    await session.commitTransaction();
+
+    logger.info('Cascade delete completed for provider profile', {
+      context: 'ProviderProfileModel',
+      action: 'CASCADE_DELETE',
+      providerProfileId: providerProfileId.toString(),
+      userId: userId.toString(),
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    logger.error('Cascade delete failed for provider profile', {
+      context: 'ProviderProfileModel',
+      action: 'CASCADE_DELETE_ERROR',
+      providerProfileId: providerProfileId.toString(),
+      userId: userId.toString(),
+      error: (error as Error).message,
+    });
+    throw error;
+  } finally {
+    if (!session.hasEnded) {
+      await session.endSession();
+    }
+  }
+}
+
+/**
+ * FIX: Add method to limit profile views array to prevent unbounded document growth
+ * Keeps the 90 most recent daily view records (approx 3 months)
+ */
+providerProfileSchema.methods.cleanupOldProfileViews = async function(): Promise<number> {
+  const MAX_PROFILE_VIEWS = 90;
+
+  if (!this.analytics.profileViews || this.analytics.profileViews.length <= MAX_PROFILE_VIEWS) {
+    return 0;
+  }
+
+  // Sort by date descending and keep only the most recent
+  const sortedViews = [...this.analytics.profileViews].sort(
+    (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+  );
+  const viewsToKeep = sortedViews.slice(0, MAX_PROFILE_VIEWS);
+  const removedCount = this.analytics.profileViews.length - viewsToKeep.length;
+
+  this.analytics.profileViews = viewsToKeep;
+  await this.save({ validateBeforeSave: false });
+
+  return removedCount;
+};
+
+// Hook for soft delete (when isDeleted is set to true via findOneAndUpdate)
+providerProfileSchema.pre('findOneAndUpdate', async function() {
+  const update = this.getUpdate() as any;
+  if (update && update.isDeleted === true) {
+    const doc = await this.model.findOne(this.getQuery()).lean() as (mongoose.Document & { _id: mongoose.Types.ObjectId; userId: mongoose.Types.ObjectId; isDeleted?: boolean }) | null;
+    if (doc && !doc.isDeleted) {
+      // Provider profile is being soft-deleted, trigger cascade
+      await performProviderProfileCascadeDelete(doc._id, doc.userId);
+    }
+  }
+});
+
+// Hook for direct deleteOne operations
+providerProfileSchema.pre('deleteOne', { document: true, query: false }, async function() {
+  const providerProfileId = this._id;
+  const userId = (this as any).userId;
+  await performProviderProfileCascadeDelete(providerProfileId, userId);
+});
+
+const ProviderProfile = mongoose.model<IProviderProfile, IProviderProfileModel>('ProviderProfile', providerProfileSchema) as IProviderProfileModel;
+
+// ===================================
+// ANALYTICS UPDATE METHODS
+// ===================================
+
+/**
+ * FIX: Recalculate and update denormalized booking stats from actual Booking documents.
+ * Call this after booking status changes (completed, cancelled, etc.)
+ * Uses atomic aggregation to prevent race conditions
+ */
+ProviderProfile.recalculateBookingStats = async function(userId: string | mongoose.Types.ObjectId): Promise<void> {
+  const Booking = mongoose.model('Booking');
+  const userIdObj = new mongoose.Types.ObjectId(userId.toString());
+
+  // FIX: Use aggregation pipeline for atomic calculation
+  const [bookingStats, completedStats] = await Promise.all([
+    // Get counts by status in single query
+    Booking.aggregate([
+      { $match: { providerId: userIdObj } },
+      {
+        $group: {
+          _id: '$status',
+          count: { $sum: 1 }
+        }
+      }
+    ]),
+    // Get completed booking stats (average value, customer metrics)
+    Booking.aggregate([
+      { $match: { providerId: userIdObj, status: 'completed' } },
+      {
+        $group: {
+          _id: null,
+          avgValue: { $avg: '$pricing.totalAmount' },
+          totalRevenue: { $sum: '$pricing.totalAmount' },
+          uniqueCustomers: { $addToSet: '$customerId' }
+        }
+      }
+    ])
+  ]);
+
+  // Process booking counts
+  const statusCounts = new Map(bookingStats.map(s => [s._id, s.count]));
+  const totalBookings = Array.from(statusCounts.values()).reduce((a, b) => a + b, 0);
+  const completedBookings = statusCounts.get('completed') || 0;
+  const cancelledBookings = statusCounts.get('cancelled') || 0;
+  const noShowBookings = statusCounts.get('no_show') || 0;
+
+  // Process completed stats
+  const completedData = completedStats[0] || { avgValue: 0, totalRevenue: 0, uniqueCustomers: [] };
+  const averageBookingValue = completedData.avgValue || 0;
+  const uniqueCustomersCount = completedData.uniqueCustomers?.filter(Boolean).length || 0;
+
+  // Calculate repeat customer rate (customers with more than 1 booking)
+  const repeatCustomersAgg = await Booking.aggregate([
+    { $match: { providerId: userIdObj, status: 'completed', customerId: { $exists: true, $ne: null } } },
+    { $group: { _id: '$customerId', bookingCount: { $sum: 1 } } },
+    { $match: { bookingCount: { $gt: 1 } } }
+  ]);
+  const repeatCustomerRate = uniqueCustomersCount > 0
+    ? (repeatCustomersAgg.length / uniqueCustomersCount) * 100
+    : 0;
+
+  // FIX: Use findOneAndUpdate with aggregation result for atomic update
+  await this.findOneAndUpdate(
+    { userId },
+    {
+      $set: {
+        'analytics.bookingStats.totalBookings': totalBookings,
+        'analytics.bookingStats.completedBookings': completedBookings,
+        'analytics.bookingStats.cancelledBookings': cancelledBookings,
+        'analytics.bookingStats.noShowBookings': noShowBookings,
+        'analytics.bookingStats.averageBookingValue': Math.round(averageBookingValue * 100) / 100,
+        'analytics.bookingStats.repeatCustomerRate': Math.round(repeatCustomerRate * 100) / 100,
+        'analytics.revenueStats.totalEarnings': Math.round((completedData.totalRevenue || 0) * 100) / 100,
+        'analytics.customerMetrics.totalCustomers': uniqueCustomersCount,
+        'analytics.customerMetrics.repeatCustomers': repeatCustomersAgg.length,
+        'analytics.customerMetrics.customerRetentionRate': Math.round(repeatCustomerRate * 100) / 100
+      }
+    }
+  );
+};
+
+/**
+ * Recalculate and update denormalized revenue stats from actual bookings.
+ * Call this after settlements are generated or payouts are made.
+ */
+ProviderProfile.recalculateRevenueStats = async function(userId: string | mongoose.Types.ObjectId): Promise<void> {
+  const Settlement = mongoose.model('Settlement');
+
+  const now = new Date();
+  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+  // Total earnings from all paid settlements
+  const totalEarningsAgg = await Settlement.aggregate([
+    { $match: { providerId: new mongoose.Types.ObjectId(userId.toString()), status: 'paid' } },
+    { $group: { _id: null, total: { $sum: '$netAmount' } } }
+  ]);
+  const totalEarnings = totalEarningsAgg[0]?.total || 0;
+
+  // Current month earnings
+  const monthEarningsAgg = await Settlement.aggregate([
+    {
+      $match: {
+        providerId: new mongoose.Types.ObjectId(userId.toString()),
+        status: 'paid',
+        paidAt: { $gte: startOfMonth }
+      }
+    },
+    { $group: { _id: null, total: { $sum: '$netAmount' } } }
+  ]);
+  const currentMonthEarnings = monthEarningsAgg[0]?.total || 0;
+
+  // Calculate average monthly earnings from last 12 months
+  const twelveMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 11, 1);
+  const monthlyEarnings = await Settlement.aggregate([
+    {
+      $match: {
+        providerId: new mongoose.Types.ObjectId(userId.toString()),
+        status: 'paid',
+        paidAt: { $gte: twelveMonthsAgo }
+      }
+    },
+    {
+      $group: {
+        _id: { $dateToString: { format: '%Y-%m', date: '$paidAt' } },
+        total: { $sum: '$netAmount' }
+      }
+    },
+    { $sort: { _id: 1 } }
+  ]);
+
+  const averageMonthlyEarnings = monthlyEarnings.length > 0
+    ? monthlyEarnings.reduce((sum, m) => sum + m.total, 0) / monthlyEarnings.length
+    : 0;
+
+  await this.updateOne(
+    { userId },
+    {
+      $set: {
+        'analytics.revenueStats.totalEarnings': Math.round(totalEarnings * 100) / 100,
+        'analytics.revenueStats.currentMonthEarnings': Math.round(currentMonthEarnings * 100) / 100,
+        'analytics.revenueStats.averageMonthlyEarnings': Math.round(averageMonthlyEarnings * 100) / 100
+      }
+    }
+  );
+};
+
+/**
+ * Recalculate and update reviews data from actual Review documents.
+ * Call this after reviews are created, updated, or deleted.
+ */
+ProviderProfile.recalculateReviewsData = async function(userId: string | mongoose.Types.ObjectId): Promise<void> {
+  const Review = mongoose.model('Review');
+
+  const reviews = await Review.aggregate([
+    {
+      $match: {
+        revieweeId: new mongoose.Types.ObjectId(userId.toString()),
+        reviewerType: 'customer'
+      }
+    },
+    {
+      $group: {
+        _id: null,
+        averageRating: { $avg: '$rating' },
+        totalReviews: { $sum: 1 },
+        rating5: { $sum: { $cond: [{ $eq: ['$rating', 5] }, 1, 0] } },
+        rating4: { $sum: { $cond: [{ $eq: ['$rating', 4] }, 1, 0] } },
+        rating3: { $sum: { $cond: [{ $eq: ['$rating', 3] }, 1, 0] } },
+        rating2: { $sum: { $cond: [{ $eq: ['$rating', 2] }, 1, 0] } },
+        rating1: { $sum: { $cond: [{ $eq: ['$rating', 1] }, 1, 0] } }
+      }
+    }
+  ]);
+
+  const stats = reviews[0] || {
+    averageRating: 0,
+    totalReviews: 0,
+    rating5: 0,
+    rating4: 0,
+    rating3: 0,
+    rating2: 0,
+    rating1: 0
+  };
+
+  // Get recent reviews - limit to 20 max for pagination support
+  // This prevents unbounded document growth from storing too many reviews
+  const recentReviews = await Review.find({
+    revieweeId: userId,
+    reviewerType: 'customer',
+    isHidden: false
+  })
+    .sort({ createdAt: -1 })
+    .limit(20)
+    .populate('reviewerId', 'firstName lastName avatar')
+    .select('reviewerId bookingId rating title comment photos isVerified helpfulVotes response createdAt');
+
+  await this.updateOne(
+    { userId },
+    {
+      $set: {
+        'reviewsData.averageRating': Math.round((stats.averageRating || 0) * 10) / 10,
+        'reviewsData.totalReviews': stats.totalReviews,
+        'reviewsData.ratingDistribution': {
+          5: stats.rating5,
+          4: stats.rating4,
+          3: stats.rating3,
+          2: stats.rating2,
+          1: stats.rating1
+        },
+        'reviewsData.recentReviews': recentReviews.map(r => ({
+          customerId: r.reviewerId?._id || r.reviewerId,
+          bookingId: r.bookingId,
+          rating: r.rating,
+          title: r.title,
+          comment: r.comment,
+          photos: r.photos,
+          isVerified: r.isVerified,
+          helpfulVotes: r.helpfulVotes,
+          response: r.response,
+          createdAt: r.createdAt
+        }))
+      }
+    }
+  );
+};
+
+/**
+ * Recalculate all denormalized analytics for a provider.
+ * Call this as a periodic job or after significant changes.
+ */
+ProviderProfile.recalculateAllAnalytics = async function(userId: string | mongoose.Types.ObjectId): Promise<void> {
+  await this.recalculateBookingStats(userId);
+  await this.recalculateRevenueStats(userId);
+  await this.recalculateReviewsData(userId);
+};
 
 export default ProviderProfile;

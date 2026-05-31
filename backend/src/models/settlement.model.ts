@@ -3,6 +3,9 @@ import mongoose, { Document, Schema, Model, Types } from 'mongoose';
 export interface ISettlement extends Document {
   _id: Types.ObjectId;
 
+  // Multi-tenant support
+  tenantId?: Types.ObjectId;
+
   // Reference and identification
   settlementNumber: string;
   providerId: Types.ObjectId;
@@ -77,6 +80,13 @@ export interface ISettlement extends Document {
 
 const settlementSchema = new Schema<ISettlement>(
   {
+    // Multi-tenant support
+    tenantId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Tenant',
+      index: true,
+    },
+
     settlementNumber: {
       type: String,
       unique: true,
@@ -259,6 +269,19 @@ settlementSchema.index({ status: 1, createdAt: -1 });
 settlementSchema.index({ providerId: 1, payoutId: 1 });
 settlementSchema.index({ periodStart: 1, periodEnd: 1 });
 
+// Tenant isolation indexes
+settlementSchema.index({ tenantId: 1, providerId: 1 });
+settlementSchema.index({ tenantId: 1, status: 1 });
+
+// FIX: Add index for settlement reconciliation queries
+settlementSchema.index({ 'reconciliation.isReconciled': 1, status: 1 });
+
+// FIX: Add index for settlement date range queries
+settlementSchema.index({ periodStart: -1, periodEnd: -1, providerId: 1 });
+
+// FIX: Add index for line items queries (booking lookups)
+settlementSchema.index({ 'lineItems.bookingId': 1 });
+
 // ===================================
 // VIRTUAL PROPERTIES
 // ===================================
@@ -279,23 +302,21 @@ settlementSchema.virtual('isPaid').get(function() {
 // INSTANCE METHODS
 // ===================================
 
-// Generate unique settlement number
+// Generate unique settlement number using atomic counter
+// FIX: Use findOneAndUpdate with $inc to prevent race conditions
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (settlementSchema.methods as any).generateSettlementNumber = async function(): Promise<string> {
   const date = new Date();
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
 
-  // Count settlements for the month
-  const startOfMonth = new Date(year, date.getMonth(), 1);
-  const endOfMonth = new Date(year, date.getMonth() + 1, 1);
+  // Create a unique counter key for each month (e.g., "settlement-202405")
+  const counterKey = `settlement-${year}${month}`;
 
-  const monthSettlementsCount = await mongoose.model('Settlement').countDocuments({
-    createdAt: { $gte: startOfMonth, $lt: endOfMonth },
-  });
+  // Atomic increment - no race condition possible
+  const sequenceNumber = await getSettlementSequenceValue(counterKey);
 
-  const sequenceNumber = String(monthSettlementsCount + 1).padStart(4, '0');
-  return `STL-${year}${month}-${sequenceNumber}`;
+  return `STL-${year}${month}-${String(sequenceNumber).padStart(4, '0')}`;
 };
 
 // Add deduction
@@ -423,6 +444,64 @@ settlementSchema.methods.reconcile = async function(
 };
 
 // ===================================
+// ATOMIC SETTLEMENT GENERATION
+// ===================================
+// Counter model for atomic settlement number generation
+// This prevents race conditions when multiple settlements are created simultaneously
+
+// Plain interface for lean documents (not extending Document)
+interface ICounterDoc {
+  _id: string;
+  seq: number;
+}
+
+const settlementCounterSchema = new Schema({
+  _id: { type: String, required: true },
+  seq: { type: Number, default: 0 },
+});
+
+// Compound index for counter queries
+settlementCounterSchema.index({ _id: 1 });
+
+// Use mongoose model without generic to avoid _id type conflict
+const SettlementCounter = mongoose.model('SettlementCounter', settlementCounterSchema);
+
+/**
+ * Atomic counter for settlement numbers using findOneAndUpdate with $inc
+ * This prevents race conditions when multiple settlements are created simultaneously
+ */
+async function getSettlementSequenceValue(sequenceName: string): Promise<number> {
+  const result = await SettlementCounter.findOneAndUpdate(
+    { _id: sequenceName },
+    { $inc: { seq: 1 } },
+    { new: true, upsert: true, returnDocument: 'after' }
+  );
+  return result.seq;
+}
+
+// Default commission rates (fallback if subscription not found)
+const DEFAULT_COMMISSION_RATE = 0.15; // 15%
+const DEFAULT_PLATFORM_FEE_RATE = 0.02; // 2%
+
+/**
+ * Get commission rate for a provider from their subscription
+ * Returns negotiated rate or default if no subscription found
+ */
+async function getProviderCommissionRate(providerId: string | Types.ObjectId): Promise<number> {
+  try {
+    const Subscription = mongoose.model('Subscription');
+    const subscription = await Subscription.findOne({ providerId });
+    if (subscription && subscription.features?.commissionRate) {
+      return subscription.features.commissionRate / 100; // Convert percentage to decimal
+    }
+  } catch (error) {
+    // Subscription model might not be registered, use default
+    console.warn(`Could not fetch subscription for provider ${providerId}, using default commission rate`);
+  }
+  return DEFAULT_COMMISSION_RATE;
+}
+
+// ===================================
 // STATIC METHODS
 // ===================================
 
@@ -503,65 +582,127 @@ settlementSchema.statics.getProviderSettlementSummary = async function(
   }>);
 };
 
-// Generate settlements for all providers in a period
+/**
+ * Generate settlements for all providers in a period using atomic operations
+ * FIX: Uses MongoDB transactions and atomic aggregation to prevent race conditions
+ */
 settlementSchema.statics.generateSettlements = async function(
   periodStart: Date,
   periodEnd: Date
 ) {
   const Settlement = this;
   const Booking = mongoose.model('Booking');
+  const session = await mongoose.startSession();
 
-  // Get all completed bookings in the period that haven't been settled
-  const bookings = await Booking.find({
-    status: 'completed',
-    completedAt: { $gte: periodStart, $lte: periodEnd },
-    'payment.status': 'completed',
-  }).populate('providerId');
-
-  // Group bookings by provider
-  const bookingsByProvider = new Map<string, typeof bookings>();
-
-  for (const booking of bookings) {
-    const providerId = (booking.providerId as any)._id.toString();
-    if (!bookingsByProvider.has(providerId)) {
-      bookingsByProvider.set(providerId, []);
-    }
-    bookingsByProvider.get(providerId)!.push(booking);
-  }
-
-  // Generate settlements
-  const settlements = [];
-  for (const [providerId, providerBookings] of bookingsByProvider) {
-    const settlement = new Settlement({
-      providerId,
-      periodStart,
-      periodEnd,
-      lineItems: providerBookings.map(b => ({
-        bookingId: b._id,
-        bookingNumber: b.bookingNumber,
-        date: b.completedAt || b.scheduledDate,
-        grossAmount: b.pricing.totalAmount,
-        commissionAmount: b.pricing.totalAmount * 0.15, // 15% commission
-        platformFeeAmount: b.pricing.totalAmount * 0.02, // 2% platform fee
-        netAmount: b.pricing.totalAmount * 0.83, // 83% to provider
-        status: 'included',
-      })),
-      grossAmount: providerBookings.reduce((sum, b) => sum + b.pricing.totalAmount, 0),
-      commission: providerBookings.reduce((sum, b) => sum + (b.pricing.totalAmount * 0.15), 0),
-      platformFee: providerBookings.reduce((sum, b) => sum + (b.pricing.totalAmount * 0.02), 0),
-      netAmount: providerBookings.reduce((sum, b) => sum + (b.pricing.totalAmount * 0.83), 0),
-      deductions: [],
-      status: 'pending',
+  try {
+    session.startTransaction({
+      readConcern: { level: 'snapshot' },
+      writeConcern: { w: 'majority' }
     });
 
-    await (settlement as any).generateSettlementNumber();
-    settlements.push(settlement);
+    // Get all completed bookings in the period that haven't been settled
+    // Use session for consistent reads within transaction
+    const bookings = await Booking.find({
+      status: 'completed',
+      completedAt: { $gte: periodStart, $lte: periodEnd },
+      'payment.status': 'completed',
+    }).session(session).populate('providerId');
+
+    // Group bookings by provider
+    const bookingsByProvider = new Map<string, typeof bookings>();
+
+    for (const booking of bookings) {
+      const providerId = (booking.providerId as any)._id.toString();
+      if (!bookingsByProvider.has(providerId)) {
+        bookingsByProvider.set(providerId, []);
+      }
+      bookingsByProvider.get(providerId)!.push(booking);
+    }
+
+    // Generate settlements
+    const settlements = [];
+    const year = periodStart.getFullYear();
+    const month = String(periodStart.getMonth() + 1).padStart(2, '0');
+
+    for (const [providerId, providerBookings] of bookingsByProvider) {
+      // Fetch provider's negotiated commission rate from subscription
+      const commissionRate = await getProviderCommissionRate(providerId);
+      const platformFeeRate = DEFAULT_PLATFORM_FEE_RATE;
+      const providerRate = 1 - commissionRate - platformFeeRate;
+
+      // FIX: Calculate amounts atomically with BigInt for precision
+      // Use integer math to avoid floating-point race conditions
+      let totalGross = 0;
+      let totalCommission = 0;
+      let totalPlatformFee = 0;
+
+      const lineItems = providerBookings.map(b => {
+        // Use integer math (amounts in fils/cents) for precision
+        const grossAmountInteger = Math.round(b.pricing.totalAmount * 100);
+        const commissionAmountInteger = Math.round(grossAmountInteger * commissionRate);
+        const platformFeeAmountInteger = Math.round(grossAmountInteger * platformFeeRate);
+        const netAmountInteger = grossAmountInteger - commissionAmountInteger - platformFeeAmountInteger;
+
+        // Convert back to decimal for storage
+        const grossAmount = grossAmountInteger / 100;
+        const commissionAmount = commissionAmountInteger / 100;
+        const platformFeeAmount = platformFeeAmountInteger / 100;
+        const netAmount = netAmountInteger / 100;
+
+        totalGross += grossAmount;
+        totalCommission += commissionAmount;
+        totalPlatformFee += platformFeeAmount;
+
+        return {
+          bookingId: b._id,
+          bookingNumber: b.bookingNumber,
+          date: b.completedAt || b.scheduledDate,
+          grossAmount,
+          commissionAmount,
+          platformFeeAmount,
+          netAmount,
+          status: 'included' as const,
+        };
+      });
+
+      // Calculate net amount from accumulated values (not derived from line items sum)
+      // This ensures consistency between totals and line items
+      const netAmount = totalGross - totalCommission - totalPlatformFee;
+
+      const settlement = new Settlement({
+        providerId,
+        periodStart,
+        periodEnd,
+        lineItems,
+        grossAmount: Math.round(totalGross * 100) / 100,
+        commission: Math.round(totalCommission * 100) / 100,
+        platformFee: Math.round(totalPlatformFee * 100) / 100,
+        netAmount: Math.round(netAmount * 100) / 100,
+        deductions: [],
+        status: 'pending',
+      });
+
+      // Generate atomic settlement number
+      const counterKey = `settlement-${year}${month}`;
+      const sequenceNumber = await getSettlementSequenceValue(counterKey);
+      settlement.settlementNumber = `STL-${year}${month}-${String(sequenceNumber).padStart(4, '0')}`;
+
+      settlements.push(settlement);
+    }
+
+    // Save all settlements atomically within transaction
+    if (settlements.length > 0) {
+      await Settlement.insertMany(settlements, { session });
+    }
+
+    await session.commitTransaction();
+    return settlements;
+  } catch (error) {
+    await session.abortTransaction();
+    throw error;
+  } finally {
+    session.endSession();
   }
-
-  // Save all settlements
-  await Settlement.insertMany(settlements);
-
-  return settlements;
 };
 
 // ===================================

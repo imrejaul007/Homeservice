@@ -11,6 +11,7 @@ import {
 import { authenticate, requireRole } from '../middleware/auth.middleware';
 import { ApiError } from '../utils/ApiError';
 import Booking from '../models/booking.model';
+import { IUser } from '../models/user.model';
 
 const router = Router();
 
@@ -35,7 +36,7 @@ const verifyProviderRole = requireRole('provider');
 const verifyBookingOwnership = async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
   try {
     const bookingId = req.params.id;
-    const providerId = (req.user as any)?._id?.toString();
+    const providerId = (req.user as IUser)?._id?.toString();
 
     if (!bookingId) {
       throw new ApiError(400, 'Booking ID is required');
@@ -72,7 +73,7 @@ const verifyBookingOwnership = async (req: Request, _res: Response, next: NextFu
 const verifyCustomerRelationship = async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
   try {
     const customerId = req.params.customerId;
-    const providerId = (req.user as any)?._id?.toString();
+    const providerId = (req.user as IUser)?._id?.toString();
 
     if (!customerId) {
       throw new ApiError(400, 'Customer ID is required');

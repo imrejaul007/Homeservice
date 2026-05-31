@@ -25,6 +25,7 @@ export interface QuietHours {
   timezone: string;
 }
 
+// Extended preferences including all notification channels
 export interface NotificationPreferencesResponse {
   email?: {
     bookingUpdates?: boolean;
@@ -47,7 +48,55 @@ export interface NotificationPreferencesResponse {
     newMessages?: boolean;
     marketing?: boolean;
   };
+  whatsapp?: {
+    enabled?: boolean;
+    bookingUpdates?: boolean;
+    reminders?: boolean;
+    promotions?: boolean;
+  };
+  telegram?: {
+    enabled?: boolean;
+    linked?: boolean;
+  };
+  digest?: {
+    enabled?: boolean;
+    frequency?: 'realtime' | 'hourly' | 'daily' | 'weekly';
+    channels?: string[];
+  };
   quietHours?: QuietHours;
+}
+
+// Web Push subscription type
+export interface PushSubscriptionJSON {
+  endpoint: string;
+  keys: {
+    p256dh: string;
+    auth: string;
+  };
+  expirationTime?: number | null;
+}
+
+// Digest preferences
+export interface DigestPreferences {
+  enabled: boolean;
+  frequency: 'realtime' | 'hourly' | 'daily' | 'weekly';
+  channels: {
+    email: boolean;
+    sms: boolean;
+    push: boolean;
+    whatsapp: boolean;
+    telegram: boolean;
+  };
+  quietHours: QuietHours;
+  types: {
+    bookingUpdates: boolean;
+    reminders: boolean;
+    promotions: boolean;
+    messages: boolean;
+    system: boolean;
+  };
+  scheduledTime?: string;
+  scheduledDays?: number[];
 }
 
 // =============================================================================
@@ -276,6 +325,126 @@ class NotificationApiService {
     const url = queryString ? `/notifications?${queryString}` : '/notifications';
 
     const response = await api.get(url);
+    return response.data;
+  }
+
+  // =============================================================================
+  // WhatsApp
+  // =============================================================================
+
+  /**
+   * Get WhatsApp opt-in status
+   */
+  async getWhatsAppStatus(): Promise<{ success: boolean; data: { enabled: boolean; optedOutAt?: string; optedInAt?: string } }> {
+    const response = await api.get('/notifications/whatsapp/status');
+    return response.data;
+  }
+
+  /**
+   * Enable WhatsApp notifications
+   */
+  async enableWhatsApp(): Promise<{ success: boolean; message: string }> {
+    const response = await api.post('/notifications/whatsapp/enable');
+    return response.data;
+  }
+
+  /**
+   * Disable WhatsApp notifications
+   */
+  async disableWhatsApp(): Promise<{ success: boolean; message: string }> {
+    const response = await api.post('/notifications/whatsapp/disable');
+    return response.data;
+  }
+
+  // =============================================================================
+  // Web Push
+  // =============================================================================
+
+  /**
+   * Get Web Push public key
+   */
+  async getWebPushPublicKey(): Promise<{ success: boolean; data: { publicKey: string } }> {
+    const response = await api.get('/notifications/push/key');
+    return response.data;
+  }
+
+  /**
+   * Subscribe to Web Push notifications
+   */
+  async subscribeWebPush(subscription: PushSubscriptionJSON): Promise<{ success: boolean; message: string }> {
+    const response = await api.post('/notifications/push/subscribe', { subscription });
+    return response.data;
+  }
+
+  /**
+   * Unsubscribe from Web Push notifications
+   */
+  async unsubscribeWebPush(endpoint: string): Promise<{ success: boolean; message: string }> {
+    const response = await api.post('/notifications/push/unsubscribe', { endpoint });
+    return response.data;
+  }
+
+  /**
+   * Get Web Push subscription status
+   */
+  async getWebPushStatus(): Promise<{ success: boolean; data: { subscribed: boolean; subscriptions: Array<{ endpoint: string; createdAt: string }> } }> {
+    const response = await api.get('/notifications/push/status');
+    return response.data;
+  }
+
+  // =============================================================================
+  // Telegram
+  // =============================================================================
+
+  /**
+   * Get Telegram link status
+   */
+  async getTelegramStatus(): Promise<{ success: boolean; data: { linked: boolean; enabled: boolean; username?: string } }> {
+    const response = await api.get('/notifications/telegram/status');
+    return response.data;
+  }
+
+  /**
+   * Generate Telegram deep link for account linking
+   */
+  async getTelegramLink(): Promise<{ success: boolean; data: { link: string } }> {
+    const response = await api.get('/notifications/telegram/link');
+    return response.data;
+  }
+
+  /**
+   * Unlink Telegram account
+   */
+  async unlinkTelegram(): Promise<{ success: boolean; message: string }> {
+    const response = await api.post('/notifications/telegram/unlink');
+    return response.data;
+  }
+
+  // =============================================================================
+  // Digest
+  // =============================================================================
+
+  /**
+   * Get digest preferences
+   */
+  async getDigestPreferences(): Promise<{ success: boolean; data: DigestPreferences }> {
+    const response = await api.get('/notifications/digest/preferences');
+    return response.data;
+  }
+
+  /**
+   * Update digest preferences
+   */
+  async updateDigestPreferences(preferences: Partial<DigestPreferences>): Promise<{ success: boolean; message: string }> {
+    const response = await api.patch('/notifications/digest/preferences', preferences);
+    return response.data;
+  }
+
+  /**
+   * Get digest schedule
+   */
+  async getDigestSchedule(): Promise<{ success: boolean; data: { frequency: string; nextRun?: string; lastRun?: string } }> {
+    const response = await api.get('/notifications/digest/schedule');
     return response.data;
   }
 }

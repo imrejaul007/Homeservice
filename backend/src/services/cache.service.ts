@@ -72,32 +72,75 @@ export const del = async (key: string, options?: CacheOptions): Promise<void> =>
   }
 };
 
-// Delete by pattern
-export const delByPattern = async (pattern: string): Promise<void> => {
+// Delete by pattern using SCAN (O(1) per iteration, non-blocking)
+export const delByPattern = async (pattern: string): Promise<number> => {
   try {
-    const keys = await cache.keys(`cache:${pattern}`);
+    const client = cache.client;
+    if (!client) return 0;
 
-    if (keys.length > 0) {
-      await cache.del(...keys);
-      logger.debug('Cache pattern deleted', { pattern, count: keys.length });
+    let cursor = 0;
+    let deletedCount = 0;
+    const searchPattern = `cache:${pattern}`;
+
+    do {
+      const [nextCursor, keys] = await client.scan(
+        cursor,
+        'MATCH',
+        searchPattern,
+        'COUNT',
+        100
+      );
+      cursor = parseInt(nextCursor, 10);
+
+      if (keys.length > 0) {
+        await client.del(...keys);
+        deletedCount += keys.length;
+      }
+    } while (cursor !== 0);
+
+    if (deletedCount > 0) {
+      logger.debug('Cache pattern deleted', { pattern, count: deletedCount });
     }
+    return deletedCount;
   } catch (error) {
     logger.error('Cache pattern delete error', { pattern, error });
+    return 0;
   }
 };
 
-// Clear all cache
-export const clear = async (prefix?: string): Promise<void> => {
+// Clear all cache using SCAN (O(1) per iteration, non-blocking)
+export const clear = async (prefix?: string): Promise<number> => {
   try {
-    const pattern = prefix ? `cache:${prefix}:*` : 'cache:*';
-    const keys = await cache.keys(pattern);
+    const client = cache.client;
+    if (!client) return 0;
 
-    if (keys.length > 0) {
-      await cache.del(...keys);
-      logger.info('Cache cleared', { prefix, count: keys.length });
+    let cursor = 0;
+    let deletedCount = 0;
+    const searchPattern = prefix ? `cache:${prefix}:*` : 'cache:*';
+
+    do {
+      const [nextCursor, keys] = await client.scan(
+        cursor,
+        'MATCH',
+        searchPattern,
+        'COUNT',
+        100
+      );
+      cursor = parseInt(nextCursor, 10);
+
+      if (keys.length > 0) {
+        await client.del(...keys);
+        deletedCount += keys.length;
+      }
+    } while (cursor !== 0);
+
+    if (deletedCount > 0) {
+      logger.info('Cache cleared', { prefix, count: deletedCount });
     }
+    return deletedCount;
   } catch (error) {
     logger.error('Cache clear error', { error });
+    return 0;
   }
 };
 

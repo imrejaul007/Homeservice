@@ -2,7 +2,87 @@ import React, { useEffect, lazy, Suspense } from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from './stores/authStore';
 import { useBackButton } from './hooks/useBackButton';
+import { useCapacitor } from './hooks/useCapacitor';
 import { ToastProvider } from './components/common/Toast';
+import { OfflineBanner } from './components/common/OfflineBanner';
+import { AppShell } from './components/mobile/AppShell';
+
+// =============================================================================
+// Error Boundary Component
+// =============================================================================
+
+interface ErrorBoundaryState {
+  hasError: boolean;
+  error: Error | null;
+  errorInfo: React.ErrorInfo | null;
+}
+
+class AppErrorBoundary extends React.Component<{ children: React.ReactNode }, ErrorBoundaryState> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = {
+      hasError: false,
+      error: null,
+      errorInfo: null
+    };
+  }
+
+  static getDerivedStateFromError(error: Error): Partial<ErrorBoundaryState> {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo): void {
+    console.error('App Error Boundary caught an error:', error, errorInfo);
+    this.setState({ errorInfo });
+  }
+
+  handleReset = (): void => {
+    this.setState({ hasError: false, error: null, errorInfo: null });
+    window.location.href = '/';
+  };
+
+  render(): React.ReactNode {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+          <div className="max-w-md w-full bg-white rounded-lg shadow-lg p-8 text-center">
+            <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <svg className="w-8 h-8 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+            </div>
+            <h1 className="text-xl font-bold text-gray-900 mb-2">Something went wrong</h1>
+            <p className="text-gray-600 mb-6">
+              We encountered an unexpected error. Please try refreshing the page.
+            </p>
+            {process.env.NODE_ENV === 'development' && this.state.error && (
+              <details className="text-left bg-gray-100 rounded-lg p-3 mb-4 text-xs">
+                <summary className="font-semibold cursor-pointer">Error Details</summary>
+                <pre className="mt-2 overflow-auto">{this.state.error.toString()}</pre>
+              </details>
+            )}
+            <div className="flex gap-3 justify-center">
+              <button
+                onClick={this.handleReset}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+              >
+                Try Again
+              </button>
+              <button
+                onClick={() => window.location.href = '/'}
+                className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors"
+              >
+                Go Home
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
 
 // Scroll to top on route change
 function ScrollToTop() {
@@ -26,7 +106,7 @@ const ChangePassword = lazy(() => import('./components/auth/ChangePassword'));
 const CustomerDashboard = lazy(() => import('./components/dashboard/CustomerDashboard'));
 const StatsView = lazy(() => import('./components/dashboard/StatsView'));
 const ProviderDashboard = lazy(() => import('./components/dashboard/ProviderDashboard'));
-const AdminDashboard = lazy(() => import('./components/dashboard/AdminDashboard'));
+const AdminDashboard = lazy(() => import('./pages/admin/AdminDashboard'));
 const AdminSettings = lazy(() => import('./components/dashboard/AdminSettings'));
 const AdminReports = lazy(() => import('./components/dashboard/AdminReports'));
 const AdminOffersManagement = lazy(() => import('./components/dashboard/AdminOffersManagement'));
@@ -38,6 +118,7 @@ const ApiKeyManagement = lazy(() => import('./pages/admin/ApiKeyManagement'));
 const MaintenanceMode = lazy(() => import('./pages/admin/MaintenanceMode'));
 const PayoutManagement = lazy(() => import('./pages/admin/PayoutManagement'));
 const ChurnReport = lazy(() => import('./pages/admin/ChurnReport'));
+const ProviderManagement = lazy(() => import('./pages/admin/ProviderManagement'));
 const HomePage = lazy(() => import('./pages/HomePage'));
 const ExperiencesPage = lazy(() => import('./pages/ExperiencesPage'));
 const SearchPage = lazy(() => import('./pages/SearchPage'));
@@ -77,6 +158,7 @@ const InsightsDashboard = lazy(() => import('./pages/provider/InsightsDashboard'
 const AvailabilityPage = lazy(() => import('./pages/provider/AvailabilityPage'));
 const OperationsDashboard = lazy(() => import('./pages/provider/OperationsDashboard'));
 const PayoutDashboard = lazy(() => import('./pages/provider/PayoutDashboard'));
+const SuperAppPage = lazy(() => import('./pages/customer/SuperAppPage'));
 const AboutPage = lazy(() => import('./pages/AboutPage'));
 const OfferDetailPage = lazy(() => import('./pages/OfferDetailPage'));
 const PrivacyPage = lazy(() => import('./pages/PrivacyPage'));
@@ -159,8 +241,29 @@ const NotFound = () => (
   </div>
 );
 
+const Unauthorized = () => (
+  <div className="flex items-center justify-center min-h-screen bg-gray-50">
+    <div className="max-w-md w-full bg-white rounded-lg shadow-md p-8 text-center">
+      <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+        <svg className="w-8 h-8 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m0 0v2m0-2h2m-2 0H10m4-6V4a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2h8a2 2 0 002-2v-3m-4 0V9a2 2 0 012-2h2a2 2 0 012 2v2m-6 5v6m4-6v6" />
+        </svg>
+      </div>
+      <h1 className="text-2xl font-bold text-gray-900 mb-2">Access Denied</h1>
+      <p className="text-gray-600 mb-6">You don't have permission to access this page.</p>
+      <a
+        href="/"
+        className="inline-block px-6 py-3 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors"
+      >
+        Go to Homepage
+      </a>
+    </div>
+  </div>
+);
+
 function App() {
   const { initialize, isInitialized } = useAuthStore();
+  const { isCapacitor, isMobile } = useCapacitor();
   useBackButton();
 
   useEffect(() => {
@@ -169,12 +272,16 @@ function App() {
     }
   }, [initialize, isInitialized]);
 
-  return (
-    <ToastProvider>
-      <div className="App">
-        <ScrollToTop />
-        <Suspense fallback={<LoadingSpinner />}>
-        <Routes>
+  // Wrap app content in AppShell on mobile devices
+  const appContent = (
+    <AppErrorBoundary>
+      <ToastProvider>
+        {/* CRITICAL FIX: Global offline indicator */}
+        <OfflineBanner autoHideDelay={3000} showCloseButton={true} />
+        <div className="App">
+          <ScrollToTop />
+          <Suspense fallback={<LoadingSpinner />}>
+          <Routes>
         {/* Public Routes */}
         <Route 
           path="/login" 
@@ -339,6 +446,11 @@ function App() {
           element={<AccountDeactivated />}
         />
 
+        <Route
+          path="/unauthorized"
+          element={<Unauthorized />}
+        />
+
         {/* Static Pages */}
         <Route path="/about" element={<AboutPage />} />
 
@@ -391,6 +503,15 @@ function App() {
           element={
             <CustomerRoute>
               <FavoritesPage />
+            </CustomerRoute>
+          }
+        />
+
+        <Route
+          path="/customer/superapp"
+          element={
+            <CustomerRoute>
+              <SuperAppPage />
             </CustomerRoute>
           }
         />
@@ -622,6 +743,8 @@ function App() {
         />
 
         {/* Protected Admin Routes */}
+        <Route path="/admin" element={<Navigate to="/admin/dashboard" replace />} />
+
         <Route
           path="/admin/dashboard"
           element={
@@ -730,6 +853,15 @@ function App() {
           }
         />
 
+        <Route
+          path="/admin/providers"
+          element={
+            <AdminRoute>
+              <ProviderManagement />
+            </AdminRoute>
+          }
+        />
+
         {/* Default Route - Homepage */}
         <Route
           path="/"
@@ -740,9 +872,17 @@ function App() {
         <Route path="*" element={<NotFound />} />
         </Routes>
         </Suspense>
-      </div>
-    </ToastProvider>
+        </div>
+      </ToastProvider>
+    </AppErrorBoundary>
   );
+
+  // Wrap with AppShell on mobile devices (Capacitor or small screens)
+  if (isMobile || isCapacitor) {
+    return <AppShell>{appContent}</AppShell>;
+  }
+
+  return appContent;
 }
 
 // Component to handle default redirects based on user role

@@ -207,11 +207,11 @@ const BookingForm: React.FC<BookingFormProps> = ({
     const basePrice = service.price.amount;
     const addOnTotal = formData.addOns.reduce((sum, addon) => sum + addon.price, 0);
     const subtotal = basePrice + addOnTotal;
-    const taxRate = 0.08; // 8% tax rate
-    const taxes = subtotal * taxRate;
-    const total = subtotal + taxes;
+    const taxRate = 0.05; // FIX: 5% UAE VAT rate (was 0.08)
+    const tax = subtotal * taxRate;
+    const total = subtotal + tax;
 
-    return { basePrice, addOnTotal, subtotal, taxes, total };
+    return { basePrice, addOnTotal, subtotal, tax, total };
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -581,7 +581,7 @@ const BookingForm: React.FC<BookingFormProps> = ({
   );
 
   const renderReviewStep = () => {
-    const { basePrice, addOnTotal, subtotal, taxes, total } = calculateTotal();
+    const { basePrice, addOnTotal, subtotal, tax, total } = calculateTotal();
 
     return (
       <div className="space-y-6">
@@ -639,8 +639,8 @@ const BookingForm: React.FC<BookingFormProps> = ({
                   <span className="text-nilin-charcoal">{formatPrice(subtotal, service.price.currency)}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-nilin-warmGray">Taxes (8%):</span>
-                  <span className="text-nilin-charcoal">{formatPrice(taxes, service.price.currency)}</span>
+                  <span className="text-nilin-warmGray">Taxes (5%):</span>
+                  <span className="text-nilin-charcoal">{formatPrice(tax, service.price.currency)}</span>
                 </div>
                 <div className="flex justify-between border-t border-nilin-border/30 pt-2 font-semibold text-lg">
                   <span className="text-nilin-charcoal">Total:</span>

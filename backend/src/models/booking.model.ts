@@ -151,6 +151,10 @@ export interface IBooking extends Document {
   completedAt?: Date;
   cancelledAt?: Date;
 
+  // Soft Delete Fields (for audit trail)
+  isDeleted?: boolean;
+  deletedAt?: Date;
+
   // Virtual Properties
   customer?: any; // Will be populated from User
   provider?: any; // Will be populated from User

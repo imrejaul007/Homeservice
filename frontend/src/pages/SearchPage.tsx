@@ -7,6 +7,9 @@ import type { Service } from '../components/customer/ServiceCard';
 import { searchApi } from '../services/searchApi';
 import { SlidersHorizontal, X, ChevronLeft, ChevronRight, Search, Star } from 'lucide-react';
 import { useCategories } from '../hooks/useCategories';
+import { PageErrorBoundary } from '../components/common/PageErrorBoundary';
+import BottomSheet from '../components/mobile/BottomSheet';
+import { CardSkeleton } from '../components/mobile/LoadingSkeleton';
 
 interface Pagination {
   page: number;
@@ -71,8 +74,11 @@ const SearchPage: React.FC = () => {
     if (sortParam) setSortBy(sortParam);
   }, [apiCategories]);
 
-  // Fetch services
+  // Fetch services with AbortController cleanup
   useEffect(() => {
+    const abortController = new AbortController();
+    let isMounted = true;
+
     const fetchServices = async () => {
       try {
         setLoading(true);
@@ -89,9 +95,10 @@ const SearchPage: React.FC = () => {
           sortBy: sortBy as any,
           page: pagination.page,
           limit: pagination.limit,
-        });
+        }, abortController.signal);
 
-        if (response.success && response.data.services) {
+        // FIX: Only update state if component is still mounted
+        if (response.success && response.data.services && isMounted) {
           setServices(response.data.services);
           if (response.data.pagination) {
             setPagination(prev => ({
@@ -102,12 +109,25 @@ const SearchPage: React.FC = () => {
           }
         }
       } catch (error) {
+        // Ignore abort errors - expected on unmount
+        if (error instanceof Error && error.name === 'AbortError') return;
         console.error('Error fetching services:', error);
       } finally {
-        setLoading(false);
+        // FIX: Only update loading state if still mounted
+        if (isMounted) {
+          setLoading(false);
+        }
       }
     };
     fetchServices();
+
+    // CRITICAL FIX: Proper cleanup order - abort BEFORE setting isMounted
+    // This ensures the abort signal stops any in-flight requests before
+    // we mark the component as unmounted, preventing race conditions
+    return () => {
+      isMounted = false;
+      abortController.abort();
+    };
   }, [searchParams, selectedCategory, priceRange, minRating, sortBy, pagination.page]);
 
   const handleCategorySelect = (category: string) => {
@@ -150,7 +170,8 @@ const SearchPage: React.FC = () => {
     <div className="min-h-screen bg-white flex flex-col">
       <NavigationHeader />
 
-      {/* Page Header */}
+      <PageErrorBoundary pageName="Search">
+        {/* Page Header */}
       <div className="bg-nilin-cream border-b border-nilin-border">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 md:py-8">
           <h1 className="text-2xl md:text-3xl font-bold text-nilin-charcoal mb-1">
@@ -234,13 +255,7 @@ const SearchPage: React.FC = () => {
         {loading ? (
           <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
             {[1, 2, 3, 4, 5, 6].map((n) => (
-              <div key={n} className="bg-gray-50 rounded-2xl overflow-hidden">
-                <div className="h-40 bg-gray-200 animate-pulse" />
-                <div className="p-4 space-y-2">
-                  <div className="h-4 bg-gray-200 rounded animate-pulse w-3/4" />
-                  <div className="h-3 bg-gray-100 rounded animate-pulse w-1/2" />
-                </div>
-              </div>
+              <CardSkeleton key={n} />
             ))}
           </div>
         ) : services.length > 0 ? (
@@ -319,66 +334,62 @@ const SearchPage: React.FC = () => {
       </button>
 
       {/* Mobile Filter Bottom Sheet */}
-      {showMobileFilters && (
-        <div className="md:hidden fixed inset-0 bg-black/50 z-50" onClick={() => setShowMobileFilters(false)}>
-          <div
-            className="absolute bottom-0 left-0 right-0 bg-white rounded-t-3xl max-h-[70vh] overflow-y-auto"
-            onClick={(e) => e.stopPropagation()}
+      <BottomSheet
+        isOpen={showMobileFilters}
+        onClose={() => setShowMobileFilters(false)}
+        title="Filters"
+        footer={
+          <button
+            onClick={() => {
+              setPagination(prev => ({ ...prev, page: 1 }));
+              setShowMobileFilters(false);
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
+            className="w-full py-3 bg-nilin-primary text-white rounded-full font-semibold"
           >
-            <div className="flex items-center justify-between p-4 border-b border-gray-100">
-              <h3 className="text-lg font-bold text-gray-900">Filters</h3>
-              <button onClick={() => setShowMobileFilters(false)} className="p-2">
-                <X className="h-5 w-5" />
-              </button>
+            Show {pagination.total} Results
+          </button>
+        }
+      >
+        <div className="space-y-6">
+          {/* Price Range */}
+          <div>
+            <h4 className="text-sm font-semibold text-gray-900 mb-3">Price Range</h4>
+            <input
+              type="range"
+              min="0" max={maxPriceLimit} step="500"
+              value={priceRange[1]}
+              onChange={(e) => setPriceRange([0, parseInt(e.target.value)])}
+              className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-nilin-primary"
+            />
+            <div className="flex justify-between text-sm mt-2">
+              <span className="text-gray-500">AED 0</span>
+              <span className="font-medium text-nilin-primary">AED {priceRange[1].toLocaleString()}</span>
             </div>
-            <div className="p-4 space-y-6">
-              {/* Price Range */}
-              <div>
-                <h4 className="text-sm font-semibold text-gray-900 mb-3">Price Range</h4>
-                <input
-                  type="range"
-                  min="0" max={maxPriceLimit} step="500"
-                  value={priceRange[1]}
-                  onChange={(e) => setPriceRange([0, parseInt(e.target.value)])}
-                  className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-nilin-primary"
-                />
-                <div className="flex justify-between text-sm mt-2">
-                  <span className="text-gray-500">AED 0</span>
-                  <span className="font-medium text-nilin-primary">AED {priceRange[1].toLocaleString()}</span>
-                </div>
-              </div>
+          </div>
 
-              {/* Rating */}
-              <div>
-                <h4 className="text-sm font-semibold text-gray-900 mb-3">Minimum Rating</h4>
-                <div className="flex flex-wrap gap-2">
-                  {[1, 2, 3, 4, 5].map((r) => (
-                    <button
-                      key={r}
-                      onClick={() => setMinRating(minRating === r ? 0 : r)}
-                      className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                        minRating === r
-                          ? 'bg-nilin-primary text-white'
-                          : 'bg-gray-100 text-gray-700'
-                      }`}
-                    >
-                      {r}+
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-            <div className="p-4 border-t border-gray-100">
-              <button
-                onClick={() => setShowMobileFilters(false)}
-                className="w-full py-3 bg-nilin-primary text-white rounded-full font-semibold"
-              >
-                Show {pagination.total} Results
-              </button>
+          {/* Rating */}
+          <div>
+            <h4 className="text-sm font-semibold text-gray-900 mb-3">Minimum Rating</h4>
+            <div className="flex flex-wrap gap-2">
+              {[1, 2, 3, 4, 5].map((r) => (
+                <button
+                  key={r}
+                  onClick={() => setMinRating(minRating === r ? 0 : r)}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                    minRating === r
+                      ? 'bg-nilin-primary text-white'
+                      : 'bg-gray-100 text-gray-700'
+                  }`}
+                >
+                  {r}+
+                </button>
+              ))}
             </div>
           </div>
         </div>
-      )}
+      </BottomSheet>
+      </PageErrorBoundary>
 
       <Footer />
     </div>

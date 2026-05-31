@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { ManagedContractService } from '../services/managedContract.service';
 import { asyncHandler } from '../utils/asyncHandler';
+import { IUser } from '../models/user.model';
 
 // ============================================
 // Contract CRUD
@@ -12,7 +13,7 @@ import { asyncHandler } from '../utils/asyncHandler';
  */
 export const createContract = asyncHandler(
   async (req: Request, res: Response) => {
-    const providerId = (req.user as any)._id.toString();
+    const providerId = (req.user as IUser)._id.toString();
     const contract = await ManagedContractService.createContract(providerId, req.body);
 
     res.status(201).json({
@@ -28,7 +29,7 @@ export const createContract = asyncHandler(
  * GET /api/provider/managed-contracts
  */
 export const getContracts = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)._id.toString();
+  const providerId = (req.user as IUser)._id.toString();
 
   const filters = {
     status: req.query.status as any,
@@ -59,7 +60,7 @@ export const getContracts = asyncHandler(async (req: Request, res: Response) => 
  */
 export const getContractById = asyncHandler(
   async (req: Request, res: Response) => {
-    const providerId = (req.user as any)._id.toString();
+    const providerId = (req.user as IUser)._id.toString();
     const { id } = req.params;
 
     const contract = await ManagedContractService.getContractById(id, providerId);
@@ -77,7 +78,7 @@ export const getContractById = asyncHandler(
  */
 export const getContractByNumber = asyncHandler(
   async (req: Request, res: Response) => {
-    const providerId = (req.user as any)._id.toString();
+    const providerId = (req.user as IUser)._id.toString();
     const { contractNumber } = req.params;
 
     const contract = await ManagedContractService.getContractByNumber(
@@ -98,7 +99,7 @@ export const getContractByNumber = asyncHandler(
  */
 export const updateContract = asyncHandler(
   async (req: Request, res: Response) => {
-    const providerId = (req.user as any)._id.toString();
+    const providerId = (req.user as IUser)._id.toString();
     const { id } = req.params;
 
     const contract = await ManagedContractService.updateContract(
@@ -121,7 +122,7 @@ export const updateContract = asyncHandler(
  */
 export const deleteContract = asyncHandler(
   async (req: Request, res: Response) => {
-    const providerId = (req.user as any)._id.toString();
+    const providerId = (req.user as IUser)._id.toString();
     const { id } = req.params;
 
     await ManagedContractService.deleteContract(id, providerId);
@@ -143,7 +144,7 @@ export const deleteContract = asyncHandler(
  */
 export const activateContract = asyncHandler(
   async (req: Request, res: Response) => {
-    const providerId = (req.user as any)._id.toString();
+    const providerId = (req.user as IUser)._id.toString();
     const { id } = req.params;
 
     const contract = await ManagedContractService.activateContract(id, providerId);
@@ -162,7 +163,7 @@ export const activateContract = asyncHandler(
  */
 export const suspendContract = asyncHandler(
   async (req: Request, res: Response) => {
-    const providerId = (req.user as any)._id.toString();
+    const providerId = (req.user as IUser)._id.toString();
     const { id } = req.params;
     const { reason } = req.body;
 
@@ -186,7 +187,7 @@ export const suspendContract = asyncHandler(
  */
 export const terminateContract = asyncHandler(
   async (req: Request, res: Response) => {
-    const providerId = (req.user as any)._id.toString();
+    const providerId = (req.user as IUser)._id.toString();
     const { id } = req.params;
     const { reason } = req.body;
 
@@ -222,7 +223,7 @@ export const terminateContract = asyncHandler(
  */
 export const addTeamMember = asyncHandler(
   async (req: Request, res: Response) => {
-    const providerId = (req.user as any)._id.toString();
+    const providerId = (req.user as IUser)._id.toString();
     const { id } = req.params;
 
     const contract = await ManagedContractService.addTeamMember(
@@ -245,7 +246,7 @@ export const addTeamMember = asyncHandler(
  */
 export const updateTeamMember = asyncHandler(
   async (req: Request, res: Response) => {
-    const providerId = (req.user as any)._id.toString();
+    const providerId = (req.user as IUser)._id.toString();
     const { id, email } = req.params;
 
     const contract = await ManagedContractService.updateTeamMember(
@@ -269,7 +270,7 @@ export const updateTeamMember = asyncHandler(
  */
 export const removeTeamMember = asyncHandler(
   async (req: Request, res: Response) => {
-    const providerId = (req.user as any)._id.toString();
+    const providerId = (req.user as IUser)._id.toString();
     const { id, email } = req.params;
 
     const contract = await ManagedContractService.removeTeamMember(
@@ -292,7 +293,7 @@ export const removeTeamMember = asyncHandler(
  */
 export const setPrimaryContact = asyncHandler(
   async (req: Request, res: Response) => {
-    const providerId = (req.user as any)._id.toString();
+    const providerId = (req.user as IUser)._id.toString();
     const { id, email } = req.params;
 
     const contract = await ManagedContractService.setPrimaryContact(
@@ -319,7 +320,7 @@ export const setPrimaryContact = asyncHandler(
  */
 export const calculateSLACompliance = asyncHandler(
   async (req: Request, res: Response) => {
-    const providerId = (req.user as any)._id.toString();
+    const providerId = (req.user as IUser)._id.toString();
     const { id } = req.params;
 
     const result = await ManagedContractService.calculateSLACompliance(id, providerId);
@@ -341,7 +342,7 @@ export const calculateSLACompliance = asyncHandler(
  */
 export const generateReport = asyncHandler(
   async (req: Request, res: Response) => {
-    const providerId = (req.user as any)._id.toString();
+    const providerId = (req.user as IUser)._id.toString();
     const { id } = req.params;
     const { startDate, endDate } = req.query;
 
@@ -368,7 +369,7 @@ export const generateReport = asyncHandler(
  * GET /api/provider/managed-contracts/stats
  */
 export const getStats = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)._id.toString();
+  const providerId = (req.user as IUser)._id.toString();
 
   const stats = await ManagedContractService.getStats(providerId);
 
@@ -383,7 +384,7 @@ export const getStats = asyncHandler(async (req: Request, res: Response) => {
  * GET /api/provider/managed-contracts/:id/summary
  */
 export const getSummary = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)._id.toString();
+  const providerId = (req.user as IUser)._id.toString();
   const { id } = req.params;
 
   const contract = await ManagedContractService.getContractById(id, providerId);
@@ -414,7 +415,7 @@ export const getSummary = asyncHandler(async (req: Request, res: Response) => {
  */
 export const getActiveContracts = asyncHandler(
   async (req: Request, res: Response) => {
-    const providerId = (req.user as any)._id.toString();
+    const providerId = (req.user as IUser)._id.toString();
 
     const contracts = await ManagedContractService.getActiveContracts(providerId);
 
@@ -431,7 +432,7 @@ export const getActiveContracts = asyncHandler(
  */
 export const getExpiringContracts = asyncHandler(
   async (req: Request, res: Response) => {
-    const providerId = (req.user as any)._id.toString();
+    const providerId = (req.user as IUser)._id.toString();
     const days = req.query.days ? parseInt(req.query.days as string) : 30;
 
     const contracts = await ManagedContractService.getExpiringContracts(
@@ -456,7 +457,7 @@ export const getExpiringContracts = asyncHandler(
  */
 export const addDocument = asyncHandler(
   async (req: Request, res: Response) => {
-    const providerId = (req.user as any)._id.toString();
+    const providerId = (req.user as IUser)._id.toString();
     const { id } = req.params;
 
     const contract = await ManagedContractService.addDocument(
@@ -479,7 +480,7 @@ export const addDocument = asyncHandler(
  */
 export const removeDocument = asyncHandler(
   async (req: Request, res: Response) => {
-    const providerId = (req.user as any)._id.toString();
+    const providerId = (req.user as IUser)._id.toString();
     const { id, name } = req.params;
 
     const contract = await ManagedContractService.removeDocument(

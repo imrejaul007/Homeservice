@@ -1,11 +1,26 @@
 import { Router } from 'express';
 import authMiddleware from '../middleware/auth.middleware';
+import { validateProviderRole } from '../middleware/validation.middleware';
+import rateLimit from 'express-rate-limit';
 import providerInsightsController from '../controllers/providerInsights.controller';
 
 const router = Router();
 
 // All routes require authentication
 router.use(authMiddleware.authenticate);
+
+// Rate limiting for insights endpoints
+const insightsRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 50, // limit each IP to 50 requests per windowMs
+  message: { error: 'Too many insights requests, please try again later' }
+});
+
+// Provider role validation for all insights routes
+router.use(validateProviderRole);
+
+// Apply rate limiting
+router.use(insightsRateLimit);
 
 // ============================================
 // PROVIDER INSIGHTS ROUTES

@@ -9,8 +9,8 @@ import { Lock, Eye, EyeOff, CheckCircle, AlertCircle, Key } from 'lucide-react';
 // Validation schema
 const resetPasswordSchema = z.object({
   password: z.string()
-    .min(8, 'Password must be at least 8 characters')
-    .regex(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/, 
+    .min(12, 'Password must be at least 12 characters')
+    .regex(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/,
       'Password must contain at least one lowercase letter, one uppercase letter, one digit, and one special character'),
   
   confirmPassword: z.string(),

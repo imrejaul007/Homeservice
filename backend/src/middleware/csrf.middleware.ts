@@ -26,7 +26,8 @@ const getConfig = () => ({
   tokenExpiryHours: parseInt(process.env.CSRF_TOKEN_EXPIRY_HOURS || String(CSRF_TOKEN_EXPIRY_HOURS)),
   cookieName: process.env.CSRF_COOKIE_NAME || 'csrf_token',
   headerName: process.env.CSRF_HEADER_NAME || 'x-csrf-token',
-  sameSite: (process.env.CSRF_SAME_SITE || 'strict') as 'strict' | 'lax' | 'none',
+  sameSite: (process.env.CSRF_SAME_SITE ||
+    (process.env.NODE_ENV === 'development' ? 'lax' : 'strict')) as 'strict' | 'lax' | 'none',
   secure: process.env.NODE_ENV === 'production',
   rotateOnAuth: process.env.CSRF_ROTATE_ON_AUTH !== 'false', // Default true
 });

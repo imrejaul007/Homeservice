@@ -17,6 +17,14 @@ import {
 } from '../controllers/booking.controller';
 
 import {
+  batchAccept,
+  batchDecline,
+  batchComplete,
+  batchCancel,
+  getBatchPreview
+} from '../controllers/batchBooking.controller';
+
+import {
   getProviderAvailability,
   updateWeeklySchedule,
   updateAvailabilitySettings,
@@ -36,6 +44,11 @@ import {
 import { authenticate } from '../middleware/auth.middleware';
 import {
   validateBookingInput,
+  validateGuestBooking,
+  validateBookingCancellation,
+  validateBookingAcceptance,
+  validateBookingRejection,
+  validateBookingCompletion,
   validateAvailabilityInput,
   validateDateOverride,
   validateBlockPeriod
@@ -46,7 +59,7 @@ const router = Router();
 // ===================================
 // PUBLIC BOOKING ROUTES (no auth required)
 // ===================================
-router.post('/bookings/guest', createGuestBooking);
+router.post('/bookings/guest', validateGuestBooking, createGuestBooking);
 router.get('/bookings/track/:bookingNumber', trackBooking);
 
 // ===================================
@@ -62,12 +75,12 @@ router.get('/bookings/provider', authenticate, getProviderBookings);
 
 // Specific booking operations (MUST come after /customer and /provider routes)
 router.get('/bookings/:id', authenticate, getBookingDetails);
-router.patch('/bookings/:id/cancel', authenticate, cancelBooking);
+router.patch('/bookings/:id/cancel', authenticate, validateBookingCancellation, cancelBooking);
 router.patch('/bookings/:id/reschedule', authenticate, rescheduleBooking);
-router.patch('/bookings/:id/accept', authenticate, acceptBooking);
-router.patch('/bookings/:id/reject', authenticate, rejectBooking);
-router.patch('/bookings/:id/start', authenticate, startBooking);
-router.patch('/bookings/:id/complete', authenticate, completeBooking);
+router.patch('/bookings/:id/accept', authenticate, validateBookingAcceptance, acceptBooking);
+router.patch('/bookings/:id/reject', authenticate, validateBookingRejection, rejectBooking);
+router.patch('/bookings/:id/start', authenticate, validateBookingCompletion, startBooking);
+router.patch('/bookings/:id/complete', authenticate, validateBookingCompletion, completeBooking);
 
 // Booking Communication
 router.post('/bookings/:id/messages', authenticate, addBookingMessage);
@@ -99,5 +112,16 @@ router.get('/bookings/analytics', authenticate, getBookingAnalyticsHandler);
 
 // Availability Analytics (provider)
 router.get('/availability/analytics', authenticate, getAvailabilityAnalytics);
+
+// ===================================
+// BATCH BOOKING OPERATIONS
+// ===================================
+
+// Batch operations for providers
+router.post('/bookings/batch/accept', authenticate, batchAccept);
+router.post('/bookings/batch/decline', authenticate, batchDecline);
+router.post('/bookings/batch/complete', authenticate, batchComplete);
+router.post('/bookings/batch/cancel', authenticate, batchCancel);
+router.post('/bookings/batch/preview', authenticate, getBatchPreview);
 
 export default router;

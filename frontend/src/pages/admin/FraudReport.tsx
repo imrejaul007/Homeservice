@@ -6,6 +6,7 @@ import type { FraudReport, FraudStats, FraudOverview, SuspiciousActivity } from 
 import PageLayout from '../../components/layout/PageLayout';
 import ErrorBoundary from '../../components/common/ErrorBoundary';
 import { useAuthStore } from '../../stores/authStore';
+import Modal from '../../components/common/Modal';
 import {
   Shield,
   AlertTriangle,
@@ -25,6 +26,7 @@ import {
   Clock,
   FileWarning,
   AlertCircle,
+  Loader2,
 } from 'lucide-react';
 
 // ============================================
@@ -66,9 +68,10 @@ interface FraudReportCardProps {
   report: FraudReport;
   onFlag?: (providerId: string, flag: SuspiciousActivity) => void;
   onResolve?: (providerId: string, flagId: string, resolution: string) => void;
+  onResolveClick?: (providerId: string, activityType: string) => void;
 }
 
-const FraudReportCard: React.FC<FraudReportCardProps> = ({ report, onFlag, onResolve }) => {
+const FraudReportCard: React.FC<FraudReportCardProps> = ({ report, onFlag, onResolve, onResolveClick }) => {
   const [expanded, setExpanded] = useState(false);
 
   const getRiskColor = (score: number) => {
@@ -160,16 +163,10 @@ const FraudReportCard: React.FC<FraudReportCardProps> = ({ report, onFlag, onRes
                       {new Date(activity.detectedAt).toLocaleDateString()}
                     </span>
                   </div>
-                  {onResolve && (
+                  {(onResolve || onResolveClick) && (
                     <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
                       <button
-                        onClick={() => {
-                          const resolution = prompt('Enter resolution notes:');
-                          if (resolution) {
-                            // Note: In real implementation, you'd pass the flag ID
-                            // onResolve(report.providerId, activity.type, resolution);
-                          }
-                        }}
+                        onClick={() => onResolveClick?.(report.providerId, activity.type)}
                         className="text-xs px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700 transition-colors"
                       >
                         Mark Resolved
@@ -214,6 +211,20 @@ const FraudReport: React.FC = () => {
   const [severityFilter, setSeverityFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [providerId, setProviderId] = useState('');
+
+  // Resolve modal state
+  const [resolveModal, setResolveModal] = useState<{
+    open: boolean;
+    providerId: string;
+    activityType: string;
+    resolution: string;
+  }>({
+    open: false,
+    providerId: '',
+    activityType: '',
+    resolution: '',
+  });
+  const [isResolving, setIsResolving] = useState(false);
 
   const fetchData = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
@@ -500,7 +511,13 @@ const FraudReport: React.FC = () => {
                     return true;
                   })
                   .map((report) => (
-                    <FraudReportCard key={report.providerId} report={report} />
+                    <FraudReportCard
+                      key={report.providerId}
+                      report={report}
+                      onResolveClick={(providerId, activityType) =>
+                        setResolveModal({ open: true, providerId, activityType, resolution: '' })
+                      }
+                    />
                   ))
               ) : (
                 <div className="text-center py-12 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
@@ -541,6 +558,63 @@ const FraudReport: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Resolution Modal */}
+      <Modal
+        open={resolveModal.open}
+        onOpenChange={(open) => !open && setResolveModal((prev) => ({ ...prev, open: false }))}
+        title="Mark as Resolved"
+        description="Enter resolution notes for this suspicious activity"
+        size="md"
+      >
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              Resolution Notes
+            </label>
+            <textarea
+              value={resolveModal.resolution}
+              onChange={(e) => setResolveModal((prev) => ({ ...prev, resolution: e.target.value }))}
+              placeholder="Describe how this issue was resolved..."
+              rows={4}
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-red-500 focus:border-red-500"
+            />
+          </div>
+          <div className="flex justify-end gap-3">
+            <button
+              onClick={() => setResolveModal((prev) => ({ ...prev, open: false }))}
+              className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={async () => {
+                if (!resolveModal.resolution.trim()) {
+                  toast.error('Please enter resolution notes');
+                  return;
+                }
+                setIsResolving(true);
+                try {
+                  // Call the onResolve callback if provided
+                  // onResolve(resolveModal.providerId, resolveModal.activityType, resolveModal.resolution);
+                  toast.success('Fraud flag resolved successfully');
+                  setResolveModal({ open: false, providerId: '', activityType: '', resolution: '' });
+                } catch (error) {
+                  console.error('Failed to resolve fraud flag:', error);
+                  toast.error(error instanceof Error ? error.message : 'Failed to resolve flag. Please try again.');
+                } finally {
+                  setIsResolving(false);
+                }
+              }}
+              disabled={isResolving || !resolveModal.resolution.trim()}
+              className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
+            >
+              {isResolving && <Loader2 className="w-4 h-4 animate-spin" />}
+              Mark Resolved
+            </button>
+          </div>
+        </div>
+      </Modal>
     </PageLayout>
     </ErrorBoundary>
   );

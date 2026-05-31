@@ -4,14 +4,15 @@ import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
 import { formatProviderAd } from '../utils/formatProviderAd';
 import logger from '../utils/logger';
+import { IUser } from '../models/user.model';
 
 /**
  * Create a new ad campaign
  * POST /api/provider/ads
  */
 export const createAd = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)._id.toString();
-  const userId = (req.user as any)._id.toString();
+  const providerId = (req.user as IUser)._id.toString();
+  const userId = (req.user as IUser)._id.toString();
 
   logger.debug('Creating ad campaign', {
     context: 'ProviderAdController',
@@ -49,7 +50,7 @@ export const createAd = asyncHandler(async (req: Request, res: Response) => {
  * GET /api/provider/ads
  */
 export const getMyAds = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)._id.toString();
+  const providerId = (req.user as IUser)._id.toString();
 
   const {
     status,
@@ -91,7 +92,7 @@ export const getMyAds = asyncHandler(async (req: Request, res: Response) => {
  * GET /api/provider/ads/:id
  */
 export const getAdById = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)._id.toString();
+  const providerId = (req.user as IUser)._id.toString();
   const { id } = req.params;
 
   const ad = await providerAdService.getAdById(id, providerId);
@@ -111,8 +112,8 @@ export const getAdById = asyncHandler(async (req: Request, res: Response) => {
  * PUT /api/provider/ads/:id
  */
 export const updateAd = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)._id.toString();
-  const userId = (req.user as any)._id.toString();
+  const providerId = (req.user as IUser)._id.toString();
+  const userId = (req.user as IUser)._id.toString();
   const { id } = req.params;
 
   logger.debug('Updating ad', {
@@ -156,7 +157,7 @@ export const updateAd = asyncHandler(async (req: Request, res: Response) => {
  * DELETE /api/provider/ads/:id
  */
 export const deleteAd = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)._id.toString();
+  const providerId = (req.user as IUser)._id.toString();
   const { id } = req.params;
 
   logger.debug('Deleting ad', {
@@ -179,7 +180,7 @@ export const deleteAd = asyncHandler(async (req: Request, res: Response) => {
  * POST /api/provider/ads/:id/pause
  */
 export const pauseAd = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)._id.toString();
+  const providerId = (req.user as IUser)._id.toString();
   const { id } = req.params;
 
   logger.debug('Pausing ad', {
@@ -203,7 +204,7 @@ export const pauseAd = asyncHandler(async (req: Request, res: Response) => {
  * POST /api/provider/ads/:id/resume
  */
 export const resumeAd = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)._id.toString();
+  const providerId = (req.user as IUser)._id.toString();
   const { id } = req.params;
 
   logger.debug('Resuming ad', {
@@ -227,7 +228,7 @@ export const resumeAd = asyncHandler(async (req: Request, res: Response) => {
  * POST /api/provider/ads/:id/launch
  */
 export const launchAd = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)._id.toString();
+  const providerId = (req.user as IUser)._id.toString();
   const { id } = req.params;
 
   logger.debug('Launching ad', {
@@ -251,7 +252,7 @@ export const launchAd = asyncHandler(async (req: Request, res: Response) => {
  * GET /api/provider/ads/stats
  */
 export const getAdStats = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)._id.toString();
+  const providerId = (req.user as IUser)._id.toString();
 
   const stats = await providerAdService.getProviderAdStats(providerId);
 
@@ -266,7 +267,7 @@ export const getAdStats = asyncHandler(async (req: Request, res: Response) => {
  * GET /api/provider/ads/:id/analytics
  */
 export const getAdAnalytics = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)._id.toString();
+  const providerId = (req.user as IUser)._id.toString();
   const { id } = req.params;
 
   const analytics = await providerAdService.getAdAnalytics(id, providerId);
@@ -295,11 +296,16 @@ export const getTargetingCategories = asyncHandler(async (_req: Request, res: Re
  * POST /api/provider/ads/bulk/pause
  */
 export const bulkPauseAds = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)._id.toString();
+  const providerId = (req.user as IUser)._id.toString();
   const { adIds } = req.body;
 
   if (!Array.isArray(adIds) || adIds.length === 0) {
     throw new ApiError(400, 'Ad IDs array is required');
+  }
+
+  const MAX_BULK_SIZE = 100;
+  if (adIds.length > MAX_BULK_SIZE) {
+    throw new ApiError(400, `Cannot process more than ${MAX_BULK_SIZE} items at once`);
   }
 
   const results = await Promise.allSettled(
@@ -324,11 +330,16 @@ export const bulkPauseAds = asyncHandler(async (req: Request, res: Response) => 
  * POST /api/provider/ads/bulk/resume
  */
 export const bulkResumeAds = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)._id.toString();
+  const providerId = (req.user as IUser)._id.toString();
   const { adIds } = req.body;
 
   if (!Array.isArray(adIds) || adIds.length === 0) {
     throw new ApiError(400, 'Ad IDs array is required');
+  }
+
+  const MAX_BULK_SIZE = 100;
+  if (adIds.length > MAX_BULK_SIZE) {
+    throw new ApiError(400, `Cannot process more than ${MAX_BULK_SIZE} items at once`);
   }
 
   const results = await Promise.allSettled(
@@ -353,11 +364,16 @@ export const bulkResumeAds = asyncHandler(async (req: Request, res: Response) =>
  * POST /api/provider/ads/bulk/delete
  */
 export const bulkDeleteAds = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)._id.toString();
+  const providerId = (req.user as IUser)._id.toString();
   const { adIds } = req.body;
 
   if (!Array.isArray(adIds) || adIds.length === 0) {
     throw new ApiError(400, 'Ad IDs array is required');
+  }
+
+  const MAX_BULK_SIZE = 100;
+  if (adIds.length > MAX_BULK_SIZE) {
+    throw new ApiError(400, `Cannot process more than ${MAX_BULK_SIZE} items at once`);
   }
 
   const results = await Promise.allSettled(

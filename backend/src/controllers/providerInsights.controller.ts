@@ -1,6 +1,7 @@
-import { Request, Response } from 'express';
+﻿import { Request, Response } from 'express';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
+import { IUser } from '../models/user.model';
 import Booking from '../models/booking.model';
 import {
   getProviderInsights,
@@ -56,7 +57,11 @@ import {
  * GET /api/provider/insights
  */
 export const getInsights = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)?._id?.toString() || (req.user as any);
+  const user = req.user as IUser;
+  if (!user?._id) {
+    throw new ApiError(401, 'Authentication required');
+  }
+  const providerId = user._id.toString();
   const period = (req.query.period as string) || 'month';
 
   if (!['week', 'month', 'quarter', 'year'].includes(period)) {
@@ -76,7 +81,11 @@ export const getInsights = asyncHandler(async (req: Request, res: Response) => {
  * GET /api/provider/insights/performance
  */
 export const getPerformance = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)?._id?.toString() || (req.user as any);
+  const user = req.user as IUser;
+  if (!user?._id) {
+    throw new ApiError(401, 'Authentication required');
+  }
+  const providerId = user._id.toString();
   const period = (req.query.period as string) || 'month';
 
   if (!['week', 'month', 'quarter', 'year'].includes(period)) {
@@ -96,7 +105,11 @@ export const getPerformance = asyncHandler(async (req: Request, res: Response) =
  * GET /api/provider/insights/revenue
  */
 export const getRevenue = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)?._id?.toString() || (req.user as any);
+  const user = req.user as IUser;
+  if (!user?._id) {
+    throw new ApiError(401, 'Authentication required');
+  }
+  const providerId = user._id.toString();
   const period = (req.query.period as string) || 'month';
 
   if (!['week', 'month', 'quarter', 'year'].includes(period)) {
@@ -116,7 +129,11 @@ export const getRevenue = asyncHandler(async (req: Request, res: Response) => {
  * GET /api/provider/insights/satisfaction
  */
 export const getSatisfaction = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)?._id?.toString() || (req.user as any);
+  const user = req.user as IUser;
+  if (!user?._id) {
+    throw new ApiError(401, 'Authentication required');
+  }
+  const providerId = user._id.toString();
   const period = (req.query.period as string) || 'month';
 
   if (!['week', 'month', 'quarter', 'year'].includes(period)) {
@@ -136,7 +153,11 @@ export const getSatisfaction = asyncHandler(async (req: Request, res: Response) 
  * GET /api/provider/insights/trends
  */
 export const getTrends = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)?._id?.toString() || (req.user as any);
+  const user = req.user as IUser;
+  if (!user?._id) {
+    throw new ApiError(401, 'Authentication required');
+  }
+  const providerId = user._id.toString();
   const period = (req.query.period as string) || 'month';
 
   if (!['week', 'month', 'quarter', 'year'].includes(period)) {
@@ -156,7 +177,11 @@ export const getTrends = asyncHandler(async (req: Request, res: Response) => {
  * GET /api/provider/insights/generate
  */
 export const generateInsights = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)?._id?.toString() || (req.user as any);
+  const user = req.user as IUser;
+  if (!user?._id) {
+    throw new ApiError(401, 'Authentication required');
+  }
+  const providerId = user._id.toString();
   const period = (req.query.period as string) || 'month';
 
   if (!['week', 'month', 'quarter', 'year'].includes(period)) {
@@ -176,7 +201,11 @@ export const generateInsights = asyncHandler(async (req: Request, res: Response)
  * GET /api/provider/insights/optimization-tips
  */
 export const getOptimizationTips = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)?._id?.toString() || (req.user as any);
+  const user = req.user as IUser;
+  if (!user?._id) {
+    throw new ApiError(401, 'Authentication required');
+  }
+  const providerId = user._id.toString();
 
   const tips = await getRevenueOptimizationTips(providerId);
 
@@ -195,7 +224,11 @@ export const getOptimizationTips = asyncHandler(async (req: Request, res: Respon
  * GET /api/provider/schedule/optimal
  */
 export const getScheduleOptimal = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)?._id?.toString() || (req.user as any);
+  const user = req.user as IUser;
+  if (!user?._id) {
+    throw new ApiError(401, 'Authentication required');
+  }
+  const providerId = user._id.toString();
 
   const optimization = await getOptimalSchedule(providerId);
 
@@ -210,7 +243,11 @@ export const getScheduleOptimal = asyncHandler(async (req: Request, res: Respons
  * GET /api/provider/schedule/patterns
  */
 export const getSchedulePatterns = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)?._id?.toString() || (req.user as any);
+  const user = req.user as IUser;
+  if (!user?._id) {
+    throw new ApiError(401, 'Authentication required');
+  }
+  const providerId = user._id.toString();
   const days = parseInt(req.query.days as string) || 30;
 
   if (days < 7 || days > 365) {
@@ -230,7 +267,11 @@ export const getSchedulePatterns = asyncHandler(async (req: Request, res: Respon
  * GET /api/provider/schedule/gaps
  */
 export const getScheduleGaps = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)?._id?.toString() || (req.user as any);
+  const user = req.user as IUser;
+  if (!user?._id) {
+    throw new ApiError(401, 'Authentication required');
+  }
+  const providerId = user._id.toString();
 
   const gaps = await getAvailabilityGaps(providerId);
 
@@ -245,7 +286,11 @@ export const getScheduleGaps = asyncHandler(async (req: Request, res: Response) 
  * GET /api/provider/schedule/peak-demand
  */
 export const getSchedulePeakDemand = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)?._id?.toString() || (req.user as any);
+  const user = req.user as IUser;
+  if (!user?._id) {
+    throw new ApiError(401, 'Authentication required');
+  }
+  const providerId = user._id.toString();
 
   const analysis = await getPeakDemandAnalysis(providerId);
 
@@ -260,7 +305,11 @@ export const getSchedulePeakDemand = asyncHandler(async (req: Request, res: Resp
  * GET /api/provider/schedule/conflicts
  */
 export const getScheduleConflicts = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)?._id?.toString() || (req.user as any);
+  const user = req.user as IUser;
+  if (!user?._id) {
+    throw new ApiError(401, 'Authentication required');
+  }
+  const providerId = user._id.toString();
   const dateParam = req.query.date as string;
 
   if (!dateParam) {
@@ -285,7 +334,7 @@ export const getScheduleConflicts = asyncHandler(async (req: Request, res: Respo
  * GET /api/provider/schedule/efficiency
  */
 export const getScheduleEfficiency = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)?._id?.toString() || (req.user as any);
+  const providerId = (req.user as IUser)._id.toString();
 
   const score = await getScheduleEfficiencyScore(providerId);
 
@@ -306,7 +355,7 @@ export const getScheduleEfficiency = asyncHandler(async (req: Request, res: Resp
  */
 export const getCancellationProfile = asyncHandler(async (req: Request, res: Response) => {
   const { customerId } = req.params;
-  const providerId = (req.user as any)?._id?.toString();
+  const providerId = (req.user as IUser)._id.toString();
 
   if (!customerId) {
     throw new ApiError(400, 'Customer ID is required');
@@ -341,7 +390,7 @@ export const getCancellationProfile = asyncHandler(async (req: Request, res: Res
  */
 export const predictCancellation = asyncHandler(async (req: Request, res: Response) => {
   const { bookingId } = req.params;
-  const providerId = (req.user as any)?._id?.toString();
+  const providerId = (req.user as IUser)._id.toString();
 
   if (!bookingId) {
     throw new ApiError(400, 'Booking ID is required');
@@ -374,7 +423,7 @@ export const predictCancellation = asyncHandler(async (req: Request, res: Respon
  * GET /api/provider/cancellations/stats
  */
 export const getCancellationStats = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)?._id?.toString() || (req.user as any);
+  const providerId = (req.user as IUser)._id.toString();
   const period = (req.query.period as string) || 'month';
 
   if (!['week', 'month', 'quarter', 'year'].includes(period)) {
@@ -394,7 +443,7 @@ export const getCancellationStats = asyncHandler(async (req: Request, res: Respo
  * GET /api/provider/cancellations/upcoming
  */
 export const getUpcomingCancellations = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)?._id?.toString() || (req.user as any);
+  const providerId = (req.user as IUser)._id.toString();
   const days = parseInt(req.query.days as string) || 7;
 
   if (days < 1 || days > 30) {
@@ -414,7 +463,7 @@ export const getUpcomingCancellations = asyncHandler(async (req: Request, res: R
  * GET /api/provider/cancellations/no-shows
  */
 export const getNoShows = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)?._id?.toString() || (req.user as any);
+  const providerId = (req.user as IUser)._id.toString();
   const dateParam = req.query.date as string;
 
   let date: Date;
@@ -440,7 +489,7 @@ export const getNoShows = asyncHandler(async (req: Request, res: Response) => {
  * GET /api/provider/cancellations/prevention
  */
 export const getPreventionRecommendations = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)?._id?.toString() || (req.user as any);
+  const providerId = (req.user as IUser)._id.toString();
 
   const recommendations = await getCancellationPreventionRecommendations(providerId);
 
@@ -459,7 +508,7 @@ export const getPreventionRecommendations = asyncHandler(async (req: Request, re
  * POST /api/provider/insights/cache/clear
  */
 export const clearCache = asyncHandler(async (req: Request, res: Response) => {
-  const providerId = (req.user as any)?._id?.toString() || (req.user as any);
+  const providerId = (req.user as IUser)._id.toString();
 
   await Promise.all([
     clearInsightsCache(providerId),

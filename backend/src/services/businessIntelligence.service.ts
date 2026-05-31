@@ -706,15 +706,33 @@ export class BusinessIntelligenceService {
   }
 
   /**
-   * Clear BI cache
+   * Clear BI cache using SCAN (non-blocking)
    */
   async clearCache(): Promise<void> {
     try {
-      const keys = await cache.keys('bi:*');
-      if (keys.length > 0) {
-        await cache.del(...keys);
-      }
-      logger.info('Business Intelligence cache cleared', { keysDeleted: keys.length });
+      const client = cache.client;
+      if (!client) return;
+
+      let cursor = 0;
+      let deletedCount = 0;
+
+      do {
+        const [nextCursor, keys] = await client.scan(
+          cursor,
+          'MATCH',
+          'bi:*',
+          'COUNT',
+          100
+        );
+        cursor = parseInt(nextCursor, 10);
+
+        if (keys.length > 0) {
+          await client.del(...keys);
+          deletedCount += keys.length;
+        }
+      } while (cursor !== 0);
+
+      logger.info('Business Intelligence cache cleared', { keysDeleted: deletedCount });
     } catch (error) {
       logger.error('Failed to clear BI cache', { error });
     }

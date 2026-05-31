@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   ArrowLeft,
   Wallet,
@@ -33,6 +33,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
 import { payoutApi } from '../../services/payoutApi';
 import { useToast } from '../../components/common/Toast';
+import { socketService } from '../../services/socket';
 import type {
   Payout,
   Settlement,
@@ -392,10 +393,13 @@ const PayoutDashboard: React.FC = () => {
   const [cancelReason, setCancelReason] = useState('');
   const [isCancelling, setIsCancelling] = useState(false);
 
+  // Socket cleanup ref
+  const socketCleanupRef = useRef<(() => void)[]>([]);
+
   // Redirect if not a provider
   useEffect(() => {
     if (user?.role !== 'provider') {
-      navigate('/dashboard');
+      navigate('/provider/dashboard'); // FIX: Was '/dashboard'
     }
   }, [user, navigate]);
 
@@ -501,6 +505,84 @@ const PayoutDashboard: React.FC = () => {
       fetchOverviewData(true);
     }
   }, [periodFilter, activeTab]);
+
+  // Socket listeners for real-time updates
+  useEffect(() => {
+    let isMounted = true;
+
+    const setupSocket = async () => {
+      // Connect to socket only if not already connected
+      if (!socketService.isConnected()) {
+        try {
+          await socketService.connect();
+        } catch (error) {
+          console.warn('Socket connection failed:', error);
+          return;
+        }
+      }
+
+      if (!isMounted) return;
+
+      // Listen for withdrawal approved events
+      const unsubWithdrawalApproved = socketService.onWithdrawalApproved((data) => {
+        if (isMounted) {
+          // Refresh payout data when a withdrawal is approved
+          fetchPayouts(payoutsPage);
+          fetchOverviewData(true);
+          toast.addToast({
+            title: 'Withdrawal Approved',
+            description: `Your withdrawal of ${data.amount} ${data.currency} has been approved and is being processed.`,
+            variant: 'success'
+          });
+        }
+      });
+
+      // Listen for withdrawal rejected events
+      const unsubWithdrawalRejected = socketService.onWithdrawalRejected((data) => {
+        if (isMounted) {
+          // Refresh payout data when a withdrawal is rejected
+          fetchPayouts(payoutsPage);
+          fetchOverviewData(true);
+          toast.addToast({
+            title: 'Withdrawal Rejected',
+            description: `Your withdrawal request was rejected. Reason: ${data.reason}`,
+            variant: 'error'
+          });
+        }
+      });
+
+      // Listen for withdrawal pending events
+      const unsubWithdrawalPending = socketService.onWithdrawalPending((data) => {
+        if (isMounted) {
+          // Refresh payout data when status changes to pending
+          fetchPayouts(payoutsPage);
+          fetchOverviewData(true);
+        }
+      });
+
+      // Store cleanup functions
+      socketCleanupRef.current = [
+        unsubWithdrawalApproved,
+        unsubWithdrawalRejected,
+        unsubWithdrawalPending
+      ];
+    };
+
+    setupSocket();
+
+    // Cleanup on unmount
+    return () => {
+      isMounted = false;
+
+      // Unsubscribe from events
+      socketCleanupRef.current.forEach(cleanup => {
+        if (typeof cleanup === 'function') {
+          cleanup();
+        }
+      });
+      socketCleanupRef.current = [];
+    };
+  }, [payoutsPage, fetchPayouts, fetchOverviewData, toast]);
 
   // Handlers
   const handleRefresh = () => {
@@ -1067,7 +1149,7 @@ const PayoutDashboard: React.FC = () => {
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6 sm:mb-8">
           <div>
             <button
-              onClick={() => navigate('/dashboard')}
+              onClick={() => navigate('/provider/dashboard')}
               className="flex items-center text-gray-600 hover:text-gray-900 mb-2 text-sm"
             >
               <ArrowLeft className="w-4 h-4 mr-1" />

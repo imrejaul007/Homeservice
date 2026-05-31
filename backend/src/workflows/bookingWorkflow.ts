@@ -1,6 +1,52 @@
-import { eventBus, EventTypes, DomainEvent } from '../events/eventBus';
-import { getQueue, addJob } from '../queue';
+import { eventBus, EVENT_TYPES, PlatformEvent } from '../event-bus';
 import logger from '../utils/logger';
+
+// Type definitions for workflow payloads
+interface BookingCreatedData {
+  bookingId?: string;
+  _id?: string;
+  id?: string;
+  customerId?: string;
+  customerEmail?: string;
+  customerName?: string;
+  providerId?: string;
+  serviceId?: string;
+  totalAmount?: number;
+  providerPayout?: number;
+}
+
+interface BookingConfirmedData {
+  bookingId?: string;
+  _id?: string;
+  id?: string;
+  customerEmail?: string;
+  customerName?: string;
+  customerId?: string;
+}
+
+interface BookingCompletedData {
+  bookingId?: string;
+  _id?: string;
+  id?: string;
+  customerId?: string;
+  customerEmail?: string;
+  customerName?: string;
+  providerId?: string;
+  providerPayout?: number;
+  totalAmount?: number;
+}
+
+interface BookingCancelledData {
+  bookingId?: string;
+  _id?: string;
+  id?: string;
+  customerEmail?: string;
+  customerName?: string;
+  providerId?: string;
+  paymentId?: string;
+  paymentTransactionId?: string;
+  cancellationReason?: string;
+}
 
 class BookingWorkflow {
   constructor() {
@@ -9,152 +55,266 @@ class BookingWorkflow {
 
   private setupEventListeners(): void {
     // Listen for booking.created
-    eventBus.subscribe(EventTypes.BOOKING_CREATED, async (event) => {
-      await this.handleBookingCreated(event);
+    eventBus.subscribe(EVENT_TYPES.BOOKING_CREATED, async (event: PlatformEvent) => {
+      await this.handleBookingCreated(event as PlatformEvent<BookingCreatedData>);
     });
 
     // Listen for booking.confirmed
-    eventBus.subscribe(EventTypes.BOOKING_CONFIRMED, async (event) => {
-      await this.handleBookingConfirmed(event);
+    eventBus.subscribe(EVENT_TYPES.BOOKING_CONFIRMED, async (event: PlatformEvent) => {
+      await this.handleBookingConfirmed(event as PlatformEvent<BookingConfirmedData>);
     });
 
     // Listen for booking.completed
-    eventBus.subscribe(EventTypes.BOOKING_COMPLETED, async (event) => {
-      await this.handleBookingCompleted(event);
+    eventBus.subscribe(EVENT_TYPES.BOOKING_COMPLETED, async (event: PlatformEvent) => {
+      await this.handleBookingCompleted(event as PlatformEvent<BookingCompletedData>);
     });
 
     // Listen for booking.cancelled
-    eventBus.subscribe(EventTypes.BOOKING_CANCELLED, async (event) => {
-      await this.handleBookingCancelled(event);
+    eventBus.subscribe(EVENT_TYPES.BOOKING_CANCELLED, async (event: PlatformEvent) => {
+      await this.handleBookingCancelled(event as PlatformEvent<BookingCancelledData>);
+    });
+
+    logger.info('Booking workflow initialized', {
+      action: 'WORKFLOW_INITIALIZED',
+      workflows: ['booking.created', 'booking.confirmed', 'booking.completed', 'booking.cancelled'],
     });
   }
 
-  private async handleBookingCreated(event: DomainEvent): Promise<void> {
-    logger.info('Workflow: Booking created', { bookingId: event.payload.bookingId });
-
-    // Queue confirmation email to customer
-    await addJob('notifications', 'send-email', {
-      to: event.payload.customerEmail,
-      template: 'booking-created',
-      data: event.payload,
-    });
-
-    // Queue notification to provider
-    await addJob('notifications', 'send-push', {
-      userId: event.payload.providerId,
-      title: 'New Booking Request',
-      body: `New booking from ${event.payload.customerName}`,
-    });
-
-    // Queue analytics event
-    await addJob('analytics', 'track-event', {
-      event: 'booking_created',
-      properties: {
-        bookingId: event.payload.bookingId,
-        serviceId: event.payload.serviceId,
-        value: event.payload.totalAmount,
-      },
-    });
-
-    // Check for fraud
-    await addJob('fraud', 'check-booking', {
-      bookingId: event.payload.bookingId,
-      customerId: event.payload.customerId,
-    });
+  private getBookingId(data: BookingCreatedData | BookingConfirmedData | BookingCompletedData | BookingCancelledData): string {
+    return (data.bookingId || data._id || data.id || '') as string;
   }
 
-  private async handleBookingConfirmed(event: DomainEvent): Promise<void> {
-    logger.info('Workflow: Booking confirmed', { bookingId: event.payload.bookingId });
+  private async handleBookingCreated(event: PlatformEvent<BookingCreatedData>): Promise<void> {
+    const data = event.data;
+    const bookingId = this.getBookingId(data);
 
-    // Send confirmation to customer
-    await addJob('notifications', 'send-email', {
-      to: event.payload.customerEmail,
-      template: 'booking-confirmed',
-      data: event.payload,
+    logger.info('Workflow: Booking created', {
+      bookingId,
+      eventId: event.eventId
     });
 
-    // Update analytics
-    await addJob('analytics', 'track-event', {
-      event: 'booking_confirmed',
-      properties: { bookingId: event.payload.bookingId },
-    });
-  }
+    // Import queue service dynamically to avoid circular dependencies
+    try {
+      const { addJob } = await import('../queue');
 
-  private async handleBookingCompleted(event: DomainEvent): Promise<void> {
-    logger.info('Workflow: Booking completed', { bookingId: event.payload.bookingId });
+      // Queue confirmation email to customer
+      if (data.customerEmail) {
+        await addJob('email-queue', 'send_email', {
+          to: data.customerEmail,
+          type: 'booking_confirmation',
+          metadata: {
+            bookingId,
+            customerName: data.customerName,
+          },
+        });
+      }
 
-    // Send review request
-    await addJob('notifications', 'send-email', {
-      to: event.payload.customerEmail,
-      template: 'booking-completed',
-      data: event.payload,
-    });
+      // Queue notification to provider
+      if (data.providerId) {
+        await addJob('notification-queue', 'send_notification', {
+          userId: data.providerId,
+          type: 'booking_new',
+          title: 'New Booking Request',
+          message: `New booking from ${data.customerName || 'a customer'}`,
+          data: { bookingId },
+        });
+      }
 
-    // Queue review request (delayed by 1 hour)
-    await addJob('notifications', 'send-email', {
-      to: event.payload.customerEmail,
-      template: 'review-request',
-      data: event.payload,
-    }, { delay: 3600000 }); // 1 hour delay
+      // Queue analytics event
+      await addJob('analytics-queue', 'track_event', {
+        event: 'booking_created',
+        properties: {
+          bookingId,
+          serviceId: data.serviceId,
+          value: data.totalAmount,
+        },
+      });
 
-    // Award loyalty points
-    await addJob('loyalty', 'award-points', {
-      customerId: event.payload.customerId,
-      bookingId: event.payload.bookingId,
-      amount: event.payload.totalAmount,
-    });
-
-    // Update analytics
-    await addJob('analytics', 'track-event', {
-      event: 'booking_completed',
-      properties: {
-        bookingId: event.payload.bookingId,
-        value: event.payload.totalAmount,
-      },
-    });
-
-    // Queue provider payout
-    await addJob('payments', 'queue-payout', {
-      providerId: event.payload.providerId,
-      bookingId: event.payload.bookingId,
-      amount: event.payload.providerPayout,
-    });
-  }
-
-  private async handleBookingCancelled(event: DomainEvent): Promise<void> {
-    logger.info('Workflow: Booking cancelled', { bookingId: event.payload.bookingId });
-
-    // Queue refund if payment was made
-    if (event.payload.paymentId) {
-      await addJob('payments', 'process-refund', {
-        paymentId: event.payload.paymentId,
-        bookingId: event.payload.bookingId,
-        reason: event.payload.cancellationReason,
+      // Check for fraud
+      if (data.customerId) {
+        await addJob('fraud-queue', 'check_booking', {
+          bookingId,
+          customerId: data.customerId,
+        });
+      }
+    } catch (error) {
+      logger.error('Workflow: Booking created handler failed', {
+        bookingId,
+        error: error instanceof Error ? error.message : String(error),
       });
     }
+  }
 
-    // Send cancellation confirmation
-    await addJob('notifications', 'send-email', {
-      to: event.payload.customerEmail,
-      template: 'booking-cancelled',
-      data: event.payload,
+  private async handleBookingConfirmed(event: PlatformEvent<BookingConfirmedData>): Promise<void> {
+    const data = event.data;
+    const bookingId = this.getBookingId(data);
+
+    logger.info('Workflow: Booking confirmed', {
+      bookingId,
+      eventId: event.eventId
     });
 
-    // Notify provider
-    await addJob('notifications', 'send-push', {
-      userId: event.payload.providerId,
-      title: 'Booking Cancelled',
-      body: `Booking has been cancelled`,
+    try {
+      const { addJob } = await import('../queue');
+
+      // Send confirmation to customer
+      if (data.customerEmail) {
+        await addJob('email-queue', 'send_email', {
+          to: data.customerEmail,
+          type: 'booking_accepted',
+          metadata: {
+            bookingId,
+            customerName: data.customerName,
+          },
+        });
+      }
+
+      // Update analytics
+      await addJob('analytics-queue', 'track_event', {
+        event: 'booking_confirmed',
+        properties: { bookingId },
+      });
+    } catch (error) {
+      logger.error('Workflow: Booking confirmed handler failed', {
+        bookingId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async handleBookingCompleted(event: PlatformEvent<BookingCompletedData>): Promise<void> {
+    const data = event.data;
+    const bookingId = this.getBookingId(data);
+
+    logger.info('Workflow: Booking completed', {
+      bookingId,
+      eventId: event.eventId
     });
 
-    // Update analytics
-    await addJob('analytics', 'track-event', {
-      event: 'booking_cancelled',
-      properties: {
-        bookingId: event.payload.bookingId,
-        reason: event.payload.cancellationReason,
-      },
+    try {
+      const { addJob } = await import('../queue');
+
+      // Send completion email to customer
+      if (data.customerEmail) {
+        await addJob('email-queue', 'send_email', {
+          to: data.customerEmail,
+          type: 'booking_completed',
+          metadata: {
+            bookingId,
+            customerName: data.customerName,
+          },
+        });
+
+        // Queue review request (delayed by 1 hour)
+        await addJob('email-queue', 'send_email', {
+          to: data.customerEmail,
+          type: 'review_request',
+          metadata: {
+            bookingId,
+            customerName: data.customerName,
+          },
+        }, { delay: 3600000 }); // 1 hour delay
+      }
+
+      // Award loyalty points to customer
+      if (data.customerId && data.totalAmount) {
+        const pointsEarned = Math.floor(data.totalAmount / 10);
+        if (pointsEarned > 0) {
+          await addJob('loyalty-queue', 'award_booking_points', {
+            userId: data.customerId,
+            amount: pointsEarned,
+            type: 'earned',
+            description: `Booking #${bookingId} completed`,
+            relatedBooking: bookingId,
+          });
+        }
+      }
+
+      // Update analytics
+      await addJob('analytics-queue', 'track_event', {
+        event: 'booking_completed',
+        properties: {
+          bookingId,
+          value: data.totalAmount,
+        },
+      });
+
+      // Queue provider payout calculation
+      if (data.providerId) {
+        await addJob('settlement-queue', 'process_settlement', {
+          bookingId,
+          providerId: data.providerId,
+          amount: data.providerPayout,
+        });
+      }
+    } catch (error) {
+      logger.error('Workflow: Booking completed handler failed', {
+        bookingId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async handleBookingCancelled(event: PlatformEvent<BookingCancelledData>): Promise<void> {
+    const data = event.data;
+    const bookingId = this.getBookingId(data);
+
+    logger.info('Workflow: Booking cancelled', {
+      bookingId,
+      eventId: event.eventId
     });
+
+    try {
+      const { addJob } = await import('../queue');
+
+      // Queue refund if payment was made
+      const paymentId = data.paymentId || data.paymentTransactionId;
+      if (paymentId) {
+        await addJob('payment-queue', 'process_refund', {
+          bookingId,
+          paymentId,
+          reason: data.cancellationReason,
+        });
+      }
+
+      // Send cancellation confirmation to customer
+      if (data.customerEmail) {
+        await addJob('email-queue', 'send_email', {
+          to: data.customerEmail,
+          type: 'booking_cancelled',
+          metadata: {
+            bookingId,
+            customerName: data.customerName,
+            reason: data.cancellationReason,
+          },
+        });
+      }
+
+      // Notify provider
+      if (data.providerId) {
+        await addJob('notification-queue', 'send_notification', {
+          userId: data.providerId,
+          type: 'booking_cancelled',
+          title: 'Booking Cancelled',
+          message: `Booking #${bookingId} has been cancelled`,
+          data: { bookingId },
+        });
+      }
+
+      // Update analytics
+      await addJob('analytics-queue', 'track_event', {
+        event: 'booking_cancelled',
+        properties: {
+          bookingId,
+          reason: data.cancellationReason,
+        },
+      });
+    } catch (error) {
+      logger.error('Workflow: Booking cancelled handler failed', {
+        bookingId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 }
 

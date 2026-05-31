@@ -108,6 +108,70 @@ const validateRejection = (req: any, res: any, next: any) => {
   next();
 };
 
+// Validation schemas for service/booking status updates (must be before route usage)
+const updateServiceStatusSchema = Joi.object({
+  status: Joi.string()
+    .valid('active', 'inactive', 'pending_review', 'rejected')
+    .required()
+    .messages({
+      'any.only': 'Status must be one of: active, inactive, pending_review, rejected',
+      'any.required': 'Status is required'
+    }),
+  reason: Joi.string()
+    .when('status', {
+      is: 'rejected',
+      then: Joi.string().required().min(10).max(500).messages({
+        'string.min': 'Rejection reason must be at least 10 characters',
+        'string.max': 'Rejection reason cannot exceed 500 characters',
+        'any.required': 'Rejection reason is required when rejecting a service'
+      }),
+      otherwise: Joi.string().max(500).optional()
+    }),
+  notes: Joi.string().max(1000).optional()
+});
+
+const updateBookingStatusSchema = Joi.object({
+  status: Joi.string()
+    .valid('pending', 'confirmed', 'in_progress', 'completed', 'cancelled', 'no_show')
+    .required()
+    .messages({
+      'any.only': 'Status must be one of: pending, confirmed, in_progress, completed, cancelled, no_show',
+      'any.required': 'Status is required'
+    }),
+  reason: Joi.string().max(500).optional(),
+  notes: Joi.string().max(1000).optional()
+});
+
+const validateServiceStatus = (req: any, res: any, next: any) => {
+  const { error } = updateServiceStatusSchema.validate(req.body);
+  if (error) {
+    return res.status(400).json({
+      success: false,
+      error: 'Validation Error',
+      details: error.details.map(detail => ({
+        field: detail.path.join('.'),
+        message: detail.message
+      }))
+    });
+  }
+  next();
+};
+
+const validateBookingStatus = (req: any, res: any, next: any) => {
+  const { error } = updateBookingStatusSchema.validate(req.body);
+  if (error) {
+    return res.status(400).json({
+      success: false,
+      error: 'Validation Error',
+      details: error.details.map(detail => ({
+        field: detail.path.join('.'),
+        message: detail.message
+      }))
+    });
+  }
+  next();
+};
+
 // All admin routes require authentication and rate limiting
 router.use(authenticate);
 router.use(requireRole('admin'));
@@ -136,17 +200,30 @@ router.post('/test/create-provider', createTestProvider);
 router.get('/services', getAllServices);
 router.get('/services/pending', getPendingServices);
 router.get('/services/stats', getServiceStats);
-router.patch('/services/:id/status', updateServiceStatus);
+router.patch('/services/:id/status', validateServiceStatus, updateServiceStatus);
 router.delete('/services/:id', adminDeleteService);
 
 // ========================================
 // User Management Routes
 // ========================================
 
-router.get('/users', getAllUsers);
-router.get('/users/stats', getUserStats);
-router.patch('/users/:id/status', updateUserStatus);
-router.delete('/users/:id', adminDeleteUser);
+// Explicit role validation middleware for user management operations
+const requireAdminRole = (req: any, res: any, next: any) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({
+      success: false,
+      error: 'Forbidden',
+      message: 'Admin role required for user management operations',
+    });
+  }
+  next();
+};
+
+// Apply explicit role check to user management routes
+router.get('/users', requireAdminRole, getAllUsers);
+router.get('/users/stats', requireAdminRole, getUserStats);
+router.patch('/users/:id/status', requireAdminRole, updateUserStatus);
+router.delete('/users/:id', requireAdminRole, adminDeleteUser);
 
 // ========================================
 // Enhanced Provider-Service Management Routes
@@ -163,7 +240,7 @@ router.post('/services/batch-action', batchServiceAction);
 router.get('/bookings', getAllBookings);
 router.get('/bookings/stats', getBookingStats);
 router.get('/bookings/:id', getBookingDetails);
-router.patch('/bookings/:id/status', updateBookingStatus);
+router.patch('/bookings/:id/status', validateBookingStatus, updateBookingStatus);
 router.post('/bookings/:id/cancel', cancelBooking);
 
 // ========================================
@@ -318,9 +395,29 @@ const rejectWithdrawalSchema = Joi.object({
   })
 });
 
+const approveWithdrawalSchema = Joi.object({
+  notes: Joi.string().max(500).optional(),
+});
+
 // Validation middleware for withdrawal rejection
 const validateWithdrawalRejection = (req: any, res: any, next: any) => {
   const { error } = rejectWithdrawalSchema.validate(req.body);
+  if (error) {
+    return res.status(400).json({
+      success: false,
+      error: 'Validation Error',
+      details: error.details.map(detail => ({
+        field: detail.path.join('.'),
+        message: detail.message
+      }))
+    });
+  }
+  next();
+};
+
+// Validation middleware for withdrawal approval
+const validateWithdrawalApproval = (req: any, res: any, next: any) => {
+  const { error } = approveWithdrawalSchema.validate(req.body);
   if (error) {
     return res.status(400).json({
       success: false,
@@ -344,7 +441,7 @@ router.get('/withdrawals/stats', getWithdrawalStats);
 router.get('/withdrawals/:id', getWithdrawalDetails);
 
 // POST /api/admin/withdrawals/:id/approve - Approve a withdrawal
-router.post('/withdrawals/:id/approve', approveWithdrawal);
+router.post('/withdrawals/:id/approve', validateWithdrawalApproval, approveWithdrawal);
 
 // POST /api/admin/withdrawals/:id/reject - Reject a withdrawal
 router.post('/withdrawals/:id/reject', validateWithdrawalRejection, rejectWithdrawal);

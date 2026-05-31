@@ -7,6 +7,7 @@ import Service from '../models/service.model';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
 import { eventBus, EVENT_TYPES } from '../event-bus';
+import { getTenantId } from '../utils/tenantFilter';
 
 // Constants for review submission rules
 const REVIEW_WINDOW_DAYS = 14;  // Customer has 14 days after service to submit review
@@ -16,6 +17,7 @@ export const submitReview = asyncHandler(async (req: Request, res: Response) => 
   const user = (req as any).user;
   const { bookingId } = req.params;
   const { rating, comment, title, photos } = req.body;
+  const tenantId = getTenantId(req);
 
   if (!rating || rating < 1 || rating > 5) {
     throw new ApiError(400, 'Rating must be between 1 and 5');
@@ -70,6 +72,7 @@ export const submitReview = asyncHandler(async (req: Request, res: Response) => 
 
   // Create the review document
   const review = new Review({
+    tenantId: tenantId || undefined,
     bookingId: booking._id,
     reviewerId: user._id,
     reviewerType: 'customer',
@@ -107,79 +110,9 @@ export const submitReview = asyncHandler(async (req: Request, res: Response) => 
     throw new ApiError(400, 'Review was already submitted');
   }
 
-  // FIX #3: Update provider profile stats atomically
-  const providerProfile = await ProviderProfile.findOneAndUpdate(
-    { userId: booking.providerId },
-    {
-      $setOnInsert: {
-        reviewsData: {
-          averageRating: 0,
-          totalReviews: 0,
-          ratingDistribution: { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 },
-          recentReviews: [],
-          responseRate: 0,
-          avgResponseTime: 0,
-        },
-      },
-    },
-    { new: true, upsert: true }
-  );
-
-  if (providerProfile) {
-    // Calculate new average
-    const prev = providerProfile.reviewsData;
-    const newTotal = prev.averageRating * prev.totalReviews + rating;
-    const newReviewCount = prev.totalReviews + 1;
-    const newAverage = newTotal / newReviewCount;
-
-    // Update provider profile with new stats
-    await ProviderProfile.findByIdAndUpdate(providerProfile._id, {
-      $set: {
-        'reviewsData.averageRating': Math.round(newAverage * 10) / 10,
-        'reviewsData.totalReviews': newReviewCount,
-        [`reviewsData.ratingDistribution.${rating}`]: (prev.ratingDistribution as any)[rating] + 1,
-      },
-      $push: {
-        'reviewsData.recentReviews': {
-          $each: [{
-            customerId: user._id,
-            bookingId: booking._id,
-            serviceId: booking.serviceId,
-            rating,
-            title: title || '',
-            comment: comment.trim(),
-            photos: photos || [],
-            isVerified: true,
-            helpfulVotes: 0,
-            createdAt: new Date(),
-          }],
-          $position: 0,
-          $slice: 20,  // Keep only 20 most recent reviews
-        },
-      },
-    });
-  }
-
-  // Keep per-service rating in sync (used on provider service management)
-  if (booking.serviceId) {
-    const service = await Service.findById(booking.serviceId);
-    if (service?.rating) {
-      const prev = service.rating;
-      const newCount = prev.count + 1;
-      const newAverage = (prev.average * prev.count + rating) / newCount;
-      const distKey = String(rating) as '1' | '2' | '3' | '4' | '5';
-      const distribution = { ...prev.distribution };
-      distribution[distKey] = (distribution[distKey] || 0) + 1;
-
-      await Service.findByIdAndUpdate(booking.serviceId, {
-        $set: {
-          'rating.average': Math.round(newAverage * 10) / 10,
-          'rating.count': newCount,
-          'rating.distribution': distribution,
-        },
-      });
-    }
-  }
+  // FIX #6: DO NOT update ratings immediately - delay until review is approved by admin
+  // Rating updates are now handled in admin.controller.ts moderateReview function
+  // when the review status is set to 'approved'
 
   // Publish review received event for notifications
   eventBus.publish(EVENT_TYPES.REVIEW_RECEIVED, {

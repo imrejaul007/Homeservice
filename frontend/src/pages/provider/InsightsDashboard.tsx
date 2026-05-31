@@ -18,6 +18,9 @@ import type {
   PreventionRecommendation,
   RevenueOptimizationTip,
 } from '../../services/providerInsightsApi';
+import { useAuthStore } from '../../stores/authStore';
+import { CompetitivePosition } from '../../components/analytics/provider/CompetitivePosition';
+import { ServiceProfitability } from '../../components/analytics/provider/ServiceProfitability';
 
 // Icon components
 const TrendingUpIcon = () => (
@@ -81,6 +84,7 @@ const InsightsDashboard: React.FC = () => {
   const [period, setPeriod] = useState<Period>('month');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const { user } = useAuthStore();
 
   // Data states
   const [insights, setInsights] = useState<ProviderInsightsData | null>(null);
@@ -341,6 +345,12 @@ const InsightsDashboard: React.FC = () => {
               </div>
             ))}
           </div>
+        </div>
+
+        {/* Competitive Position & Service Profitability */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <CompetitivePosition providerId={user?._id} />
+          <ServiceProfitability providerId={user?._id} timeRange="30d" />
         </div>
 
         {/* Revenue Chart Placeholder */}

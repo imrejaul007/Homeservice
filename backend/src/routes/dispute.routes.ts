@@ -1,4 +1,5 @@
 import express, { Request, Response, NextFunction } from 'express';
+import Joi from 'joi';
 import { authenticate, requireRole } from '../middleware/auth.middleware';
 import { asyncHandler } from '../utils/asyncHandler';
 import { ApiError } from '../utils/ApiError';
@@ -13,8 +14,181 @@ import {
 import { refundService, CreateRefundDTO, ProcessRefundDTO } from '../services/refund.service';
 import { cache } from '../config/redis';
 import logger from '../utils/logger';
+import rateLimit from 'express-rate-limit';
+
+/**
+ * Rate limiter for dispute messages - prevents message flooding attacks
+ * Limits to 30 messages per minute per user per dispute
+ */
+const disputeMessageLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 30, // 30 messages per minute
+  keyGenerator: (req: Request) => {
+    const userId = (req as Request & { user?: { _id?: string } }).user?._id || 'unknown';
+    const disputeId = req.params.id || 'unknown';
+    return `dispute:msg:${userId}:${disputeId}`;
+  },
+  message: { success: false, error: 'Too many messages sent. Please slow down.' },
+  standardHeaders: true,
+  legacyHeaders: true,
+  handler: (req: Request, res: Response) => {
+    logger.warn('Dispute message rate limit exceeded', {
+      ip: req.ip,
+      disputeId: req.params.id,
+      userId: (req as Request & { user?: { _id?: string } }).user?._id,
+      action: 'DISPUTE_MESSAGE_RATE_LIMIT',
+    });
+    res.status(429).json({
+      success: false,
+      error: 'Too many messages sent. Please wait a moment before sending another message.',
+    });
+  },
+});
+
+/**
+ * Rate limiter for dispute evidence - prevents evidence flooding
+ * Limits to 10 evidence submissions per minute per user per dispute
+ */
+const disputeEvidenceLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 10, // 10 evidence items per minute
+  keyGenerator: (req: Request) => {
+    const userId = (req as Request & { user?: { _id?: string } }).user?._id || 'unknown';
+    const disputeId = req.params.id || 'unknown';
+    return `dispute:evidence:${userId}:${disputeId}`;
+  },
+  message: { success: false, error: 'Too many evidence submissions. Please slow down.' },
+  standardHeaders: true,
+  legacyHeaders: true,
+  handler: (req: Request, res: Response) => {
+    logger.warn('Dispute evidence rate limit exceeded', {
+      ip: req.ip,
+      disputeId: req.params.id,
+      userId: (req as Request & { user?: { _id?: string } }).user?._id,
+      action: 'DISPUTE_EVIDENCE_RATE_LIMIT',
+    });
+    res.status(429).json({
+      success: false,
+      error: 'Too many evidence submissions. Please wait a moment before submitting more evidence.',
+    });
+  },
+});
+
+/**
+ * Rate limiter for dispute escalation - prevents escalation abuse
+ * Limits to 3 escalations per hour per user per dispute
+ */
+const disputeEscalateLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 3, // 3 escalations per hour
+  keyGenerator: (req: Request) => {
+    const userId = (req as Request & { user?: { _id?: string } }).user?._id || 'unknown';
+    const disputeId = req.params.id || 'unknown';
+    return `dispute:escalate:${userId}:${disputeId}`;
+  },
+  message: { success: false, error: 'Too many escalation requests.' },
+  standardHeaders: true,
+  legacyHeaders: true,
+  handler: (req: Request, res: Response) => {
+    logger.warn('Dispute escalation rate limit exceeded', {
+      ip: req.ip,
+      disputeId: req.params.id,
+      userId: (req as Request & { user?: { _id?: string } }).user?._id,
+      action: 'DISPUTE_ESCALATE_RATE_LIMIT',
+    });
+    res.status(429).json({
+      success: false,
+      error: 'Too many escalation requests. Please wait before escalating this dispute again.',
+    });
+  },
+});
 
 const router = express.Router();
+
+// ============================================
+// VALIDATION SCHEMAS
+// ============================================
+
+/**
+ * Validation schema for dispute status update
+ * Status is required, reason is optional
+ */
+const updateDisputeStatusSchema = Joi.object({
+  status: Joi.string()
+    .valid('open', 'under_review', 'escalated', 'resolved', 'closed')
+    .required()
+    .messages({
+      'any.only': 'Status must be one of: open, under_review, escalated, resolved, closed',
+      'any.required': 'Status is required'
+    }),
+  reason: Joi.string().max(500).optional()
+});
+
+/**
+ * Validation schema for dispute resolution
+ * All fields are required when resolving a dispute
+ */
+const resolveDisputeSchema = Joi.object({
+  resolutionType: Joi.string()
+    .valid('refund', 'partial_refund', 'no_action', 'provider_warning', 'provider_suspended')
+    .required()
+    .messages({
+      'any.only': 'Resolution type must be one of: refund, partial_refund, no_action, provider_warning, provider_suspended',
+      'any.required': 'Resolution type is required'
+    }),
+  amount: Joi.number()
+    .min(0)
+    .optional()
+    .messages({
+      'number.min': 'Refund amount cannot be negative'
+    }),
+  reason: Joi.string()
+    .min(10)
+    .max(500)
+    .required()
+    .messages({
+      'string.min': 'Resolution reason must be at least 10 characters',
+      'string.max': 'Resolution reason cannot exceed 500 characters',
+      'any.required': 'Resolution reason is required'
+    }),
+  notes: Joi.string().max(1000).optional()
+});
+
+/**
+ * Validation middleware for dispute status updates
+ */
+const validateDisputeStatus = (req: Request, res: Response, next: NextFunction) => {
+  const { error } = updateDisputeStatusSchema.validate(req.body);
+  if (error) {
+    return res.status(400).json({
+      success: false,
+      error: 'Validation Error',
+      details: error.details.map(detail => ({
+        field: detail.path.join('.'),
+        message: detail.message
+      }))
+    });
+  }
+  return next();
+};
+
+/**
+ * Validation middleware for dispute resolution
+ */
+const validateDisputeResolution = (req: Request, res: Response, next: NextFunction) => {
+  const { error } = resolveDisputeSchema.validate(req.body);
+  if (error) {
+    return res.status(400).json({
+      success: false,
+      error: 'Validation Error',
+      details: error.details.map(detail => ({
+        field: detail.path.join('.'),
+        message: detail.message
+      }))
+    });
+  }
+  return next();
+};
 
 // ============================================
 // DISPUTE ROUTES
@@ -158,9 +332,10 @@ router.get(
  * @route   GET /api/disputes/my/:disputeId
  * @desc    Get dispute by ID for current user
  * @access  Private
+ * @note    FIX: Changed route from /my/:disputeId to /my/detail/:disputeId to avoid conflict with /:id
  */
 router.get(
-  '/my/:disputeId',
+  '/my/detail/:disputeId',
   authenticate,
   asyncHandler(async (req: Request, res: Response) => {
     const dispute = await disputeService.getDisputeById(
@@ -203,20 +378,42 @@ router.get(
  * @route   POST /api/disputes/:id/evidence
  * @desc    Add evidence to dispute
  * @access  Private (Dispute parties only)
+ * @security IDOR prevention: Verifies user is party to dispute before allowing evidence submission
+ * @security Rate limiting: 10 evidence submissions per minute per user per dispute
  */
 router.post(
   '/:id/evidence',
   authenticate,
+  disputeEvidenceLimiter,
   asyncHandler(async (req: Request, res: Response) => {
     const { type, url, description } = req.body;
+    const userId = req.user!._id.toString();
+    const userRole = req.user!.role;
 
     if (!type) {
       throw new ApiError(400, 'Evidence type is required');
     }
 
-    const dispute = await disputeService.addEvidence({
+    // IDOR PREVENTION: Verify user is party to dispute before allowing evidence submission
+    // Admins have full access, parties can only access their own disputes
+    const dispute = await disputeService.verifyDisputeAccess(
+      req.params.id,
+      userId,
+      {
+        allowAdmin: userRole === 'admin',
+        allowParties: true,
+        allowAssignee: true,
+      }
+    );
+
+    // Check if dispute is in a state that allows evidence submission
+    if (['resolved', 'closed'].includes(dispute.status)) {
+      throw new ApiError(400, 'Cannot add evidence to a closed or resolved dispute');
+    }
+
+    const updatedDispute = await disputeService.addEvidence({
       disputeId: req.params.id,
-      userId: req.user!._id.toString(),
+      userId,
       type,
       url,
       description,
@@ -224,7 +421,7 @@ router.post(
 
     res.json({
       success: true,
-      data: dispute,
+      data: updatedDispute,
       message: 'Evidence added successfully',
     });
   })
@@ -244,6 +441,13 @@ router.post(
     if (!message || message.trim().length === 0) {
       throw new ApiError(400, 'Message content is required');
     }
+
+    // IDOR check - verify user is party to dispute
+    await disputeService.verifyDisputeAccess(
+      req.params.id,
+      req.user!._id.toString(),
+      { allowAdmin: true, allowParties: true }
+    );
 
     const dispute = await disputeService.addMessage({
       disputeId: req.params.id,
@@ -298,6 +502,13 @@ router.post(
       throw new ApiError(400, 'Escalation reason is required');
     }
 
+    // IDOR check - verify user is party to dispute (admins cannot escalate)
+    await disputeService.verifyDisputeAccess(
+      req.params.id,
+      req.user!._id.toString(),
+      { allowAdmin: false, allowParties: true }
+    );
+
     const dispute = await disputeService.escalateDispute(
       req.params.id,
       req.user!._id.toString(),
@@ -322,17 +533,9 @@ router.patch(
   '/:id/status',
   authenticate,
   requireRole(['admin']),
+  validateDisputeStatus,
   asyncHandler(async (req: Request, res: Response) => {
     const { status, reason } = req.body;
-
-    if (!status) {
-      throw new ApiError(400, 'Status is required');
-    }
-
-    const validStatuses = ['open', 'under_review', 'resolved', 'escalated', 'closed'];
-    if (!validStatuses.includes(status)) {
-      throw new ApiError(400, `Invalid status. Must be one of: ${validStatuses.join(', ')}`);
-    }
 
     const dispute = await disputeService.updateStatus(
       req.params.id,
@@ -358,17 +561,9 @@ router.post(
   '/:id/resolve',
   authenticate,
   requireRole(['admin']),
+  validateDisputeResolution,
   asyncHandler(async (req: Request, res: Response) => {
     const { resolutionType, amount, reason, notes } = req.body as Omit<ResolveDisputeDTO, 'disputeId' | 'resolvedBy'>;
-
-    if (!resolutionType || !reason) {
-      throw new ApiError(400, 'Resolution type and reason are required');
-    }
-
-    const validTypes = ['refund', 'partial_refund', 'no_action', 'provider_warning', 'provider_suspended'];
-    if (!validTypes.includes(resolutionType)) {
-      throw new ApiError(400, `Invalid resolution type. Must be one of: ${validTypes.join(', ')}`);
-    }
 
     const dispute = await disputeService.resolveDispute({
       disputeId: req.params.id,
@@ -690,76 +885,6 @@ router.post(
       data: refund,
       message: 'Refund cancelled successfully',
     });
-  })
-);
-
-// ============================================
-// WEBHOOK ROUTES
-// ============================================
-
-/**
- * @route   POST /api/disputes/webhooks/stripe
- * @desc    Handle Stripe webhooks
- * @access  Public (with signature verification)
- */
-router.post(
-  '/webhooks/stripe',
-  asyncHandler(async (req: Request, res: Response) => {
-    const signature = req.headers['stripe-signature'] as string;
-
-    if (!signature) {
-      throw new ApiError(400, 'Missing Stripe signature');
-    }
-
-    // Verify webhook signature
-    const stripe = await import('stripe');
-    const stripeInstance = new stripe.default(process.env.STRIPE_SECRET_KEY || '', {
-      apiVersion: '2023-10-16' as any,
-    });
-
-    let event: any;
-
-    try {
-      event = stripeInstance.webhooks.constructEvent(
-        req.body,
-        signature,
-        process.env.STRIPE_WEBHOOK_SECRET || ''
-      );
-    } catch (err: any) {
-      logger.error('Stripe webhook signature verification failed', {
-        error: err.message,
-        action: 'WEBHOOK_SIGNATURE_VERIFICATION_FAILED',
-      });
-      throw new ApiError(400, 'Invalid Stripe signature');
-    }
-
-    // Idempotency check using Redis
-    const eventKey = `webhook:processed:${event.id}`;
-    const alreadyProcessed = await cache.get(eventKey);
-    if (alreadyProcessed) {
-      logger.info('Stripe webhook event already processed, skipping', {
-        eventId: event.id,
-        eventType: event.type,
-        action: 'WEBHOOK_IDEMPOTENT_SKIP',
-      });
-      return res.json({ received: true, duplicate: true });
-    }
-
-    // Handle refund events
-    if (event.type === 'charge.refunded') {
-      await refundService.handleStripeWebhook(event);
-    }
-
-    // Mark event as processed with 24 hour TTL
-    await cache.set(eventKey, JSON.stringify({ processed: true, timestamp: Date.now() }), 86400);
-
-    logger.info('Stripe webhook processed successfully', {
-      eventId: event.id,
-      eventType: event.type,
-      action: 'WEBHOOK_PROCESSED',
-    });
-
-    return res.json({ received: true });
   })
 );
 

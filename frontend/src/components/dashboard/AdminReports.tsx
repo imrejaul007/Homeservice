@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
 import authService from '../../services/AuthService';
 import PageLayout from '../layout/PageLayout';
+import { AdminPageShell } from '../admin/AdminPageShell';
 import {
   DollarSign,
   Calendar,
@@ -1033,13 +1034,12 @@ const AdminReports: React.FC = () => {
   );
 
   return (
-    <PageLayout
+    <AdminPageShell
       title="Admin Reports & Analytics"
       subtitle={`Analytics for ${user?.firstName || 'Admin'}`}
-      showBreadcrumb={true}
       breadcrumbItems={[
-        { label: 'Dashboard', href: '/admin/dashboard' },
-        { label: 'Reports', current: true }
+        { label: 'Admin', href: '/admin/dashboard' },
+        { label: 'Reports', current: true },
       ]}
       headerActions={
         <div className="flex items-center space-x-3">
@@ -1130,7 +1130,7 @@ const AdminReports: React.FC = () => {
           {activeTab === 'users' && renderUsersTab()}
         </>
       )}
-    </PageLayout>
+    </AdminPageShell>
   );
 };
 

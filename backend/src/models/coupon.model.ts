@@ -1,6 +1,13 @@
 import mongoose, { Schema, Document } from 'mongoose';
 
 export interface ICoupon extends Document {
+  // Multi-tenant support
+  tenantId?: mongoose.Types.ObjectId;
+
+  // Soft delete support
+  isDeleted: boolean;
+  deletedAt?: Date;
+
   code: string;
   type: 'percentage' | 'fixed' | 'free_service';
   value: number; // Percentage (0-100) or fixed amount
@@ -54,6 +61,21 @@ export interface ICoupon extends Document {
 
 const couponSchema = new Schema<ICoupon>(
   {
+    // Multi-tenant support
+    tenantId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Tenant',
+      index: true
+    },
+
+    // Soft delete support
+    isDeleted: {
+      type: Boolean,
+      default: false,
+      select: false
+    },
+    deletedAt: Date,
+
     code: {
       type: String,
       required: true,
@@ -210,6 +232,24 @@ couponSchema.methods.isValid = function(): { valid: boolean; reason?: string } {
   return { valid: true };
 };
 
+// Pre-save hook to sync currentUses from usedBy array length
+// NOTE: This is only for manual saves. Atomic operations (findOneAndUpdate with $inc)
+// should be used for production booking flows to prevent race conditions.
+// See offer.service.ts markCouponAsUsed() for atomic implementation.
+couponSchema.pre('save', function(next) {
+  // Only sync currentUses if usedBy was directly modified (not via atomic $inc)
+  // This prevents the hook from overriding atomic increments
+  if (this.isModified('usedBy') && !this.isNew) {
+    // Check if usedBy was modified via atomic push or direct assignment
+    // Direct assignment will have isModified('usedBy') true but the array length
+    // should match the atomic increment result
+    this.currentUses = this.usedBy.length;
+  } else if (this.isNew) {
+    this.currentUses = this.usedBy.length;
+  }
+  next();
+});
+
 // Calculate discount
 couponSchema.methods.calculateDiscount = function(orderValue: number): number {
   if (orderValue < this.minOrderValue) {
@@ -252,6 +292,25 @@ couponSchema.index({
   currentUses: 1,
   maxUses: 1
 });
+
+// Tenant isolation indexes
+couponSchema.index({ tenantId: 1, isActive: 1 });
+
+// Soft delete indexes
+couponSchema.index({ isDeleted: 1, createdAt: -1 });
+couponSchema.index({ tenantId: 1, isDeleted: 1 });
+
+// FIX: Add compound index for user coupon usage history queries
+couponSchema.index({ 'usedBy.userId': 1, usedAt: -1 });
+
+// FIX: Add index for target user coupons (specific users)
+couponSchema.index({ targetUsers: 1, isActive: 1 });
+
+// FIX: Add index for target service coupons
+couponSchema.index({ targetServices: 1, isActive: 1 });
+
+// FIX: Add index for featured coupons on homepage
+couponSchema.index({ featured: 1, isActive: 1, validUntil: 1 });
 
 // Partial index for active non-expired coupons (MongoDB 3.2+)
 // Note: code already has index from field definition above

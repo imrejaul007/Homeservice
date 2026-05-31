@@ -41,11 +41,11 @@ process.on('unhandledRejection', (reason: any, promise: Promise<any>) => {
 const gracefulShutdown = async (signal: string) => {
   logger.info(`${signal} received. Starting graceful shutdown...`);
 
-  // Close Socket.io connections
+  // Close Socket.io connections (including Redis adapter if enabled)
   const socketServer = await import('./socket');
   const io = socketServer.getSocketServer();
   if (io) {
-    io.getIO().close();
+    await io.shutdown();
     logger.info('Socket.io server closed');
   }
 

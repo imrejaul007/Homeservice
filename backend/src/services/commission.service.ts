@@ -1,4 +1,4 @@
-import mongoose, { Types } from 'mongoose';
+import mongoose, { Types, ClientSession } from 'mongoose';
 import { Commission, CommissionRule, ICommission, ICommissionRule, ICommissionTier } from '../models/commission.model';
 import Booking from '../models/booking.model';
 import Service from '../models/service.model';
@@ -196,15 +196,6 @@ export class CommissionService {
           : input.categoryId
         : undefined;
 
-      // Check if commission already exists for this booking
-      const existingCommission = await Commission.findOne({ bookingId });
-      if (existingCommission) {
-        return {
-          success: false,
-          error: 'Commission already calculated for this booking',
-        };
-      }
-
       // Get booking details
       const booking = await Booking.findById(bookingId).populate('customerId');
       if (!booking) {
@@ -360,22 +351,55 @@ export class CommissionService {
         },
       });
 
-      await commission.save();
+      // FIX: Wrap check + create in transaction to prevent race conditions
+      const session = await mongoose.startSession();
+      let transactionSuccess = false;
+      try {
+        session.startTransaction();
 
-      logger.info('Commission calculated', {
-        commissionId: commission._id,
-        bookingId,
-        providerId,
-        grossAmount,
-        commissionAmount,
-        providerEarnings,
-        ruleName,
-      });
+        // Check inside transaction to prevent race condition
+        const existingCommission = await Commission.findOne({ bookingId }).session(session);
+        if (existingCommission) {
+          await session.abortTransaction();
+          transactionSuccess = true;
+          return {
+            success: false,
+            error: 'Commission already calculated for this booking',
+          };
+        }
 
-      return {
-        success: true,
-        commission,
-      };
+        await commission.save({ session });
+        await session.commitTransaction();
+        transactionSuccess = true;
+
+        logger.info('Commission calculated', {
+          commissionId: commission._id,
+          bookingId,
+          providerId,
+          grossAmount,
+          commissionAmount,
+          providerEarnings,
+          ruleName,
+        });
+
+        return {
+          success: true,
+          commission,
+        };
+      } catch (error) {
+        if (!transactionSuccess) {
+          await session.abortTransaction();
+        }
+        logger.error('Error calculating commission', { error, input });
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : 'Failed to calculate commission',
+        };
+      } finally {
+        if (session && !session.hasEnded) {
+          await session.endSession();
+        }
+      }
     } catch (error) {
       logger.error('Error calculating commission', { error, input });
       return {
@@ -607,6 +631,7 @@ export class CommissionService {
 
   /**
    * Adjust commission (bonus, penalty, or correction)
+   * HIGH SEVERITY FIX: Wrapped in transaction to ensure atomicity with CommissionHistory
    */
   async adjustCommission(
     commissionId: string | Types.ObjectId,
@@ -618,20 +643,29 @@ export class CommissionService {
     adjustedBy: string | Types.ObjectId,
     adjustedByRole: 'admin' | 'provider'
   ): Promise<{ success: boolean; commission?: ICommission; error?: string }> {
+    const session = await mongoose.startSession();
     try {
+      session.startTransaction();
+
       const commissionObjectId =
         typeof commissionId === 'string' ? new Types.ObjectId(commissionId) : commissionId;
       const adjustedByObjectId = typeof adjustedBy === 'string' ? new Types.ObjectId(adjustedBy) : adjustedBy;
 
-      const commission = await Commission.findById(commissionObjectId);
+      const commission = await Commission.findById(commissionObjectId).session(session);
       if (!commission) {
+        await session.abortTransaction();
         return { success: false, error: 'Commission not found' };
       }
 
       // Cannot adjust paid commissions
       if (commission.status === 'paid') {
+        await session.abortTransaction();
         return { success: false, error: 'Cannot adjust paid commissions' };
       }
+
+      // Store previous values for history
+      const previousStatus = commission.status;
+      const previousEarnings = commission.providerEarnings;
 
       // Apply adjustment
       commission.adjustment = {
@@ -645,21 +679,51 @@ export class CommissionService {
       // Recalculate earnings
       (commission as any).recalculateEarnings();
 
-      await commission.save();
+      // Create CommissionHistory entry
+      const CommissionHistory = mongoose.model('CommissionHistory');
+      const historyEntry = new CommissionHistory({
+        commissionId: commission._id,
+        previousStatus,
+        previousEarnings,
+        newStatus: commission.status,
+        newEarnings: commission.providerEarnings,
+        adjustment: {
+          type: adjustment.type,
+          amount: adjustment.amount,
+          reason: adjustment.reason,
+        },
+        adjustedBy: adjustedByObjectId,
+        adjustedByRole,
+        adjustedAt: new Date(),
+      });
+      await historyEntry.save({ session });
 
-      logger.info('Commission adjusted', {
+      // Save commission
+      await commission.save({ session });
+
+      await session.commitTransaction();
+
+      logger.info('Commission adjusted with history', {
         commissionId: commission._id,
         adjustment,
         newEarnings: commission.providerEarnings,
+        historyId: historyEntry._id,
       });
 
       return { success: true, commission };
     } catch (error) {
+      if (session && session.hasEnded === false) {
+        await session.abortTransaction();
+      }
       logger.error('Error adjusting commission', { error, commissionId, adjustment });
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to adjust commission',
       };
+    } finally {
+      if (session && session.hasEnded === false) {
+        await session.endSession();
+      }
     }
   }
 

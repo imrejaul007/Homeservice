@@ -1,8 +1,9 @@
 import { Router, Request, Response } from 'express';
-import { authenticate } from '../middleware/auth.middleware';
+import { authenticate, requireRole } from '../middleware/auth.middleware';
 import { asyncHandler } from '../utils/asyncHandler';
 import { ApiError } from '../utils/ApiError';
 import { fraudDetectionService, FraudReport, SuspiciousActivity } from '../services/fraudDetection.service';
+import { IUser } from '../models/user.model';
 
 const router = Router();
 
@@ -11,7 +12,7 @@ const router = Router();
  * @desc    Analyze a specific provider for fraud indicators
  * @access  Admin
  */
-router.get('/analyze/:providerId', authenticate, asyncHandler(async (req: Request, res: Response) => {
+router.get('/analyze/:providerId', authenticate, requireRole(['admin']), asyncHandler(async (req: Request, res: Response) => {
   const { providerId } = req.params;
 
   if (!providerId) {
@@ -31,7 +32,7 @@ router.get('/analyze/:providerId', authenticate, asyncHandler(async (req: Reques
  * @desc    Get fraud detection statistics
  * @access  Admin
  */
-router.get('/stats', authenticate, asyncHandler(async (_req: Request, res: Response) => {
+router.get('/stats', authenticate, requireRole(['admin']), asyncHandler(async (_req: Request, res: Response) => {
   const stats = await fraudDetectionService.getFraudStats();
 
   res.json({
@@ -45,7 +46,7 @@ router.get('/stats', authenticate, asyncHandler(async (_req: Request, res: Respo
  * @desc    Flag suspicious activity for a provider
  * @access  Admin
  */
-router.post('/flag/:providerId', authenticate, asyncHandler(async (req: Request, res: Response) => {
+router.post('/flag/:providerId', authenticate, requireRole(['admin']), asyncHandler(async (req: Request, res: Response) => {
   const { providerId } = req.params;
   const { type, severity, description, evidence } = req.body;
 
@@ -79,10 +80,10 @@ router.post('/flag/:providerId', authenticate, asyncHandler(async (req: Request,
  * @desc    Resolve a fraud flag
  * @access  Admin
  */
-router.post('/resolve/:providerId/:flagId', authenticate, asyncHandler(async (req: Request, res: Response) => {
+router.post('/resolve/:providerId/:flagId', authenticate, requireRole(['admin']), asyncHandler(async (req: Request, res: Response) => {
   const { providerId, flagId } = req.params;
   const { resolution } = req.body;
-  const adminId = (req.user as any)?._id?.toString();
+  const adminId = (req.user as IUser)?._id?.toString();
 
   if (!resolution) {
     throw new ApiError(400, 'Resolution is required');
@@ -101,7 +102,7 @@ router.post('/resolve/:providerId/:flagId', authenticate, asyncHandler(async (re
  * @desc    Batch analyze multiple providers
  * @access  Admin
  */
-router.post('/batch-analyze', authenticate, asyncHandler(async (req: Request, res: Response) => {
+router.post('/batch-analyze', authenticate, requireRole(['admin']), asyncHandler(async (req: Request, res: Response) => {
   const { providerIds } = req.body;
 
   if (!providerIds || !Array.isArray(providerIds) || providerIds.length === 0) {
@@ -129,7 +130,7 @@ router.post('/batch-analyze', authenticate, asyncHandler(async (req: Request, re
  * @desc    Generate fraud report for a provider
  * @access  Admin
  */
-router.get('/report/:providerId', authenticate, asyncHandler(async (req: Request, res: Response) => {
+router.get('/report/:providerId', authenticate, requireRole(['admin']), asyncHandler(async (req: Request, res: Response) => {
   const { providerId } = req.params;
 
   const report: FraudReport = await fraudDetectionService.generateFraudReport(providerId);
@@ -145,7 +146,7 @@ router.get('/report/:providerId', authenticate, asyncHandler(async (req: Request
  * @desc    Get fraud overview for dashboard
  * @access  Admin
  */
-router.get('/overview', authenticate, asyncHandler(async (_req: Request, res: Response) => {
+router.get('/overview', authenticate, requireRole(['admin']), asyncHandler(async (_req: Request, res: Response) => {
   const stats = await fraudDetectionService.getFraudStats();
 
   res.json({
@@ -167,7 +168,7 @@ router.get('/overview', authenticate, asyncHandler(async (_req: Request, res: Re
  * @desc    Get fraud pattern configuration
  * @access  Admin
  */
-router.get('/patterns', authenticate, asyncHandler(async (_req: Request, _res: Response) => {
+router.get('/patterns', authenticate, requireRole(['admin']), asyncHandler(async (_req: Request, _res: Response) => {
   // Return fraud patterns configuration (read-only)
   const patterns = [
     { id: 'duplicate_accounts', name: 'Duplicate Account Detection', severity: 'high' },

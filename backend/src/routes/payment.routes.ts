@@ -5,6 +5,7 @@ import {
   getPaymentStatus,
   createRefund,
 } from '../services/payment.service';
+import { bookingService } from '../services/booking.service';
 import { asyncHandler } from '../utils/asyncHandler';
 import { ApiError } from '../utils/ApiError';
 import logger from '../utils/logger';
@@ -13,6 +14,8 @@ import { paymentLimiter } from '../middleware/rateLimiter';
 import { cache } from '../config/redis';
 import crypto from 'crypto';
 import Joi from 'joi';
+import Booking from '../models/booking.model';
+import { IUser } from '../models/user.model';
 
 const router = Router();
 
@@ -56,7 +59,8 @@ router.post('/create-intent', paymentLimiter, authenticate, asyncHandler(async (
   }
 
   const { bookingId } = value;
-  const userId = (req.user as any)._id;
+  const user = req.user as IUser;
+  const userId = user._id;
 
   // Get or generate idempotency key
   const idempotencyKey = (req.headers['idempotency-key'] as string) || crypto.randomUUID();
@@ -108,9 +112,60 @@ router.post('/create-intent', paymentLimiter, authenticate, asyncHandler(async (
 }));
 
 /**
+ * @route   POST /api/payments/heartbeat
+ * @desc    Extend slot lock TTL during long checkout/payment processes
+ * @access  Private (Customer)
+ * @security Verifies user owns the booking before extending lock
+ */
+router.post('/heartbeat', paymentLimiter, authenticate, asyncHandler(async (req: Request, res: Response) => {
+  const heartbeatSchema = Joi.object({
+    bookingId: Joi.string().required().messages({
+      'string.empty': 'Booking ID is required',
+      'any.required': 'Booking ID is required',
+    }),
+    sessionId: Joi.string().required().messages({
+      'string.empty': 'Session ID is required',
+      'any.required': 'Session ID is required',
+    }),
+  });
+
+  const { error, value } = heartbeatSchema.validate(req.body);
+  if (error) {
+    throw new ApiError(400, error.details[0].message);
+  }
+
+  const { bookingId, sessionId } = value;
+  const user = req.user as IUser;
+
+  // Verify user owns the booking
+  const booking = await Booking.findById(bookingId).lean();
+  if (!booking) {
+    throw new ApiError(404, 'Booking not found');
+  }
+
+  // Check if user is the customer (owner) or the assigned provider
+  const isCustomer = booking.customerId?.toString() === user._id.toString();
+  const isProvider = booking.providerId.toString() === user._id.toString();
+
+  if (!isCustomer && !isProvider && user.role !== 'admin') {
+    throw new ApiError(403, 'You do not have permission to extend this slot lock');
+  }
+
+  const result = await bookingService.extendSlotLockHeartbeat(bookingId, sessionId);
+
+  res.json({
+    success: result.success,
+    message: result.message,
+    expiresIn: result.success ? 900 : 0, // SLOT_LOCK_TTL_SECONDS or 0 if failed
+  });
+  return;
+}));
+
+/**
  * @route   GET /api/payments/status/:bookingId
  * @desc    Get payment status for a booking
- * @access  Private
+ * @access  Private (Customer or Provider owning the booking, or Admin)
+ * @security Ownership check: Only booking owner (customer) or assigned provider can view payment status
  */
 router.get('/status/:bookingId', authenticate, asyncHandler(async (req: Request, res: Response) => {
   const { error, value } = bookingIdParamSchema.validate(req.params);
@@ -119,6 +174,25 @@ router.get('/status/:bookingId', authenticate, asyncHandler(async (req: Request,
   }
 
   const { bookingId } = value;
+  const user = req.user as IUser;
+
+  // SECURITY FIX: Verify user owns the booking or is the assigned provider
+  // Admins can view any booking's payment status
+  if (user.role !== 'admin') {
+    const booking = await Booking.findById(bookingId).lean();
+
+    if (!booking) {
+      throw new ApiError(404, 'Booking not found');
+    }
+
+    // Check if user is the customer (owner) or the assigned provider
+    const isCustomer = booking.customerId?.toString() === user._id.toString();
+    const isProvider = booking.providerId.toString() === user._id.toString();
+
+    if (!isCustomer && !isProvider) {
+      throw new ApiError(403, 'You do not have permission to view this payment status');
+    }
+  }
 
   const status = await getPaymentStatus(bookingId);
 
@@ -131,7 +205,8 @@ router.get('/status/:bookingId', authenticate, asyncHandler(async (req: Request,
 /**
  * @route   POST /api/payments/refund/:bookingId
  * @desc    Create a refund for a booking
- * @access  Private (Admin or Provider)
+ * @access  Private (Admin or Provider who owns the booking)
+ * @security Ownership check: Provider can only refund their own bookings
  */
 router.post('/refund/:bookingId', paymentLimiter, authenticate, asyncHandler(async (req: Request, res: Response) => {
   const paramsError = bookingIdParamSchema.validate(req.params);
@@ -146,11 +221,32 @@ router.post('/refund/:bookingId', paymentLimiter, authenticate, asyncHandler(asy
   }
 
   const { amount } = value;
-  const user = req.user as any;
+  const user = req.user as IUser;
 
   // Only admin or provider can issue refunds
   if (user.role !== 'admin' && user.role !== 'provider') {
     throw new ApiError(403, 'Not authorized to issue refunds');
+  }
+
+  // SECURITY FIX: Verify provider owns the booking being refunded
+  // Admins can refund any booking, but providers can only refund their own
+  if (user.role === 'provider') {
+    const booking = await Booking.findById(bookingId).lean();
+
+    if (!booking) {
+      throw new ApiError(404, 'Booking not found');
+    }
+
+    // Provider can only refund bookings assigned to them
+    if (booking.providerId.toString() !== user._id.toString()) {
+      logger.warn('Provider attempted to refund booking they do not own', {
+        action: 'UNAUTHORIZED_REFUND_ATTEMPT',
+        bookingId,
+        providerId: user._id.toString(),
+        bookingProviderId: booking.providerId.toString(),
+      });
+      throw new ApiError(403, 'You can only refund your own bookings');
+    }
   }
 
   // Get or generate idempotency key

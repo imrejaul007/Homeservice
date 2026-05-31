@@ -13,6 +13,7 @@ import Service from '../models/service.model';
 import ServiceCategory from '../models/serviceCategory.model';
 import BookingNotification from '../models/bookingNotification.model';
 import { ApiError, ERROR_CODES } from '../utils/ApiError';
+import { IUser } from '../models/user.model';
 
 const router = Router();
 
@@ -60,7 +61,7 @@ router.get(
           .select('-__v')
           .lean(),
         BookingNotification.find({
-          recipientId: (req.user as any)?._id,
+          recipientId: (req.user as IUser)?._id,
           createdAt: { $gt: sinceDate },
         })
           .lean(),
@@ -113,7 +114,7 @@ router.post(
       }
 
       const { actions } = req.body;
-      const userId = (req.user as any)?._id;
+      const userId = (req.user as IUser)?._id;
 
       const results: Array<{
         clientId: string;

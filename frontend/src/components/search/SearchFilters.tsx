@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Filter, X, MapPin, DollarSign, Star, ChevronDown } from 'lucide-react';
-import { useSearchStore } from '@/store/searchStore';
+import { useSearchStore } from '@/stores/searchStore';
 import { useCategories } from '@/hooks/useCategories';
 import { cn } from '@/lib/utils';
 

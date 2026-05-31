@@ -54,6 +54,14 @@ export interface CreateBookingData {
 
   // Coupon/Promo
   couponCode?: string;
+
+  // Metadata for tracking and idempotency
+  metadata?: {
+    idempotencyKey?: string;
+    bookingSource?: string;
+    deviceType?: string;
+    sessionId?: string;
+  };
 }
 
 export interface Booking {
@@ -103,9 +111,10 @@ export interface Booking {
     basePrice: number;
     addOns: BookingAddOn[];
     subtotal: number;
-    taxes: number;
-    total: number;
-    totalAmount: number; // Add missing totalAmount property
+    tax: number; // FIX: Backend uses 'tax' not 'taxes'
+    taxes?: number; // Legacy - some code uses this
+    totalAmount: number;
+    total?: number; // Legacy - some code uses this
     currency: string;
   };
 

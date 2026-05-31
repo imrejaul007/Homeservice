@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { api } from '../../services/api';
 import { ErrorBoundary } from '../../components/common/ErrorBoundary';
+import { AdminPageShell } from '../../components/admin/AdminPageShell';
 
 interface MaintenanceSettings {
   maintenanceMode: boolean;
@@ -102,15 +103,15 @@ const MaintenanceMode: React.FC = () => {
 
   return (
     <ErrorBoundary>
-      <div className="min-h-screen bg-gray-100 p-6">
-        <div className="max-w-3xl mx-auto">
-          {/* Header */}
-        <div className="mb-6">
-          <h1 className="text-2xl font-bold text-gray-900">Maintenance Mode</h1>
-          <p className="text-gray-600 mt-1">
-            Control platform availability for users during maintenance windows.
-          </p>
-        </div>
+      <AdminPageShell
+        title="Maintenance Mode"
+        subtitle="Control platform availability during maintenance windows"
+        breadcrumbItems={[
+          { label: 'Admin', href: '/admin/dashboard' },
+          { label: 'Maintenance', current: true },
+        ]}
+      >
+        <div className="max-w-3xl">
 
         {/* Status Card */}
         <div className={`rounded-lg shadow p-6 mb-6 ${
@@ -317,8 +318,8 @@ const MaintenanceMode: React.FC = () => {
             <li>API requests from non-admin users will return 503 status.</li>
           </ul>
         </div>
-      </div>
-    </div>
+        </div>
+      </AdminPageShell>
     </ErrorBoundary>
   );
 };

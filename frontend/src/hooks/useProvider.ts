@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { providerApi } from '@/services/providerApi';
 import type { GetProvidersOptions } from '@/services/providerApi';
 import type { Provider, ProviderCard } from '@/types/provider';
+import { cacheManager } from '@/lib/CacheManager';
 
 // ===================================
 // Hook to fetch single provider by ID
@@ -12,6 +13,9 @@ interface UseProviderState {
   isLoading: boolean;
   error: string | null;
 }
+
+// Cache TTL for provider data (5 minutes)
+const PROVIDER_CACHE_TTL = 5 * 60 * 1000;
 
 export function useProvider(id: string | undefined): UseProviderState & { refetch: () => Promise<void> } {
   const [state, setState] = useState<UseProviderState>({
@@ -26,9 +30,23 @@ export function useProvider(id: string | undefined): UseProviderState & { refetc
       return;
     }
 
+    // Check client-side cache first (MAJOR PERFORMANCE FIX)
+    const cacheKey = `provider:${id}`;
+    const cachedProvider = cacheManager.get<Provider>(cacheKey);
+    if (cachedProvider) {
+      setState({
+        provider: cachedProvider,
+        isLoading: false,
+        error: null,
+      });
+      return;
+    }
+
     setState(prev => ({ ...prev, isLoading: true, error: null }));
     try {
       const response = await providerApi.getProviderById(id);
+      // Cache the result for 5 minutes
+      cacheManager.set(cacheKey, response.data.provider, PROVIDER_CACHE_TTL);
       setState({
         provider: response.data.provider,
         isLoading: false,

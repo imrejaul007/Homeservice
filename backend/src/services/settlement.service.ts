@@ -201,6 +201,8 @@ export const calculateNetPayable = (
 
 /**
  * Generate a settlement for a provider
+ * FIX: Use atomic findOneAndUpdate with upsert to prevent race condition
+ * The $setOnInsert operator ensures we only create if the document doesn't exist
  */
 export const generateSettlement = async (
   providerId: string,
@@ -208,17 +210,6 @@ export const generateSettlement = async (
   periodEnd: Date
 ): Promise<SettlementResult> => {
   const providerObjectId = new Types.ObjectId(providerId);
-
-  // Check if settlement already exists for this period
-  const existing = await Settlement.findOne({
-    providerId: providerObjectId,
-    periodStart,
-    periodEnd,
-  });
-
-  if (existing) {
-    throw new ApiError(409, 'Settlement already exists for this period');
-  }
 
   // Get all completed bookings in the period
   const bookings = await Booking.find({
@@ -260,8 +251,25 @@ export const generateSettlement = async (
 
   const netAmount = grossAmount - totalCommission - totalPlatformFee;
 
-  // Create settlement
-  const settlement = new Settlement({
+  // FIX: Generate settlement number first (atomic counter)
+  const date = new Date();
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const counterKey = `settlement-${year}${month}`;
+
+  // Get atomic sequence number
+  const sequenceResult = await mongoose.model('Counter').findOneAndUpdate(
+    { _id: counterKey },
+    { $inc: { seq: 1 } },
+    { new: true, upsert: true, returnDocument: 'after' }
+  );
+  const sequenceNumber = sequenceResult?.seq || 1;
+  const settlementNumber = `STL-${year}${month}-${String(sequenceNumber).padStart(4, '0')}`;
+
+  // FIX: Use atomic findOneAndUpdate with upsert to prevent race condition
+  // $setOnInsert only applies when creating a new document
+  // This combines the check and create into a single atomic operation
+  const settlementData = {
     providerId: providerObjectId,
     periodStart,
     periodEnd,
@@ -273,13 +281,48 @@ export const generateSettlement = async (
     deductions: [],
     status: 'pending',
     currency: 'AED',
-  });
+    settlementNumber, // Pre-generate to avoid pre-save hook race condition
+  };
 
-  await settlement.save();
+  // Use findOneAndUpdate with upsert to atomically prevent duplicate settlements
+  // Returns the document (existing or newly created)
+  const settlementDoc = await Settlement.findOneAndUpdate(
+    {
+      providerId: providerObjectId,
+      periodStart,
+      periodEnd,
+    },
+    {
+      $setOnInsert: settlementData
+    },
+    {
+      upsert: true,
+      new: true,
+      setDefaultsOnInsert: true,
+    }
+  );
+
+  // If the returned document has a settlementNumber, check if it was pre-existing
+  // by comparing with the one we just generated
+  // Note: $setOnInsert only sets fields on insert, so existing docs won't have our settlementNumber
+  if (settlementDoc.settlementNumber !== settlementNumber) {
+    // Document already existed with a different settlementNumber
+    // Another process created it first - race condition prevented!
+    logger.info('Settlement already exists for this period (atomic upsert prevented duplicate)', {
+      providerId,
+      periodStart,
+      periodEnd,
+      action: 'SETTLEMENT_DUPLICATE_PREVENTED',
+    });
+    throw new ApiError(409, 'Settlement already exists for this period');
+  }
+
+  // New settlement created
+  const settlementId = settlementDoc._id.toString();
 
   logger.info('Settlement generated', {
-    settlementId: settlement._id,
-    settlementNumber: settlement.settlementNumber,
+    settlementId,
+    settlementNumber,
     providerId,
     periodStart,
     periodEnd,
@@ -290,12 +333,12 @@ export const generateSettlement = async (
   });
 
   return {
-    settlementId: settlement._id.toString(),
-    settlementNumber: settlement.settlementNumber,
-    grossAmount: settlement.grossAmount,
-    commission: settlement.commission,
-    platformFee: settlement.platformFee,
-    netAmount: settlement.netAmount,
+    settlementId,
+    settlementNumber,
+    grossAmount: Math.round(grossAmount * 100) / 100,
+    commission: Math.round(totalCommission * 100) / 100,
+    platformFee: Math.round(totalPlatformFee * 100) / 100,
+    netAmount: Math.round(netAmount * 100) / 100,
     lineItems: bookings.length,
   };
 };
@@ -809,6 +852,237 @@ export const getSettlementSummary = async (
 };
 
 // ===================================
+// BOOKING COMPLETION PROCESSING
+// ===================================
+
+/**
+ * Process booking completion - add provider earnings to pending balance
+ * This is the critical money flow function that ensures providers receive their money
+ */
+export const processBookingCompletion = async (bookingId: string): Promise<{
+  success: boolean;
+  providerEarnings: number;
+  commission: number;
+  platformFee: number;
+  settlementId?: string;
+}> => {
+  try {
+    // 1. Fetch booking
+    const booking = await Booking.findById(bookingId);
+
+    if (!booking) {
+      throw new ApiError(404, 'Booking not found');
+    }
+
+    // Only process completed bookings
+    if (booking.status !== 'completed') {
+      logger.warn('Attempted to process non-completed booking', {
+        bookingId,
+        status: booking.status,
+        action: 'SETTLEMENT_SKIP_NON_COMPLETED',
+      });
+      return {
+        success: false,
+        providerEarnings: 0,
+        commission: 0,
+        platformFee: 0,
+      };
+    }
+
+    // 2. Calculate commission
+    const { commission, platformFee, netAmount: providerEarnings } = await calculateCommission(bookingId);
+
+    // 3. Get or create provider wallet and update pending balance
+    const Wallet = mongoose.model('Wallet');
+    const providerWallet = await Wallet.findOne({ userId: booking.providerId });
+
+    if (!providerWallet) {
+      // Create wallet if it doesn't exist
+      const newWallet = new Wallet({
+        userId: booking.providerId,
+        balance: 0,
+        pendingBalance: providerEarnings,
+        currency: 'AED',
+        transactions: [{
+          id: new mongoose.Types.ObjectId().toString(),
+          type: 'credit',
+          amount: providerEarnings,
+          description: `Earnings from booking ${booking.bookingNumber}`,
+          reference: bookingId,
+          referenceType: 'commission',
+          status: 'completed',
+          balanceAfter: providerEarnings,
+          createdAt: new Date(),
+        }],
+        totalEarned: providerEarnings,
+      });
+      await newWallet.save();
+
+      logger.info('Created new wallet for provider', {
+        providerId: booking.providerId.toString(),
+        amount: providerEarnings,
+        bookingId,
+        action: 'WALLET_CREATED',
+      });
+    } else {
+      // Update existing wallet atomically
+      await Wallet.findOneAndUpdate(
+        { userId: booking.providerId },
+        {
+          $inc: {
+            pendingBalance: providerEarnings,
+            totalEarned: providerEarnings,
+          },
+          $push: {
+            transactions: {
+              $each: [{
+                id: new mongoose.Types.ObjectId().toString(),
+                type: 'credit',
+                amount: providerEarnings,
+                description: `Earnings from booking ${booking.bookingNumber}`,
+                reference: bookingId,
+                referenceType: 'commission',
+                status: 'completed',
+                balanceAfter: (providerWallet.pendingBalance || 0) + providerEarnings,
+                createdAt: new Date(),
+              }],
+              $position: 0, // Add to beginning of array
+            },
+          },
+        }
+      );
+
+      logger.info('Updated provider pending balance', {
+        providerId: booking.providerId.toString(),
+        amount: providerEarnings,
+        newPendingBalance: (providerWallet.pendingBalance || 0) + providerEarnings,
+        bookingId,
+        action: 'PENDING_BALANCE_UPDATED',
+      });
+    }
+
+    // 4. Create individual booking settlement record
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const counterKey = `booking-settlement-${year}${month}`;
+
+    // Get atomic sequence number
+    const sequenceResult = await mongoose.model('Counter').findOneAndUpdate(
+      { _id: counterKey },
+      { $inc: { seq: 1 } },
+      { new: true, upsert: true, returnDocument: 'after' }
+    );
+    const sequenceNumber = sequenceResult?.seq || 1;
+    const settlementNumber = `BS-${year}${month}-${String(sequenceNumber).padStart(6, '0')}`;
+
+    const settlement = await Settlement.create({
+      providerId: booking.providerId,
+      periodStart: now,
+      periodEnd: now,
+      grossAmount: booking.pricing.totalAmount,
+      commission,
+      platformFee,
+      netAmount: providerEarnings,
+      lineItems: [{
+        bookingId: booking._id,
+        bookingNumber: booking.bookingNumber,
+        date: now,
+        grossAmount: booking.pricing.totalAmount,
+        commissionAmount: commission,
+        platformFeeAmount: platformFee,
+        netAmount: providerEarnings,
+        status: 'included',
+      }],
+      deductions: [],
+      status: 'pending',
+      currency: 'AED',
+      settlementNumber,
+    });
+
+    logger.info('Booking settlement created', {
+      settlementId: settlement._id.toString(),
+      settlementNumber,
+      providerId: booking.providerId.toString(),
+      bookingId,
+      grossAmount: booking.pricing.totalAmount,
+      commission,
+      platformFee,
+      netAmount: providerEarnings,
+      action: 'BOOKING_SETTLEMENT_CREATED',
+    });
+
+    return {
+      success: true,
+      providerEarnings,
+      commission,
+      platformFee,
+      settlementId: settlement._id.toString(),
+    };
+  } catch (error) {
+    logger.error('Failed to process booking completion', {
+      bookingId,
+      error: error instanceof Error ? error.message : String(error),
+      action: 'SETTLEMENT_PROCESS_ERROR',
+    });
+    throw error;
+  }
+};
+
+/**
+ * Get provider's pending balance and recent settlements
+ */
+export const getProviderWalletSummary = async (providerId: string): Promise<{
+  balance: number;
+  pendingBalance: number;
+  totalEarned: number;
+  totalSpent: number;
+  recentSettlements: Array<{
+    settlementId: string;
+    settlementNumber: string;
+    amount: number;
+    status: string;
+    createdAt: Date;
+  }>;
+}> => {
+  const Wallet = mongoose.model('Wallet');
+  const wallet = await Wallet.findOne({ userId: new mongoose.Types.ObjectId(providerId) });
+
+  if (!wallet) {
+    return {
+      balance: 0,
+      pendingBalance: 0,
+      totalEarned: 0,
+      totalSpent: 0,
+      recentSettlements: [],
+    };
+  }
+
+  // Get recent settlements for this provider
+  const recentSettlements = await Settlement.find({
+    providerId: new mongoose.Types.ObjectId(providerId),
+  })
+    .sort({ createdAt: -1 })
+    .limit(10)
+    .select('_id settlementNumber netAmount status createdAt')
+    .lean();
+
+  return {
+    balance: wallet.balance,
+    pendingBalance: wallet.pendingBalance,
+    totalEarned: wallet.totalEarned,
+    totalSpent: wallet.totalSpent,
+    recentSettlements: recentSettlements.map(s => ({
+      settlementId: s._id.toString(),
+      settlementNumber: s.settlementNumber,
+      amount: s.netAmount,
+      status: s.status,
+      createdAt: s.createdAt,
+    })),
+  };
+};
+
+// ===================================
 // EXPORTS
 // ===================================
 
@@ -823,6 +1097,10 @@ export default {
 
   // Net payable
   calculateNetPayable,
+
+  // Booking completion processing
+  processBookingCompletion,
+  getProviderWalletSummary,
 
   // Generation
   generateSettlement,

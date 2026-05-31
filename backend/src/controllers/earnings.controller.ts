@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import mongoose, { Types } from 'mongoose';
+import Joi from 'joi';
 import { commissionService } from '../services/commission.service';
 import { taxService } from '../services/taxService';
 import { earningsReportService } from '../services/earningsReport.service';
@@ -114,17 +115,52 @@ export const getCommissionSummary = asyncHandler(async (req: Request, res: Respo
   sendSuccess(res, summary);
 });
 
+// ============================================
+// COMMISSION VALIDATION SCHEMAS
+// ============================================
+
+const adjustCommissionSchema = Joi.object({
+  type: Joi.string().valid('bonus', 'penalty', 'correction').required().messages({
+    'any.only': 'Type must be one of: bonus, penalty, correction',
+    'any.required': 'Type is required',
+  }),
+  amount: Joi.number().min(-10000).max(10000).required().messages({
+    'number.min': 'Amount cannot be less than -10000',
+    'number.max': 'Amount cannot exceed 10000',
+    'any.required': 'Amount is required',
+  }),
+  reason: Joi.string().min(10).max(500).required().messages({
+    'string.min': 'Reason must be at least 10 characters',
+    'string.max': 'Reason cannot exceed 500 characters',
+    'any.required': 'Reason is required',
+  }),
+});
+
+const updateCommissionStatusSchema = Joi.object({
+  status: Joi.string()
+    .valid('pending', 'approved', 'paid', 'cancelled', 'disputed')
+    .required()
+    .messages({
+      'any.only': 'Status must be one of: pending, approved, paid, cancelled, disputed',
+      'any.required': 'Status is required',
+    }),
+  reason: Joi.string().max(500).optional(),
+});
+
 /**
  * Adjust a commission
  * POST /api/earnings/commissions/:id/adjust
  */
 export const adjustCommission = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
-  const { type, amount, reason } = req.body;
 
-  if (!type || amount === undefined || !reason) {
-    return sendError(res, 'Missing required fields: type, amount, reason', 400);
+  // Validate request body with Joi schema
+  const { error, value } = adjustCommissionSchema.validate(req.body);
+  if (error) {
+    return sendError(res, error.details[0].message, 400);
   }
+
+  const { type, amount, reason } = value;
 
   // Only admin can adjust commissions
   if (req.user?.role !== 'admin') {
@@ -151,11 +187,14 @@ export const adjustCommission = asyncHandler(async (req: Request, res: Response)
  */
 export const updateCommissionStatus = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
-  const { status, reason } = req.body;
 
-  if (!status) {
-    return sendError(res, 'Status is required', 400);
+  // Validate request body with Joi schema
+  const { error, value } = updateCommissionStatusSchema.validate(req.body);
+  if (error) {
+    return sendError(res, error.details[0].message, 400);
   }
+
+  const { status, reason } = value;
 
   // Only admin can update commission status
   if (req.user?.role !== 'admin') {

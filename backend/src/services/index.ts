@@ -6,6 +6,14 @@ export { bookingService, BookingService } from './booking.service';
 export { providerService, ProviderService } from './provider.service';
 export { notificationService, NotificationService } from './notification.service';
 
+// Chat service exports
+export { chatService, ChatService } from './chat.service';
+export type { SendMessageInput, GetMessagesOptions, ChatRoomWithParticipants } from './chat.service';
+
+// Chat moderation service exports
+export { chatModerationService } from './chatModeration.service';
+export type { ModerationResult, SpamCheckResult } from './chatModeration.service';
+
 // Provider AI Insights exports
 export {
   getProviderInsights,
@@ -243,3 +251,63 @@ export {
   LaunchReadiness,
   ReadinessItem,
 } from './demoService';
+
+// ============================================
+// Notification services (notifications subdirectory)
+export * from './notifications/index';
+
+// Chat services - exported above via named exports
+
+// PDF & Document services
+export { default as pdfService } from './pdf.service';
+export { default as invoiceService } from './invoice.service';
+export { default as receiptService } from './receipt.service';
+
+// Analytics services
+export { default as trendingService } from './trending.service';
+export { default as geolocationService } from './geolocation.service';
+
+// Trust & Safety services
+export { default as deviceFingerprintService } from './deviceFingerprint.service';
+export { default as behavioralAnalysisService } from './behavioralAnalysis.service';
+export { default as vpnProxyDetectionService } from './vpnProxyDetection.service';
+export { default as emailReputationService } from './emailReputation.service';
+export { default as phoneIntelligenceService } from './phoneIntelligence.service';
+export { default as chargebackPredictionService } from './chargebackPrediction.service';
+export { default as reviewVelocityMonitorService } from './reviewVelocityMonitor.service';
+export { default as loginAnomalyDetectionService } from './loginAnomalyDetection.service';
+export { default as sessionManagementService } from './sessionManagement.service';
+export { default as trustedDeviceFlowService } from './trustedDeviceFlow.service';
+
+// Monetization services
+export { default as instantBookingCommissionService } from './instantBookingCommission.service';
+export { default as priorityMatchFeeService } from './priorityMatchFee.service';
+export { default as bundleSalesService } from './bundleSales.service';
+export { default as bookingDepositService } from './bookingDeposit.service';
+export { default as cancellationInsuranceService } from './cancellationInsurance.service';
+export { default as verifiedBadgeService } from './verifiedBadge.service';
+export { default as leadGenerationFeeService } from './leadGenerationFee.service';
+export { default as featuredSearchBoostService } from './featuredSearchBoost.service';
+export { default as corporateAccountService } from './corporateAccount.service';
+export { default as b2bBillingService } from './b2bBilling.service';
+export { default as apiAccessPricingService } from './apiAccessPricing.service';
+
+// Trust & Safety - Fraud Detection Services
+export { default as breachCheckService } from './breachCheck.service';
+export { default as bankVerificationService } from './bankVerification.service';
+export { default as stockPhotoDetectionService } from './stockPhotoDetection.service';
+export { default as imageModerationService } from './imageModeration.service';
+export { default as profanityFilterService } from './profanityFilter.service';
+export { default as bookingRingDetectionService } from './bookingRingDetection.service';
+
+// Cross-connection services
+export { default as servicePackagesService } from './servicePackages.service';
+export { default as tippingService } from './tipping.service';
+export { default as photoSharingService } from './photoSharing.service';
+export { default as quoteRequestService } from './quoteRequest.service';
+export { default as policyUpdateNotificationService } from './policyUpdateNotification';
+export { default as monthlyScorecardService } from './monthlyScorecard.service';
+export { default as trainingAcademyService } from './trainingAcademy.service';
+export { default as betaFeaturesAccessService } from './betaFeaturesAccess.service';
+export { default as enhancedAccountRecoveryService } from './enhancedAccountRecovery.service';
+export { default as activityAuditLogService } from './activityAuditLog.service';

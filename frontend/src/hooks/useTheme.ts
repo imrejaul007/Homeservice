@@ -51,10 +51,11 @@ export const useThemeStore = create<ThemeState>()(
 
 // Apply theme to document
 const applyTheme = (theme: Theme) => {
+  if (typeof document === 'undefined') return;
   const root = document.documentElement;
 
   if (theme === 'system') {
-    const systemTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    const systemTheme = typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
     root.setAttribute('data-theme', systemTheme);
     root.classList.remove('light', 'dark');
     root.classList.add(systemTheme);
@@ -67,12 +68,14 @@ const applyTheme = (theme: Theme) => {
 
 // Apply font size
 const applyFontSize = (fontSize: FontSize) => {
+  if (typeof document === 'undefined') return;
   const root = document.documentElement;
   root.setAttribute('data-font-size', fontSize);
 };
 
 // Apply reduced motion
 const applyReducedMotion = (enabled: boolean) => {
+  if (typeof document === 'undefined') return;
   const root = document.documentElement;
   if (enabled) {
     root.classList.add('reduce-motion');
@@ -83,6 +86,7 @@ const applyReducedMotion = (enabled: boolean) => {
 
 // Apply high contrast
 const applyHighContrast = (enabled: boolean) => {
+  if (typeof document === 'undefined') return;
   const root = document.documentElement;
   if (enabled) {
     root.classList.add('high-contrast');
@@ -93,6 +97,8 @@ const applyHighContrast = (enabled: boolean) => {
 
 // Initialize theme on load
 export const initializeTheme = () => {
+  if (typeof window === 'undefined') return;
+
   const store = useThemeStore.getState();
   applyTheme(store.theme);
   applyFontSize(store.fontSize);

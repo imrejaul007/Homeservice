@@ -6,7 +6,7 @@ import User, { IUser, UserRole } from '../models/user.model';
 import { ApiError, ERROR_CODES } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
 import logger from '../utils/logger';
-import { cache } from '../config/redis';
+import { cache, cacheRedis, isRedisAvailable } from '../config/redis';
 import { createAuditLog } from '../services/audit.service';
 import {
   verifyToken,
@@ -46,11 +46,6 @@ const SESSION_REFRESH_THRESHOLD = parseInt(process.env.SESSION_REFRESH_THRESHOLD
 // Core authentication middleware
 export const authenticate = asyncHandler(async (req: Request, _res: Response, next: NextFunction) => {
   try {
-    // Skip auth if skipAuth header is present (for specific public endpoints)
-    if (req.headers.skipauth === 'true' || req.headers.skipAuth === 'true') {
-      return next();
-    }
-
     let token: string | undefined;
 
     // Extract token from Authorization header or cookies
@@ -135,11 +130,13 @@ export const authenticate = asyncHandler(async (req: Request, _res: Response, ne
       if (process.env.REDIS_SESSION_ENABLED === 'true') {
         const sessionValid = await validateRedisSession(user._id.toString(), sessionId);
         if (!sessionValid) {
-          logger.warn('Session validation failed in Redis', {
+          logger.warn('Session validation failed in Redis - rejecting request', {
             userId: user._id,
             sessionId,
             ip: req.ip,
+            action: 'SESSION_INVALID_REJECTED',
           });
+          throw new ApiError(401, 'Session expired or invalid');
         }
       }
     }
@@ -191,11 +188,25 @@ async function validateSessionWithTimeout(
 
     // Check if session has expired
     if (session.expiresAt && new Date(session.expiresAt) < now) {
-      // Remove expired session
+      // Remove expired session from MongoDB
       await User.updateOne(
         { _id: userId },
         { $pull: { sessions: { sessionId } } }
       );
+
+      // FIX: Also remove from Redis to prevent stale session data
+      try {
+        if (cacheRedis && isRedisAvailable()) {
+          await cacheRedis.del(`session:${sessionId}`);
+        }
+      } catch (redisError) {
+        logger.warn('Failed to delete expired session from Redis', {
+          userId,
+          sessionId,
+          error: redisError instanceof Error ? redisError.message : String(redisError),
+        });
+      }
+
       return { expired: true, shouldRefresh: false };
     }
 
@@ -315,9 +326,10 @@ async function validateMongoSession(userId: string, sessionId: string): Promise<
     return true;
   } catch (error) {
     logger.error('MongoDB session validation error', { userId, sessionId, error: (error as Error).message });
-    // On error, allow the request (fail open) - MongoDB is source of truth
-    // This prevents Redis failures from blocking all authentication
-    return true;
+    // SECURITY FIX: Fail closed on database errors - deny access by default
+    // Only allow access if we can definitively verify the session is valid
+    // This prevents unauthorized access when the database is experiencing issues
+    return false;
   }
 }
 
@@ -445,7 +457,7 @@ export const requireOwnership = (resourceUserField: string = 'userId') => {
     }
 
     // For user resources, check if the user owns the resource
-    if (resourceUserField === 'userId' && (req.user as any)._id.toString() !== resourceId) {
+    if (resourceUserField === 'userId' && req.user._id.toString() !== resourceId) {
       throw new ApiError(403, 'Access denied. You can only access your own resources');
     }
 
@@ -582,12 +594,6 @@ export const csrfProtection = asyncHandler(async (req: Request, res: Response, n
     return next();
   }
 
-  // Skip for API endpoints using JWT authentication
-  const authHeader = req.headers.authorization;
-  if (authHeader?.startsWith('Bearer ')) {
-    return next();
-  }
-
   // Skip for webhook endpoints (they use their own signature verification)
   if (req.path.includes('/webhook')) {
     return next();
@@ -595,6 +601,23 @@ export const csrfProtection = asyncHandler(async (req: Request, res: Response, n
 
   // Skip for internal service-to-service calls
   if (req.headers['x-internal-service']) {
+    return next();
+  }
+
+  // SECURITY FIX: Do NOT skip CSRF validation for Bearer token authenticated requests
+  // Browser-based attacks (XSS, malicious iframes) can still make requests with Bearer tokens
+  // CSRF tokens protect against cross-site request forgery regardless of auth method
+  // Only skip for non-browser clients (mobile apps, API keys) identified by specific headers
+
+  // Identify non-browser clients by User-Agent patterns
+  const userAgent = req.get('User-Agent') || '';
+  const isNonBrowserClient = (
+    /^(curl|wget|postman|axios|node|python|java|ruby|go|http-client|okhttp|unirest|requests|httpx|rest-client|Apache-HttpClient|Google-HTTP|Jetty|Netty)/i.test(userAgent) ||
+    req.headers['x-requested-with'] === 'XMLHttpRequest'
+  );
+
+  // Only skip CSRF for explicitly identified non-browser clients
+  if (isNonBrowserClient) {
     return next();
   }
 
@@ -665,7 +688,9 @@ export const trackDevice = asyncHandler(async (req: Request, _res: Response, nex
 
     // Store device info for security monitoring
     // You could implement device tracking and alert on new devices
-    (req.user as any).deviceFingerprint = deviceFingerprint;
+    // Type assertion to extended interface (non-persisted tracking data)
+    const userWithDevice = req.user as IUser & { deviceFingerprint: typeof deviceFingerprint };
+    userWithDevice.deviceFingerprint = deviceFingerprint;
   }
 
   next();

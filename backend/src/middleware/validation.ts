@@ -94,8 +94,21 @@ const createBookingSchema = Joi.object({
     deviceType: Joi.string()
       .valid('mobile', 'desktop', 'tablet')
       .default('desktop'),
-    sessionId: Joi.string().optional()
-  }).optional(),
+    sessionId: Joi.string().optional(),
+    // FIX: Make idempotencyKey REQUIRED to prevent double-booking
+    // Clients must generate a unique key per booking attempt and retry with the same key
+    idempotencyKey: Joi.string()
+      .min(16)
+      .max(64)
+      .pattern(/^[a-zA-Z0-9_-]+$/)
+      .required()
+      .messages({
+        'string.min': 'Idempotency key must be at least 16 characters',
+        'string.max': 'Idempotency key cannot exceed 64 characters',
+        'string.pattern.base': 'Idempotency key must contain only alphanumeric characters, underscores, and hyphens',
+        'any.required': 'Idempotency key is required to prevent duplicate bookings'
+      })
+  }).required(),
 
   // New booking flow fields
   locationType: Joi.string()
@@ -167,6 +180,110 @@ const rejectBookingSchema = Joi.object({
 const completeBookingSchema = Joi.object({
   notes: Joi.string().max(500).optional(),
   actualDuration: Joi.number().min(15).max(480).optional()
+});
+
+// Guest booking schema with honeypot for bot prevention
+const guestBookingSchema = Joi.object({
+  serviceId: Joi.string()
+    .pattern(/^[0-9a-fA-F]{24}$/)
+    .required()
+    .messages({
+      'string.pattern.base': 'Invalid service ID format',
+      'any.required': 'Service ID is required'
+    }),
+
+  providerId: Joi.string()
+    .pattern(/^[0-9a-fA-F]{24}$/)
+    .required()
+    .messages({
+      'string.pattern.base': 'Invalid provider ID format',
+      'any.required': 'Provider ID is required'
+    }),
+
+  scheduledDate: Joi.string()
+    .pattern(/^\d{4}-\d{2}-\d{2}$/)
+    .required()
+    .messages({
+      'string.pattern.base': 'Invalid date format. Use YYYY-MM-DD format',
+      'any.required': 'Scheduled date is required'
+    }),
+
+  scheduledTime: Joi.string()
+    .pattern(/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/)
+    .required()
+    .messages({
+      'string.pattern.base': 'Invalid time format. Use HH:MM format',
+      'any.required': 'Scheduled time is required'
+    }),
+
+  locationType: Joi.string()
+    .valid('at_home', 'hotel')
+    .default('at_home'),
+
+  guestInfo: Joi.object({
+    name: Joi.string()
+      .min(2)
+      .max(100)
+      .required()
+      .messages({
+        'string.min': 'Guest name must be at least 2 characters',
+        'string.max': 'Guest name cannot exceed 100 characters',
+        'any.required': 'Guest name is required'
+      }),
+    email: Joi.string()
+      .email()
+      .required()
+      .messages({
+        'string.email': 'Invalid email format',
+        'any.required': 'Guest email is required'
+      }),
+    phone: Joi.string()
+      .pattern(/^\+?[\d\s\-\(\)]{7,}$/)
+      .required()
+      .messages({
+        'string.pattern.base': 'Invalid phone number format',
+        'any.required': 'Guest phone is required'
+      })
+  }).required(),
+
+  notes: Joi.string().max(500).allow('').optional(),
+
+  metadata: Joi.object({
+    bookingSource: Joi.string()
+      .valid('search', 'profile', 'recommendation', 'repeat')
+      .default('search'),
+    deviceType: Joi.string()
+      .valid('mobile', 'desktop', 'tablet')
+      .default('desktop'),
+    sessionId: Joi.string().optional(),
+    idempotencyKey: Joi.string()
+      .min(16)
+      .max(64)
+      .pattern(/^[a-zA-Z0-9_-]+$/)
+      .required()
+      .messages({
+        'string.min': 'Idempotency key must be at least 16 characters',
+        'string.max': 'Idempotency key cannot exceed 64 characters',
+        'any.required': 'Idempotency key is required to prevent duplicate bookings'
+      })
+  }).required(),
+
+  // Honeypot field - should always be empty (bots fill this in)
+  website: Joi.string().max(0).allow('').optional()
+}).custom((value, helpers) => {
+  // Check honeypot field - if filled, it's likely a bot submission
+  if (value.website && value.website.length > 0) {
+    logger.warn('Honeypot field triggered - possible bot submission', {
+      action: 'HONEYPOT_TRIGGERED',
+      ip: 'redacted',
+      userAgent: 'redacted'
+    });
+    // Return error but don't reveal which field caused it (security through obscurity)
+    return helpers.error('any.custom');
+  }
+  return value;
+}).messages({
+  'any.custom': 'Invalid submission'
 });
 
 // ===================================
@@ -349,6 +466,7 @@ export const validateBookingCancellation = createValidationMiddleware(cancelBook
 export const validateBookingAcceptance = createValidationMiddleware(acceptBookingSchema);
 export const validateBookingRejection = createValidationMiddleware(rejectBookingSchema);
 export const validateBookingCompletion = createValidationMiddleware(completeBookingSchema);
+export const validateGuestBooking = createValidationMiddleware(guestBookingSchema);
 
 export const validateAvailabilityInput = createValidationMiddleware(updateAvailabilitySchema);
 export const validateDateOverride = createValidationMiddleware(dateOverrideSchema);
@@ -501,6 +619,7 @@ export default {
   validateBookingAcceptance,
   validateBookingRejection,
   validateBookingCompletion,
+  validateGuestBooking,
   validateAvailabilityInput,
   validateDateOverride,
   validateBlockPeriod,

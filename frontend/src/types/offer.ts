@@ -30,14 +30,24 @@ export interface ClaimedOffer {
   offerId?: string;
   offer?: {
     _id: string;
+    code: string;
     title: string;
     description?: string;
     type: 'percentage' | 'fixed' | 'free_service';
     value: number;
     maxDiscount?: number;
+    minOrderValue?: number;
     displayGradient?: string;
+    displayBadge?: string;
     imageUrl?: string;
+    applicableServices?: string[];
+    applicableCategories?: string[];
   };
+}
+
+/** Resolved offer details from a claim (API populates `offer`, not `offerId`). */
+export function getClaimOffer(claim: ClaimedOffer) {
+  return claim.offer ?? null;
 }
 
 export interface ClaimResponse {

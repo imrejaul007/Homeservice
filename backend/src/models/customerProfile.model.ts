@@ -149,6 +149,15 @@ export interface ICustomerProfile extends Document {
   isDeleted: boolean;
 }
 
+// Static methods interface
+export interface ICustomerProfileModel extends Model<ICustomerProfile> {
+  findByUserId(userId: string): Promise<ICustomerProfile | null>;
+  findCustomersInArea(lat: number, lng: number, maxDistance: number): Promise<ICustomerProfile[]>;
+  recalculateBookingHistory(userId: string | mongoose.Types.ObjectId): Promise<void>;
+  recalculateSocialActivity(userId: string | mongoose.Types.ObjectId): Promise<void>;
+  recalculateAllAnalytics(userId: string | mongoose.Types.ObjectId): Promise<void>;
+}
+
 const customerProfileSchema = new Schema<ICustomerProfile>(
   {
     userId: {
@@ -429,6 +438,173 @@ customerProfileSchema.statics.findCustomersInArea = function(lat: number, lng: n
 
 // NOTE: findByTier moved to User model since loyalty data is now in User
 
-const CustomerProfile: Model<ICustomerProfile> = mongoose.model<ICustomerProfile>('CustomerProfile', customerProfileSchema);
+const CustomerProfile = mongoose.model<ICustomerProfile, ICustomerProfileModel>('CustomerProfile', customerProfileSchema);
+
+// ===================================
+// ANALYTICS UPDATE METHODS
+// ===================================
+
+/**
+ * Recalculate and update denormalized booking history stats from actual Booking documents.
+ * Call this after booking status changes (completed, cancelled, etc.)
+ */
+CustomerProfile.recalculateBookingHistory = async function(userId: string | mongoose.Types.ObjectId): Promise<void> {
+  const Booking = mongoose.model('Booking');
+
+  const userObjectId = new mongoose.Types.ObjectId(userId.toString());
+
+  const completedBookings = await Booking.countDocuments({
+    customerId: userObjectId,
+    status: 'completed'
+  });
+
+  const cancelledBookings = await Booking.countDocuments({
+    customerId: userObjectId,
+    status: 'cancelled'
+  });
+
+  const totalBookings = await Booking.countDocuments({
+    customerId: userObjectId
+  });
+
+  // Calculate total spent from completed bookings
+  const spentAgg = await Booking.aggregate([
+    { $match: { customerId: userObjectId, status: 'completed' } },
+    { $group: { _id: null, total: { $sum: '$pricing.totalAmount' } } }
+  ]);
+  const totalSpent = spentAgg[0]?.total || 0;
+
+  // Calculate average rating given by customer
+  const reviewsAgg = await Booking.aggregate([
+    { $match: { customerId: userObjectId, status: 'completed' } },
+    { $lookup: { from: 'reviews', localField: '_id', foreignField: 'bookingId', as: 'review' } },
+    { $unwind: { path: '$review', preserveNullAndEmptyArrays: true } },
+    { $match: { 'review.reviewerType': 'customer' } },
+    { $group: { _id: null, avgRating: { $avg: '$review.rating' } } }
+  ]);
+  const averageRating = reviewsAgg[0]?.avgRating || 0;
+
+  // Get favorite categories
+  const categoryAgg = await Booking.aggregate([
+    { $match: { customerId: userObjectId, status: 'completed' } },
+    { $lookup: { from: 'services', localField: 'serviceId', foreignField: '_id', as: 'service' } },
+    { $unwind: { path: '$service', preserveNullAndEmptyArrays: true } },
+    {
+      $group: {
+        _id: '$service.category',
+        bookingCount: { $sum: 1 },
+        totalSpent: { $sum: '$pricing.totalAmount' }
+      }
+    },
+    { $sort: { bookingCount: -1 } },
+    { $limit: 5 }
+  ]);
+
+  const favoriteCategories = categoryAgg.map(c => ({
+    category: c._id || 'Unknown',
+    bookingCount: c.bookingCount,
+    totalSpent: c.totalSpent
+  }));
+
+  // Get seasonal patterns
+  const seasonalAgg = await Booking.aggregate([
+    { $match: { customerId: userObjectId, status: 'completed' } },
+    {
+      $group: {
+        _id: { $dateToString: { format: '%Y-%m', date: '$scheduledDate' } },
+        bookingCount: { $sum: 1 },
+        averageSpend: { $avg: '$pricing.totalAmount' }
+      }
+    },
+    { $sort: { _id: 1 } },
+    { $limit: 12 }
+  ]);
+
+  const seasonalPatterns = seasonalAgg.map(s => ({
+    month: s._id,
+    bookingCount: s.bookingCount,
+    averageSpend: Math.round((s.averageSpend || 0) * 100) / 100
+  }));
+
+  await this.updateOne(
+    { userId },
+    {
+      $set: {
+        'bookingHistory.totalBookings': totalBookings,
+        'bookingHistory.completedBookings': completedBookings,
+        'bookingHistory.cancelledBookings': cancelledBookings,
+        'bookingHistory.totalSpent': Math.round(totalSpent * 100) / 100,
+        'bookingHistory.averageRating': Math.round((averageRating || 0) * 10) / 10,
+        'bookingHistory.favoriteCategories': favoriteCategories,
+        'bookingHistory.seasonalPatterns': seasonalPatterns
+      }
+    }
+  );
+};
+
+/**
+ * Recalculate and update social activity stats from actual Review documents.
+ */
+CustomerProfile.recalculateSocialActivity = async function(userId: string | mongoose.Types.ObjectId): Promise<void> {
+  const Review = mongoose.model('Review');
+
+  const reviewsWritten = await Review.countDocuments({
+    reviewerId: userId,
+    reviewerType: 'customer'
+  });
+
+  const helpfulVotesAgg = await Review.aggregate([
+    { $match: { reviewerId: new mongoose.Types.ObjectId(userId.toString()), reviewerType: 'customer' } },
+    { $group: { _id: null, totalVotes: { $sum: '$helpfulVotes' } } }
+  ]);
+  const helpfulVotes = helpfulVotesAgg[0]?.totalVotes || 0;
+
+  // Count photos shared in reviews
+  const photosAgg = await Review.aggregate([
+    { $match: { reviewerId: new mongoose.Types.ObjectId(userId.toString()), reviewerType: 'customer' } },
+    { $project: { photoCount: { $size: { $ifNull: ['$photos', []] } } } },
+    { $group: { _id: null, totalPhotos: { $sum: '$photoCount' } } }
+  ]);
+  const photosShared = photosAgg[0]?.totalPhotos || 0;
+
+  // Get social profile counts from User model
+  const User = mongoose.model('User');
+  const user = await User.findById(userId).select('socialProfiles');
+  const followersCount = user?.socialProfiles?.followers?.length || 0;
+  const followingCount = user?.socialProfiles?.following?.length || 0;
+  const profileViews = user?.socialProfiles?.profileViews || 0;
+
+  // Calculate social score (simple formula)
+  const socialScore = Math.min(100, Math.round(
+    (reviewsWritten * 5) +
+    (helpfulVotes * 0.5) +
+    (photosShared * 2) +
+    (followersCount * 0.1)
+  ));
+
+  await this.updateOne(
+    { userId },
+    {
+      $set: {
+        'socialActivity.reviewsWritten': reviewsWritten,
+        'socialActivity.helpfulVotes': helpfulVotes,
+        'socialActivity.photosShared': photosShared,
+        'socialActivity.followersCount': followersCount,
+        'socialActivity.followingCount': followingCount,
+        'socialActivity.profileViews': profileViews,
+        'socialActivity.socialScore': socialScore
+      }
+    }
+  );
+};
+
+/**
+ * Recalculate all denormalized analytics for a customer.
+ * Call this as a periodic job or after significant changes.
+ */
+CustomerProfile.recalculateAllAnalytics = async function(userId: string | mongoose.Types.ObjectId): Promise<void> {
+  await this.recalculateBookingHistory(userId);
+  await this.recalculateSocialActivity(userId);
+};
 
 export default CustomerProfile;

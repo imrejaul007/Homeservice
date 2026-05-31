@@ -12,9 +12,14 @@ interface BeforeInstallPromptEvent extends Event {
 
 export const usePWA = () => {
   const [isInstalled, setIsInstalled] = useState(false);
-  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [isOnline, setIsOnline] = useState(false);
   const [installPrompt, setInstallPrompt] = useState<PWAInstallPromptEvent | null>(null);
   const [serviceWorker, setServiceWorker] = useState<ServiceWorker | null>(null);
+
+  useEffect(() => {
+    // Set initial online state in useEffect to avoid SSR issues
+    setIsOnline(navigator.onLine);
+  }, []);
 
   useEffect(() => {
     // Check if already installed
@@ -41,7 +46,6 @@ export const usePWA = () => {
       navigator.serviceWorker
         .register('/sw.js')
         .then((registration) => {
-          console.log('SW registered:', registration.scope);
           setServiceWorker(registration.active);
 
           // Check for updates
@@ -50,14 +54,14 @@ export const usePWA = () => {
             if (newWorker) {
               newWorker.addEventListener('statechange', () => {
                 if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                  console.log('New service worker available');
+                  // New service worker available
                 }
               });
             }
           });
         })
-        .catch((error) => {
-          console.error('SW registration failed:', error);
+        .catch(() => {
+          // SW registration failed silently
         });
 
       // Listen for controller change (new SW activated)
@@ -83,8 +87,8 @@ export const usePWA = () => {
         setInstallPrompt(null);
         return true;
       }
-    } catch (error) {
-      console.error('Install prompt error:', error);
+    } catch {
+      // Install prompt error silently handled
     }
     return false;
   };

@@ -15,10 +15,27 @@ import {
 import { useAuthStore } from '../../stores/authStore';
 import { api } from '../../services/api';
 
+interface ReferralData {
+  referralCode: string;
+  referralUrl?: string;
+  referrerReward?: number;
+  refereeReward?: number;
+}
+
+interface ReferralStats {
+  totalReferrals: number;
+  successfulReferrals: number;
+  totalRewardsEarned: number;
+  recentReferrals?: Array<{
+    name: string;
+    joinedAt: string;
+  }>;
+}
+
 const ProfileReferrals: React.FC = () => {
   const { user } = useAuthStore();
-  const [referralData, setReferralData] = useState<any>(null);
-  const [stats, setStats] = useState<any>(null);
+  const [referralData, setReferralData] = useState<ReferralData | null>(null);
+  const [stats, setStats] = useState<ReferralStats | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [copied, setCopied] = useState(false);
 
@@ -200,11 +217,11 @@ const ProfileReferrals: React.FC = () => {
       </div>
 
       {/* Recent Referrals */}
-      {stats?.recentReferrals?.length > 0 && (
+      {stats?.recentReferrals && stats.recentReferrals.length > 0 && (
         <div className="glass-nilin rounded-nilin p-6 hover-lift">
           <h3 className="font-serif text-lg text-nilin-charcoal mb-4">Recent Referrals</h3>
           <div className="space-y-3">
-            {stats.recentReferrals.map((referral: any, index: number) => (
+            {stats.recentReferrals.map((referral, index) => (
               <div
                 key={index}
                 className="flex items-center justify-between py-3 border-b border-nilin-border last:border-0"

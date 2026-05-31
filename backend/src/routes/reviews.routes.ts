@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import reviewsController from '../controllers/reviews.controller';
 import reviewController from '../controllers/review.controller';
+import * as reviewDraftController from '../controllers/reviewDraft.controller';
 import authMiddleware from '../middleware/auth.middleware';
 import Joi from 'joi';
 import { validate } from '../middleware/validation.middleware';
@@ -34,6 +35,52 @@ router.post('/booking/:bookingId',
   authMiddleware.authenticate,
   validate(submitReviewSchema),
   reviewsController.submitReview
+);
+
+// ============================================
+// Review Draft Routes
+// ============================================
+
+// Save or update a draft
+router.post('/drafts',
+  authMiddleware.authenticate,
+  reviewDraftController.saveDraft
+);
+
+// Get all user drafts
+router.get('/drafts',
+  authMiddleware.authenticate,
+  reviewDraftController.getUserDrafts
+);
+
+// Get draft count
+router.get('/drafts/count',
+  authMiddleware.authenticate,
+  reviewDraftController.getDraftCount
+);
+
+// Get draft by booking ID
+router.get('/drafts/:bookingId',
+  authMiddleware.authenticate,
+  reviewDraftController.getDraft
+);
+
+// Delete draft
+router.delete('/drafts/:bookingId',
+  authMiddleware.authenticate,
+  reviewDraftController.deleteDraft
+);
+
+// Submit draft as review
+router.post('/drafts/:bookingId/submit',
+  authMiddleware.authenticate,
+  reviewDraftController.submitDraft
+);
+
+// Submit review directly (without draft)
+router.post('/',
+  authMiddleware.authenticate,
+  reviewDraftController.submitReview
 );
 
 export default router;

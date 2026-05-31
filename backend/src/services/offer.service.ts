@@ -504,6 +504,76 @@ export class OfferService {
     return true;
   }
 
+  /**
+   * FIX: Atomic version of markCouponAsUsed that accepts a MongoDB session
+   * Use this when calling from within a transaction to ensure atomicity
+   */
+  async markCouponAsUsedAtomic(
+    couponCode: string,
+    userId: string,
+    bookingId: string,
+    session: mongoose.ClientSession
+  ): Promise<boolean> {
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const bookingObjectId = new mongoose.Types.ObjectId(bookingId);
+    const normalizedCode = couponCode.toUpperCase();
+
+    // Atomic check and increment within the session
+    const result = await Coupon.findOneAndUpdate(
+      {
+        code: normalizedCode,
+        isActive: true,
+        $expr: { $lt: ['$currentUses', '$maxUses'] }, // Atomic condition check
+      },
+      {
+        $inc: { currentUses: 1 },
+        $push: {
+          usedBy: {
+            userId: userObjectId,
+            usedAt: new Date(),
+            bookingId: bookingObjectId,
+          },
+        },
+      },
+      { new: true, session }
+    );
+
+    if (!result) {
+      logger.warn('Coupon atomic marking failed - exhausted or not found', {
+        context: 'OfferService',
+        action: 'COUPON_ATOMIC_FAILED',
+        couponCode: normalizedCode,
+      });
+      return false;
+    }
+
+    // Update claim status within the same session
+    await OfferClaim.findOneAndUpdate(
+      {
+        userId: userObjectId,
+        offerId: result._id,
+        status: 'claimed',
+      },
+      {
+        $set: {
+          status: 'applied',
+          usedAt: new Date(),
+          usedInBookingId: bookingObjectId,
+        },
+      },
+      { session }
+    );
+
+    logger.info('Coupon atomically marked as used (with session)', {
+      context: 'OfferService',
+      action: 'COUPON_MARKED_USED_ATOMIC',
+      couponCode: normalizedCode,
+      newCurrentUses: result.currentUses,
+    });
+
+    return true;
+  }
+
   // Admin: Create offer
   async createOffer(offerData: any): Promise<any> {
     const offer = await Coupon.create({

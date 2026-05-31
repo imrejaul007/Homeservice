@@ -1,8 +1,51 @@
 import { create } from 'zustand';
-import { persist, createJSONStorage } from 'zustand/middleware';
+import { persist, createJSONStorage, type StateStorage } from 'zustand/middleware';
 import { immer } from 'zustand/middleware/immer';
+import { Capacitor } from '@capacitor/core';
+import { Preferences } from '@capacitor/preferences';
 import { locationService, SUPPORTED_CITIES } from '@/services/locationService';
 import type { UserLocation, SupportedCity, LocationState } from '@/types/location.types';
+
+/**
+ * Capacitor-safe Zustand storage adapter
+ */
+const capacitorStorageAdapter: StateStorage = {
+  getItem: async (name: string): Promise<string | null> => {
+    if (Capacitor.isNativePlatform()) {
+      try {
+        const result = await Preferences.get({ key: name });
+        return result.value;
+      } catch {
+        return null;
+      }
+    }
+    // Browser fallback
+    if (typeof window !== 'undefined' && window.localStorage) {
+      return localStorage.getItem(name);
+    }
+    return null;
+  },
+  setItem: async (name: string, value: string): Promise<void> => {
+    if (Capacitor.isNativePlatform()) {
+      await Preferences.set({ key: name, value });
+    } else {
+      // Browser fallback
+      if (typeof window !== 'undefined' && window.localStorage) {
+        localStorage.setItem(name, value);
+      }
+    }
+  },
+  removeItem: async (name: string): Promise<void> => {
+    if (Capacitor.isNativePlatform()) {
+      await Preferences.remove({ key: name });
+    } else {
+      // Browser fallback
+      if (typeof window !== 'undefined' && window.localStorage) {
+        localStorage.removeItem(name);
+      }
+    }
+  },
+};
 
 interface LocationStoreState extends LocationState {
   requestLocationPermission: () => Promise<boolean>;
@@ -83,7 +126,7 @@ export const useLocationStore = create<LocationStoreState>()(
           const location = await locationService.getCurrentLocation();
 
           if (location) {
-            locationService.cacheLocation(location);
+            void locationService.cacheLocation(location);
             set(() => ({
               currentLocation: location,
               permissionStatus: 'granted',
@@ -139,7 +182,7 @@ export const useLocationStore = create<LocationStoreState>()(
     {
       name: 'location-storage',
       version: 1,
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => capacitorStorageAdapter),
       partialize: (state) => ({
         currentLocation: state.currentLocation,
         selectedCity: state.selectedCity,

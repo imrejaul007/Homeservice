@@ -1,284 +1,431 @@
 import { api } from './api';
 
 // ============================================
-// Types
+// Bundle Types
 // ============================================
-
-export type BundleStatus = 'draft' | 'active' | 'paused' | 'archived';
-export type BundleType = 'subscription' | 'one-time' | 'promotional';
-export type DiscountType = 'percentage' | 'fixed' | 'free_service';
 
 export interface BundleService {
   serviceId: string;
-  name: string;
+  serviceName: string;
+  description: string;
   originalPrice: number;
   discountedPrice: number;
+  quantity: number;
   duration: number;
-  category?: string;
-}
-
-export interface BundlePricing {
-  originalTotal: number;
-  discountedTotal: number;
-  discountAmount: number;
-  discountPercentage: number;
-  currency: string;
-}
-
-export interface BundleLimits {
-  maxRedemptions?: number;
-  maxRedemptionsPerUser: number;
-  minOrderValue?: number;
-  validFrom?: string;
-  validUntil?: string;
+  categoryName: string;
 }
 
 export interface Bundle {
-  _id: string;
-  bundleId: string;
+  id: string;
   name: string;
-  description?: string;
-  provider: any;
-  bundleType: BundleType;
-  status: BundleStatus;
+  slug: string;
+  description: string;
+  shortDescription: string;
   services: BundleService[];
-  pricing: BundlePricing;
-  discountType: DiscountType;
-  discountValue: number;
-  maxDiscount?: number;
-  limits: BundleLimits;
-  imageUrl?: string;
-  displayColor?: string;
-  featured: boolean;
-  totalRedemptions: number;
-  totalRevenue?: number;
-  averageRating?: number;
-  reviewCount?: number;
-  tags?: string[];
+  originalTotalPrice: number;
+  bundlePrice: number;
+  discountPercent: number;
+  savings: number;
+  images: string[];
+  thumbnail?: string;
+  categoryId: string;
+  categoryName: string;
+  providerId: string;
+  providerName: string;
+  providerAvatar?: string;
+  averageRating: number;
+  reviewCount: number;
+  duration: number;
+  durationUnit: 'minutes' | 'hours' | 'days';
+  validityDays: number;
+  maxBookings: number;
+  bookingsUsed: number;
+  isActive: boolean;
+  isFeatured: boolean;
+  isPopular: boolean;
+  tags: string[];
+  terms?: string;
+  cancellationPolicy?: string;
   createdAt: string;
-  updatedAt?: string;
+  updatedAt: string;
 }
 
-export interface CreateBundleDTO {
+export interface BundleListItem {
+  id: string;
   name: string;
-  description?: string;
-  bundleType?: BundleType;
-  serviceIds: string[];
-  discountType: DiscountType;
-  discountValue: number;
-  maxDiscount?: number;
-  imageUrl?: string;
-  displayColor?: string;
+  slug: string;
+  shortDescription: string;
+  images: string[];
+  thumbnail?: string;
+  categoryName: string;
+  providerName: string;
+  originalTotalPrice: number;
+  bundlePrice: number;
+  discountPercent: number;
+  averageRating: number;
+  reviewCount: number;
+  duration: number;
+  durationUnit: 'minutes' | 'hours' | 'days';
+  validityDays: number;
+  isActive: boolean;
+  isFeatured: boolean;
+  isPopular: boolean;
+}
+
+export interface GetBundlesOptions {
+  page?: number;
+  limit?: number;
+  categoryId?: string;
+  providerId?: string;
   featured?: boolean;
-  displayOrder?: number;
+  popular?: boolean;
+  search?: string;
+  minPrice?: number;
+  maxPrice?: number;
+  minRating?: number;
+  sortBy?: 'price' | 'rating' | 'popularity' | 'newest' | 'discount';
+  sortOrder?: 'asc' | 'desc';
+}
+
+export interface CreateBundlePayload {
+  name: string;
+  description: string;
+  shortDescription: string;
+  serviceIds: string[];
+  bundlePrice: number;
+  validityDays: number;
+  maxBookings?: number;
+  images?: string[];
+  categoryId: string;
   tags?: string[];
-  validFrom?: string;
-  validUntil?: string;
-  maxRedemptions?: number;
-  maxRedemptionsPerUser?: number;
-  minOrderValue?: number;
+  terms?: string;
+  cancellationPolicy?: string;
 }
 
-export interface BundleAnalytics {
-  totalRedemptions: number;
-  totalRevenue: number;
-  averageOrderValue: number;
-  topServices: Array<{ serviceId: string; name: string; count: number }>;
-  redemptionTrend: Array<{ date: string; count: number; revenue: number }>;
+export interface UpdateBundlePayload {
+  name?: string;
+  description?: string;
+  shortDescription?: string;
+  serviceIds?: string[];
+  bundlePrice?: number;
+  validityDays?: number;
+  maxBookings?: number;
+  images?: string[];
+  tags?: string[];
+  terms?: string;
+  cancellationPolicy?: string;
+  isActive?: boolean;
+  isFeatured?: boolean;
 }
 
-export interface ProviderBundleStats {
-  totalBundles: number;
-  activeBundles: number;
-  totalRedemptions: number;
-  totalRevenue: number;
-  avgDiscount: number;
+export interface BookBundlePayload {
+  bundleId: string;
+  scheduledDate: string;
+  scheduledTime: string;
+  address: string;
+  notes?: string;
+  promoCode?: string;
+  paymentMethod: 'card' | 'wallet' | 'cash';
+}
+
+export interface BookingBundleResponse {
+  bookingId: string;
+  bookingReference: string;
+  status: 'pending' | 'confirmed' | 'failed';
+  bundleName: string;
+  totalAmount: number;
+  paymentStatus: 'pending' | 'paid' | 'failed';
+  scheduledDate: string;
+  scheduledTime: string;
+  confirmationCode?: string;
+  estimatedArrival?: string;
+  providerDetails?: {
+    name: string;
+    phone: string;
+    avatar?: string;
+    rating: number;
+  };
 }
 
 // ============================================
 // Bundle API Service
 // ============================================
 
-class BundleApiService {
-  // ========================================
-  // Public Endpoints
-  // ========================================
+export interface BundleApi {
+  /**
+   * Get all bundles with filtering and pagination
+   */
+  getBundles: (options?: GetBundlesOptions) => Promise<{
+    bundles: BundleListItem[];
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+  }>;
 
   /**
-   * Get all active bundles
+   * Get a single bundle by ID
    */
-  async getBundles(options?: {
-    page?: number;
-    limit?: number;
-    type?: BundleType;
-    featured?: boolean;
-    search?: string;
-  }): Promise<{
-    success: boolean;
-    data: {
-      bundles: Bundle[];
-      pagination: { page: number; pages: number; total: number };
-    };
-  }> {
-    const params = new URLSearchParams();
-    if (options?.page) params.append('page', options.page.toString());
-    if (options?.limit) params.append('limit', options.limit.toString());
-    if (options?.type) params.append('type', options.type);
-    if (options?.featured !== undefined) params.append('featured', options.featured.toString());
-    if (options?.search) params.append('search', options.search);
-
-    const queryString = params.toString();
-    const url = `/bundles${queryString ? `?${queryString}` : ''}`;
-
-    const response = await api.get(url);
-    return response.data;
-  }
+  getBundle: (id: string) => Promise<Bundle>;
 
   /**
-   * Get featured bundles
+   * Get a bundle by slug
    */
-  async getFeaturedBundles(limit = 10): Promise<{ success: boolean; data: Bundle[] }> {
-    const response = await api.get(`/bundles/featured?limit=${limit}`);
-    return response.data;
-  }
-
-  /**
-   * Get bundle by ID
-   */
-  async getBundleById(bundleId: string): Promise<{ success: boolean; data: Bundle }> {
-    const response = await api.get(`/bundles/${bundleId}`);
-    return response.data;
-  }
-
-  /**
-   * Get bundles by provider
-   */
-  async getProviderBundles(providerId: string, status?: BundleStatus): Promise<{
-    success: boolean;
-    data: Bundle[];
-  }> {
-    const params = new URLSearchParams();
-    if (status) params.append('status', status);
-
-    const queryString = params.toString();
-    const url = `/bundles/provider/${providerId}${queryString ? `?${queryString}` : ''}`;
-
-    const response = await api.get(url);
-    return response.data;
-  }
-
-  /**
-   * Get bundles for a service
-   */
-  async getBundlesForService(serviceId: string): Promise<{ success: boolean; data: Bundle[] }> {
-    const response = await api.get(`/bundles/service/${serviceId}`);
-    return response.data;
-  }
-
-  // ========================================
-  // Provider Endpoints
-  // ========================================
+  getBundleBySlug: (slug: string) => Promise<Bundle>;
 
   /**
    * Create a new bundle
    */
-  async createBundle(data: CreateBundleDTO): Promise<{ success: boolean; data: Bundle; message: string }> {
-    const response = await api.post('/bundles', data);
-    return response.data;
-  }
+  createBundle: (data: CreateBundlePayload) => Promise<Bundle>;
 
   /**
-   * Update a bundle
+   * Update an existing bundle
    */
-  async updateBundle(bundleId: string, data: Partial<CreateBundleDTO>): Promise<{
-    success: boolean;
-    data: Bundle;
-    message: string;
-  }> {
-    const response = await api.put(`/bundles/${bundleId}`, data);
-    return response.data;
-  }
-
-  /**
-   * Change bundle status
-   */
-  async changeBundleStatus(
-    bundleId: string,
-    status: BundleStatus
-  ): Promise<{ success: boolean; data: Bundle; message: string }> {
-    const response = await api.patch(`/bundles/${bundleId}/status`, { status });
-    return response.data;
-  }
-
-  /**
-   * Get provider's bundles
-   */
-  async getMyBundles(status?: BundleStatus): Promise<{ success: boolean; data: Bundle[] }> {
-    const params = new URLSearchParams();
-    if (status) params.append('status', status);
-
-    const queryString = params.toString();
-    const url = `/bundles/my/list${queryString ? `?${queryString}` : ''}`;
-
-    const response = await api.get(url);
-    return response.data;
-  }
-
-  /**
-   * Get provider bundle statistics
-   */
-  async getMyStats(): Promise<{ success: boolean; data: ProviderBundleStats }> {
-    const response = await api.get('/bundles/my/stats');
-    return response.data;
-  }
-
-  /**
-   * Get bundle analytics
-   */
-  async getBundleAnalytics(bundleId: string): Promise<{ success: boolean; data: BundleAnalytics }> {
-    const response = await api.get(`/bundles/${bundleId}/analytics`);
-    return response.data;
-  }
+  updateBundle: (id: string, data: UpdateBundlePayload) => Promise<Bundle>;
 
   /**
    * Delete a bundle
    */
-  async deleteBundle(bundleId: string): Promise<{ success: boolean; message: string }> {
-    const response = await api.delete(`/bundles/${bundleId}`);
-    return response.data;
-  }
-
-  // ========================================
-  // Redemption
-  // ========================================
+  deleteBundle: (id: string) => Promise<{
+    success: boolean;
+    message: string;
+  }>;
 
   /**
-   * Validate bundle for redemption
+   * Book a bundle service
    */
-  async validateBundle(
-    bundleId: string,
-    orderValue?: number
-  ): Promise<{ success: boolean; data: { valid: boolean; reason?: string; bundle?: Bundle } }> {
-    const response = await api.post(`/bundles/${bundleId}/validate`, { orderValue });
-    return response.data;
-  }
+  bookBundle: (data: BookBundlePayload) => Promise<BookingBundleResponse>;
 
   /**
-   * Redeem a bundle
+   * Get bundles by category
    */
-  async redeemBundle(
+  getBundlesByCategory: (
+    categoryId: string,
+    options?: Omit<GetBundlesOptions, 'categoryId'>
+  ) => Promise<{
+    bundles: BundleListItem[];
+    total: number;
+    page: number;
+    limit: number;
+  }>;
+
+  /**
+   * Get featured bundles
+   */
+  getFeaturedBundles: (limit?: number) => Promise<BundleListItem[]>;
+
+  /**
+   * Get popular bundles
+   */
+  getPopularBundles: (limit?: number) => Promise<BundleListItem[]>;
+
+  /**
+   * Search bundles
+   */
+  searchBundles: (
+    query: string,
+    options?: Omit<GetBundlesOptions, 'search'>
+  ) => Promise<{
+    bundles: BundleListItem[];
+    total: number;
+  }>;
+
+  /**
+   * Get my bundles (provider's bundles)
+   */
+  getMyBundles: (options?: {
+    page?: number;
+    limit?: number;
+    status?: 'active' | 'inactive' | 'all';
+  }) => Promise<{
+    bundles: Bundle[];
+    total: number;
+    page: number;
+    limit: number;
+  }>;
+
+  /**
+   * Get bundle availability for dates
+   */
+  getBundleAvailability: (
+    id: string,
+    startDate: string,
+    endDate: string
+  ) => Promise<{
+    dates: Array<{
+      date: string;
+      available: boolean;
+      slots: string[];
+    }>;
+  }>;
+
+  /**
+   * Add review to a booked bundle
+   */
+  reviewBundle: (
     bundleId: string,
-    revenue: number,
-    bookingId?: string
-  ): Promise<{ success: boolean; message: string }> {
-    const response = await api.post(`/bundles/${bundleId}/redeem`, { revenue, bookingId });
-    return response.data;
-  }
+    rating: number,
+    review?: string,
+    photos?: string[]
+  ) => Promise<{
+    success: boolean;
+    reviewId: string;
+  }>;
 }
 
-// ============================================
-// Export singleton instance
-// ============================================
+export const bundleApi: BundleApi = {
+  /**
+   * Get all bundles with filtering and pagination
+   * @param options - Query options including filters and sorting
+   */
+  getBundles: async (options = {}) => {
+    const response = await api.get('/bundles', { params: options });
+    return response.data.data;
+  },
 
-export const bundleApi = new BundleApiService();
+  /**
+   * Get a single bundle by ID with full details
+   * @param id - The bundle ID
+   */
+  getBundle: async (id: string) => {
+    const response = await api.get(`/bundles/${id}`);
+    return response.data.data;
+  },
+
+  /**
+   * Get a single bundle by slug (SEO-friendly URL)
+   * @param slug - The bundle slug
+   */
+  getBundleBySlug: async (slug: string) => {
+    const response = await api.get(`/bundles/slug/${slug}`);
+    return response.data.data;
+  },
+
+  /**
+   * Create a new bundle
+   * @param data - Bundle data including services and pricing
+   */
+  createBundle: async (data: CreateBundlePayload) => {
+    const response = await api.post('/bundles', data);
+    return response.data.data;
+  },
+
+  /**
+   * Update an existing bundle
+   * @param id - The bundle ID
+   * @param data - Fields to update
+   */
+  updateBundle: async (id: string, data: UpdateBundlePayload) => {
+    const response = await api.patch(`/bundles/${id}`, data);
+    return response.data.data;
+  },
+
+  /**
+   * Delete a bundle
+   * @param id - The bundle ID to delete
+   */
+  deleteBundle: async (id: string) => {
+    const response = await api.delete(`/bundles/${id}`);
+    return response.data;
+  },
+
+  /**
+   * Book a bundle service
+   * @param data - Booking details including date, time, address, and payment
+   */
+  bookBundle: async (data: BookBundlePayload) => {
+    const response = await api.post('/bundles/book', data);
+    return response.data.data;
+  },
+
+  /**
+   * Get bundles by category
+   * @param categoryId - The category ID
+   * @param options - Additional filter options
+   */
+  getBundlesByCategory: async (categoryId: string, options = {}) => {
+    const response = await api.get(`/bundles/category/${categoryId}`, {
+      params: options,
+    });
+    return response.data.data;
+  },
+
+  /**
+   * Get featured bundles for homepage
+   * @param limit - Maximum number of bundles to return (default 10)
+   */
+  getFeaturedBundles: async (limit = 10) => {
+    const response = await api.get('/bundles/featured', { params: { limit } });
+    return response.data.data;
+  },
+
+  /**
+   * Get popular bundles
+   * @param limit - Maximum number of bundles to return (default 10)
+   */
+  getPopularBundles: async (limit = 10) => {
+    const response = await api.get('/bundles/popular', { params: { limit } });
+    return response.data.data;
+  },
+
+  /**
+   * Search bundles by query
+   * @param query - Search query string
+   * @param options - Additional filter options
+   */
+  searchBundles: async (query: string, options = {}) => {
+    const response = await api.get('/bundles/search', {
+      params: { query, ...options },
+    });
+    return response.data.data;
+  },
+
+  /**
+   * Get provider's own bundles
+   * @param options - Pagination and filter options
+   */
+  getMyBundles: async (options = {}) => {
+    const response = await api.get('/bundles/my', { params: options });
+    return response.data.data;
+  },
+
+  /**
+   * Get available time slots for a bundle
+   * @param id - The bundle ID
+   * @param startDate - Start date (YYYY-MM-DD)
+   * @param endDate - End date (YYYY-MM-DD)
+   */
+  getBundleAvailability: async (
+    id: string,
+    startDate: string,
+    endDate: string
+  ) => {
+    const response = await api.get(`/bundles/${id}/availability`, {
+      params: { startDate, endDate },
+    });
+    return response.data.data;
+  },
+
+  /**
+   * Add a review to a booked bundle
+   * @param bundleId - The bundle ID
+   * @param rating - Rating (1-5)
+   * @param review - Optional review text
+   * @param photos - Optional photo URLs
+   */
+  reviewBundle: async (
+    bundleId: string,
+    rating: number,
+    review?: string,
+    photos?: string[]
+  ) => {
+    const response = await api.post(`/bundles/${bundleId}/review`, {
+      rating,
+      review,
+      photos,
+    });
+    return response.data.data;
+  },
+};
+
 export default bundleApi;

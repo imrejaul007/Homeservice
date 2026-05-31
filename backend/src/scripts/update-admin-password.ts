@@ -13,7 +13,10 @@ async function updateAdminPassword() {
 
   const result = await User.updateOne(
     { email: 'admin@homeservice.com' },
-    { $set: { password: hashedPassword } }
+    {
+      $set: { password: hashedPassword, loginAttempts: 0 },
+      $unset: { lockUntil: 1 },
+    }
   );
 
   console.log(`Updated ${result.modifiedCount} admin user(s)`);

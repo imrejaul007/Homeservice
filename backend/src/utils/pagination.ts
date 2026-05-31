@@ -1,5 +1,6 @@
 /**
- * Pagination utilities for consistent API responses
+ * Enhanced Pagination utilities for consistent API responses
+ * Includes robust input validation, NaN handling, and DoS prevention
  */
 
 export interface PaginationParams {
@@ -25,8 +26,49 @@ export interface PaginatedResult<T> {
   pagination: PaginationMeta;
 }
 
+// Configuration constants
+const DEFAULT_PAGE = 1;
+const DEFAULT_LIMIT = 20;
+const MAX_LIMIT = 100;
+const MIN_LIMIT = 1;
+const MIN_PAGE = 1;
+
 /**
- * Parse and validate pagination parameters
+ * Safely parse an integer from a value, returning a default if invalid
+ */
+export const safeParseInt = (value: unknown, defaultValue: number, min?: number, max?: number): number => {
+  if (value === undefined || value === null || value === '') {
+    return defaultValue;
+  }
+
+  const num = Number(value);
+
+  // Handle NaN and Infinity
+  if (!Number.isFinite(num)) {
+    return defaultValue;
+  }
+
+  // Check if it's actually an integer
+  if (!Number.isInteger(num)) {
+    return defaultValue;
+  }
+
+  // Apply min constraint
+  let result = num;
+  if (min !== undefined) {
+    result = Math.max(min, num);
+  }
+
+  // Apply max constraint
+  if (max !== undefined) {
+    result = Math.min(max, result);
+  }
+
+  return result;
+};
+
+/**
+ * Parse and validate pagination parameters with strict bounds
  */
 export const parsePaginationParams = (query: {
   page?: string | number;
@@ -34,38 +76,68 @@ export const parsePaginationParams = (query: {
   sortBy?: string;
   sortOrder?: string;
 }): PaginationParams => {
-  const page = Math.max(1, parseInt(String(query.page || 1), 10) || 1);
-  const limit = Math.min(100, Math.max(1, parseInt(String(query.limit || 20), 10) || 20));
-  const sortBy = String(query.sortBy || 'createdAt');
+  const page = safeParseInt(query.page, DEFAULT_PAGE, MIN_PAGE);
+  const limit = safeParseInt(query.limit, DEFAULT_LIMIT, MIN_LIMIT, MAX_LIMIT);
+
+  // Validate sortBy - only allow safe field names
+  const allowedSortFields = ['createdAt', 'updatedAt', 'name', 'email', '_id', 'scheduledDate', 'status', 'totalAmount'];
+  let sortBy = String(query.sortBy || 'createdAt');
+
+  // Prevent injection through sortBy parameter
+  if (!allowedSortFields.includes(sortBy)) {
+    sortBy = 'createdAt';
+  }
+
+  // Validate sortOrder
   const sortOrder = query.sortOrder === 'asc' ? 'asc' : 'desc';
 
   return { page, limit, sortBy, sortOrder };
 };
 
 /**
- * Calculate pagination metadata
+ * Calculate pagination metadata with safe arithmetic
  */
 export const getPaginationMeta = (
   total: number,
   page: number,
   limit: number
 ): PaginationMeta => {
-  const totalPages = Math.ceil(total / limit);
+  // Ensure total is a valid number
+  const safeTotal = safeParseInt(total, 0, 0);
+  const safePage = safeParseInt(page, DEFAULT_PAGE, MIN_PAGE);
+  const safeLimit = safeParseInt(limit, DEFAULT_LIMIT, MIN_LIMIT, MAX_LIMIT);
+
+  const totalPages = Math.max(1, Math.ceil(safeTotal / safeLimit));
 
   return {
-    page,
-    limit,
-    total,
+    page: safePage,
+    limit: safeLimit,
+    total: safeTotal,
     totalPages,
-    hasNextPage: page < totalPages,
-    hasPrevPage: page > 1,
-    nextPage: page < totalPages ? page + 1 : null,
-    prevPage: page > 1 ? page - 1 : null,
+    hasNextPage: safePage < totalPages,
+    hasPrevPage: safePage > 1,
+    nextPage: safePage < totalPages ? safePage + 1 : null,
+    prevPage: safePage > 1 ? safePage - 1 : null,
   };
 };
 
 /**
- * Generic paginated query helper
+ * Calculate skip value for pagination with overflow protection
+ */
+export const calculateSkip = (page: number, limit: number): number => {
+  const safePage = safeParseInt(page, DEFAULT_PAGE, MIN_PAGE);
+  const safeLimit = safeParseInt(limit, DEFAULT_LIMIT, MIN_LIMIT, MAX_LIMIT);
+
+  // Prevent overflow for very large page numbers
+  // Max safe skip is limited to prevent query performance issues
+  const maxPage = 10000;
+  const safePageNum = Math.min(safePage, maxPage);
+
+  return Math.max(0, (safePageNum - 1) * safeLimit);
+};
+
+/**
+ * Generic paginated query helper with enhanced error handling
  */
 export const paginate = async <T>(
   model: any,
@@ -73,34 +145,48 @@ export const paginate = async <T>(
   params: PaginationParams,
   populate?: string | Record<string, unknown> | null
 ): Promise<PaginatedResult<T>> => {
-  const page = params.page ?? 1;
-  const limit = params.limit ?? 20;
-  const sortBy = params.sortBy ?? 'createdAt';
-  const sortOrder = params.sortOrder ?? 'desc';
+  const page = safeParseInt(params.page ?? DEFAULT_PAGE, DEFAULT_PAGE, MIN_PAGE);
+  const limit = safeParseInt(params.limit ?? DEFAULT_LIMIT, DEFAULT_LIMIT, MIN_LIMIT, MAX_LIMIT);
+  const sortBy = String(params.sortBy || 'createdAt');
+  const sortOrder = params.sortOrder === 'asc' ? 1 : -1;
 
-  const skip = (page - 1) * limit;
-  const sort: Record<string, 1 | -1> = { [sortBy]: sortOrder === 'asc' ? 1 : -1 };
+  // Validate sortBy field to prevent injection
+  const allowedSortFields = ['createdAt', 'updatedAt', 'name', 'email', '_id', 'scheduledDate', 'status', 'totalAmount', 'price', 'rating'];
+  const safeSortBy = allowedSortFields.includes(sortBy) ? sortBy : 'createdAt';
 
-  const [data, total] = await Promise.all([
-    model
-      .find(query)
-      .sort(sort)
-      .skip(skip)
-      .limit(limit)
-      .populate(populate as any)
-      .lean(),
-    model.countDocuments(query),
-  ]);
+  const skip = calculateSkip(page, limit);
+  const sort: Record<string, 1 | -1> = { [safeSortBy]: sortOrder as 1 | -1 };
 
-  return {
-    data,
-    pagination: getPaginationMeta(total, page, limit),
-  };
+  try {
+    const [data, total] = await Promise.all([
+      model
+        .find(query)
+        .sort(sort)
+        .skip(skip)
+        .limit(limit)
+        .populate(populate as any)
+        .lean(),
+      model.countDocuments(query),
+    ]);
+
+    return {
+      data: data || [],
+      pagination: getPaginationMeta(total, page, limit),
+    };
+  } catch (error) {
+    // Log error and return empty result with proper pagination metadata
+    console.error('Pagination query error:', error);
+    return {
+      data: [],
+      pagination: getPaginationMeta(0, page, limit),
+    };
+  }
 };
 
-/**
- * Cursor-based pagination for large datasets
- */
+// ============================================
+// CURSOR-BASED PAGINATION
+// ============================================
+
 export interface CursorPaginationParams {
   cursor?: string;
   limit?: number;
@@ -126,31 +212,56 @@ export const generateCursor = (doc: any, sortBy: string): string => {
 };
 
 /**
- * Parse cursor for query
+ * Parse cursor for query with validation
  */
-export const parseCursor = (cursor: string, sortBy: string, sortOrder: 'asc' | 'desc'): Record<string, unknown> => {
-  // For ObjectId cursors
+export const parseCursor = (
+  cursor: string,
+  sortBy: string,
+  sortOrder: 'asc' | 'desc'
+): Record<string, unknown> => {
+  // Validate cursor format to prevent injection
+  if (!cursor || typeof cursor !== 'string') {
+    return {};
+  }
+
+  // For ObjectId cursors (24 hex characters)
   if (/^[a-fA-F0-9]{24}$/.test(cursor)) {
     return sortOrder === 'asc'
       ? { _id: { $gt: cursor } }
       : { _id: { $lt: cursor } };
   }
 
-  // For date cursors
+  // For date cursors (ISO format)
   if (/^\d{4}-\d{2}-\d{2}T/.test(cursor)) {
-    return sortOrder === 'asc'
-      ? { [sortBy]: { $gt: new Date(cursor) } }
-      : { [sortBy]: { $lt: new Date(cursor) } };
+    const date = new Date(cursor);
+    if (!isNaN(date.getTime())) {
+      return sortOrder === 'asc'
+        ? { [sortBy]: { $gt: date } }
+        : { [sortBy]: { $lt: date } };
+    }
   }
 
-  // For string cursors
-  return sortOrder === 'asc'
-    ? { [sortBy]: { $gt: cursor } }
-    : { [sortBy]: { $lt: cursor } };
+  // For numeric cursors
+  const numCursor = Number(cursor);
+  if (Number.isFinite(numCursor)) {
+    return sortOrder === 'asc'
+      ? { [sortBy]: { $gt: numCursor } }
+      : { [sortBy]: { $lt: numCursor } };
+  }
+
+  // For string cursors (alphanumeric only for safety)
+  if (/^[a-zA-Z0-9_-]+$/.test(cursor)) {
+    return sortOrder === 'asc'
+      ? { [sortBy]: { $gt: cursor } }
+      : { [sortBy]: { $lt: cursor } };
+  }
+
+  // Invalid cursor format - return empty query
+  return {};
 };
 
 /**
- * Cursor-based pagination query
+ * Cursor-based pagination query with enhanced validation
  */
 export const cursorPaginate = async <T>(
   model: any,
@@ -158,44 +269,64 @@ export const cursorPaginate = async <T>(
   params: CursorPaginationParams,
   populate?: string | Record<string, unknown> | null
 ): Promise<CursorPaginatedResult<T>> => {
-  const { cursor, limit = 20, sortBy = '_id', sortOrder = 'desc' } = params;
-  const sort = { [sortBy]: sortOrder === 'asc' ? 1 : -1 };
+  const limit = safeParseInt(params.limit ?? DEFAULT_LIMIT, DEFAULT_LIMIT, MIN_LIMIT, MAX_LIMIT);
+  const sortBy = String(params.sortBy || '_id');
+  const sortOrder = params.sortOrder === 'asc' ? 1 : -1;
+
+  // Validate sortBy
+  const allowedSortFields = ['_id', 'createdAt', 'updatedAt', 'name', 'price', 'rating'];
+  const safeSortBy = allowedSortFields.includes(sortBy) ? sortBy : '_id';
+
+  const sort = { [safeSortBy]: sortOrder };
 
   let finalQuery = { ...query };
 
-  // Add cursor to query if provided
-  if (cursor) {
-    const cursorQuery = parseCursor(cursor, sortBy, sortOrder);
-    finalQuery = { ...finalQuery, ...cursorQuery };
+  // Add cursor to query if provided and valid
+  if (params.cursor) {
+    const cursorQuery = parseCursor(params.cursor, safeSortBy, params.sortOrder === 'asc' ? 'asc' : 'desc');
+    if (Object.keys(cursorQuery).length > 0) {
+      finalQuery = { ...finalQuery, ...cursorQuery };
+    }
   }
 
-  // Fetch one extra to check if there's more
-  const data = await model
-    .find(finalQuery)
-    .sort(sort)
-    .limit(limit + 1)
-    .populate(populate as any)
-    .lean();
+  try {
+    // Fetch one extra to check if there's more
+    const data = await model
+      .find(finalQuery)
+      .sort(sort)
+      .limit(limit + 1)
+      .populate(populate as any)
+      .lean();
 
-  const hasMore = data.length > limit;
-  if (hasMore) {
-    data.pop();
+    const hasMore = data.length > limit;
+    if (hasMore) {
+      data.pop();
+    }
+
+    const nextCursor = hasMore && data.length > 0
+      ? generateCursor(data[data.length - 1], safeSortBy)
+      : null;
+
+    return {
+      data: data || [],
+      nextCursor,
+      hasMore,
+    };
+  } catch (error) {
+    console.error('Cursor pagination error:', error);
+    return {
+      data: [],
+      nextCursor: null,
+      hasMore: false,
+    };
   }
-
-  const nextCursor = hasMore && data.length > 0
-    ? generateCursor(data[data.length - 1], sortBy)
-    : null;
-
-  return {
-    data,
-    nextCursor,
-    hasMore,
-  };
 };
 
 export default {
+  safeParseInt,
   parsePaginationParams,
   getPaginationMeta,
+  calculateSkip,
   paginate,
   cursorPaginate,
   generateCursor,

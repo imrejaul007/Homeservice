@@ -100,7 +100,9 @@ const DisputeCenter: React.FC<DisputeCenterProps> = () => {
       setDisputes(response.data);
       setPagination(response.pagination);
     } catch (err: any) {
-      setError(err.message || 'Failed to load disputes');
+      const message = err.message || 'Failed to load disputes';
+      setError(message);
+      toast.error(message);
     } finally {
       setIsLoading(false);
     }
@@ -179,7 +181,9 @@ const DisputeCenter: React.FC<DisputeCenterProps> = () => {
       await fetchDisputeDetail(selectedDispute._id);
       setMessageInput('');
     } catch (err: any) {
-      setError(err.message || 'Failed to send message');
+      const message = err.message || 'Failed to send message';
+      setError(message);
+      toast.error(message);
     }
   };
 
@@ -187,11 +191,14 @@ const DisputeCenter: React.FC<DisputeCenterProps> = () => {
   const handleAssign = async (disputeId: string) => {
     try {
       await disputeApi.assignDispute(disputeId);
+      toast.success('Dispute assigned successfully');
       await fetchDisputes();
       await fetchDisputeDetail(disputeId);
       setShowAssignModal(false);
     } catch (err: any) {
-      setError(err.message || 'Failed to assign dispute');
+      const message = err.message || 'Failed to assign dispute';
+      setError(message);
+      toast.error(message);
     }
   };
 
@@ -201,13 +208,16 @@ const DisputeCenter: React.FC<DisputeCenterProps> = () => {
 
     try {
       await disputeApi.resolveDispute(selectedDispute._id, resolveData);
+      toast.success('Dispute resolved successfully');
       await fetchDisputes();
       await fetchDisputeDetail(selectedDispute._id);
       await fetchStats();
       setShowResolveModal(false);
       setResolveData({ resolutionType: 'no_action', reason: '' });
     } catch (err: any) {
-      setError(err.message || 'Failed to resolve dispute');
+      const message = err.message || 'Failed to resolve dispute';
+      setError(message);
+      toast.error(message);
     }
   };
 
@@ -221,11 +231,14 @@ const DisputeCenter: React.FC<DisputeCenterProps> = () => {
   const handleUpdateStatus = async (disputeId: string, status: DisputeStatus) => {
     try {
       await disputeApi.updateDisputeStatus(disputeId, status);
+      toast.success(`Dispute status updated to ${status}`);
       await fetchDisputes();
       await fetchDisputeDetail(disputeId);
       await fetchStats();
     } catch (err: any) {
-      setError(err.message || 'Failed to update status');
+      const message = err.message || 'Failed to update status';
+      setError(message);
+      toast.error(message);
     }
   };
 

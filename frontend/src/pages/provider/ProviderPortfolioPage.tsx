@@ -36,7 +36,7 @@ const ProviderPortfolioPage: React.FC = () => {
   // Redirect if not a provider
   useEffect(() => {
     if (user?.role !== 'provider') {
-      navigate('/dashboard');
+      navigate('/provider/dashboard'); // FIX: Was '/dashboard'
     }
   }, [user, navigate]);
 
@@ -47,6 +47,8 @@ const ProviderPortfolioPage: React.FC = () => {
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingItem, setEditingItem] = useState<PortfolioItem | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleteItemId, setDeleteItemId] = useState<string | null>(null);
 
   // Form state
   const [formData, setFormData] = useState({
@@ -159,14 +161,17 @@ const ProviderPortfolioPage: React.FC = () => {
   };
 
   // Delete portfolio item
-  const handleDeleteItem = async (id: string) => {
-    if (!window.confirm('Are you sure you want to delete this portfolio item?')) {
-      return;
-    }
+  const handleDeleteItem = async () => {
+    if (!deleteItemId) return;
 
     try {
-      await portfolioApi.deletePortfolioItem(id);
-      setPortfolioItems((prev) => prev.filter((item) => item._id !== id));
+      await portfolioApi.deletePortfolioItem(deleteItemId);
+      setPortfolioItems((prev) => prev.filter((item) => item._id !== deleteItemId));
+      toast.addToast({
+        title: 'Deleted',
+        description: 'Portfolio item deleted successfully',
+        variant: 'success'
+      });
     } catch (err: any) {
       console.error('Failed to delete portfolio item:', err);
       toast.addToast({
@@ -174,7 +179,15 @@ const ProviderPortfolioPage: React.FC = () => {
         description: err.response?.data?.message || 'Failed to delete portfolio item',
         variant: 'error'
       });
+    } finally {
+      setShowDeleteModal(false);
+      setDeleteItemId(null);
     }
+  };
+
+  const handleDeleteClick = (id: string) => {
+    setDeleteItemId(id);
+    setShowDeleteModal(true);
   };
 
   // Submit form
@@ -412,7 +425,7 @@ const ProviderPortfolioPage: React.FC = () => {
                           <Edit className="h-4 w-4" />
                         </button>
                         <button
-                          onClick={() => handleDeleteItem(item._id)}
+                          onClick={() => handleDeleteClick(item._id)}
                           className="p-2 bg-white/90 backdrop-blur-sm rounded-full text-red-500 hover:bg-white transition-colors"
                         >
                           <Trash2 className="h-4 w-4" />
@@ -689,6 +702,37 @@ const ProviderPortfolioPage: React.FC = () => {
       )}
 
       <Footer />
+
+      {/* Delete Portfolio Item Confirmation Modal */}
+      {showDeleteModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-nilin-lg max-w-md w-full p-6 shadow-xl">
+            <div className="text-center">
+              <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center mx-auto mb-4">
+                <Trash2 className="h-6 w-6 text-red-600" />
+              </div>
+              <h3 className="text-lg font-serif text-nilin-charcoal mb-2">Delete Portfolio Item</h3>
+              <p className="text-nilin-warmGray mb-6">
+                Are you sure you want to delete this portfolio item? This action cannot be undone.
+              </p>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setShowDeleteModal(false)}
+                  className="flex-1 px-4 py-3 rounded-nilin border border-nilin-border text-nilin-charcoal hover:bg-nilin-muted transition-colors font-medium"
+                >
+                  Keep
+                </button>
+                <button
+                  onClick={handleDeleteItem}
+                  className="flex-1 px-4 py-3 rounded-nilin bg-red-500 text-white hover:bg-red-600 transition-colors font-medium"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

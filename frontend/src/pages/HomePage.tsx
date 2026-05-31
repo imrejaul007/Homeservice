@@ -15,6 +15,7 @@ import {
   ProviderCTA,
 } from '../components/home';
 import ExperienceSection from '../components/experience/ExperienceSection';
+import { PageErrorBoundary } from '../components/common/PageErrorBoundary';
 
 // UNIFIED HERO CAROUSEL - Merged with hero
 const HERO_SLIDES = [
@@ -61,26 +62,40 @@ const HomePage: React.FC = () => {
   const popularScrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    const abortController = new AbortController();
+    let isMounted = true;
+
+    const fetchServices = async () => {
+      try {
+        setIsLoading(true);
+        const popularRes = await searchApi.searchServices({ limit: 8, sortBy: 'popularity' }, abortController.signal);
+        if (popularRes.success && popularRes.data.services && isMounted) {
+          setPopularServices(popularRes.data.services);
+        }
+      } catch (error) {
+        // Ignore abort errors - expected on unmount
+        if (error instanceof Error && error.name === 'AbortError') return;
+        console.error('Error fetching services:', error);
+      } finally {
+        if (isMounted) {
+          setIsLoading(false);
+        }
+      }
+    };
+
     fetchServices();
     const interval = setInterval(() => {
       setCurrentSlide((prev) => (prev + 1) % HERO_SLIDES.length);
     }, 6000);
-    return () => clearInterval(interval);
-  }, []);
 
-  const fetchServices = async () => {
-    try {
-      setIsLoading(true);
-      const popularRes = await searchApi.searchServices({ limit: 8, sortBy: 'popularity' });
-      if (popularRes.success && popularRes.data.services) {
-        setPopularServices(popularRes.data.services);
-      }
-    } catch (error) {
-      console.error('Error fetching services:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+    // FIX: Proper cleanup order - abort request BEFORE clearing interval
+    // This prevents race conditions where the fetch completes after abort
+    return () => {
+      isMounted = false;
+      abortController.abort(); // Abort first to stop in-flight requests
+      clearInterval(interval); // Then clear the interval
+    };
+  }, []);
 
   const handleServiceClick = (serviceId: string) => {
     navigate(`/services/${serviceId}`);
@@ -103,7 +118,8 @@ const HomePage: React.FC = () => {
     <div className="min-h-screen bg-nilin-cream flex flex-col">
       <NavigationHeader showSearch={false} showCategoryTabs={false} />
 
-      {/* UNIFIED HERO SECTION */}
+      <PageErrorBoundary pageName="Home">
+        {/* UNIFIED HERO SECTION */}
       <section className="relative h-[85vh] min-h-[600px] overflow-hidden animate-nilin-in">
         {/* Background Slides */}
         {HERO_SLIDES.map((slide, index) => (
@@ -327,6 +343,7 @@ const HomePage: React.FC = () => {
 
       {/* Provider CTA */}
       <ProviderCTA />
+      </PageErrorBoundary>
 
       <Footer />
     </div>

@@ -188,11 +188,19 @@ class MeiliSearchIndex {
   }
 
   async search(query: string, options?: any): Promise<any> {
-    const response = await this.client.post(`/indexes/${this.indexName}/search`, {
-      q: query,
-      ...options,
-    });
-    return response.data;
+    try {
+      const response = await this.client.post(`/indexes/${this.indexName}/search`, {
+        q: query,
+        ...options,
+      });
+      return response.data;
+    } catch (error: any) {
+      const status = error?.response?.status;
+      if (status === 404) {
+        throw new Error(`Meilisearch index "${this.indexName}" not found`);
+      }
+      throw error;
+    }
   }
 
   async updateSettings(settings: any): Promise<any> {
@@ -227,6 +235,11 @@ class MeiliSearchIndex {
 // Lazy client instance
 let _meiliClient: MeiliSearchClient | null = null;
 
+/** Clear cached client so the next request retries or uses MongoDB fallback */
+export const resetMeiliClient = (): void => {
+  _meiliClient = null;
+};
+
 // Check if Meilisearch is configured
 export const isMeiliSearchConfigured = (): boolean => {
   const host = process.env.MEILISEARCH_HOST;
@@ -258,10 +271,20 @@ export const getMeiliClient = async (): Promise<MeiliSearchClient | null> => {
       throw new Error(`Meilisearch health check failed: ${health.status}`);
     }
 
+    // Ensure the services index exists before using Meilisearch for search
+    const servicesIndex = await _meiliClient.getIndex(INDEXES.SERVICES);
+    if (!servicesIndex) {
+      throw new Error(`Meilisearch index "${INDEXES.SERVICES}" not found`);
+    }
+
     logger.info('Meilisearch client initialized successfully');
     return _meiliClient;
   } catch (error: any) {
-    logger.error('Failed to initialize Meilisearch client:', { message: error?.message, code: error?.code });
+    logger.error('Failed to initialize Meilisearch client:', {
+      message: error?.message,
+      code: error?.code,
+      status: error?.response?.status,
+    });
     _meiliClient = null;
     return null;
   }
@@ -319,6 +342,7 @@ export const getIndexStats = async (): Promise<{
 
 export default {
   getMeiliClient,
+  resetMeiliClient,
   INDEXES,
   isMeiliSearchConfigured,
   checkMeiliSearchHealth,

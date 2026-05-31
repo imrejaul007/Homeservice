@@ -9,6 +9,7 @@ import { setAuthCookie, clearAuthCookie } from '../middleware/auth.middleware';
 import logger from '../utils/logger';
 import { hashRecoveryCodes } from '../services/auth/2fa.service';
 import { twoFactorVerifyLimiter } from '../middleware/rateLimiter';
+import { IUser } from '../models/user.model';
 
 // ============================================
 // Validation Schemas
@@ -284,7 +285,7 @@ export const registerAdmin = asyncHandler(async (req: Request, res: Response) =>
   }
 
   const dto: AdminRegistrationDTO = value;
-  const creatorId = (req.user as any)?._id;
+  const creatorId = (req.user as IUser)?._id?.toString();
   const result = await authService.registerAdmin(dto, creatorId);
 
   res.status(201).json({
@@ -400,12 +401,53 @@ export const login = asyncHandler(async (req: Request, res: Response) => {
       }
     }
 
-    // Keep only last 10 sessions
+    // Keep only last 10 sessions, but ALWAYS preserve the newly created current session
+    // FIX: Use the newly generated sessionId (not from headers) to preserve current session
     if (userDoc.sessions.length > 10) {
-      userDoc.sessions = userDoc.sessions.slice(-10);
+      const newSessionId = sessionId; // This is the newly created session
+
+      // Keep new session + 9 most recent other sessions
+      const otherSessions = userDoc.sessions
+        .filter((s: any) => s.sessionId !== newSessionId)
+        .sort((a: any, b: any) => b.lastActive.getTime() - a.lastActive.getTime())
+        .slice(0, 9);
+
+      // Find the new session (it was just added)
+      const newSession = userDoc.sessions.find((s: any) => s.sessionId === newSessionId);
+
+      if (newSession) {
+        userDoc.sessions = [...otherSessions, newSession];
+      } else {
+        // Fallback: keep 10 most recent
+        userDoc.sessions = userDoc.sessions
+          .sort((a: any, b: any) => b.lastActive.getTime() - a.lastActive.getTime())
+          .slice(0, 10);
+      }
     }
 
-    await userDoc.save({ validateBeforeSave: false });
+    // CRITICAL FIX: Wrap session and device updates in transaction to prevent race conditions
+    const mongoose = (await import('mongoose')).default;
+    const mongooseSession = await mongoose.startSession();
+    try {
+      mongooseSession.startTransaction({
+        readConcern: { level: 'snapshot' },
+        writeConcern: { w: 'majority' }
+      });
+      await userDoc.save({ session: mongooseSession, validateBeforeSave: false });
+      await mongooseSession.commitTransaction();
+    } catch (error) {
+      if (mongooseSession.inTransaction()) {
+        await mongooseSession.abortTransaction();
+      }
+      logger.error('Session update transaction failed', {
+        action: 'SESSION_UPDATE_TRANSACTION_FAILED',
+        userId: result.user.id,
+        error: (error as Error).message,
+      });
+      throw error;
+    } finally {
+      mongooseSession.endSession();
+    }
 
     // Log new device detection for security monitoring
     if (isNewDevice) {
@@ -828,6 +870,10 @@ export const deleteAccount = asyncHandler(async (req: Request, res: Response) =>
 export const getLoginHistory = asyncHandler(async (req: Request, res: Response) => {
   const user = (req as any).user;
 
+  // FIX: Pagination DoS Prevention - Enforce maximum limits on pagination parameters
+  const page = Math.max(1, parseInt(req.query.page as string, 10) || 1);
+  const limit = Math.min(Math.max(1, parseInt(req.query.limit as string, 10) || 20), 100); // Max 100
+
   const User = (await import('../models/user.model')).default;
   const userDoc = await User.findById(user._id).select('sessions');
 
@@ -836,7 +882,7 @@ export const getLoginHistory = asyncHandler(async (req: Request, res: Response) 
   }
 
   // Return sessions without the actual tokens for security
-  const sessions = (userDoc.sessions || []).map(session => ({
+  const allSessions = (userDoc.sessions || []).map(session => ({
     device: session.device,
     browser: session.browser,
     os: session.os,
@@ -847,14 +893,29 @@ export const getLoginHistory = asyncHandler(async (req: Request, res: Response) 
     isCurrent: session.isCurrent,
   }));
 
-  // Sort by lastActive descending
-  sessions.sort((a, b) => new Date(b.lastActive).getTime() - new Date(a.lastActive).getTime());
+  // FIX: Sort by lastActive descending with null safety
+  allSessions.sort((a, b) => {
+    const aTime = a?.lastActive ? new Date(a.lastActive).getTime() : 0;
+    const bTime = b?.lastActive ? new Date(b.lastActive).getTime() : 0;
+    return bTime - aTime;
+  });
+
+  // FIX: Apply pagination to prevent returning too many sessions
+  const total = allSessions.length;
+  const totalPages = Math.ceil(total / limit);
+  const offset = (page - 1) * limit;
+  const sessions = allSessions.slice(offset, offset + limit);
 
   res.json({
     success: true,
     data: {
       sessions,
-      total: sessions.length,
+      total,
+      page,
+      limit,
+      totalPages,
+      hasNextPage: page < totalPages,
+      hasPrevPage: page > 1,
     },
   });
 });
@@ -1293,6 +1354,7 @@ export const generateAdminInvite = asyncHandler(async (req: Request, res: Respon
  * Accept an admin invite token and create admin account
  * POST /api/auth/admin/accept-invite
  * SECURITY FIX: Validates token securely and prevents reuse
+ * FIX: Verify invite token was intended for the accepting user before upgrading role
  */
 export const acceptAdminInvite = asyncHandler(async (req: Request, res: Response) => {
   const { token, firstName, lastName, password, phone } = req.body;
@@ -1315,15 +1377,52 @@ export const acceptAdminInvite = asyncHandler(async (req: Request, res: Response
     throw new ApiError(400, error.details[0].message);
   }
 
+  // SECURITY FIX: Prevent already-admin users from misusing invite tokens
+  if (adminUser.role === 'admin') {
+    throw new ApiError(400, 'You are already an admin');
+  }
+
+  // SECURITY FIX: Prevent suspended/deactivated users from accepting invites
+  if (adminUser.accountStatus === 'suspended' || adminUser.accountStatus === 'deactivated') {
+    throw new ApiError(403, 'Your account is not active. Please contact support.');
+  }
+
   const { AdminInviteService } = await import('../services/adminInvite.service');
 
   // Verify and consume the token
+  // FIX: The service already validates email matches, but we add explicit verification here
   const invite = await AdminInviteService.verifyAndConsumeToken(
     value.token,
     adminUser._id.toString()
   );
 
-  // Update user to admin role
+  // SECURITY FIX: Double-verify the invite was intended for this user
+  // This prevents any race conditions or edge cases in the token validation
+  if (!invite || !invite.email) {
+    throw new ApiError(400, 'Invalid invite token');
+  }
+
+  // Verify email matches explicitly (defense in depth)
+  const acceptingUserEmail = adminUser.email.toLowerCase();
+  const invitedEmail = invite.email.toLowerCase();
+
+  if (acceptingUserEmail !== invitedEmail) {
+    logger.warn('Admin invite acceptance rejected - email mismatch', {
+      action: 'ADMIN_INVITE_EMAIL_MISMATCH_DEFENSE',
+      userId: adminUser._id.toString(),
+      userEmail: acceptingUserEmail,
+      invitedEmail: invitedEmail,
+    });
+    throw new ApiError(403, 'This invite was not intended for your account');
+  }
+
+  // SECURITY FIX: Only allow upgrade to admin, not other roles
+  const allowedRoles = ['customer', 'provider'];
+  if (!allowedRoles.includes(adminUser.role)) {
+    throw new ApiError(400, 'Invalid current role for admin invite acceptance');
+  }
+
+  // Update user to admin role - explicitly set to 'admin' to prevent any role manipulation
   adminUser.role = 'admin';
   adminUser.firstName = value.firstName;
   adminUser.lastName = value.lastName;

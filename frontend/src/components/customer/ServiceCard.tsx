@@ -14,6 +14,14 @@ interface ServiceCardProps {
   onClick?: (service: Service) => void;
   isFavorited?: boolean;
   onFavoriteChange?: (isFavorited: boolean) => void;
+  // Additional props for search results
+  className?: string;
+  showDistance?: boolean;
+  onServiceClick?: (service: Service) => void;
+  onProviderClick?: (providerId: string) => void;
+  onFavorite?: (serviceId: string) => Promise<void>;
+  onShare?: (service: Service) => void;
+  isFavoriteLoading?: boolean;
 }
 
 const ServiceCard: React.FC<ServiceCardProps> = ({
@@ -21,7 +29,14 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
   variant = 'default',
   onClick,
   isFavorited: initialFavorited = false,
-  onFavoriteChange
+  onFavoriteChange,
+  className,
+  showDistance,
+  onServiceClick,
+  onProviderClick,
+  onFavorite,
+  onShare,
+  isFavoriteLoading,
 }) => {
   const navigate = useNavigate();
   const { isAuthenticated } = useAuthStore();

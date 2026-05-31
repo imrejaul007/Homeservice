@@ -37,6 +37,10 @@ export interface ICommissionRule {
 // Commission Record Interface
 export interface ICommission extends Document {
   _id: mongoose.Types.ObjectId;
+
+  // Multi-tenant support
+  tenantId?: mongoose.Types.ObjectId;
+
   // Booking reference
   bookingId: mongoose.Types.ObjectId;
   bookingNumber: string;
@@ -192,6 +196,13 @@ const commissionRuleSchema = new Schema<ICommissionRule>(
 // Commission Record Schema
 const commissionSchema = new Schema<ICommission>(
   {
+    // Multi-tenant support
+    tenantId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Tenant',
+      index: true,
+    },
+
     bookingId: {
       type: Schema.Types.ObjectId,
       ref: 'Booking',
@@ -402,6 +413,10 @@ commissionSchema.index({ bookingId: 1 }, { unique: true });
 commissionSchema.index({ ruleId: 1 });
 commissionSchema.index({ status: 1, calculatedAt: -1 });
 commissionSchema.index({ 'metadata.customerId': 1 });
+
+// Tenant isolation indexes
+commissionSchema.index({ tenantId: 1, providerId: 1 });
+commissionSchema.index({ tenantId: 1, status: 1 });
 
 // Commission history indexes
 commissionHistorySchema.index({ commissionId: 1, changedAt: -1 });

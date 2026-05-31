@@ -98,6 +98,7 @@ export const isValidUrl = (url: string): boolean => {
 
 /**
  * Validate password strength
+ * SECURITY FIX: Minimum length increased to 12 to match backend validation
  */
 export const validatePassword = (password: string): {
   valid: boolean;
@@ -105,8 +106,8 @@ export const validatePassword = (password: string): {
 } => {
   const errors: string[] = [];
 
-  if (password.length < 8) {
-    errors.push('Password must be at least 8 characters');
+  if (password.length < 12) {
+    errors.push('Password must be at least 12 characters');
   }
   if (!/[A-Z]/.test(password)) {
     errors.push('Password must contain at least one uppercase letter');
@@ -138,6 +139,7 @@ export const generateSecureId = (length: number = 32): string => {
 
 /**
  * Secure token storage (uses sessionStorage as fallback)
+ * FIX #12: Added SSR guards for all localStorage/sessionStorage access
  */
 declare global {
   interface Window {
@@ -145,8 +147,17 @@ declare global {
   }
 }
 
+// Memory fallback storage for SSR environments
+const memoryStorage: Record<string, string> = {};
+
 export const secureStorage = {
   setItem: (key: string, value: string): void => {
+    // SSR guard: Check if we're in a browser environment
+    if (typeof window === 'undefined') {
+      memoryStorage[key] = value;
+      return;
+    }
+
     try {
       // Try to use sessionStorage
       sessionStorage.setItem(key, value);
@@ -158,6 +169,11 @@ export const secureStorage = {
   },
 
   getItem: (key: string): string | null => {
+    // SSR guard: Check if we're in a browser environment
+    if (typeof window === 'undefined') {
+      return memoryStorage[key] || null;
+    }
+
     try {
       return sessionStorage.getItem(key);
     } catch {
@@ -167,6 +183,12 @@ export const secureStorage = {
   },
 
   removeItem: (key: string): void => {
+    // SSR guard: Check if we're in a browser environment
+    if (typeof window === 'undefined') {
+      delete memoryStorage[key];
+      return;
+    }
+
     try {
       sessionStorage.removeItem(key);
     } catch {
@@ -176,6 +198,12 @@ export const secureStorage = {
   },
 
   clear: (): void => {
+    // SSR guard: Check if we're in a browser environment
+    if (typeof window === 'undefined') {
+      Object.keys(memoryStorage).forEach((key) => delete memoryStorage[key]);
+      return;
+    }
+
     try {
       sessionStorage.clear();
     } catch {
@@ -186,8 +214,14 @@ export const secureStorage = {
 
 /**
  * Check if running on localhost or HTTPS
+ * FIX #12: Added SSR guard for window access
  */
 export const isSecureContext = (): boolean => {
+  // SSR guard: Check if window is available
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
   return (
     window.location.hostname === 'localhost' ||
     window.location.hostname === '127.0.0.1' ||
@@ -197,8 +231,14 @@ export const isSecureContext = (): boolean => {
 
 /**
  * Detect if user is likely a bot
+ * FIX #12: Added SSR guard for navigator access
  */
 export const detectBot = (): boolean => {
+  // SSR guard: Check if navigator is available
+  if (typeof navigator === 'undefined') {
+    return false;
+  }
+
   const userAgent = navigator.userAgent.toLowerCase();
   const botPatterns = [
     'bot', 'crawler', 'spider', 'scraper',
@@ -230,7 +270,8 @@ export const handleCSPViolation = (event: SecurityPolicyViolationEvent): void =>
 };
 
 // Initialize CSP violation listener
-if (typeof document !== 'undefined') {
+// FIX #12: Added SSR guard for document access
+if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   document.addEventListener('securitypolicyviolation', handleCSPViolation as EventListener);
 }
 

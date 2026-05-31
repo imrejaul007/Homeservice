@@ -2060,10 +2060,23 @@ export class AuthService {
     const lockKey = `refresh:lock:${userId}`;
     const lockTTL = 10; // 10 seconds lock timeout
 
-    // Try to acquire lock with retry logic
-    let lockAcquired = false;
+    // Calculate base delay and max jitter for exponential backoff
+    const baseDelay = 50; // 50ms base delay
+    const maxJitter = 50; // 50ms max jitter
     const maxRetries = 5;
-    const retryDelay = 100; // 100ms between retries
+    const maxBaseDelay = 800; // Max 800ms total base delay
+
+    // Helper function to calculate delay with exponential backoff and jitter
+    const calculateBackoffDelay = (attempt: number): number => {
+      // Exponential backoff: baseDelay * 2^attempt, capped
+      const exponentialDelay = Math.min(baseDelay * Math.pow(2, attempt), maxBaseDelay);
+      // Add random jitter between 0 and maxJitter
+      const jitter = Math.random() * maxJitter;
+      return exponentialDelay + jitter;
+    };
+
+    // Try to acquire lock with exponential backoff and jitter
+    let lockAcquired = false;
 
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       // Use SET NX (set if not exists) to acquire lock
@@ -2072,12 +2085,25 @@ export class AuthService {
         lockAcquired = true;
         break;
       }
-      // Wait before retrying
-      await new Promise(resolve => setTimeout(resolve, retryDelay));
+
+      if (attempt < maxRetries - 1) {
+        // Calculate backoff delay for next attempt
+        const delay = calculateBackoffDelay(attempt);
+        logger.debug('Token refresh lock acquisition failed, retrying with backoff', {
+          action: 'TOKEN_REFRESH_RETRY',
+          userId,
+          attempt: attempt + 1,
+          maxRetries,
+          delayMs: Math.round(delay),
+        });
+        // Wait before retrying with exponential backoff + jitter
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
     }
 
     if (!lockAcquired) {
-      throw new ApiError(429, 'Token refresh is in progress. Please wait a moment and try again.');
+      // Return 409 Conflict - another refresh is in progress (semantically correct)
+      throw new ApiError(409, 'Token refresh conflict. Another refresh request is being processed.');
     }
 
     try {

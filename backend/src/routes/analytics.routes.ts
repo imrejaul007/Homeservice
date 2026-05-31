@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { authenticate } from '../middleware/auth.middleware';
+import { authenticate, requireRole } from '../middleware/auth.middleware';
 import { asyncHandler } from '../utils/asyncHandler';
 import { ApiError } from '../utils/ApiError';
 import Booking from '../models/booking.model';
@@ -23,12 +23,42 @@ import {
 
 const router = Router();
 
+function parseAnalyticsDateRange(query: Request['query']): { start: Date; end: Date; period?: string } {
+  const { startDate, endDate, period } = query;
+  const end = endDate ? new Date(endDate as string) : new Date();
+
+  if (isNaN(end.getTime())) {
+    throw new ApiError(400, 'Invalid endDate format');
+  }
+
+  if (startDate) {
+    const start = new Date(startDate as string);
+    if (isNaN(start.getTime())) {
+      throw new ApiError(400, 'Invalid startDate format');
+    }
+    if (start > end) {
+      throw new ApiError(400, 'startDate must be before endDate');
+    }
+    return { start, end };
+  }
+
+  const periodValue = typeof period === 'string' ? period : '30d';
+  const days =
+    periodValue === '7d' ? 7 :
+    periodValue === '90d' ? 90 :
+    periodValue === '365d' || periodValue === '1y' ? 365 :
+    30;
+
+  const start = new Date(end.getTime() - days * 24 * 60 * 60 * 1000);
+  return { start, end, period: periodValue };
+}
+
 /**
  * @route   GET /api/analytics/overview
  * @desc    Get analytics overview (all metrics)
  * @access  Admin
  */
-router.get('/overview', authenticate, asyncHandler(async (_req: Request, res: Response) => {
+router.get('/overview', authenticate, requireRole('admin'), asyncHandler(async (_req: Request, res: Response) => {
   const { period = 'month' } = _req.query;
 
   const [bookings, providers, customers, revenue] = await Promise.all([
@@ -55,7 +85,7 @@ router.get('/overview', authenticate, asyncHandler(async (_req: Request, res: Re
  * @desc    Get booking analytics
  * @access  Admin
  */
-router.get('/bookings', authenticate, asyncHandler(async (_req: Request, res: Response) => {
+router.get('/bookings', authenticate, requireRole('admin'), asyncHandler(async (_req: Request, res: Response) => {
   const { period = 'month' } = _req.query;
 
   const analytics = await getBookingAnalytics(period as string);
@@ -71,7 +101,7 @@ router.get('/bookings', authenticate, asyncHandler(async (_req: Request, res: Re
  * @desc    Get provider analytics
  * @access  Admin
  */
-router.get('/providers', authenticate, asyncHandler(async (_req: Request, res: Response) => {
+router.get('/providers', authenticate, requireRole('admin'), asyncHandler(async (_req: Request, res: Response) => {
   const { period = 'month' } = _req.query;
   const analytics = await getProviderAnalytics(period as string);
 
@@ -86,7 +116,7 @@ router.get('/providers', authenticate, asyncHandler(async (_req: Request, res: R
  * @desc    Get customer analytics
  * @access  Admin
  */
-router.get('/customers', authenticate, asyncHandler(async (_req: Request, res: Response) => {
+router.get('/customers', authenticate, requireRole('admin'), asyncHandler(async (_req: Request, res: Response) => {
   const { period = 'month' } = _req.query;
   const analytics = await getCustomerAnalytics(period as string);
 
@@ -101,7 +131,7 @@ router.get('/customers', authenticate, asyncHandler(async (_req: Request, res: R
  * @desc    Get revenue analytics
  * @access  Admin
  */
-router.get('/revenue', authenticate, asyncHandler(async (_req: Request, res: Response) => {
+router.get('/revenue', authenticate, requireRole('admin'), asyncHandler(async (_req: Request, res: Response) => {
   const { period = 'month' } = _req.query;
 
   const analytics = await getRevenueAnalytics(period as string);
@@ -117,7 +147,7 @@ router.get('/revenue', authenticate, asyncHandler(async (_req: Request, res: Res
  * @desc    Get service analytics
  * @access  Admin
  */
-router.get('/services', authenticate, asyncHandler(async (_req: Request, res: Response) => {
+router.get('/services', authenticate, requireRole('admin'), asyncHandler(async (_req: Request, res: Response) => {
   const analytics = await getServiceAnalytics();
 
   res.json({
@@ -131,7 +161,7 @@ router.get('/services', authenticate, asyncHandler(async (_req: Request, res: Re
  * @desc    Force refresh analytics cache
  * @access  Admin
  */
-router.post('/refresh', authenticate, asyncHandler(async (_req: Request, res: Response) => {
+router.post('/refresh', authenticate, requireRole('admin'), asyncHandler(async (_req: Request, res: Response) => {
   await clearAnalyticsCache();
 
   res.json({
@@ -143,17 +173,11 @@ router.post('/refresh', authenticate, asyncHandler(async (_req: Request, res: Re
 /**
  * @route   GET /api/analytics/provider/:id
  * @desc    Get analytics for specific provider
- * @access  Provider (own) or Admin
+ * @access  Admin only
  */
-router.get('/provider/:id', authenticate, asyncHandler(async (req: Request, res: Response) => {
+router.get('/provider/:id', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
   const { period = '30d' } = req.query;
-  const user = req.user as any;
-
-  // Check if user is the provider or admin
-  if (user.role !== 'admin' && user._id.toString() !== id) {
-    throw new ApiError(403, 'Not authorized to view these analytics');
-  }
 
   // Validate period parameter
   const validPeriods = ['7d', '30d', '90d'];
@@ -172,7 +196,7 @@ router.get('/provider/:id', authenticate, asyncHandler(async (req: Request, res:
  * @desc    Get dashboard summary metrics
  * @access  Admin
  */
-router.get('/dashboard', authenticate, asyncHandler(async (_req: Request, res: Response) => {
+router.get('/dashboard', authenticate, requireRole('admin'), asyncHandler(async (_req: Request, res: Response) => {
   const today = new Date();
   const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
   const startOfWeek = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
@@ -210,7 +234,7 @@ router.get('/dashboard', authenticate, asyncHandler(async (_req: Request, res: R
  * @access  Admin
  * @param   type - Export type: 'csv', 'json', 'pdf'
  */
-router.get('/export/:type', authenticate, asyncHandler(async (req: Request, res: Response) => {
+router.get('/export/:type', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
   const { type } = req.params;
   const { period, startDate, endDate, format } = req.query;
 
@@ -401,106 +425,44 @@ router.get('/export/:type', authenticate, asyncHandler(async (req: Request, res:
 }));
 
 /**
- * @route   GET /api/admin/analytics/funnel
- * @desc    Get booking funnel metrics
- * @access  Admin
- */
-router.get('/admin/analytics/funnel', authenticate, asyncHandler(async (req: Request, res: Response) => {
-  const { startDate, endDate } = req.query;
-
-  // Default to last 30 days
-  const end = endDate ? new Date(endDate as string) : new Date();
-  const start = startDate
-    ? new Date(startDate as string)
-    : new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
-
-  if (isNaN(start.getTime()) || isNaN(end.getTime())) {
-    throw new ApiError(400, 'Invalid date format');
-  }
-
-  const funnel: FunnelMetrics = await getBookingFunnel(start, end);
-
-  res.json({
-    success: true,
-    data: funnel,
-  });
-}));
-
-/**
- * @route   GET /api/admin/analytics/geographic
- * @desc    Get geographic analytics
- * @access  Admin
- */
-router.get('/admin/analytics/geographic', authenticate, asyncHandler(async (req: Request, res: Response) => {
-  const { startDate, endDate } = req.query;
-
-  // Default to last 30 days
-  const end = endDate ? new Date(endDate as string) : new Date();
-  const start = startDate
-    ? new Date(startDate as string)
-    : new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
-
-  if (isNaN(start.getTime()) || isNaN(end.getTime())) {
-    throw new ApiError(400, 'Invalid date format');
-  }
-
-  const geographic: GeographicAnalytics = await getGeographicAnalytics(start, end);
-
-  res.json({
-    success: true,
-    data: geographic,
-  });
-}));
-
-/**
  * @route   GET /api/analytics/funnel
- * @desc    Get booking funnel metrics
+ * @desc    Canonical booking funnel metrics
  * @access  Admin
+ * @query   startDate, endDate OR period (7d|30d|90d|365d)
  */
-router.get('/analytics/funnel', authenticate, asyncHandler(async (req: Request, res: Response) => {
-  const { startDate, endDate } = req.query;
-
-  // Default to last 30 days
-  const end = endDate ? new Date(endDate as string) : new Date();
-  const start = startDate
-    ? new Date(startDate as string)
-    : new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
-
-  if (isNaN(start.getTime()) || isNaN(end.getTime())) {
-    throw new ApiError(400, 'Invalid date format');
-  }
-
+router.get('/funnel', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
+  const { start, end, period } = parseAnalyticsDateRange(req.query);
   const funnel: FunnelMetrics = await getBookingFunnel(start, end);
 
   res.json({
     success: true,
     data: funnel,
+    meta: {
+      startDate: start.toISOString(),
+      endDate: end.toISOString(),
+      period: period || null,
+    },
   });
 }));
 
 /**
  * @route   GET /api/analytics/geographic
- * @desc    Get geographic analytics
+ * @desc    Canonical geographic analytics (city-level)
  * @access  Admin
+ * @query   startDate, endDate OR period (7d|30d|90d|365d)
  */
-router.get('/analytics/geographic', authenticate, asyncHandler(async (req: Request, res: Response) => {
-  const { startDate, endDate } = req.query;
-
-  // Default to last 30 days
-  const end = endDate ? new Date(endDate as string) : new Date();
-  const start = startDate
-    ? new Date(startDate as string)
-    : new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
-
-  if (isNaN(start.getTime()) || isNaN(end.getTime())) {
-    throw new ApiError(400, 'Invalid date format');
-  }
-
+router.get('/geographic', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
+  const { start, end, period } = parseAnalyticsDateRange(req.query);
   const geographic: GeographicAnalytics = await getGeographicAnalytics(start, end);
 
   res.json({
     success: true,
     data: geographic,
+    meta: {
+      startDate: start.toISOString(),
+      endDate: end.toISOString(),
+      period: period || null,
+    },
   });
 }));
 

@@ -1,7 +1,7 @@
 import React, { useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Grid3X3, List, ChevronLeft, ChevronRight, Loader2, AlertCircle } from 'lucide-react';
-import { useSearchStore, searchSelectors } from '@/store/searchStore';
+import { useSearchStore, searchSelectors } from '@/stores/searchStore';
 import ServiceCard from './ServiceCard';
 import { cn } from '@/lib/utils';
 import { favoritesApi } from '@/services/favoritesApi';

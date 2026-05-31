@@ -17,6 +17,7 @@ import {
   Share2,
   ArrowLeft
 } from 'lucide-react';
+import toast from 'react-hot-toast';
 import NavigationHeader from '../../components/layout/NavigationHeader';
 import Footer from '../../components/layout/Footer';
 import Breadcrumb from '../../components/common/Breadcrumb';
@@ -156,11 +157,12 @@ const TrackBookingPage: React.FC = () => {
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (bookingNumber.trim()) {
+      await fetchTracking(bookingNumber.trim());
+      toast.success('Booking found');
       navigate(`/track/${bookingNumber.trim()}`);
-      fetchTracking(bookingNumber.trim());
     }
   };
 

@@ -4,7 +4,7 @@ import { asyncHandler } from '../utils/asyncHandler';
 import { ApiError } from '../utils/ApiError';
 import { eventBus, EVENT_TYPES } from '../event-bus';
 import Booking from '../models/booking.model';
-import User from '../models/user.model';
+import User, { IUser } from '../models/user.model';
 import Service from '../models/service.model';
 import Joi from 'joi';
 import logger from '../utils/logger';
@@ -62,7 +62,18 @@ const bookingInputSchema = Joi.object({
     bookingSource: Joi.string(),
     deviceType: Joi.string(),
     sessionId: Joi.string(),
-  }),
+    // FIX: Make idempotencyKey REQUIRED to prevent double-booking
+    idempotencyKey: Joi.string()
+      .min(16)
+      .max(64)
+      .pattern(/^[a-zA-Z0-9_-]+$/)
+      .required()
+      .messages({
+        'string.min': 'Idempotency key must be at least 16 characters',
+        'string.max': 'Idempotency key cannot exceed 64 characters',
+        'any.required': 'Idempotency key is required to prevent duplicate bookings'
+      })
+  }).required(),
   locationType: Joi.string().valid('at_home', 'at_provider', 'at_hotel'),
   selectedDuration: Joi.number(),
   genderPreference: Joi.string().valid('male', 'female', 'no_preference').default('no_preference'),
@@ -85,7 +96,22 @@ const guestBookingInputSchema = Joi.object({
   guestInfo: guestInfoSchema.required(),
   addOns: Joi.array().items(addOnSchema),
   specialRequests: Joi.string(),
-  metadata: Joi.object(),
+  metadata: Joi.object({
+    bookingSource: Joi.string(),
+    deviceType: Joi.string(),
+    sessionId: Joi.string(),
+    // FIX: Make idempotencyKey REQUIRED for guest bookings too
+    idempotencyKey: Joi.string()
+      .min(16)
+      .max(64)
+      .pattern(/^[a-zA-Z0-9_-]+$/)
+      .required()
+      .messages({
+        'string.min': 'Idempotency key must be at least 16 characters',
+        'string.max': 'Idempotency key cannot exceed 64 characters',
+        'any.required': 'Idempotency key is required to prevent duplicate bookings'
+      })
+  }).required(),
   locationType: Joi.string().valid('at_home', 'at_provider', 'at_hotel'),
   selectedDuration: Joi.number(),
   genderPreference: Joi.string().valid('male', 'female', 'no_preference').default('no_preference'),
@@ -115,6 +141,9 @@ const rejectBookingSchema = Joi.object({
 
 const cancelBookingSchema = Joi.object({
   reason: Joi.string(),
+  // FIX: Add cancellationToken for guest bookings
+  cancellationToken: Joi.string(),
+  email: Joi.string().email(),
 });
 
 const completeBookingSchema = Joi.object({
@@ -130,6 +159,12 @@ const rescheduleBookingSchema = Joi.object({
   scheduledDate: Joi.string().required(),
   scheduledTime: Joi.string().required(),
   reason: Joi.string(),
+});
+
+const reportProviderNoShowSchema = Joi.object({
+  notes: Joi.string().max(1000).optional().messages({
+    'string.max': 'Notes cannot exceed 1000 characters',
+  }),
 });
 
 // ============================================
@@ -156,28 +191,60 @@ interface BookingNotificationData {
 
 /**
  * Format booking data for email notifications
- * Uses pre-populated data if available, otherwise fetches in a single batch query
+ * Uses pre-populated data if available, otherwise fetches in parallel
  */
 const formatBookingForEmail = async (
   booking: any,
   prePopulated?: { service?: any; customer?: any; provider?: any }
 ): Promise<BookingNotificationData | null> => {
   try {
-    // Use pre-populated data if available, otherwise batch fetch
+    // Use pre-populated data if available, otherwise batch fetch in parallel
     let service = prePopulated?.service;
     let provider = prePopulated?.provider;
+    let customer: any = prePopulated?.customer;
 
-    if (!service) {
-      // Try to get from populated booking first
-      service = booking.service || booking._doc?.service;
-      if (!service && booking.serviceId) {
-        const services = await Service.find({ _id: booking.serviceId }).select('name duration').lean();
-        service = services[0];
-      }
-    }
+    // Parallel fetch for any missing data
+    const [serviceData, providerData, customerData] = await Promise.all([
+      // Get service
+      Promise.resolve(service || booking.service || booking._doc?.service).then(async (s) => {
+        if (s) return s;
+        if (booking.serviceId) {
+          const services = await Service.find({ _id: booking.serviceId }).select('name duration').lean();
+          return services[0];
+        }
+        return null;
+      }),
+      // Get provider
+      Promise.resolve(provider || booking.provider || booking._doc?.provider).then(async (p) => {
+        if (p) return p;
+        if (booking.providerId) {
+          const providers = await User.find({ _id: booking.providerId }).select('firstName lastName email').lean();
+          return providers[0];
+        }
+        return null;
+      }),
+      // Get customer
+      Promise.resolve(customer || booking.customer || booking._doc?.customer).then(async (c) => {
+        if (c) return c;
+        if (booking.customerId) {
+          const customers = await User.find({ _id: booking.customerId }).select('firstName lastName email').lean();
+          return customers[0];
+        }
+        return null;
+      }),
+    ]);
+
+    service = serviceData;
+    provider = providerData;
+    customer = customerData;
 
     if (!service) {
       logger.warn('Service not found for booking email', { bookingId: booking._id });
+      return null;
+    }
+
+    if (!provider) {
+      logger.warn('Provider not found for booking email', { bookingId: booking._id });
       return null;
     }
 
@@ -188,31 +255,9 @@ const formatBookingForEmail = async (
     if (booking.isGuestBooking && booking.guestInfo) {
       customerName = booking.guestInfo.name;
       customerEmail = booking.guestInfo.email;
-    } else if (booking.customerId) {
-      // Try to get from pre-populated data or populated booking
-      let customer = prePopulated?.customer || booking.customer || booking._doc?.customer;
-      if (!customer) {
-        const customers = await User.find({ _id: booking.customerId }).select('firstName lastName email').lean();
-        customer = customers[0];
-      }
-      if (customer) {
-        customerName = `${customer.firstName || ''} ${customer.lastName || ''}`.trim() || 'Customer';
-        customerEmail = customer.email || '';
-      }
-    }
-
-    // Get provider info
-    if (!provider) {
-      provider = booking.provider || booking._doc?.provider;
-      if (!provider && booking.providerId) {
-        const providers = await User.find({ _id: booking.providerId }).select('firstName lastName email').lean();
-        provider = providers[0];
-      }
-    }
-
-    if (!provider) {
-      logger.warn('Provider not found for booking email', { bookingId: booking._id });
-      return null;
+    } else if (customer) {
+      customerName = `${customer.firstName || ''} ${customer.lastName || ''}`.trim() || 'Customer';
+      customerEmail = customer.email || '';
     }
 
     const providerName = `${provider.firstName || ''} ${provider.lastName || ''}`.trim() || 'Provider';
@@ -345,7 +390,7 @@ export const createBooking = asyncHandler(async (req: Request, res: Response) =>
     throw new ApiError(400, error.details[0].message);
   }
 
-  const customerId = (req.user as any)._id.toString();
+  const customerId = (req.user as IUser)._id.toString();
   const result = await bookingService.createCustomerBooking(customerId, value);
 
   // Publish booking.created event
@@ -382,16 +427,16 @@ export const getCustomerBookings = asyncHandler(async (req: Request, res: Respon
     throw new ApiError(400, error.details[0].message);
   }
 
-  const customerId = (req.user as any)._id.toString();
+  const customerId = (req.user as IUser)._id.toString();
 
   // CRITICAL: Pass tenant context to prevent cross-tenant data access
-  const userRole = (req.user as any)?.role;
+  const userRole = (req.user as IUser)?.role;
   const tenantContext = {
     tenantId: req.tenantId,
-    isAdmin: userRole === 'admin' || userRole === 'super_admin'
+    isAdmin: userRole === 'admin'
   };
 
-  const result = await bookingService.getCustomerBookings(customerId, value, tenantContext);
+  const result = await bookingService.getCustomerBookings(customerId, value, { tenantContext });
 
   res.json({
     success: true,
@@ -403,11 +448,34 @@ export const getBookingDetails = asyncHandler(async (req: Request, res: Response
   const { id } = req.params;
   const user = req.user as any;
 
-  const booking = await bookingService.getBookingById(id, user._id.toString(), user.role);
+  // SECURITY FIX: IDOR Prevention - Explicit ownership verification BEFORE delegating to service
+  // Fetch booking directly to validate access before any operation
+  const booking = await Booking.findById(id);
+  if (!booking || booking.deletedAt) {
+    throw new ApiError(404, 'Booking not found');
+  }
+
+  // Verify user has access to this booking
+  const isOwner = booking.customerId?.toString() === user._id.toString();
+  const isProvider = booking.providerId?.toString() === user._id.toString();
+  const isAdmin = user.role === 'admin' || user.role === 'super_admin';
+
+  if (!isOwner && !isProvider && !isAdmin) {
+    logger.warn('IDOR attempt detected in getBookingDetails', {
+      action: 'IDOR_ATTEMPT',
+      bookingId: id,
+      userId: user._id,
+      userRole: user.role,
+    });
+    throw new ApiError(403, 'Access denied. You do not have permission to view this booking.');
+  }
+
+  // Now delegate to service for consistent response formatting
+  const result = await bookingService.getBookingById(id, user._id.toString(), user.role);
 
   res.json({
     success: true,
-    data: { booking },
+    data: { booking: result },
   });
 });
 
@@ -422,8 +490,14 @@ export const cancelBooking = asyncHandler(async (req: Request, res: Response) =>
     throw new ApiError(400, error.details[0].message);
   }
 
-  const customerId = (req.user as any)._id.toString();
-  const result = await bookingService.cancelBooking(id, customerId, value);
+  const customerId = (req.user as IUser)._id.toString();
+  // FIX: Pass cancellation token and email for guest booking cancellation
+  const cancelData = {
+    reason: value.reason,
+    cancellationToken: value.cancellationToken,
+    email: value.email,
+  };
+  const result = await bookingService.cancelBooking(id, customerId, cancelData);
 
   // Publish booking.cancelled event
   await eventBus.publish(EVENT_TYPES.BOOKING_CANCELLED, {
@@ -469,18 +543,38 @@ export const rescheduleBooking = asyncHandler(async (req: Request, res: Response
     throw new ApiError(400, error.details[0].message);
   }
 
-  // Get the current booking to capture the old date
-  const currentBooking = await Booking.findById(id);
-  const oldDate = currentBooking
-    ? new Date(currentBooking.scheduledDate).toLocaleDateString('en-US', {
-        weekday: 'long',
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric',
-      })
-    : '';
-
   const user = req.user as any;
+
+  // SECURITY FIX: IDOR Prevention - Explicit ownership verification BEFORE delegating to service
+  // Fetch booking directly to validate access before any operation
+  const currentBooking = await Booking.findById(id);
+  if (!currentBooking || currentBooking.deletedAt) {
+    throw new ApiError(404, 'Booking not found');
+  }
+
+  // Verify user has access to this booking
+  const isOwner = currentBooking.customerId?.toString() === user._id.toString();
+  const isProvider = currentBooking.providerId?.toString() === user._id.toString();
+  const isAdmin = user.role === 'admin' || user.role === 'super_admin';
+
+  if (!isOwner && !isProvider && !isAdmin) {
+    logger.warn('IDOR attempt detected in rescheduleBooking', {
+      action: 'IDOR_ATTEMPT',
+      bookingId: id,
+      userId: user._id,
+      userRole: user.role,
+    });
+    throw new ApiError(403, 'Access denied. You do not have permission to reschedule this booking.');
+  }
+
+  // Capture the old date for notification
+  const oldDate = new Date(currentBooking.scheduledDate).toLocaleDateString('en-US', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
+
   const booking = await bookingService.rescheduleBooking(
     id,
     user._id.toString(),
@@ -528,6 +622,45 @@ export const rescheduleBooking = asyncHandler(async (req: Request, res: Response
 });
 
 // ============================================
+// Report Provider No-Show (Customer Reporting)
+// ============================================
+
+export const reportProviderNoShow = asyncHandler(async (req: Request, res: Response) => {
+  if (req.user?.role !== 'customer') {
+    throw new ApiError(403, 'Only customers can report provider no-show');
+  }
+
+  const { id } = req.params;
+  const { error, value } = reportProviderNoShowSchema.validate(req.body);
+  if (error) {
+    throw new ApiError(400, error.details[0].message);
+  }
+
+  const customerId = (req.user as IUser)._id.toString();
+  const booking = await bookingService.reportProviderNoShow(id, customerId, value.notes);
+
+  // Publish booking.no_show event
+  await eventBus.publish(EVENT_TYPES.BOOKING_NO_SHOW, {
+    bookingId: id,
+    bookingNumber: booking.bookingNumber,
+    customerId,
+    providerId: booking.providerId?.toString(),
+    reportedBy: 'customer',
+    reason: value.notes || 'Customer reported provider did not show up',
+  }, {
+    userId: customerId,
+    ipAddress: req.ip,
+    userAgent: req.get('user-agent'),
+  });
+
+  res.json({
+    success: true,
+    message: 'Provider no-show reported successfully. The provider has been flagged for review.',
+    data: { booking },
+  });
+});
+
+// ============================================
 // Provider Booking Operations
 // ============================================
 
@@ -545,7 +678,7 @@ export const getProviderBookings = asyncHandler(async (req: Request, res: Respon
     throw new ApiError(400, error.details[0].message);
   }
 
-  const providerId = (req.user as any)._id.toString();
+  const providerId = (req.user as IUser)._id.toString();
   const result = await bookingService.getProviderBookings(providerId, value);
 
   res.json({
@@ -565,7 +698,7 @@ export const acceptBooking = asyncHandler(async (req: Request, res: Response) =>
     throw new ApiError(400, error.details[0].message);
   }
 
-  const providerId = (req.user as any)._id.toString();
+  const providerId = (req.user as IUser)._id.toString();
 
   // SECURITY: Conflict detection before accepting booking
   // This prevents accepting a booking for a time slot that conflicts with existing bookings
@@ -617,7 +750,7 @@ export const rejectBooking = asyncHandler(async (req: Request, res: Response) =>
     throw new ApiError(400, error.details[0].message);
   }
 
-  const providerId = (req.user as any)._id.toString();
+  const providerId = (req.user as IUser)._id.toString();
   const booking = await bookingService.rejectBooking(id, providerId, value);
 
   // Publish booking.rejected event
@@ -651,8 +784,8 @@ export const startBooking = asyncHandler(async (req: Request, res: Response) => 
     throw new ApiError(400, error.details[0].message);
   }
 
-  const providerId = (req.user as any)._id.toString();
-  const booking = await bookingService.startBooking(id, providerId, value);
+  const providerId = (req.user as IUser)._id.toString();
+  const booking = await bookingService.startBooking(id, providerId);
 
   res.json({
     success: true,
@@ -672,7 +805,7 @@ export const completeBooking = asyncHandler(async (req: Request, res: Response) 
     throw new ApiError(400, error.details[0].message);
   }
 
-  const providerId = (req.user as any)._id.toString();
+  const providerId = (req.user as IUser)._id.toString();
   const booking = await bookingService.completeBooking(id, providerId, value);
 
   // Publish booking.completed event
@@ -741,8 +874,9 @@ export const markMessagesAsRead = asyncHandler(async (req: Request, res: Respons
   const { id } = req.params;
   const user = req.user as any;
 
+  // SECURITY FIX: Single booking lookup with proper authorization and deletedAt check
   const booking = await Booking.findById(id);
-  if (!booking) {
+  if (!booking || booking.deletedAt) {
     throw new ApiError(404, 'Booking not found');
   }
 
@@ -751,32 +885,37 @@ export const markMessagesAsRead = asyncHandler(async (req: Request, res: Respons
   const isProvider = booking.providerId?.toString() === user._id.toString();
 
   if (!isCustomer && !isProvider) {
-    throw new ApiError(403, 'Not authorized to view this booking');
+    throw new ApiError(403, 'Not authorized to access this booking');
   }
 
   const unreadField = isCustomer ? 'readByCustomer' : 'readByProvider';
 
-  // FIX: Update all messages where the other party sent them with error handling
-  try {
-    const result = await Booking.updateOne(
-      { _id: id },
-      { $set: { [unreadField]: true } }
-    );
+  // SECURITY FIX: Only mark messages from the OTHER party as read, not all messages
+  // Determine which messages to mark as read based on user role
+  // If customer: mark provider's messages as read
+  // If provider: mark customer's messages as read
+  const senderIdToMark = isCustomer ? booking.providerId : booking.customerId;
 
-    res.json({
-      success: true,
-      message: 'Messages marked as read',
-      data: { modified: result.modifiedCount }
-    });
-  } catch (error) {
-    logger.error('Failed to mark messages as read', {
-      bookingId: id,
-      userId: user._id,
-      error: (error as Error).message,
-      action: 'MARK_MESSAGES_READ_FAILED'
-    });
-    throw new ApiError(500, 'Failed to mark messages as read');
-  }
+  // Update messages where sender is the other party and message is not already read
+  const result = await Booking.updateOne(
+    {
+      _id: id,
+      'messages.from': senderIdToMark,
+      'messages.isRead': false
+    },
+    {
+      $set: { 'messages.$[elem].isRead': true, [unreadField]: true },
+    },
+    {
+      arrayFilters: [{ 'elem.from': { $eq: senderIdToMark }, 'elem.isRead': { $eq: false } }]
+    }
+  );
+
+  res.json({
+    success: true,
+    message: 'Messages marked as read',
+    data: { modified: result.modifiedCount }
+  });
 });
 
 // ============================================

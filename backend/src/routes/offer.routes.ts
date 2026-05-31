@@ -1,6 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { offerService } from '../services/offer.service';
-import { authenticate, requireRole } from '../middleware/auth.middleware';
+import { authenticate, optionalAuth, requireRole } from '../middleware/auth.middleware';
 
 const router = Router();
 
@@ -14,8 +14,8 @@ const asyncHandler = (fn: Function) => (req: Request, res: Response, next: NextF
 // ============================================
 
 // GET /api/offers - List active offers for homepage (includes claimed status if authenticated)
-router.get('/', authenticate, asyncHandler(async (req: Request, res: Response) => {
-  const userId = (req as any).user?.id;
+router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = req.user?._id?.toString();
   const offers = await offerService.getActiveOffers(userId);
   res.json({ success: true, data: offers });
 }));

@@ -28,7 +28,7 @@ import { useBookingStore } from '../../stores/bookingStore';
 import { api } from '../../services/api';
 
 const ProfilePage: React.FC = () => {
-  const { user, customerProfile } = useAuthStore();
+  const { user, customerProfile, updateProfile } = useAuthStore();
   const { customerBookings, getCustomerBookings, isLoading: isLoadingBookings } = useBookingStore();
 
   // Fetch bookings on mount
@@ -47,7 +47,14 @@ const ProfilePage: React.FC = () => {
   };
 
   // Personal Information State
-  const [personalInfo, setPersonalInfo] = useState({
+  const [personalInfo, setPersonalInfo] = useState<{
+    firstName: string;
+    lastName: string;
+    email: string;
+    phone: string;
+    gender: string;
+    dateOfBirth: string;
+  }>({
     firstName: user?.firstName || '',
     lastName: user?.lastName || '',
     email: user?.email || '',
@@ -140,32 +147,29 @@ const ProfilePage: React.FC = () => {
 
   const handleSavePersonalInfo = async () => {
     try {
-      const response = await api.patch('/auth/me', {
+      const profileData: {
+        firstName: string;
+        lastName: string;
+        phone?: string;
+        gender?: 'male' | 'female' | 'other' | 'prefer_not_to_say';
+        dateOfBirth?: string;
+      } = {
         firstName: personalInfo.firstName,
         lastName: personalInfo.lastName,
-        phone: personalInfo.phone || undefined,
-        gender: personalInfo.gender || undefined,
-        dateOfBirth: personalInfo.dateOfBirth || undefined,
-      });
+      };
 
-      if (response.data.success) {
-        useAuthStore.setState({
-          user: {
-            ...user!,
-            firstName: personalInfo.firstName,
-            lastName: personalInfo.lastName,
-            phone: personalInfo.phone,
-            gender: personalInfo.gender as any,
-            dateOfBirth: personalInfo.dateOfBirth,
-          }
-        });
+      if (personalInfo.phone) profileData.phone = personalInfo.phone;
+      if (personalInfo.gender) profileData.gender = personalInfo.gender as 'male' | 'female' | 'other' | 'prefer_not_to_say';
+      if (personalInfo.dateOfBirth) profileData.dateOfBirth = personalInfo.dateOfBirth;
 
-        setSaveMessage('Personal information updated successfully!');
-        setIsEditingPersonal(false);
-        setTimeout(() => setSaveMessage(''), 3000);
-      }
-    } catch (error: any) {
-      setErrorMessage(error.response?.data?.message || 'Failed to update personal information');
+      await updateProfile(profileData);
+
+      setSaveMessage('Personal information updated successfully!');
+      setIsEditingPersonal(false);
+      setTimeout(() => setSaveMessage(''), 3000);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Failed to update personal information';
+      setErrorMessage(message);
       setTimeout(() => setErrorMessage(''), 3000);
     }
   };

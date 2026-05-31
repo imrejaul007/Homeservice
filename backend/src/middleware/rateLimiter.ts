@@ -2,6 +2,22 @@ import rateLimit from 'express-rate-limit';
 import { Request, Response } from 'express';
 import logger from '../utils/logger';
 
+// SECURITY FIX: Redis rate limiting is REQUIRED in production
+const useRedis = process.env.NODE_ENV === 'production'
+  ? true
+  : (process.env.REDIS_ENABLED === 'true');
+
+// Log Redis requirement status
+if (process.env.NODE_ENV === 'production' && !useRedis) {
+  logger.warn('SECURITY WARNING: Redis rate limiting is disabled in production!', {
+    action: 'RATE_LIMIT_REDIS_DISABLED_PROD',
+  });
+} else if (useRedis) {
+  logger.info('Rate limiting with Redis enabled', {
+    action: 'RATE_LIMIT_REDIS_ENABLED',
+  });
+}
+
 /**
  * Helper to set rate limit headers on response
  * Sets both legacy (X-RateLimit-*) and standard (RateLimit-*) headers
@@ -263,6 +279,32 @@ export const adminLimiter = rateLimit({
   },
 });
 
+/**
+ * Registration limiter - very strict rate limiting for registration endpoints
+ * SECURITY FIX: Prevents registration enumeration attacks and bot signups
+ * Limits to 3 registration attempts per 10 minutes per IP
+ */
+export const registrationLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000, // 10 minutes
+  max: 3, // 3 registration attempts per 10 minutes per IP
+  message: { success: false, error: 'Too many registration attempts, please try again in 10 minutes.' },
+  standardHeaders: true,
+  legacyHeaders: true,
+  skipSuccessfulRequests: false, // Count all attempts to prevent timing-based enumeration
+  handler: (req: Request, res: Response) => {
+    logger.warn('Registration rate limit exceeded', {
+      ip: req.ip,
+      path: req.path,
+      email: req.body?.email,
+      action: 'REGISTRATION_RATE_LIMIT_EXCEEDED',
+    });
+    res.status(429).json({
+      success: false,
+      error: 'Too many registration attempts, please try again in 10 minutes.',
+    });
+  },
+});
+
 export default {
   apiLimiter,
   authLimiter,
@@ -276,4 +318,5 @@ export default {
   strictRateLimiter,
   perUserRateLimiter,
   adminLimiter,
+  registrationLimiter,
 };

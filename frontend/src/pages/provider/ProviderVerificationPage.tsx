@@ -54,7 +54,7 @@ const ProviderVerificationPage: React.FC = () => {
   // Redirect if not a provider
   useEffect(() => {
     if (user?.role !== 'provider') {
-      navigate('/dashboard');
+      navigate('/provider/dashboard'); // FIX: Was '/dashboard'
     }
   }, [user, navigate]);
 
@@ -130,8 +130,6 @@ const ProviderVerificationPage: React.FC = () => {
     // Listen for provider approved
     unsubscribers.push(
       socketService.onProviderApproved(() => {
-        // Log minimal info for debugging
-        console.log('Provider verification approved');
         toast.addToast({
           title: 'Verification Approved',
           description: 'Your provider account has been verified!',
@@ -145,8 +143,6 @@ const ProviderVerificationPage: React.FC = () => {
     // Listen for provider rejected
     unsubscribers.push(
       socketService.onProviderRejected((data) => {
-        // Log minimal info for debugging without exposing sensitive details
-        console.log('Provider verification rejected');
         toast.addToast({
           title: 'Verification Rejected',
           description: data.reason || 'Your verification was rejected.',
@@ -158,8 +154,6 @@ const ProviderVerificationPage: React.FC = () => {
     // Listen for provider suspended
     unsubscribers.push(
       socketService.onProviderSuspended(() => {
-        // Log minimal info for debugging
-        console.log('Provider account suspended');
         toast.addToast({
           title: 'Account Suspended',
           description: 'Your account has been suspended.',
@@ -171,8 +165,6 @@ const ProviderVerificationPage: React.FC = () => {
     // Listen for document verified
     unsubscribers.push(
       socketService.onDocumentVerified((data) => {
-        // Log minimal info for debugging without exposing document details
-        console.log('Document verified:', data.documentId);
         setVerificationSteps((steps) =>
           steps.map((step) => ({
             ...step,
@@ -194,8 +186,6 @@ const ProviderVerificationPage: React.FC = () => {
     // Listen for verification complete
     unsubscribers.push(
       socketService.onVerificationComplete(() => {
-        // Log minimal info for debugging
-        console.log('Verification complete');
         toast.addToast({
           title: 'Verification Complete',
           description: 'You are now a verified provider!',

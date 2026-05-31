@@ -1,5 +1,7 @@
+import mongoose from 'mongoose';
 import User from '../models/user.model';
 import logger from '../utils/logger';
+import { ApiError } from '../utils/ApiError';
 
 export interface OnboardingStep {
   id: string;
@@ -116,11 +118,24 @@ class OnboardingService {
     progress: number;
     totalReward: number;
     earnedReward: number;
+    startedAt?: Date;
+    completedAt?: Date;
   }> {
+    // FIX: Validate userId format
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      throw new ApiError(400, 'Invalid user ID format');
+    }
+
     const user = await User.findById(userId);
+
+    // FIX: Return clear error if user not found
+    if (!user) {
+      throw new ApiError(404, 'User not found');
+    }
 
     const completed = (user as any)?.onboardingProgress?.completedSteps || [];
     const completedSet = new Set(completed);
+    const startedAt = (user as any)?.onboardingProgress?.startedAt;
 
     // Calculate which steps are applicable
     const applicableSteps = ONBOARDING_STEPS.filter(step => {
@@ -143,6 +158,10 @@ class OnboardingService {
       .filter(s => completedSet.has(s.id))
       .reduce((sum, s) => sum + (s.reward?.amount || 0), 0);
 
+    // FIX: Check if onboarding was completed (not just current step)
+    const isComplete = completedSet.size >= applicableSteps.length &&
+      applicableSteps.every(s => completedSet.has(s.id));
+
     return {
       steps: applicableSteps,
       completed,
@@ -152,25 +171,55 @@ class OnboardingService {
         : 100,
       totalReward,
       earnedReward,
+      startedAt,
+      completedAt: (user as any)?.onboardingProgress?.completedAt,
     };
   }
 
   async completeStep(userId: string, stepId: string): Promise<{ success: boolean; reward?: number; completed: boolean }> {
+    // FIX: Validate inputs
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      throw new ApiError(400, 'Invalid user ID format');
+    }
+
+    if (!stepId || typeof stepId !== 'string') {
+      throw new ApiError(400, 'Step ID is required');
+    }
+
     const step = ONBOARDING_STEPS.find(s => s.id === stepId);
     if (!step) {
-      return { success: false, completed: false };
+      throw new ApiError(404, 'Onboarding step not found');
     }
 
     const user = await User.findById(userId);
+    // FIX: Check user exists before proceeding
+    if (!user) {
+      throw new ApiError(404, 'User not found');
+    }
+
     const completed = (user as any)?.onboardingProgress?.completedSteps || [];
 
     if (completed.includes(stepId)) {
       return { success: true, completed: false };
     }
 
+    // FIX: Initialize onboardingProgress if it doesn't exist
+    const updates: any = {};
+
     // Mark step as completed
+    updates['onboardingProgress.completedSteps'] = stepId;
+    updates['onboardingProgress.currentStep'] = (user as any)?.onboardingProgress?.currentStep || 0;
+
+    // FIX: Set startedAt on first step completion
+    if (!((user as any)?.onboardingProgress?.startedAt)) {
+      updates['onboardingProgress.startedAt'] = new Date();
+    }
+
     await User.findByIdAndUpdate(userId, {
       $push: { 'onboardingProgress.completedSteps': stepId },
+      $set: {
+        ...updates,
+      },
     });
 
     // Award reward
@@ -184,22 +233,29 @@ class OnboardingService {
 
     // Check if onboarding is complete
     const progress = await this.getOnboardingProgress(userId);
-    const isComplete = progress.currentStep >= progress.steps.length;
+    // FIX: Check all required steps are completed, not just current step
+    const allRequiredCompleted = progress.steps
+      .filter(s => s.required)
+      .every(s => progress.completed.includes(s.id));
 
-    if (isComplete) {
+    if (allRequiredCompleted) {
       await User.findByIdAndUpdate(userId, {
         $set: { 'onboardingProgress.completedAt': new Date() },
       });
+      logger.info('Onboarding completed', { userId });
     }
 
     logger.info('Onboarding step completed', { userId, stepId, reward });
 
-    return { success: true, reward, completed: isComplete };
+    return { success: true, reward, completed: allRequiredCompleted };
   }
 
   async isOnboardingComplete(userId: string): Promise<boolean> {
     const progress = await this.getOnboardingProgress(userId);
-    return progress.currentStep >= progress.steps.length;
+    // FIX: Check all required steps are completed
+    return progress.steps
+      .filter(s => s.required)
+      .every(s => progress.completed.includes(s.id));
   }
 
   async getOnboardingSteps(): Promise<OnboardingStep[]> {

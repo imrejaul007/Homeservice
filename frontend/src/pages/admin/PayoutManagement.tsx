@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { toast } from 'react-hot-toast';
 import { ErrorBoundary } from '../../components/common/ErrorBoundary';
 import {
   ArrowLeft,
@@ -26,6 +27,7 @@ import {
 } from 'lucide-react';
 import { payoutApi, type AdminWithdrawal, type WithdrawalStats, type WithdrawalFilters, type WithdrawalDetails } from '../../services/payoutApi';
 import { useAuthStore } from '../../stores/authStore';
+import { AdminPageShell } from '../../components/admin/AdminPageShell';
 
 interface PayoutManagementProps {}
 
@@ -84,7 +86,9 @@ const PayoutManagement: React.FC<PayoutManagementProps> = () => {
         setPagination(response.data.pagination);
       }
     } catch (err: any) {
-      setError(err.message || 'Failed to load withdrawals');
+      const message = err.message || 'Failed to load withdrawals';
+      setError(message);
+      toast.error(message);
     } finally {
       setIsLoading(false);
     }
@@ -100,6 +104,7 @@ const PayoutManagement: React.FC<PayoutManagementProps> = () => {
       }
     } catch (err) {
       console.error('Failed to load stats:', err);
+      toast.error(err instanceof Error ? err.message : 'Failed to load statistics. Please try again.');
     } finally {
       setIsLoadingStats(false);
     }
@@ -114,7 +119,9 @@ const PayoutManagement: React.FC<PayoutManagementProps> = () => {
         setDetailData(response.data);
       }
     } catch (err: any) {
-      setError(err.message || 'Failed to load withdrawal details');
+      const message = err.message || 'Failed to load withdrawal details';
+      setError(message);
+      toast.error(message);
     } finally {
       setIsLoadingDetail(false);
     }
@@ -187,14 +194,19 @@ const PayoutManagement: React.FC<PayoutManagementProps> = () => {
       }
 
       if (response.success) {
+        toast.success(`Withdrawal ${processAction === 'approve' ? 'approved' : 'rejected'} successfully`);
         closeProcessModal();
         fetchWithdrawals();
         fetchStats();
       } else {
-        setError(response.message || `Failed to ${processAction} withdrawal`);
+        const errorMsg = response.message || `Failed to ${processAction} withdrawal`;
+        setError(errorMsg);
+        toast.error(errorMsg);
       }
     } catch (err: any) {
-      setError(err.message || `Failed to ${processAction} withdrawal`);
+      const errorMsg = err.message || `Failed to ${processAction} withdrawal`;
+      setError(errorMsg);
+      toast.error(errorMsg);
     } finally {
       setIsProcessing(false);
     }
@@ -260,29 +272,16 @@ const PayoutManagement: React.FC<PayoutManagementProps> = () => {
 
   return (
     <ErrorBoundary>
-      <div className="min-h-screen bg-gray-50">
-        {/* Header */}
-      <div className="bg-white border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-4">
-              <button
-                onClick={() => navigate('/admin')}
-                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-              >
-                <ArrowLeft className="w-5 h-5 text-gray-600" />
-              </button>
-              <div>
-                <h1 className="text-2xl font-bold text-gray-900">Payout Management</h1>
-                <p className="text-sm text-gray-500">Manage provider withdrawal requests</p>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
+      <AdminPageShell
+        title="Payout Management"
+        subtitle="Manage provider withdrawal requests"
+        breadcrumbItems={[
+          { label: 'Admin', href: '/admin/dashboard' },
+          { label: 'Payouts', current: true },
+        ]}
+      >
       {/* Stats Cards */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      <div className="py-2">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           {/* Pending */}
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
@@ -778,41 +777,47 @@ const PayoutManagement: React.FC<PayoutManagementProps> = () => {
                   </div>
 
                   {/* Bank Details */}
-                  {detailData.transaction.metadata?.bankAccount && (
-                    <div>
-                      <h4 className="text-sm font-medium text-gray-500 uppercase mb-3">
-                        Bank Account
-                      </h4>
-                      <div className="bg-gray-50 rounded-lg p-4 space-y-2">
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm text-gray-500">Bank</span>
-                          <span className="text-sm text-gray-900">
-                            {(detailData.transaction.metadata as { bankAccount: { bankName: string; accountHolder: string; accountNumber: string; iban?: string } }).bankAccount.bankName}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm text-gray-500">Account Holder</span>
-                          <span className="text-sm text-gray-900">
-                            {(detailData.transaction.metadata as { bankAccount: { bankName: string; accountHolder: string; accountNumber: string; iban?: string } }).bankAccount.accountHolder}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm text-gray-500">Account Number</span>
-                          <span className="text-sm text-gray-900 font-mono">
-                            {(detailData.transaction.metadata as { bankAccount: { bankName: string; accountHolder: string; accountNumber: string; iban?: string } }).bankAccount.accountNumber}
-                          </span>
-                        </div>
-                        {(detailData.transaction.metadata as { bankAccount: { bankName: string; accountHolder: string; accountNumber: string; iban?: string } }).bankAccount.iban && (
+                  {/* SECURITY FIX: Use safe type extraction with optional chaining */}
+                  {(() => {
+                    const metadata = detailData.transaction.metadata as Record<string, unknown> | undefined;
+                    const bankAccount = metadata?.bankAccount as { bankName?: string; accountHolder?: string; accountNumber?: string; iban?: string } | undefined;
+                    if (!bankAccount) return null;
+                    return (
+                      <div>
+                        <h4 className="text-sm font-medium text-gray-500 uppercase mb-3">
+                          Bank Account
+                        </h4>
+                        <div className="bg-gray-50 rounded-lg p-4 space-y-2">
                           <div className="flex items-center justify-between">
-                            <span className="text-sm text-gray-500">IBAN</span>
-                            <span className="text-sm text-gray-900 font-mono">
-                              {(detailData.transaction.metadata as { bankAccount: { bankName: string; accountHolder: string; accountNumber: string; iban?: string } }).bankAccount.iban}
+                            <span className="text-sm text-gray-500">Bank</span>
+                            <span className="text-sm text-gray-900">
+                              {bankAccount.bankName ?? 'N/A'}
                             </span>
                           </div>
-                        )}
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm text-gray-500">Account Holder</span>
+                            <span className="text-sm text-gray-900">
+                              {bankAccount.accountHolder ?? 'N/A'}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm text-gray-500">Account Number</span>
+                            <span className="text-sm text-gray-900 font-mono">
+                              {bankAccount.accountNumber ?? 'N/A'}
+                            </span>
+                          </div>
+                          {bankAccount.iban && (
+                            <div className="flex items-center justify-between">
+                              <span className="text-sm text-gray-500">IBAN</span>
+                              <span className="text-sm text-gray-900 font-mono">
+                                {bankAccount.iban}
+                              </span>
+                            </div>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    );
+                  })()}
 
                   {/* Wallet Info */}
                   <div>
@@ -840,23 +845,30 @@ const PayoutManagement: React.FC<PayoutManagementProps> = () => {
                   </div>
 
                   {/* Rejection Reason */}
-                  {detailData.transaction.metadata?.rejectionReason && (
-                    <div>
-                      <h4 className="text-sm font-medium text-gray-500 uppercase mb-3">
-                        Rejection Reason
-                      </h4>
-                      <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-                        <p className="text-sm text-red-800">
-                          {(detailData.transaction.metadata as { rejectionReason?: string; rejectedAt?: string }).rejectionReason}
-                        </p>
-                        <p className="text-xs text-red-600 mt-2">
-                          Rejected on{' '}
-                          {(detailData.transaction.metadata as { rejectionReason?: string; rejectedAt?: string }).rejectedAt &&
-                            formatDate((detailData.transaction.metadata as { rejectionReason?: string; rejectedAt?: string }).rejectedAt!)}
-                        </p>
+                  {/* SECURITY FIX: Use safe type extraction with optional chaining */}
+                  {(() => {
+                    const metadata = detailData.transaction.metadata as Record<string, unknown> | undefined;
+                    const rejectionReason = metadata?.rejectionReason as string | undefined;
+                    const rejectedAt = metadata?.rejectedAt as string | undefined;
+                    if (!rejectionReason) return null;
+                    return (
+                      <div>
+                        <h4 className="text-sm font-medium text-gray-500 uppercase mb-3">
+                          Rejection Reason
+                        </h4>
+                        <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                          <p className="text-sm text-red-800">
+                            {rejectionReason}
+                          </p>
+                          {rejectedAt && (
+                            <p className="text-xs text-red-600 mt-2">
+                              Rejected on {formatDate(rejectedAt)}
+                            </p>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    );
+                  })()}
                 </div>
               ) : (
                 <p className="text-center text-gray-500">No details available</p>
@@ -865,7 +877,7 @@ const PayoutManagement: React.FC<PayoutManagementProps> = () => {
           </div>
         </div>
       )}
-    </div>
+      </AdminPageShell>
     </ErrorBoundary>
   );
 };

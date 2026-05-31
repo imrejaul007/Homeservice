@@ -710,6 +710,30 @@ export const analyticsApi = {
     return response.data;
   },
 
+  // Provider Travel Metrics
+  getProviderTravelMetrics: async (providerId: string): Promise<ProviderTravelMetrics> => {
+    const response = await api.get(`/analytics/provider/${providerId}/travel`);
+    return response.data.data;
+  },
+
+  // Service Profitability
+  getServiceProfitability: async (providerId: string): Promise<ServiceProfitabilityData> => {
+    const response = await api.get(`/analytics/provider/${providerId}/profitability`);
+    return response.data.data;
+  },
+
+  // Competitive Position
+  getCompetitivePosition: async (providerId: string): Promise<CompetitivePositionData> => {
+    const response = await api.get(`/analytics/provider/${providerId}/competitive`);
+    return response.data.data;
+  },
+
+  // ROAS Metrics
+  getROASMetrics: async (providerId: string): Promise<ROASMetricsData> => {
+    const response = await api.get(`/analytics/provider/${providerId}/roas`);
+    return response.data.data;
+  },
+
   // Booking Funnel Analytics
   getBookingFunnel: async (startDate?: string, endDate?: string): Promise<FunnelMetrics> => {
     const response = await api.get('/analytics/funnel', {
@@ -726,6 +750,169 @@ export const analyticsApi = {
     return response.data.data;
   },
 };
+
+// ============================================
+// Provider Travel Metrics Types
+// ============================================
+
+export interface TravelData {
+  date: string;
+  totalTravelTime: number;
+  avgTravelTime: number;
+  totalDistance: number;
+  bookings: number;
+  efficiency: number;
+}
+
+export interface TravelStats {
+  totalTravelTime: number;
+  avgTravelTime: number;
+  totalDistance: number;
+  avgDistance: number;
+  fuelCost: number;
+  mostRemoteJob: string;
+  leastEfficient: string;
+  potentialSavings: number;
+  efficiency: number;
+}
+
+export interface JobsByArea {
+  area: string;
+  jobs: number;
+  avgTravel: number;
+  avgDistance: number;
+}
+
+export interface ProviderTravelMetrics {
+  travelData: TravelData[];
+  stats: TravelStats;
+  jobsByArea: JobsByArea[];
+}
+
+// ============================================
+// Service Profitability Types
+// ============================================
+
+export interface ServiceData {
+  serviceId: string;
+  serviceName: string;
+  revenue: number;
+  costs: number;
+  profit: number;
+  margin: number;
+  bookings: number;
+  avgPrice: number;
+  trend: number;
+  category: string;
+}
+
+export interface ProfitabilityStats {
+  totalRevenue: number;
+  totalCosts: number;
+  totalProfit: number;
+  averageMargin: number;
+  topPerformer: string;
+  worstPerformer: string;
+  potentialSavings: number;
+}
+
+export interface ServiceProfitabilityData {
+  services: ServiceData[];
+  stats: ProfitabilityStats;
+}
+
+// ============================================
+// Competitive Position Types
+// ============================================
+
+export interface RankingData {
+  metric: string;
+  yourRank: number;
+  totalProviders: number;
+  percentile: number;
+  change: number;
+}
+
+export interface ComparisonData {
+  category: string;
+  you: number;
+  average: number;
+  top10: number;
+  top1: number;
+}
+
+export interface RadarData {
+  metric: string;
+  value: number;
+  max: number;
+}
+
+export interface SuggestionData {
+  category: string;
+  priority: 'high' | 'medium' | 'low';
+  title: string;
+  description: string;
+  potential: number;
+}
+
+export interface PositionStats {
+  overallRank: number;
+  totalProviders: number;
+  percentile: number;
+  trend: number;
+  marketShare: number;
+  rating: number;
+  reviews: number;
+}
+
+export interface CompetitivePositionData {
+  rankingData: RankingData[];
+  comparisonData: ComparisonData[];
+  radarData: RadarData[];
+  suggestions: SuggestionData[];
+  stats: PositionStats;
+}
+
+// ============================================
+// ROAS Types
+// ============================================
+
+export interface ROASData {
+  date: string;
+  adSpend: number;
+  revenue: number;
+  bookings: number;
+  roas: number;
+  cpc: number;
+  impressions: number;
+  clicks: number;
+}
+
+export interface ROASStats {
+  totalAdSpend: number;
+  totalRevenue: number;
+  overallROAS: number;
+  averageROAS: number;
+  totalBookings: number;
+  costPerBooking: number;
+  bestCampaign: string;
+  worstCampaign: string;
+  targetROAS: number;
+}
+
+export interface CampaignData {
+  name: string;
+  spend: number;
+  revenue: number;
+  roas: number;
+  status: 'active' | 'paused';
+}
+
+export interface ROASMetricsData {
+  roasData: ROASData[];
+  stats: ROASStats;
+  campaigns: CampaignData[];
+}
 
 // ============================================
 // Funnel Analytics Types

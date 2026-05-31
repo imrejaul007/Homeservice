@@ -21,6 +21,7 @@ import { useNavigate } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
 import { useAuthStore } from '../../stores/authStore';
 import PageLayout from '../../components/layout/PageLayout';
+import { AdminPageShell } from '../../components/admin/AdminPageShell';
 import ErrorBoundary from '../../components/common/ErrorBoundary';
 import type { Category, Subcategory } from '../../types/category';
 
@@ -660,9 +661,13 @@ const CategoryManagement: React.FC = () => {
 
   return (
     <ErrorBoundary>
-    <PageLayout
+    <AdminPageShell
       title="Category Management"
       subtitle="Manage service categories and their subcategories"
+      breadcrumbItems={[
+        { label: 'Admin', href: '/admin/dashboard' },
+        { label: 'Categories', current: true },
+      ]}
     >
       <div className="space-y-6">
         {/* Header Actions */}
@@ -1049,7 +1054,7 @@ const CategoryManagement: React.FC = () => {
           tokens={tokens || {}}
         />
       )}
-    </PageLayout>
+    </AdminPageShell>
     </ErrorBoundary>
   );
 };

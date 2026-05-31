@@ -24,7 +24,7 @@ const Footer: React.FC = () => {
     // { name: 'Partners', path: '/partners' },
     { name: 'Home', path: '/' },
     { name: 'Search', path: '/search' },
-    { name: 'For Providers', path: '/provider/register' },
+    { name: 'For Providers', path: '/register/provider' }, // FIX: Was '/provider/register'
   ];
 
   const support = [

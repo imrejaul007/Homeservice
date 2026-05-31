@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { Types } from 'mongoose';
+import Joi from 'joi';
 import payoutEngineService from '../services/payoutEngine.service';
 import settlementService from '../services/settlement.service';
 import Payout from '../models/payout.model';
@@ -8,6 +9,58 @@ import { ApiError } from '../utils/ApiError';
 import authMiddleware from '../middleware/auth.middleware';
 import { asyncHandler } from '../utils/asyncHandler';
 import logger from '../utils/logger';
+
+// FIX: Add validation schemas
+const payoutIdParamSchema = Joi.object({
+  payoutId: Joi.string().required().custom((value, helpers) => {
+    if (!Types.ObjectId.isValid(value)) {
+      return helpers.error('any.invalid');
+    }
+    return value;
+  }).messages({
+    'any.invalid': 'Invalid payout ID format',
+  }),
+});
+
+const settlementIdParamSchema = Joi.object({
+  settlementId: Joi.string().required().custom((value, helpers) => {
+    if (!Types.ObjectId.isValid(value)) {
+      return helpers.error('any.invalid');
+    }
+    return value;
+  }).messages({
+    'any.invalid': 'Invalid settlement ID format',
+  }),
+});
+
+const dateRangeSchema = Joi.object({
+  periodStart: Joi.date().iso().required(),
+  periodEnd: Joi.date().iso().required().greater(Joi.ref('periodStart')),
+});
+
+const payoutConfigUpdateSchema = Joi.object({
+  frequency: Joi.string().valid('weekly', 'bi-weekly', 'monthly').required(),
+  dayOfWeek: Joi.number().min(0).max(6).when('frequency', {
+    is: Joi.valid('weekly', 'bi-weekly'),
+    then: Joi.optional(),
+    otherwise: Joi.forbidden(),
+  }),
+  dayOfMonth: Joi.number().min(1).max(28).when('frequency', {
+    is: 'monthly',
+    then: Joi.optional(),
+    otherwise: Joi.forbidden(),
+  }),
+  minPayoutAmount: Joi.number().min(1).max(100000).default(100),
+  maxPayoutAmount: Joi.number().min(1).max(1000000),
+  bankDetails: Joi.object({
+    bankName: Joi.string().max(100),
+    accountNumber: Joi.string().max(50),
+    accountHolderName: Joi.string().max(100),
+    iban: Joi.string().max(34),
+    swiftCode: Joi.string().max(11),
+    routingNumber: Joi.string().max(20),
+  }),
+});
 
 const router = Router();
 
@@ -103,6 +156,12 @@ router.get(
 router.get(
   '/payouts/:payoutId',
   asyncHandler(async (req: Request, res: Response) => {
+    // FIX: Validate payout ID format
+    const { error } = payoutIdParamSchema.validate(req.params);
+    if (error) {
+      throw new ApiError(400, error.message);
+    }
+
     const { payoutId } = req.params;
     const providerId = req.user?._id.toString();
     if (!providerId) {
@@ -132,6 +191,12 @@ router.get(
 router.post(
   '/payouts/:payoutId/cancel',
   asyncHandler(async (req: Request, res: Response) => {
+    // FIX: Validate payout ID format
+    const { error: paramError } = payoutIdParamSchema.validate(req.params);
+    if (paramError) {
+      throw new ApiError(400, paramError.message);
+    }
+
     const { payoutId } = req.params;
     const { reason } = req.body;
     const providerId = req.user?._id.toString();
@@ -139,8 +204,8 @@ router.post(
       throw new ApiError(401, 'Authentication required');
     }
 
-    if (!reason) {
-      throw new ApiError(400, 'Cancellation reason is required');
+    if (!reason || typeof reason !== 'string' || reason.trim().length < 3) {
+      throw new ApiError(400, 'Cancellation reason must be at least 3 characters');
     }
 
     // Verify ownership
@@ -297,6 +362,12 @@ router.get(
 router.get(
   '/settlements/:settlementId',
   asyncHandler(async (req: Request, res: Response) => {
+    // FIX: Validate settlement ID format
+    const { error } = settlementIdParamSchema.validate(req.params);
+    if (error) {
+      throw new ApiError(400, error.message);
+    }
+
     const { settlementId } = req.params;
     const providerId = req.user?._id.toString();
     if (!providerId) {
@@ -329,6 +400,12 @@ router.get(
 router.post(
   '/settlements/:settlementId/dispute',
   asyncHandler(async (req: Request, res: Response) => {
+    // FIX: Validate settlement ID format
+    const { error: paramError } = settlementIdParamSchema.validate(req.params);
+    if (paramError) {
+      throw new ApiError(400, paramError.message);
+    }
+
     const { settlementId } = req.params;
     const { reason } = req.body;
     const providerId = req.user?._id.toString();
@@ -336,8 +413,8 @@ router.post(
       throw new ApiError(401, 'Authentication required');
     }
 
-    if (!reason) {
-      throw new ApiError(400, 'Dispute reason is required');
+    if (!reason || typeof reason !== 'string' || reason.trim().length < 10) {
+      throw new ApiError(400, 'Dispute reason must be at least 10 characters');
     }
 
     // Verify ownership
@@ -431,7 +508,14 @@ router.put(
     if (!providerId) {
       throw new ApiError(401, 'Authentication required');
     }
-    const { frequency, dayOfWeek, dayOfMonth, minPayoutAmount, maxPayoutAmount, bankDetails } = req.body;
+
+    // FIX: Validate payout config update
+    const { error, value } = payoutConfigUpdateSchema.validate(req.body);
+    if (error) {
+      throw new ApiError(400, error.message);
+    }
+
+    const { frequency, dayOfWeek, dayOfMonth, minPayoutAmount, maxPayoutAmount, bankDetails } = value;
 
     const config = payoutEngineService.updateProviderPayoutConfig(providerId, {
       schedule: {
@@ -469,10 +553,18 @@ router.post(
   '/admin/generate-settlements',
   authMiddleware.requireRole('admin'),
   asyncHandler(async (req: Request, res: Response) => {
-    const { periodStart, periodEnd } = req.body;
+    // FIX: Validate date range input
+    const { error, value } = dateRangeSchema.validate(req.body);
+    if (error) {
+      throw new ApiError(400, error.message);
+    }
 
-    if (!periodStart || !periodEnd) {
-      throw new ApiError(400, 'Period start and end dates are required');
+    const { periodStart, periodEnd } = value;
+
+    // Validate period isn't too large (max 1 year)
+    const periodDays = (new Date(periodEnd).getTime() - new Date(periodStart).getTime()) / (1000 * 60 * 60 * 24);
+    if (periodDays > 365) {
+      throw new ApiError(400, 'Period cannot exceed 365 days');
     }
 
     const results = await settlementService.generateBulkSettlements(
@@ -500,6 +592,12 @@ router.post(
   '/admin/approve-settlement/:settlementId',
   authMiddleware.requireRole('admin'),
   asyncHandler(async (req: Request, res: Response) => {
+    // FIX: Validate settlement ID format
+    const { error } = settlementIdParamSchema.validate(req.params);
+    if (error) {
+      throw new ApiError(400, error.message);
+    }
+
     const { settlementId } = req.params;
     const adminId = req.user?._id.toString();
 
@@ -526,6 +624,12 @@ router.post(
   '/admin/pay-settlement/:settlementId',
   authMiddleware.requireRole('admin'),
   asyncHandler(async (req: Request, res: Response) => {
+    // FIX: Validate settlement ID format
+    const { error } = settlementIdParamSchema.validate(req.params);
+    if (error) {
+      throw new ApiError(400, error.message);
+    }
+
     const { settlementId } = req.params;
 
     await settlementService.paySettlement(settlementId);
@@ -551,7 +655,9 @@ router.post(
   '/admin/process-payouts',
   authMiddleware.requireRole('admin'),
   asyncHandler(async (req: Request, res: Response) => {
-    const { batchSize = 100 } = req.body;
+    // FIX: Validate and sanitize batch size
+    let { batchSize = 100 } = req.body;
+    batchSize = Math.min(Math.max(1, parseInt(batchSize, 10) || 100), 500); // Between 1-500
 
     const results = await payoutEngineService.processDuePayouts(batchSize);
 

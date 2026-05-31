@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+﻿import mongoose from 'mongoose';
 import ProviderProfile, { IProviderProfile } from '../models/providerProfile.model';
 import ProviderVerification, { IProviderVerification } from '../models/providerVerification.model';
 import User from '../models/user.model';
@@ -8,6 +8,8 @@ import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
 import logger from '../utils/logger';
 import { fraudDetectionService, FraudReport } from './fraudDetection.service';
+import { NotificationService } from './notification.service';
+import { getSocketServer } from '../socket';
 
 // ============================================
 // Provider Operations Types
@@ -234,7 +236,7 @@ export class ProviderOpsService {
         providerId,
         status: 'pending',
         documents: [],
-        backgroundCheck: { status: 'pending' },
+        backgroundChecks: [],
         fraudFlags: [],
         reviewHistory: [],
         metadata: { verificationAttempts: 0 },
@@ -957,61 +959,172 @@ export class ProviderOpsService {
 
   /**
    * Approve a provider
+   * SECURITY FIX: Added distributed lock to prevent race conditions during approval
    */
   async approveProvider(
     providerId: string,
     adminId: string,
     notes?: string
   ): Promise<{ provider: any; verification: any; metrics: ProviderMetrics }> {
-    const verification = await ProviderVerification.findOne({ providerId });
-    if (!verification) {
-      throw new ApiError(404, 'Verification record not found');
+    // SECURITY FIX: Acquire distributed lock to prevent concurrent approval attempts
+    const { redis, isRedisAvailable } = await import('../config/redis');
+    const lockKey = `provider:approve:${providerId}`;
+    let lockAcquired = false;
+
+    if (redis && isRedisAvailable()) {
+      const lock = await redis.set(lockKey, adminId, 'EX', 30, 'NX');
+      if (!lock) {
+        throw new ApiError(409, 'Provider approval already in progress. Please try again.');
+      }
+      lockAcquired = true;
+      logger.info('Acquired distributed lock for provider approval', {
+        providerId,
+        adminId,
+        lockKey,
+        action: 'PROVIDER_APPROVAL_LOCK_ACQUIRED',
+      });
     }
 
-    // Update verification status
-    verification.status = 'verified';
-    verification.reviewHistory.push({
-      action: 'approved',
-      performedBy: new mongoose.Types.ObjectId(adminId),
-      performedAt: new Date(),
-      notes,
-      previousStatus: verification.status,
-      newStatus: 'verified',
-    });
-    await verification.save();
+    try {
+      // Check if already approved
+      const existingVerification = await ProviderVerification.findOne({ providerId });
+      if (existingVerification?.status === 'verified') {
+        throw new ApiError(400, 'Provider is already approved');
+      }
 
-    // Update user status
-    await User.findByIdAndUpdate(providerId, {
-      accountStatus: 'active',
-    });
+      const verification = await ProviderVerification.findOne({ providerId });
+      if (!verification) {
+        throw new ApiError(404, 'Verification record not found');
+      }
 
-    // Update provider profile
-    const providerProfile = await ProviderProfile.findOne({ userId: providerId });
-    if (providerProfile) {
-      providerProfile.verificationStatus.overall = 'approved';
-      providerProfile.instagramStyleProfile.isVerified = true;
-      await providerProfile.save();
+      // Update verification status
+      verification.status = 'verified';
+      verification.reviewHistory.push({
+        action: 'approved',
+        performedBy: new mongoose.Types.ObjectId(adminId),
+        performedAt: new Date(),
+        notes,
+        previousStatus: verification.status,
+        newStatus: 'verified',
+      });
+      await verification.save();
+
+      // Update user status
+      await User.findByIdAndUpdate(providerId, {
+        accountStatus: 'active',
+      });
+
+      // Update provider profile
+      const providerProfile = await ProviderProfile.findOne({ userId: providerId });
+      if (providerProfile) {
+        providerProfile.verificationStatus.overall = 'approved';
+        providerProfile.instagramStyleProfile.isVerified = true;
+        await providerProfile.save();
+      }
+
+      // Activate services that were pending review
+      const activatedServices = await Service.updateMany(
+        { providerId, status: 'pending_review' },
+        { $set: { isActive: true, status: 'active' } }
+      );
+
+      // Notify provider about service activation
+      if (activatedServices.modifiedCount > 0) {
+        try {
+          const notificationService = new NotificationService();
+          await notificationService.createNotification({
+            recipientId: providerId,
+            type: 'service_approved',
+            title: 'Services Activated',
+            message: `Your services are now live! ${activatedServices.modifiedCount} service(s) have been activated and are visible to customers.`,
+            metadata: {
+              providerId,
+              activatedCount: activatedServices.modifiedCount,
+            },
+          });
+          logger.info('Service activation notification sent', {
+            providerId,
+            activatedCount: activatedServices.modifiedCount,
+          });
+        } catch (notificationError) {
+          logger.error('Failed to send service activation notification', {
+            providerId,
+            error: notificationError instanceof Error ? notificationError.message : String(notificationError),
+          });
+        }
+      }
+
+      const metrics = await this.getProviderMetrics(providerId);
+
+      // SECURITY FIX: Send notification to provider about approval
+      try {
+        const notificationService = new NotificationService();
+        await notificationService.createNotification({
+          recipientId: providerId,
+          type: 'provider_approved',
+          title: 'Provider Application Approved',
+          message: 'Congratulations! Your provider application has been approved. You can now start listing your services.',
+          metadata: {
+            providerId,
+            verificationId: verification._id.toString(),
+          },
+        });
+      } catch (notificationError) {
+        logger.error('Failed to send provider approval notification', {
+          providerId,
+          error: notificationError instanceof Error ? notificationError.message : String(notificationError),
+        });
+      }
+
+      // Emit provider:approved socket event to notify provider in real-time
+      try {
+        const socketServer = getSocketServer();
+        if (socketServer) {
+          socketServer.emitProviderApproved(providerId);
+          logger.info('Emitted provider:approved socket event', {
+            providerId,
+            action: 'SOCKET_PROVIDER_APPROVED',
+          });
+        }
+      } catch (socketError) {
+        logger.error('Failed to emit provider:approved socket event', {
+          providerId,
+          error: socketError instanceof Error ? socketError.message : String(socketError),
+        });
+      }
+
+      logger.info('PROVIDER_OPS: Provider approved', {
+        providerId,
+        adminId,
+        notes,
+      });
+
+      const result = {
+        provider: await User.findById(providerId),
+        verification,
+        metrics,
+      };
+      return result;
+    } finally {
+      // SECURITY FIX: Always release the distributed lock
+      if (lockAcquired && redis && isRedisAvailable()) {
+        try {
+          await redis.del(lockKey);
+          logger.debug('Released provider approval lock', {
+            providerId,
+            lockKey,
+            action: 'PROVIDER_APPROVAL_LOCK_RELEASED',
+          });
+        } catch (releaseError) {
+          logger.warn('Failed to release provider approval lock', {
+            providerId,
+            lockKey,
+            error: releaseError instanceof Error ? releaseError.message : String(releaseError),
+            action: 'PROVIDER_APPROVAL_LOCK_RELEASE_FAILED',
+          });
+        }
+      }
     }
-
-    // Activate services
-    await Service.updateMany(
-      { providerId },
-      { $set: { isActive: true, status: 'active' } }
-    );
-
-    const metrics = await this.getProviderMetrics(providerId);
-
-    logger.info('PROVIDER_OPS: Provider approved', {
-      providerId,
-      adminId,
-      notes,
-    });
-
-    return {
-      provider: await User.findById(providerId),
-      verification,
-      metrics,
-    };
   }
 
   /**
@@ -1057,6 +1170,27 @@ export class ProviderOpsService {
       { providerId },
       { $set: { isActive: false, status: 'rejected' } }
     );
+
+    // SECURITY FIX: Send notification to provider about rejection
+    try {
+      const notificationService = new NotificationService();
+      await notificationService.createNotification({
+        recipientId: providerId,
+        type: 'provider_rejected',
+        title: 'Provider Application Rejected',
+        message: `Your provider application has been rejected. Reason: ${reason}. Please contact support for more information.`,
+        metadata: {
+          providerId,
+          verificationId: verification._id.toString(),
+          reason,
+        },
+      });
+    } catch (notificationError) {
+      logger.error('Failed to send provider rejection notification', {
+        providerId,
+        error: notificationError instanceof Error ? notificationError.message : String(notificationError),
+      });
+    }
 
     logger.info('PROVIDER_OPS: Provider rejected', {
       providerId,

@@ -81,6 +81,8 @@ export interface IRefundRequest extends Document {
   approvedAt?: Date;
   processedAt?: Date;
   completedAt?: Date;
+  processingStartedAt?: Date;
+  failureReason?: string;
   metadata?: Record<string, any>;
   timeline: Array<{
     action: string;
@@ -488,16 +490,30 @@ export class RefundService {
   }
 
   // ========================================
-  // Process Stripe Refund
+  // Process Stripe Refund - ATOMIC with Transaction
   // ========================================
+  // HIGH SEVERITY FIX: Wrap entire operation in transaction to ensure atomicity
+  // between Stripe refund, saving refund record, and updating booking payment status
 
   async processStripeRefund(refund: IRefundRequest): Promise<IRefundRequest> {
     const RefundRequest = mongoose.model('RefundRequest');
 
+    // Check if already processing/completed (idempotency)
+    if (refund.status === 'processing' || refund.status === 'completed') {
+      logger.info('Refund already processed, skipping', {
+        context: 'RefundService',
+        action: 'REFUND_ALREADY_PROCESSED',
+        refundId: refund._id.toString(),
+        currentStatus: refund.status,
+      });
+      return refund;
+    }
+
+    const session = await mongoose.startSession();
+    let stripeRefundId: string | undefined;
+
     try {
-      // Update status to processing
-      refund.status = 'processing';
-      await refund.save();
+      session.startTransaction();
 
       // Get Stripe instance (using the payment service pattern)
       const stripe = await this.getStripeInstance();
@@ -524,26 +540,88 @@ export class RefundService {
         throw new ApiError(400, `Invalid refund amount: ${amountInCents} cents (${refundMoney.toString()})`);
       }
 
-      // Generate idempotency key for Stripe
-      const idempotencyKey = `refund-${refund._id.toString()}-${crypto.randomUUID().slice(0, 8)}`;
+      // Generate deterministic idempotency key based on refund ID only
+      const idempotencyKey = `refund-${refund._id.toString()}`;
 
-      // Create Stripe refund
-      const stripeRefund = await stripe.refunds.create({
-        charge: refund.stripeChargeId,
-        amount: amountInCents,
-        reason: 'requested_by_customer',
-        metadata: {
+      // STEP 1: Mark refund as processing in DB BEFORE Stripe call
+      const previousStatus = refund.status;
+      refund.status = 'processing';
+      refund.processingStartedAt = new Date();
+      refund.timeline.push({
+        action: 'processing_started',
+        performedBy: new Types.ObjectId('system'),
+        performedByRole: 'system',
+        timestamp: new Date(),
+        details: 'Stripe refund processing initiated',
+        previousStatus,
+        newStatus: 'processing',
+      });
+      await refund.save({ session });
+
+      // STEP 2: Execute Stripe refund (Stripe is idempotent via idempotency key)
+      let stripeRefund: { id: string };
+      try {
+        stripeRefund = await stripe.refunds.create({
+          charge: refund.stripeChargeId,
+          amount: amountInCents,
+          reason: 'requested_by_customer',
+          metadata: {
+            refundId: refund._id.toString(),
+            refundNumber: refund.refundNumber,
+            bookingId: refund.bookingId.toString(),
+            type: refund.type,
+          },
+        }, {
+          idempotencyKey,
+        });
+        stripeRefundId = stripeRefund.id;
+      } catch (stripeError: any) {
+        // STEP 3: COMPENSATION - If Stripe fails, abort transaction and revert DB status
+        const errorMessage = stripeError.message || 'Unknown Stripe error';
+
+        refund.status = 'failed';
+        refund.failureReason = errorMessage;
+        refund.timeline.push({
+          action: 'stripe_failed',
+          performedBy: new Types.ObjectId('system'),
+          performedByRole: 'system',
+          timestamp: new Date(),
+          details: `Stripe refund failed: ${errorMessage}`,
+          previousStatus: 'processing',
+          newStatus: 'failed',
+        });
+
+        // Save failure status within the transaction before aborting
+        await refund.save({ session });
+
+        // Abort the transaction
+        await session.abortTransaction();
+
+        // Log for manual review - this is a CRITICAL situation requiring attention
+        logger.error('CRITICAL: Stripe refund failed but DB state saved as failed. Manual review required.', {
           refundId: refund._id.toString(),
           refundNumber: refund.refundNumber,
-          bookingId: refund.bookingId.toString(),
-          type: refund.type,
-        },
-      }, {
-        idempotencyKey,
-      });
+          stripeChargeId: refund.stripeChargeId,
+          amount: amountInCents,
+          error: errorMessage,
+          context: 'RefundService',
+          action: 'STRIPE_REFUND_FAILED_COMPENSATION',
+        });
 
-      // Update refund with Stripe refund ID
-      refund.stripeRefundId = stripeRefund.id;
+        // Emit failure event for alerting/monitoring
+        eventBus.publish(EVENT_TYPES.REFUND_FAILED, {
+          refundId: refund._id,
+          refundNumber: refund.refundNumber,
+          bookingId: refund.bookingId,
+          error: errorMessage,
+        });
+
+        // Return early - DO NOT throw, as the failure is already recorded
+        return refund;
+      }
+
+      // STEP 4: Update refund record with Stripe result
+      refund.stripeRefundId = stripeRefundId;
       refund.status = 'completed';
       refund.completedAt = new Date();
 
@@ -553,55 +631,182 @@ export class RefundService {
         performedBy: new Types.ObjectId('system'),
         performedByRole: 'system',
         timestamp: new Date(),
-        details: `Stripe refund ${stripeRefund.id} processed successfully (${refundMoney.toString()})`,
+        details: `Stripe refund ${stripeRefundId} processed successfully (${refundMoney.toString()})`,
         previousStatus: 'processing',
         newStatus: 'completed',
       });
 
-      await refund.save();
+      await refund.save({ session });
 
-      // Update booking payment status
-      await this.updateBookingPaymentStatus(refund.bookingId.toString(), refund.amount);
+      // Update booking payment status with transaction
+      await this.updateBookingPaymentStatus(refund.bookingId.toString(), refund.amount, { session });
 
-      // Emit success event
+      // STEP 5: Commit transaction only after all DB operations succeed
+      await session.commitTransaction();
+
+      // Emit refund completed event (outside transaction)
       eventBus.publish(EVENT_TYPES.REFUND_COMPLETED, {
         refundId: refund._id,
         refundNumber: refund.refundNumber,
         bookingId: refund.bookingId,
         amount: refund.amount,
         amountCents: amountInCents,
-        stripeRefundId: stripeRefund.id,
+        stripeRefundId,
       });
+
+      // Also emit PAYMENT_REFUNDED event so payment workflow can process it
+      if (booking?.payment?.transactionId) {
+        eventBus.publish(EVENT_TYPES.PAYMENT_REFUNDED, {
+          paymentId: booking.payment.transactionId,
+          bookingId: refund.bookingId.toString(),
+          refundedAmount: refund.amount,
+          currency: booking.pricing?.currency || 'AED',
+          customerEmail: (booking.customerInfo as any)?.email,
+          refundId: refund._id.toString(),
+        });
+      }
 
       return refund;
 
     } catch (error: any) {
-      // Update refund status to failed
-      refund.status = 'failed';
-      refund.processingNotes = `Stripe processing failed: ${error.message}`;
+      // This catch block handles unexpected errors OUTSIDE the Stripe call.
+      // Stripe failures are handled inline with compensation logic above.
 
-      refund.timeline.push({
-        action: 'stripe_failed',
-        performedBy: new Types.ObjectId('system'),
-        performedByRole: 'system',
-        timestamp: new Date(),
-        details: `Stripe refund failed: ${error.message}`,
-        previousStatus: 'processing',
-        newStatus: 'failed',
-      });
+      if (session && session.hasEnded === false) {
+        await session.abortTransaction();
+      }
 
-      await refund.save();
+      // If refund was already marked as 'processing', update to 'failed'
+      if (refund.status === 'processing') {
+        const errorMessage = error.message || 'Unknown error during refund processing';
 
-      // Emit failure event
-      eventBus.publish(EVENT_TYPES.REFUND_FAILED, {
-        refundId: refund._id,
-        refundNumber: refund.refundNumber,
-        bookingId: refund.bookingId,
+        refund.status = 'failed';
+        refund.failureReason = errorMessage;
+
+        refund.timeline.push({
+          action: 'processing_failed',
+          performedBy: new Types.ObjectId('system'),
+          performedByRole: 'system',
+          timestamp: new Date(),
+          details: `Refund processing failed: ${errorMessage}`,
+          previousStatus: 'processing',
+          newStatus: 'failed',
+        });
+
+        // Save failure status OUTSIDE the aborted transaction
+        try {
+          await refund.save();
+        } catch (saveError) {
+          logger.error('CRITICAL: Failed to save refund failure status after transaction abort', {
+            refundId: refund._id.toString(),
+            error: saveError instanceof Error ? saveError.message : String(saveError),
+            context: 'RefundService',
+            action: 'FAILED_TO_SAVE_FAILURE_STATUS',
+          });
+        }
+
+        // Emit failure event
+        eventBus.publish(EVENT_TYPES.REFUND_FAILED, {
+          refundId: refund._id,
+          refundNumber: refund.refundNumber,
+          bookingId: refund.bookingId,
+          error: errorMessage,
+        });
+      }
+
+      logger.error('Refund processing failed with unexpected error', {
+        refundId: refund._id.toString(),
+        stripeRefundId,
         error: error.message,
+        context: 'RefundService',
+        action: 'REFUND_UNEXPECTED_ERROR',
       });
 
       throw error;
+    } finally {
+      if (session && session.hasEnded === false) {
+        await session.endSession();
+      }
     }
+  }
+
+  // ========================================
+  // Process Pending Refunds (for retry job)
+  // ========================================
+  // FIX: Job to process refunds stuck in 'processing' state
+  // This handles the case where Stripe succeeded but DB update failed
+
+  async processPendingRefunds(batchSize: number = 100): Promise<{ processed: number; failed: number }> {
+    const RefundRequest = mongoose.model('RefundRequest');
+
+    // Find refunds stuck in 'processing' for more than 5 minutes
+    const staleThreshold = new Date(Date.now() - 5 * 60 * 1000);
+
+    const staleRefunds = await RefundRequest.find({
+      status: 'processing',
+      updatedAt: { $lt: staleThreshold },
+    }).limit(batchSize);
+
+    let processed = 0;
+    let failed = 0;
+
+    for (const refund of staleRefunds) {
+      try {
+        // Check with Stripe if this refund was actually processed
+        if (refund.stripeRefundId) {
+          const stripe = await this.getStripeInstance();
+          const stripeRefund = await stripe.refunds.retrieve(refund.stripeRefundId);
+
+          if (stripeRefund.status === 'succeeded') {
+            // Stripe processed it - complete the refund record
+            refund.status = 'completed';
+            refund.completedAt = new Date();
+            refund.timeline.push({
+              action: 'recovery_completed',
+              performedBy: new Types.ObjectId('system'),
+              performedByRole: 'system',
+              timestamp: new Date(),
+              details: 'Refund recovered from stale processing state via Stripe API check',
+              previousStatus: 'processing',
+              newStatus: 'completed',
+            });
+            await refund.save();
+            await this.updateBookingPaymentStatus(refund.bookingId.toString(), refund.amount);
+            processed++;
+          } else if (stripeRefund.status === 'failed') {
+            // Stripe failed it
+            refund.status = 'failed';
+            refund.processingNotes = `Stripe reported failure: ${stripeRefund.failure_reason || 'Unknown'}`;
+            refund.timeline.push({
+              action: 'recovery_failed',
+              performedBy: new Types.ObjectId('system'),
+              performedByRole: 'system',
+              timestamp: new Date(),
+              details: `Stripe refund failed: ${stripeRefund.failure_reason}`,
+              previousStatus: 'processing',
+              newStatus: 'failed',
+            });
+            await refund.save();
+            failed++;
+          }
+          // If still 'pending' in Stripe, leave it for next run
+        } else {
+          // No Stripe ID - retry the refund
+          await this.processStripeRefund(refund);
+          processed++;
+        }
+      } catch (error) {
+        logger.error('Failed to process stale refund', {
+          context: 'RefundService',
+          action: 'STALE_REFUND_RECOVERY_FAILED',
+          refundId: refund._id.toString(),
+          error: (error as Error).message,
+        });
+        failed++;
+      }
+    }
+
+    return { processed, failed };
   }
 
   // ========================================
@@ -957,9 +1162,14 @@ export class RefundService {
 
   /**
    * Update booking payment status after refund
+   * HIGH SEVERITY FIX: Accept optional session parameter for transaction support
    */
-  private async updateBookingPaymentStatus(bookingId: string, refundAmount: number): Promise<void> {
-    const booking = await Booking.findById(bookingId);
+  private async updateBookingPaymentStatus(
+    bookingId: string,
+    refundAmount: number,
+    options?: { session?: mongoose.ClientSession }
+  ): Promise<void> {
+    const booking = await Booking.findById(bookingId).session(options?.session ?? null);
     if (booking) {
       booking.payment = booking.payment || {};
       booking.payment.refundedAt = new Date();
@@ -970,7 +1180,7 @@ export class RefundService {
         booking.payment.status = 'refunded';
       }
 
-      await booking.save();
+      await booking.save({ session: options?.session });
     }
   }
 }
@@ -1045,6 +1255,8 @@ const refundRequestSchema = new mongoose.Schema({
   approvedAt: Date,
   processedAt: Date,
   completedAt: Date,
+  processingStartedAt: Date,
+  failureReason: String,
   metadata: mongoose.Schema.Types.Mixed,
   timeline: [{
     action: String,

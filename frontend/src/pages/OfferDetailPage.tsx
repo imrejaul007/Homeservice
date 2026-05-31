@@ -31,11 +31,28 @@ interface ServiceSummary {
   thumbnail?: string;
 }
 
+interface OfferDetail {
+  _id: string;
+  code: string;
+  title: string;
+  description?: string;
+  displayTitle?: string;
+  displaySubtitle?: string;
+  displayGradient?: string;
+  displayBadge?: string;
+  type: 'percentage' | 'fixed' | 'free_service';
+  value: number;
+  validUntil?: string;
+  minOrderValue: number;
+  applicableServices?: string[];
+  applicableCategories?: string[];
+}
+
 const OfferDetailPage: React.FC = () => {
   const { offerId } = useParams<{ offerId: string }>();
   const navigate = useNavigate();
   const { isAuthenticated, tokens } = useAuthStore();
-  const [offer, setOffer] = useState<any>(null);
+  const [offer, setOffer] = useState<OfferDetail | null>(null);
   const [services, setServices] = useState<ServiceSummary[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isClaiming, setIsClaiming] = useState(false);
@@ -122,7 +139,7 @@ const OfferDetailPage: React.FC = () => {
 
       setServices(prev => {
         const existingIds = new Set(prev.map(s => s._id));
-        const newServices = loadedServices.filter((s: any) => !existingIds.has(s._id));
+        const newServices = loadedServices.filter((s: ServiceSummary) => !existingIds.has(s._id));
         return [...prev, ...newServices];
       });
     } catch (error) {

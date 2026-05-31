@@ -10,6 +10,7 @@ import { searchApi } from '../services/searchApi';
 import { favoritesApi } from '../services/favoritesApi';
 import { useAuthStore } from '../stores/authStore';
 import { CATEGORY_IMAGES, SUBCATEGORY_IMAGES } from '../constants/images';
+import { PageErrorBoundary } from '../components/common/PageErrorBoundary';
 
 interface ServiceDetail {
   _id: string;
@@ -214,7 +215,8 @@ const ServiceDetailPage: React.FC = () => {
       </div>
 
       {/* Main Content - 2 column on desktop */}
-      <div className="flex-1">
+      <PageErrorBoundary pageName="Service Details">
+        <div className="flex-1">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 md:py-8">
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
 
@@ -430,6 +432,7 @@ const ServiceDetailPage: React.FC = () => {
           </div>
         </div>
       </div>
+      </PageErrorBoundary>
 
       {/* Mobile Fixed Bottom Booking Bar */}
       <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-nilin-border px-4 py-3 z-50 lg:hidden">

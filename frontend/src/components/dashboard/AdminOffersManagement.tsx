@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
 import PageLayout from '../layout/PageLayout';
+import { AdminPageShell } from '../admin/AdminPageShell';
 import { toast } from 'react-hot-toast';
 import {
   Gift,
@@ -313,21 +314,18 @@ const AdminOffersManagement: React.FC = () => {
   };
 
   return (
-    <PageLayout>
-      <div className="min-h-screen bg-nilin-cream py-8">
-        <div className="max-w-7xl mx-auto px-4">
-          {/* Header */}
-          <div className="flex items-center justify-between mb-8">
-            <div>
-              <div className="flex items-center gap-3 mb-2">
-                <div className="w-12 h-12 rounded-full bg-gradient-to-br from-nilin-rose to-nilin-coral flex items-center justify-center">
-                  <Gift className="w-6 h-6 text-white" />
-                </div>
-                <h1 className="text-3xl font-serif text-nilin-charcoal">Offers Management</h1>
-              </div>
-              <p className="text-nilin-warmGray">Create and manage promotional offers</p>
-            </div>
+    <AdminPageShell
+      title="Offers Management"
+      subtitle="Create and manage promotional offers"
+      breadcrumbItems={[
+        { label: 'Admin', href: '/admin/dashboard' },
+        { label: 'Offers', current: true },
+      ]}
+    >
+      <div className="space-y-6">
+          <div className="flex justify-end">
             <button
+              type="button"
               onClick={() => {
                 setEditingOffer(null);
                 setFormData({
@@ -511,7 +509,6 @@ const AdminOffersManagement: React.FC = () => {
             </div>
           )}
         </div>
-      </div>
 
       {/* Modal */}
       {showModal && (
@@ -851,7 +848,7 @@ const AdminOffersManagement: React.FC = () => {
           </div>
         </div>
       )}
-    </PageLayout>
+    </AdminPageShell>
   );
 };
 

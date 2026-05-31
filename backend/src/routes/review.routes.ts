@@ -4,6 +4,7 @@ import reviewsController from '../controllers/reviews.controller';
 import authMiddleware from '../middleware/auth.middleware';
 import Joi from 'joi';
 import { validate } from '../middleware/validation.middleware';
+import logger from '../utils/logger';
 
 const router = Router();
 
@@ -94,7 +95,11 @@ router.get('/provider/me',
         },
       });
     } catch (error) {
-      console.error('Error fetching provider reviews:', error);
+      logger.error('Error fetching provider reviews', {
+        context: 'ReviewRoutes',
+        action: 'FETCH_REVIEWS_ERROR',
+        error: error instanceof Error ? error.message : String(error),
+      });
       return res.status(500).json({ success: false, message: 'Server error' });
     }
   }
@@ -191,7 +196,11 @@ router.get('/provider/:providerId',
         },
       });
     } catch (error) {
-      console.error('Error fetching provider reviews:', error);
+      logger.error('Error fetching provider reviews', {
+        context: 'ReviewRoutes',
+        action: 'FETCH_REVIEWS_ERROR',
+        error: error instanceof Error ? error.message : String(error),
+      });
       return res.status(500).json({ success: false, message: 'Server error' });
     }
   }
@@ -280,7 +289,11 @@ router.post('/:reviewId/reply',
         },
       });
     } catch (error) {
-      console.error('Error submitting review reply:', error);
+      logger.error('Error submitting review reply', {
+        context: 'ReviewRoutes',
+        action: 'SUBMIT_REPLY_ERROR',
+        error: error instanceof Error ? error.message : String(error),
+      });
       return res.status(500).json({ success: false, message: 'Server error' });
     }
   }

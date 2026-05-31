@@ -570,12 +570,12 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
 
                     <div className="flex justify-between">
                       <span className="text-nilin-warmGray">Taxes:</span>
-                      <span className="text-nilin-charcoal">{formatPrice(currentBooking.pricing.taxes, currentBooking.pricing.currency)}</span>
+                      <span className="text-nilin-charcoal">{formatPrice(currentBooking.pricing.tax, currentBooking.pricing.currency)}</span>
                     </div>
 
                     <div className="flex justify-between border-t border-nilin-border/30 pt-2 font-semibold text-lg">
                       <span className="text-nilin-charcoal">Total:</span>
-                      <span className="text-nilin-coral">{formatPrice(currentBooking.pricing.totalAmount || currentBooking.pricing.total || 0, currentBooking.pricing.currency)}</span>
+                      <span className="text-nilin-coral">{formatPrice(currentBooking.pricing.totalAmount, currentBooking.pricing.currency)}</span>
                     </div>
                   </div>
                 </div>

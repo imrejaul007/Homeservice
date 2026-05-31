@@ -4,6 +4,8 @@ import { asyncHandler } from '../utils/asyncHandler';
 import { ApiError } from '../utils/ApiError';
 import { getSettings } from '../services/settings.service';
 import Joi from 'joi';
+import { getSocketServer } from '../socket';
+import logger from '../utils/logger';
 
 const withdrawSchema = Joi.object({
   amount: Joi.number().min(1).required(),
@@ -151,6 +153,41 @@ export const requestWithdrawal = asyncHandler(async (req: Request, res: Response
 
     // Calculate new available balance (excluding pending)
     const newAvailableBalance = walletDoc.balance - walletDoc.pendingBalance;
+
+    // FIX 4: Emit withdrawal:pending socket event to notify provider in real-time
+    try {
+      const socketServer = getSocketServer();
+      if (socketServer) {
+        // Emit to provider about pending withdrawal
+        socketServer.emitToUser(user._id.toString(), 'withdrawal:pending', {
+          withdrawalId: withdrawalReference,
+          amount: value.amount,
+          currency: 'AED',
+          status: 'pending',
+        });
+        logger.info('Emitted withdrawal:pending socket event', {
+          withdrawalId: withdrawalReference,
+          providerId: user._id.toString(),
+          amount: value.amount,
+          action: 'SOCKET_WITHDRAWAL_PENDING',
+        });
+
+        // Also emit to admins about new withdrawal request
+        socketServer.emitNewWithdrawalRequest(
+          withdrawalReference,
+          user._id.toString(),
+          `${user.firstName || ''} ${user.lastName || ''}`.trim() || 'Provider',
+          value.amount,
+          'AED'
+        );
+      }
+    } catch (socketError) {
+      // Don't fail the withdrawal request if socket emission fails
+      logger.error('Failed to emit withdrawal:pending socket event', {
+        withdrawalId: withdrawalReference,
+        error: socketError instanceof Error ? socketError.message : String(socketError),
+      });
+    }
 
     res.json({
       success: true,

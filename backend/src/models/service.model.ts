@@ -1,4 +1,5 @@
-import mongoose, { Document, Schema, Model } from 'mongoose';
+import mongoose, { Document, Schema, Model, ClientSession } from 'mongoose';
+import logger from '../utils/logger';
 
 export interface IService extends Document {
   // Multi-tenant
@@ -116,10 +117,15 @@ export interface IService extends Document {
   isActive: boolean;
   isFeatured: boolean;
   isPopular: boolean;
-  
+
+  // FIX: Add soft delete support to services
+  isDeleted: boolean;
+  deletedAt?: Date;
+  deletedBy?: mongoose.Types.ObjectId;
+
   // Service Management Status
-  status: 'draft' | 'active' | 'inactive' | 'pending_review';
-  
+  status: 'draft' | 'active' | 'inactive' | 'pending_review' | 'rejected';
+
   // Audit Fields
   createdAt: Date;
   updatedAt: Date;
@@ -406,15 +412,27 @@ const serviceSchema = new Schema<IService>(
       default: false,
       index: true
     },
-    
+
+    // FIX: Add soft delete support to services
+    isDeleted: {
+      type: Boolean,
+      default: false,
+      index: true
+    },
+    deletedAt: Date,
+    deletedBy: {
+      type: Schema.Types.ObjectId,
+      ref: 'User'
+    },
+
     // Service Management Status
     status: {
       type: String,
-      enum: ['draft', 'active', 'inactive', 'pending_review'],
+      enum: ['draft', 'active', 'inactive', 'pending_review', 'rejected'],
       default: 'active',
       index: true
     },
-    
+
     // Audit Fields
     createdBy: {
       type: Schema.Types.ObjectId,
@@ -473,6 +491,25 @@ serviceSchema.index({ category: 1, _id: 1 });
 serviceSchema.index({ isActive: 1, category: 1, 'rating.average': -1 });
 // Note: searchMetadata.popularityScore already has index from field-level index: -1
 
+// ===================================
+// PERFORMANCE INDEXES (ADDED)
+// ===================================
+// Index for service-level rating recalculation queries
+serviceSchema.index({ status: 1, 'rating.count': -1 });
+// Index for popular services by search count
+serviceSchema.index({ isActive: 1, 'searchMetadata.searchCount': -1 });
+// Index for price range queries with rating
+serviceSchema.index({ 'price.amount': 1, 'rating.average': -1, isActive: 1 });
+
+// ===================================
+// TENANT ISOLATION INDEXES (CRITICAL)
+// ===================================
+// Multi-tenant isolation for service queries
+serviceSchema.index({ tenantId: 1, providerId: 1 });
+serviceSchema.index({ tenantId: 1, category: 1 });
+serviceSchema.index({ tenantId: 1, isActive: 1 });
+serviceSchema.index({ tenantId: 1, 'rating.average': -1 });
+
 // Sparse indexes for optional fields (subcategory and isFeatured already have index: true)
 
 // ===================================
@@ -500,6 +537,27 @@ serviceSchema.virtual('averageRating').get(function() {
 
 // Distance (will be set during geospatial queries)
 serviceSchema.virtual('distance');
+
+// Static methods interface
+export interface IServiceModel extends Model<IService> {
+  findInArea(lat: number, lng: number, maxDistanceKm: number, limit?: number): Promise<IService[]>;
+  searchServices(searchParams: {
+    q?: string;
+    category?: string;
+    subcategory?: string;
+    minPrice?: number;
+    maxPrice?: number;
+    minRating?: number;
+    lat?: number;
+    lng?: number;
+    radius?: number;
+    sortBy?: string;
+    page?: number;
+    limit?: number;
+  }): Promise<IService[]>;
+  recalculateRating(serviceId: string | mongoose.Types.ObjectId): Promise<void>;
+  updateBookingCount(serviceId: string | mongoose.Types.ObjectId): Promise<void>;
+}
 
 // ===================================
 // INSTANCE METHODS
@@ -677,6 +735,216 @@ serviceSchema.pre('save', function(next) {
   next();
 });
 
-const Service: Model<IService> = mongoose.model<IService>('Service', serviceSchema);
+const Service = mongoose.model<IService, IServiceModel>('Service', serviceSchema);
+
+// ===================================
+// CASCADE DELETE HOOKS (CRITICAL)
+// ===================================
+// FIX: Add cascade delete hooks to clean up related data when service is deleted
+
+/**
+ * Helper function to perform cascade cleanup when a service is deleted
+ */
+async function performServiceCascadeDelete(serviceId: mongoose.Types.ObjectId): Promise<void> {
+  const session: ClientSession = await mongoose.startSession();
+  try {
+    session.startTransaction();
+
+    const Booking = mongoose.model('Booking');
+    const Review = mongoose.model('Review');
+    const Availability = mongoose.model('Availability');
+
+    // Soft delete bookings that use this service (maintain audit trail)
+    await Booking.updateMany(
+      { serviceId: serviceId },
+      {
+        $set: {
+          isDeleted: true,
+          deletedAt: new Date(),
+        }
+      },
+      { session }
+    );
+
+    // Clean up reviews for bookings that used this service
+    const bookingIds = await Booking.find({ serviceId: serviceId }).select('_id').session(session);
+    if (bookingIds.length > 0) {
+      await Review.deleteMany(
+        {
+          bookingId: { $in: bookingIds.map(b => b._id) }
+        },
+        { session }
+      );
+    }
+
+    // Clean up availability for this service
+    await Availability.deleteMany({ serviceId: serviceId }, { session });
+
+    await session.commitTransaction();
+
+    logger.info('Cascade delete completed for service', {
+      context: 'ServiceModel',
+      action: 'CASCADE_DELETE',
+      serviceId: serviceId.toString(),
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    logger.error('Cascade delete failed for service', {
+      context: 'ServiceModel',
+      action: 'CASCADE_DELETE_ERROR',
+      serviceId: serviceId.toString(),
+      error: (error as Error).message,
+    });
+    throw error;
+  } finally {
+    if (!session.hasEnded) {
+      await session.endSession();
+    }
+  }
+}
+
+// Hook for soft delete (when service is deactivated)
+serviceSchema.pre('findOneAndUpdate', async function() {
+  const update = this.getUpdate() as any;
+  if (update && update.isActive === false) {
+    const doc = await this.model.findOne(this.getQuery()).lean() as (mongoose.Document & { _id: mongoose.Types.ObjectId; isActive?: boolean }) | null;
+    if (doc && doc.isActive !== false) {
+      // Service is being deactivated
+      logger.info('Service deactivated', {
+        context: 'ServiceModel',
+        action: 'SERVICE_DEACTIVATED',
+        serviceId: doc._id.toString(),
+      });
+    }
+  }
+});
+
+// Hook for direct deleteOne operations
+serviceSchema.pre('deleteOne', { document: true, query: false }, async function() {
+  await performServiceCascadeDelete(this._id as mongoose.Types.ObjectId);
+});
+
+// ===================================
+// ANALYTICS UPDATE METHODS
+// ===================================
+
+/**
+ * FIX: Recalculate and update denormalized rating from actual Review documents.
+ * Uses optimized aggregation pipeline to avoid N+1 queries
+ */
+Service.recalculateRating = async function(serviceId: string | mongoose.Types.ObjectId): Promise<void> {
+  const Review = mongoose.model('Review');
+  const Booking = mongoose.model('Booking');
+
+  const serviceObjectId = new mongoose.Types.ObjectId(serviceId.toString());
+
+  // PERFORMANCE FIX: Use aggregation pipeline with $lookup to get reviews in a single query
+  // This eliminates the N+1 query pattern where we first fetch booking IDs and then reviews
+
+  // First, check if there are any completed bookings for this service
+  const hasCompletedBookings = await Booking.exists({
+    serviceId: serviceObjectId,
+    status: { $in: ['completed', 'confirmed'] }
+  });
+
+  if (!hasCompletedBookings) {
+    // No bookings, reset rating
+    await this.updateOne(
+      { _id: serviceId },
+      {
+        $set: {
+          'rating.average': 0,
+          'rating.count': 0,
+          'rating.distribution': { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 }
+        }
+      }
+    );
+    return;
+  }
+
+  // Use aggregation to get reviews directly - Review has bookingId which links to Booking
+  // Filter reviews by checking which bookings are for this service
+  // This is more efficient than two separate queries
+  const reviews = await Review.aggregate([
+    // Join with bookings to filter by serviceId
+    {
+      $lookup: {
+        from: 'bookings',
+        localField: 'bookingId',
+        foreignField: '_id',
+        as: 'booking'
+      }
+    },
+    // Unwind the booking array
+    { $unwind: '$booking' },
+    // Filter to only reviews for this service
+    { $match: { 'booking.serviceId': serviceObjectId } },
+    // Filter to only visible reviews
+    { $match: { isHidden: false } },
+    // Group and calculate stats
+    {
+      $group: {
+        _id: null,
+        average: { $avg: '$rating' },
+        count: { $sum: 1 },
+        rating5: { $sum: { $cond: [{ $eq: ['$rating', 5] }, 1, 0] } },
+        rating4: { $sum: { $cond: [{ $eq: ['$rating', 4] }, 1, 0] } },
+        rating3: { $sum: { $cond: [{ $eq: ['$rating', 3] }, 1, 0] } },
+        rating2: { $sum: { $cond: [{ $eq: ['$rating', 2] }, 1, 0] } },
+        rating1: { $sum: { $cond: [{ $eq: ['$rating', 1] }, 1, 0] } }
+      }
+    }
+  ]);
+
+  const stats = reviews[0] || {
+    average: 0,
+    count: 0,
+    rating5: 0,
+    rating4: 0,
+    rating3: 0,
+    rating2: 0,
+    rating1: 0
+  };
+
+  await this.updateOne(
+    { _id: serviceId },
+    {
+      $set: {
+        'rating.average': Math.round((stats.average || 0) * 10) / 10,
+        'rating.count': stats.count,
+        'rating.distribution': {
+          5: stats.rating5,
+          4: stats.rating4,
+          3: stats.rating3,
+          2: stats.rating2,
+          1: stats.rating1
+        }
+      }
+    }
+  );
+};
+
+/**
+ * FIX: Update booking count for a service with proper error handling
+ */
+Service.updateBookingCount = async function(serviceId: string | mongoose.Types.ObjectId): Promise<void> {
+  const Booking = mongoose.model('Booking');
+
+  const bookingCount = await Booking.countDocuments({
+    serviceId: serviceId,
+    status: { $in: ['completed', 'confirmed'] }
+  });
+
+  await this.updateOne(
+    { _id: serviceId },
+    { $set: { 'searchMetadata.bookingCount': bookingCount } }
+  );
+
+  // Also recalculate popularity score after booking count changes
+  const service = await this.findById(serviceId);
+  if (service) {
+    await service.updatePopularityScore();
+  }
+};
 
 export default Service;

@@ -94,7 +94,7 @@ const ProviderEarningsPage: React.FC = () => {
   // Redirect if not a provider
   useEffect(() => {
     if (user?.role !== 'provider') {
-      navigate('/dashboard');
+      navigate('/customer/dashboard');
     }
   }, [user, navigate]);
 
@@ -174,38 +174,26 @@ const ProviderEarningsPage: React.FC = () => {
     }
   }, [currentPage]);
 
-  // Initial fetch
+  // Initial fetch and refetch when page changes
+  // FIX: Combined into single useEffect to prevent double fetch
   useEffect(() => {
     fetchData();
   }, [fetchData]);
-
-  // Refetch when page changes
-  useEffect(() => {
-    if (!isLoading) {
-      fetchData(true);
-    }
-  }, [currentPage]);
 
   // Socket listeners for real-time updates
   useEffect(() => {
     // Listen for withdrawal approved
     const unsubWithdrawalApproved = socketService.onWithdrawalApproved(() => {
-      // Log minimal info for debugging without exposing financial data
-      console.log('Withdrawal approved');
       fetchData(true);
     });
 
     // Listen for withdrawal rejected
     const unsubWithdrawalRejected = socketService.onWithdrawalRejected(() => {
-      // Log minimal info for debugging without exposing financial data
-      console.log('Withdrawal rejected');
       fetchData(true);
     });
 
     // Listen for booking confirmed (new earnings)
     const unsubBookingConfirmed = socketService.on('booking:confirmed', () => {
-      // Log minimal info for debugging without exposing financial data
-      console.log('Booking confirmed');
       fetchData(true);
     });
 

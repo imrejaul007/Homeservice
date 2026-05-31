@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { churnApi } from '../../services/analyticsApi';
 import type { ChurnRisk, ChurnStats, CustomerSegment, ChurnOverview, RetentionAction } from '../../services/analyticsApi';
 import PageLayout from '../../components/layout/PageLayout';
+import { AdminPageShell } from '../../components/admin/AdminPageShell';
 import { useAuthStore } from '../../stores/authStore';
 import { toast } from 'react-hot-toast';
 import {
@@ -270,37 +271,39 @@ const ChurnReport: React.FC = () => {
 
   if (loading) {
     return (
-      <PageLayout title="Churn Analysis">
+      <AdminPageShell title="Churn & Retention" subtitle="Loading at-risk customers…">
         <div className="flex items-center justify-center h-96">
           <div className="text-center">
-            <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto" />
-            <p className="mt-4 text-gray-500 dark:text-gray-400">Loading churn analysis...</p>
+            <div className="w-12 h-12 border-4 border-nilin-coral border-t-transparent rounded-full animate-spin mx-auto" />
+            <p className="mt-4 text-nilin-warmGray font-sans">Loading churn analysis…</p>
           </div>
         </div>
-      </PageLayout>
+      </AdminPageShell>
     );
   }
 
   return (
     <ErrorBoundary>
-      <div className="space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Churn Analysis</h1>
-            <p className="text-sm text-gray-500 dark:text-gray-400">
-              Identify at-risk customers and execute retention campaigns
-            </p>
-          </div>
+      <AdminPageShell
+        title="Churn & Retention"
+        subtitle="Identify at-risk customers and execute retention campaigns"
+        breadcrumbItems={[
+          { label: 'Admin', href: '/admin/dashboard' },
+          { label: 'Churn', current: true },
+        ]}
+        headerActions={
           <button
+            type="button"
             onClick={() => fetchData(true)}
             disabled={refreshing}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-nilin-rose to-nilin-coral text-white text-sm font-medium font-sans disabled:opacity-50"
           >
             <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
             Refresh
           </button>
-        </div>
+        }
+      >
+      <div className="space-y-6">
 
         {/* Stats Cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -545,6 +548,7 @@ const ChurnReport: React.FC = () => {
           </div>
         )}
       </div>
+      </AdminPageShell>
     </ErrorBoundary>
   );
 };

@@ -23,6 +23,7 @@ import {
 import { toast } from 'react-hot-toast';
 import { useAuthStore } from '../../stores/authStore';
 import PageLayout from '../../components/layout/PageLayout';
+import { AdminPageShell } from '../../components/admin/AdminPageShell';
 
 // ============================================
 // Types
@@ -522,7 +523,8 @@ const ReviewModeration: React.FC = () => {
     setActionLoading(true);
 
     try {
-      const response = await fetch(`${API_URL}/admin/reviews/${selectedReview._id}`, {
+      // Backend expects /admin/reviews/:id/moderate with action in body
+      const response = await fetch(`${API_URL}/admin/reviews/${selectedReview._id}/moderate`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -540,7 +542,8 @@ const ReviewModeration: React.FC = () => {
         toast.error(data.message || `Failed to ${action} review`);
       }
     } catch (error) {
-      toast.error(`Failed to ${action} review`);
+      console.error(`Failed to ${action} review:`, error);
+      toast.error(error instanceof Error ? error.message : `Failed to ${action} review. Please try again.`);
     } finally {
       setActionLoading(false);
     }
@@ -570,7 +573,8 @@ const ReviewModeration: React.FC = () => {
         toast.error(data.message || 'Failed to delete review');
       }
     } catch (error) {
-      toast.error('Failed to delete review');
+      console.error('Failed to delete review:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to delete review. Please try again.');
     } finally {
       setActionLoading(false);
     }
@@ -585,9 +589,13 @@ const ReviewModeration: React.FC = () => {
 
   return (
     <ErrorBoundary>
-      <PageLayout
+      <AdminPageShell
         title="Review Moderation"
         subtitle="Manage and moderate customer reviews"
+        breadcrumbItems={[
+          { label: 'Admin', href: '/admin/dashboard' },
+          { label: 'Reviews', current: true },
+        ]}
       >
         <div className="space-y-6">
         {/* Stats Cards */}
@@ -847,7 +855,7 @@ const ReviewModeration: React.FC = () => {
           isLoading={actionLoading}
         />
       )}
-    </PageLayout>
+    </AdminPageShell>
     </ErrorBoundary>
   );
 };

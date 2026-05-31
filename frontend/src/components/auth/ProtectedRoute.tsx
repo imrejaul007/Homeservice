@@ -71,7 +71,10 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
     );
   }
 
-  // ✅ EMAIL VERIFICATION DISABLED - Comment out email verification check
+  // EMAIL VERIFICATION DISABLED: Email verification check is currently disabled
+  // because the email verification flow requires additional user experience work
+  // (resend verification, email delivery timing, etc.).
+  // To re-enable: uncomment below and ensure requireEmailVerified prop is passed where needed
   // if (requireEmailVerified && !user.isEmailVerified) {
   //   return (
   //     <Navigate
@@ -256,7 +259,7 @@ export const useRouteAccess = () => {
     canAccessProvider: (requireVerification = false) => {
       if (!isAuthenticated || !user || user.role !== 'provider') return false;
       if (!requireVerification) return true;
-      // ✅ EMAIL VERIFICATION DISABLED - Always return true
+      // Email verification check disabled - requires UX improvements before enabling
       // return user.isEmailVerified;
       return true;
     },
