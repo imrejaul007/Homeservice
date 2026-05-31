@@ -110,6 +110,7 @@ const corsOptions = {
     'x-tenant',
     'x-csrf-token',
     'x-2fa-token',
+    'skipauth',
     'stripe-signature',
   ],
   exposedHeaders: [

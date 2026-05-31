@@ -356,6 +356,41 @@ class AuthService {
     return expirationTime > (currentTime + bufferTime);
   }
 
+  // ==========================================
+  // CSRF TOKEN MANAGEMENT
+  // ==========================================
+
+  /**
+   * Fetch a new CSRF token from the server
+   * This sets an httpOnly cookie that will be sent with subsequent requests
+   */
+  async fetchCsrfToken(): Promise<string | null> {
+    try {
+      const response = await axios.get<{ success: boolean; csrfToken: string }>(
+        `${this.httpClient.defaults.baseURL}/auth/csrf-token`,
+        { withCredentials: true }
+      );
+      return response.data.csrfToken || null;
+    } catch (error) {
+      console.error('Failed to fetch CSRF token:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Get CSRF token from cookie
+   */
+  private getCsrfTokenFromCookie(): string | null {
+    const cookies = document.cookie.split(';');
+    for (const cookie of cookies) {
+      const [name, value] = cookie.trim().split('=');
+      if (name === 'csrf_token') {
+        return value;
+      }
+    }
+    return null;
+  }
+
   /**
    * Decode JWT token to get expiration time
    */
@@ -448,13 +483,26 @@ class AuthService {
 
   /**
    * Login user with credentials
+   * Fetches CSRF token before login and includes it in the request
    */
   async login(credentials: LoginCredentials): Promise<AuthResponse<LoginResponse>> {
     try {
+      // Fetch CSRF token first (this also sets the httpOnly cookie)
+      await this.fetchCsrfToken();
+
+      // Get CSRF token from cookie to include in header
+      const csrfToken = this.getCsrfTokenFromCookie();
+
       const response = await this.httpClient.post<AuthResponse<LoginResponse>>(
         '/auth/login',
         credentials,
-        { headers: { skipAuth: true } }
+        {
+          headers: {
+            skipAuth: true,
+            ...(csrfToken && { 'x-csrf-token': csrfToken }),
+          },
+          withCredentials: true, // Ensure cookies are sent
+        }
       );
       return response.data;
     } catch (error) {
@@ -467,9 +515,16 @@ class AuthService {
 
   /**
    * Register new user account
+   * Fetches CSRF token before registration and includes it in the request
    */
   async register(data: RegisterData): Promise<AuthResponse<RegisterResponse>> {
     try {
+      // Fetch CSRF token first (this also sets the httpOnly cookie)
+      await this.fetchCsrfToken();
+
+      // Get CSRF token from cookie to include in header
+      const csrfToken = this.getCsrfTokenFromCookie();
+
       const endpoint = data.role === 'customer'
         ? '/auth/register/customer'
         : '/auth/register/provider';
@@ -477,7 +532,13 @@ class AuthService {
       const response = await this.httpClient.post<AuthResponse<RegisterResponse>>(
         endpoint,
         data,
-        { headers: { skipAuth: true } }
+        {
+          headers: {
+            skipAuth: true,
+            ...(csrfToken && { 'x-csrf-token': csrfToken }),
+          },
+          withCredentials: true,
+        }
       );
       return response.data;
     } catch (error) {

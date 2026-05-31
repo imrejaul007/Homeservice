@@ -317,13 +317,14 @@ async function validateTokenAsync(
 
 /**
  * CSRF cookie configuration options
- * Uses httpOnly and SameSite for security
+ * Uses httpOnly=false so JavaScript can read the token (double-submit pattern)
+ * The cookie is still protected by SameSite and HTTPS in production
  */
 export function csrfCookieOptions(): CookieOptions {
   const config = getConfig();
 
   const options: CookieOptions = {
-    httpOnly: true, // Not accessible to JavaScript
+    httpOnly: false, // MUST be false so frontend can read the token for header
     secure: config.secure, // HTTPS only in production
     sameSite: config.sameSite, // SameSite=Strict for maximum protection
     path: '/',
