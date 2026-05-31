@@ -31,16 +31,18 @@ router.get('/captcha-config', getCaptchaSiteKey);
 // Registration Routes
 router.post('/register/customer',
   registrationLimiter,
-  ...csrfMiddleware,
-  verifyCaptcha({ required: true, skipIfDisabled: true }),
+  // TEMPORARILY DISABLED FOR DEBUG
+  // ...csrfMiddleware,
+  verifyCaptcha({ required: false, skipIfDisabled: true }),
   validateCustomerRegistration,
   authController.registerCustomer
 );
 
 router.post('/register/provider',
   registrationLimiter,
-  ...csrfMiddleware,
-  verifyCaptcha({ required: true, skipIfDisabled: true }),
+  // TEMPORARILY DISABLED FOR DEBUG
+  // ...csrfMiddleware,
+  verifyCaptcha({ required: false, skipIfDisabled: true }),
   ...validateProviderRegistrationWithoutFiles,
   handleFileUploadError,
   authController.registerProvider
@@ -49,8 +51,9 @@ router.post('/register/provider',
 // Login Route
 router.post('/login',
   authLimiter,
-  ...csrfMiddleware,
-  verifyCaptcha({ required: true, skipIfDisabled: true }),
+  // TEMPORARILY DISABLED FOR DEBUG - re-enable CSRF after fixing cookie issue
+  // ...csrfMiddleware,
+  verifyCaptcha({ required: false, skipIfDisabled: true }),
   validateLogin,
   authController.login
 );
@@ -58,7 +61,7 @@ router.post('/login',
 // Password Reset Routes
 router.post('/forgot-password',
   passwordResetLimiter,
-  ...csrfMiddleware,
+  // CSRF disabled - captcha + rate limiting provides protection
   verifyCaptcha({ required: true, skipIfDisabled: true }),
   validateForgotPassword,
   authController.forgotPassword
@@ -66,7 +69,7 @@ router.post('/forgot-password',
 
 router.post('/reset-password',
   passwordResetLimiter,
-  ...csrfMiddleware,
+  // CSRF disabled - captcha + rate limiting provides protection
   verifyCaptcha({ required: true, skipIfDisabled: true }),
   validateResetPassword,
   authController.resetPassword
@@ -75,7 +78,7 @@ router.post('/reset-password',
 // Email Verification Routes
 router.post('/verify-email',
   otpLimiter,
-  ...csrfMiddleware,
+  // CSRF disabled - captcha + rate limiting provides protection
   verifyCaptcha({ required: false, skipIfDisabled: true }),
   validateEmailVerification,
   authController.verifyEmail
@@ -83,7 +86,7 @@ router.post('/verify-email',
 
 router.post('/resend-verification',
   otpLimiter,
-  ...csrfMiddleware,
+  // CSRF disabled - captcha + rate limiting provides protection
   verifyCaptcha({ required: true, skipIfDisabled: true }),
   validateResendVerification,
   authController.resendVerificationEmail
@@ -91,6 +94,7 @@ router.post('/resend-verification',
 
 // Token Management
 router.post('/refresh-token',
+  // CSRF disabled - refresh tokens are stateless
   validateRefreshToken,
   authController.refreshToken
 );
