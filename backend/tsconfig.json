@@ -3,7 +3,7 @@
     "target": "ES2022",
     "module": "commonjs",
     "lib": ["ES2022"],
-    "moduleResolution": "node",
+    "moduleResolution": "node10",
     "outDir": "./dist",
     "rootDir": "./src",
     "strict": true,
@@ -24,8 +24,8 @@
     "noUnusedParameters": false,
     "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": true,
-    "types": ["node", "express", "jest"]
+    "types": ["node", "express"]
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist", "**/*.test.ts", "**/*.spec.ts"]
+  "exclude": ["node_modules", "dist", "src/tests", "**/*.test.ts", "**/*.spec.ts"]
 }
