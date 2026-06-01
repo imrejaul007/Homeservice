@@ -15,6 +15,8 @@ interface AdminPageShellProps {
   backHref?: string;
   pendingVerifications?: number;
   showSidebar?: boolean;
+  /** Use wider main column for tables and dashboards */
+  wideLayout?: boolean;
   children: React.ReactNode;
 }
 
@@ -26,6 +28,7 @@ export function AdminPageShell({
   backHref = '/admin/dashboard',
   pendingVerifications = 0,
   showSidebar = true,
+  wideLayout = false,
   children,
 }: AdminPageShellProps) {
   const crumbs = breadcrumbItems ?? [
@@ -40,11 +43,12 @@ export function AdminPageShell({
       breadcrumbItems={crumbs}
       backHref={backHref}
       headerActions={headerActions}
+      contentWidth={wideLayout ? 'wide' : 'default'}
     >
       {showSidebar ? (
-        <div className="flex flex-col lg:flex-row gap-6">
-          <aside className="lg:w-72 flex-shrink-0">
-            <div className="lg:sticky lg:top-6">
+        <div className="flex flex-col xl:flex-row gap-4">
+          <aside className="xl:w-[15.5rem] flex-shrink-0">
+            <div className="xl:sticky xl:top-6">
               <AdminNav pendingVerifications={pendingVerifications} />
             </div>
           </aside>

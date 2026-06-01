@@ -1,7 +1,7 @@
 ﻿import mongoose from 'mongoose';
 import ProviderProfile, { IProviderProfile } from '../models/providerProfile.model';
 import ProviderVerification, { IProviderVerification } from '../models/providerVerification.model';
-import User from '../models/user.model';
+import User, { AccountStatus } from '../models/user.model';
 import Booking from '../models/booking.model';
 import Service from '../models/service.model';
 import { ApiError } from '../utils/ApiError';
@@ -66,6 +66,8 @@ export interface PayoutHold {
 
 export interface SLAMetrics {
   providerId: mongoose.Types.ObjectId;
+  periodBookingCount: number;
+  hasInsufficientData: boolean;
   responseTime: {
     avgMinutes: number;
     p95Minutes: number;
@@ -94,7 +96,51 @@ export interface SLAMetrics {
 // Provider Operations Service
 // ============================================
 
+type ProfileOverallStatus = 'pending' | 'in_progress' | 'approved' | 'rejected' | 'suspended';
+type VerificationStatus = 'pending' | 'in_progress' | 'verified' | 'rejected' | 'suspended';
+
 export class ProviderOpsService {
+  /**
+   * Keep ProviderProfile, ProviderVerification, and User account status aligned.
+   */
+  private async syncProviderStatus(
+    providerId: string,
+    profileOverall: ProfileOverallStatus,
+    verificationStatus: VerificationStatus,
+    accountStatus: AccountStatus
+  ): Promise<void> {
+    await User.findByIdAndUpdate(providerId, { accountStatus });
+    await ProviderProfile.updateOne(
+      { userId: providerId },
+      { $set: { 'verificationStatus.overall': profileOverall } },
+      { runValidators: false }
+    );
+
+    const verification = await ProviderVerification.findOne({ providerId });
+    if (verification) {
+      verification.status = verificationStatus;
+      await verification.save();
+    } else {
+      await ProviderVerification.create({
+        providerId,
+        status: verificationStatus,
+        documents: [],
+        backgroundChecks: [],
+        fraudFlags: [],
+        reviewHistory: [],
+        metadata: { verificationAttempts: 0 },
+      });
+    }
+  }
+
+  private mapProfileToVerificationStatus(profileOverall: ProfileOverallStatus): VerificationStatus {
+    if (profileOverall === 'approved') return 'verified';
+    if (profileOverall === 'in_progress') return 'in_progress';
+    if (profileOverall === 'rejected') return 'rejected';
+    if (profileOverall === 'suspended') return 'suspended';
+    return 'pending';
+  }
+
   // ========================================
   // Onboarding Pipeline
   // ========================================
@@ -174,6 +220,7 @@ export class ProviderOpsService {
     }
 
     // Update verification status
+    const previousStatus = verification.status; // Capture BEFORE changing
     verification.status = 'in_progress';
     verification.metadata.lastAttemptAt = new Date();
     verification.metadata.verificationAttempts += 1;
@@ -183,17 +230,14 @@ export class ProviderOpsService {
         action: 'under_review',
         performedBy: new mongoose.Types.ObjectId(adminId),
         performedAt: new Date(),
-        previousStatus: verification.status,
+        previousStatus,
         newStatus: 'in_progress',
       });
     }
 
     await verification.save();
 
-    // Update user account status
-    await User.findByIdAndUpdate(providerId, {
-      accountStatus: 'pending_verification',
-    });
+    await this.syncProviderStatus(providerId, 'in_progress', 'in_progress', 'pending_verification');
 
     const onboardingStatus = await this.getOnboardingStatus(providerId);
 
@@ -425,22 +469,20 @@ export class ProviderOpsService {
       completionRate: 0.3, // 30% weight
     };
 
-    // Rating component (0-100)
-    // 5 stars = 100, 4 stars = 80, 3 stars = 60, etc.
-    const ratingScore = (providerProfile.reviewsData.averageRating / 5) * 100;
+    // Rating component (0-100) - use optional chaining for incomplete profiles
+    const ratingScore = ((providerProfile.reviewsData?.averageRating || 0) / 5) * 100;
 
     // Response time component (0-100)
-    // < 15 min = 100, < 30 min = 80, < 60 min = 60, < 120 min = 40, > 120 min = 20
-    const responseTime = providerProfile.reviewsData.avgResponseTime || 0;
+    const responseTime = providerProfile.reviewsData?.avgResponseTime || 0;
     let responseScore = 100;
     if (responseTime > 120) responseScore = 20;
     else if (responseTime > 60) responseScore = 40;
     else if (responseTime > 30) responseScore = 60;
     else if (responseTime > 15) responseScore = 80;
 
-    // Completion rate component (0-100)
-    const totalBookings = providerProfile.analytics.bookingStats.totalBookings;
-    const completedBookings = providerProfile.analytics.bookingStats.completedBookings;
+    // Completion rate component (0-100) - use optional chaining for incomplete profiles
+    const totalBookings = providerProfile.analytics?.bookingStats?.totalBookings || 0;
+    const completedBookings = providerProfile.analytics?.bookingStats?.completedBookings || 0;
     const completionRate = totalBookings > 0 ? (completedBookings / totalBookings) * 100 : 100;
 
     const qualityScore = Math.round(
@@ -449,9 +491,16 @@ export class ProviderOpsService {
       (completionRate * weights.completionRate)
     );
 
-    // Update provider profile with new score
-    providerProfile.analytics.performanceMetrics.qualityScore = qualityScore;
-    await providerProfile.save();
+    // Use updateOne to avoid full document validation on incomplete profiles
+    try {
+      await ProviderProfile.updateOne(
+        { userId: providerId },
+        { $set: { 'analytics.performanceMetrics.qualityScore': qualityScore } }
+      );
+    } catch (updateError) {
+      // Silently ignore update errors for incomplete profiles
+      logger.warn('Failed to update quality score for incomplete profile', { providerId });
+    }
 
     return Math.min(100, Math.max(0, qualityScore));
   }
@@ -469,17 +518,21 @@ export class ProviderOpsService {
     const qualityScore = await this.calculateQualityScore(providerId);
     const reliabilityScore = await this.calculateReliabilityScore(providerId);
 
+    const bookingStats = providerProfile.analytics?.bookingStats;
+    const reviewsData = providerProfile.reviewsData;
+    const performanceMetrics = providerProfile.analytics?.performanceMetrics;
+
     return {
       providerId: providerProfile.userId as mongoose.Types.ObjectId,
       qualityScore,
       reliabilityScore,
-      totalBookings: providerProfile.analytics.bookingStats.totalBookings,
-      completedBookings: providerProfile.analytics.bookingStats.completedBookings,
-      cancelledBookings: providerProfile.analytics.bookingStats.cancelledBookings,
-      noShows: providerProfile.analytics.bookingStats.noShowBookings,
-      avgRating: providerProfile.reviewsData.averageRating,
-      avgResponseTime: providerProfile.reviewsData.avgResponseTime,
-      acceptanceRate: providerProfile.analytics.performanceMetrics.acceptanceRate,
+      totalBookings: bookingStats?.totalBookings ?? 0,
+      completedBookings: bookingStats?.completedBookings ?? 0,
+      cancelledBookings: bookingStats?.cancelledBookings ?? 0,
+      noShows: bookingStats?.noShowBookings ?? 0,
+      avgRating: reviewsData?.averageRating ?? 0,
+      avgResponseTime: reviewsData?.avgResponseTime ?? 0,
+      acceptanceRate: performanceMetrics?.acceptanceRate ?? 0,
       lastUpdated: new Date(),
     };
   }
@@ -498,23 +551,24 @@ export class ProviderOpsService {
       return 0;
     }
 
-    const stats = providerProfile.analytics.bookingStats;
-    const totalBookings = stats.totalBookings;
+    // Use optional chaining for incomplete profiles
+    const stats = providerProfile.analytics?.bookingStats;
+    const totalBookings = stats?.totalBookings || 0;
 
     if (totalBookings === 0) {
       return 100; // New provider with no bookings
     }
 
     // Cancellation rate (max 40 points deduction)
-    const cancellationRate = stats.cancelledBookings / totalBookings;
+    const cancellationRate = (stats?.cancelledBookings || 0) / totalBookings;
     const cancellationScore = Math.max(0, 60 - (cancellationRate * 100));
 
     // No-show rate (max 40 points deduction)
-    const noShowRate = stats.noShowBookings / totalBookings;
+    const noShowRate = (stats?.noShowBookings || 0) / totalBookings;
     const noShowScore = Math.max(0, 60 - (noShowRate * 100));
 
-    // Punctuality score (20 points)
-    const punctualityScore = providerProfile.analytics.performanceMetrics.punctualityScore;
+    // Punctuality score (20 points) - use optional chaining
+    const punctualityScore = providerProfile.analytics?.performanceMetrics?.punctualityScore || 50;
 
     const reliabilityScore = Math.round(
       cancellationScore * 0.35 +
@@ -522,9 +576,16 @@ export class ProviderOpsService {
       punctualityScore * 0.30
     );
 
-    // Update provider profile
-    providerProfile.analytics.performanceMetrics.qualityScore = reliabilityScore;
-    await providerProfile.save();
+    // Use updateOne to avoid full document validation on incomplete profiles
+    try {
+      await ProviderProfile.updateOne(
+        { userId: providerId },
+        { $set: { 'analytics.performanceMetrics.reliabilityScore': reliabilityScore } }
+      );
+    } catch (updateError) {
+      // Silently ignore update errors for incomplete profiles
+      logger.warn('Failed to update reliability score for incomplete profile', { providerId });
+    }
 
     return Math.min(100, Math.max(0, reliabilityScore));
   }
@@ -552,27 +613,39 @@ export class ProviderOpsService {
       throw new ApiError(400, 'User is not a provider');
     }
 
-    // Update user status
-    provider.accountStatus = 'suspended';
-    await provider.save();
+    const profile = await ProviderProfile.findOne({ userId: providerId });
+    const previousProfileOverall =
+      (profile?.verificationStatus?.overall as ProfileOverallStatus) || 'approved';
 
-    // Update verification record
-    const verification = await ProviderVerification.findOne({ providerId });
+    let verification = await ProviderVerification.findOne({ providerId });
     if (verification) {
+      const previousStatus = verification.status;
       verification.status = 'suspended';
+      verification.suspension = {
+        type,
+        endDate: type === 'temporary' ? endDate : undefined,
+        reason,
+        previousProfileOverall,
+      };
       verification.reviewHistory.push({
         action: 'suspended',
         performedBy: new mongoose.Types.ObjectId(adminId),
         performedAt: new Date(),
         notes: reason,
-        previousStatus: verification.status,
+        previousStatus,
         newStatus: 'suspended',
       });
       await verification.save();
     } else {
-      await ProviderVerification.create({
+      verification = await ProviderVerification.create({
         providerId,
         status: 'suspended',
+        suspension: {
+          type,
+          endDate: type === 'temporary' ? endDate : undefined,
+          reason,
+          previousProfileOverall,
+        },
         reviewHistory: [{
           action: 'suspended',
           performedBy: new mongoose.Types.ObjectId(adminId),
@@ -583,24 +656,25 @@ export class ProviderOpsService {
       });
     }
 
-    // Deactivate all provider's services
+    await this.syncProviderStatus(providerId, 'suspended', 'suspended', 'suspended');
+
     await Service.updateMany(
       { providerId },
       { $set: { isActive: false, status: 'suspended' } }
     );
 
-    // Add audit log
     logger.info('PROVIDER_OPS: Provider suspended', {
       providerId,
       adminId,
       reason,
       type,
       endDate,
+      previousProfileOverall,
     });
 
     return {
-      provider,
-      verification: await ProviderVerification.findOne({ providerId }),
+      provider: await User.findById(providerId),
+      verification,
     };
   }
 
@@ -617,37 +691,57 @@ export class ProviderOpsService {
       throw new ApiError(404, 'Provider not found');
     }
 
+    const profile = await ProviderProfile.findOne({ userId: providerId });
+    if (profile?.verificationStatus?.overall === 'rejected') {
+      throw new ApiError(400, 'Rejected providers cannot be reactivated. They must re-apply.');
+    }
+
     if (provider.accountStatus !== 'suspended') {
       throw new ApiError(400, 'Provider is not suspended');
     }
 
-    // Check if suspension period has ended (for temporary suspensions)
     const verification = await ProviderVerification.findOne({ providerId });
-    if (verification?.expiresAt && verification.expiresAt > new Date()) {
+    if (verification?.status !== 'suspended') {
+      throw new ApiError(400, 'Provider verification is not in suspended state');
+    }
+
+    if (
+      verification.suspension?.type === 'temporary' &&
+      verification.suspension.endDate &&
+      verification.suspension.endDate > new Date()
+    ) {
       throw new ApiError(400, 'Suspension period has not ended yet');
     }
 
-    // Reactivate user
-    provider.accountStatus = 'active';
-    await provider.save();
+    const restoreOverall =
+      (verification.suspension?.previousProfileOverall as ProfileOverallStatus) || 'approved';
+    const restoreVerification = this.mapProfileToVerificationStatus(restoreOverall);
+    const restoreAccount: AccountStatus =
+      restoreOverall === 'approved' ? 'active' : 'pending_verification';
 
-    // Update verification record
-    if (verification) {
-      verification.status = 'verified';
-      verification.reviewHistory.push({
+    await this.syncProviderStatus(
+      providerId,
+      restoreOverall,
+      restoreVerification,
+      restoreAccount
+    );
+
+    const updatedVerification = await ProviderVerification.findOne({ providerId });
+    if (updatedVerification) {
+      updatedVerification.reviewHistory.push({
         action: 'approved',
         performedBy: new mongoose.Types.ObjectId(adminId),
         performedAt: new Date(),
         notes: notes || 'Provider reactivated after suspension review',
         previousStatus: 'suspended',
-        newStatus: 'verified',
+        newStatus: restoreVerification,
       });
-      await verification.save();
+      updatedVerification.suspension = undefined;
+      await updatedVerification.save();
     }
 
-    // Reactivate services
     await Service.updateMany(
-      { providerId },
+      { providerId, status: 'suspended' },
       { $set: { isActive: true, status: 'active' } }
     );
 
@@ -655,10 +749,11 @@ export class ProviderOpsService {
       providerId,
       adminId,
       notes,
+      restoreOverall,
     });
 
     return {
-      provider,
+      provider: await User.findById(providerId),
       verification: await ProviderVerification.findOne({ providerId }),
     };
   }
@@ -734,6 +829,37 @@ export class ProviderOpsService {
       createdAt: { $gte: thirtyDaysAgo },
     });
 
+    const periodBookingCount = bookings.length;
+    if (periodBookingCount === 0) {
+      return {
+        providerId: new mongoose.Types.ObjectId(providerId),
+        periodBookingCount: 0,
+        hasInsufficientData: true,
+        responseTime: {
+          avgMinutes: 0,
+          p95Minutes: 0,
+          targetMinutes: 30,
+          compliant: true,
+        },
+        bookingAcceptanceRate: {
+          accepted: 0,
+          rejected: 0,
+          rate: 0,
+          targetPercentage: 80,
+          compliant: false,
+        },
+        completionRate: {
+          completed: 0,
+          cancelled: 0,
+          noShow: 0,
+          rate: 0,
+          targetPercentage: 95,
+          compliant: false,
+        },
+        lastUpdated: new Date(),
+      };
+    }
+
     // Calculate response time (using createdAt as request received, acceptedAt as response)
     const responseTimes = bookings
       .filter(b => b.providerResponse?.acceptedAt)
@@ -757,7 +883,7 @@ export class ProviderOpsService {
       b.status === 'cancelled' && b.cancellationDetails?.cancelledBy === 'provider'
     ).length;
     const totalReviewed = acceptedBookings + rejectedBookings;
-    const acceptanceRate = totalReviewed > 0 ? (acceptedBookings / totalReviewed) * 100 : 100;
+    const acceptanceRate = totalReviewed > 0 ? (acceptedBookings / totalReviewed) * 100 : 0;
 
     // Calculate completion rate
     const completedBookings = bookings.filter(b => b.status === 'completed').length;
@@ -768,10 +894,12 @@ export class ProviderOpsService {
     const totalRelevantBookings = completedBookings + cancelledBookings + noShows;
     const completionRate = totalRelevantBookings > 0
       ? (completedBookings / totalRelevantBookings) * 100
-      : 100;
+      : 0;
 
     return {
       providerId: new mongoose.Types.ObjectId(providerId),
+      periodBookingCount,
+      hasInsufficientData: false,
       responseTime: {
         avgMinutes: Math.round(avgResponseTime),
         p95Minutes: Math.round(p95ResponseTime),
@@ -820,6 +948,9 @@ export class ProviderOpsService {
 
     for (const provider of providers) {
       const slaMetrics = await this.getSlaMetrics(provider.userId.toString());
+      if (slaMetrics.hasInsufficientData) {
+        continue;
+      }
       const violations: string[] = [];
 
       if (!slaMetrics.responseTime.compliant) {
@@ -881,17 +1012,36 @@ export class ProviderOpsService {
       }
     }
 
-    // Search filter
-    if (filters.search) {
+    // Search filter (email via User lookup — userId is ObjectId ref)
+    if (filters.search?.trim()) {
+      const searchRegex = { $regex: filters.search.trim(), $options: 'i' };
+      const matchingUsers = await User.find({
+        role: 'provider',
+        $or: [{ email: searchRegex }, { phone: searchRegex }, { firstName: searchRegex }, { lastName: searchRegex }],
+      }).select('_id');
+      const userIds = matchingUsers.map((u) => u._id);
       query.$or = [
-        { 'businessInfo.businessName': { $regex: filters.search, $options: 'i' } },
-        { 'userId.email': { $regex: filters.search, $options: 'i' } },
+        { 'businessInfo.businessName': searchRegex },
+        ...(userIds.length > 0 ? [{ userId: { $in: userIds } }] : []),
       ];
     }
 
     // City filter
     if (filters.city) {
       query['locationInfo.primaryAddress.city'] = { $regex: filters.city, $options: 'i' };
+    }
+
+    if (filters.qualityScoreMin !== undefined) {
+      query['analytics.performanceMetrics.qualityScore'] = {
+        ...query['analytics.performanceMetrics.qualityScore'],
+        $gte: filters.qualityScoreMin,
+      };
+    }
+    if (filters.qualityScoreMax !== undefined) {
+      query['analytics.performanceMetrics.qualityScore'] = {
+        ...query['analytics.performanceMetrics.qualityScore'],
+        $lte: filters.qualityScoreMax,
+      };
     }
 
     // Pagination
@@ -909,7 +1059,7 @@ export class ProviderOpsService {
         sortOptions['analytics.performanceMetrics.qualityScore'] = sortOrder;
         break;
       case 'reliabilityScore':
-        sortOptions['analytics.performanceMetrics.punctualityScore'] = sortOrder;
+        sortOptions['analytics.performanceMetrics.reliabilityScore'] = sortOrder;
         break;
       case 'name':
         sortOptions['businessInfo.businessName'] = sortOrder;
@@ -918,30 +1068,16 @@ export class ProviderOpsService {
         sortOptions.createdAt = sortOrder;
     }
 
+    const total = await ProviderProfile.countDocuments(query);
+
     const providers = await ProviderProfile.find(query)
       .populate('userId', 'firstName lastName email phone accountStatus createdAt')
       .sort(sortOptions)
       .skip(skip)
       .limit(limit);
 
-    // Apply quality score filter in memory (since it's calculated)
-    let filteredProviders = providers;
-    if (filters.qualityScoreMin !== undefined || filters.qualityScoreMax !== undefined) {
-      filteredProviders = [];
-      for (const provider of providers) {
-        const metrics = await this.getProviderMetrics(provider.userId.toString());
-        const meetsMin = filters.qualityScoreMin === undefined || metrics.qualityScore >= filters.qualityScoreMin;
-        const meetsMax = filters.qualityScoreMax === undefined || metrics.qualityScore <= filters.qualityScoreMax;
-        if (meetsMin && meetsMax) {
-          filteredProviders.push(provider);
-        }
-      }
-    }
-
-    const total = await ProviderProfile.countDocuments(query);
-
     return {
-      providers: filteredProviders,
+      providers,
       pagination: {
         page,
         limit,
@@ -986,41 +1122,92 @@ export class ProviderOpsService {
     }
 
     try {
-      // Check if already approved
+      logger.info('Provider approval: Step 1 - Starting approval', {
+        providerId,
+        adminId,
+        action: 'PROVIDER_APPROVAL_STEP_1'
+      });
+
+      // Check if already approved via ProviderProfile
+      const existingProfile = await ProviderProfile.findOne({ userId: providerId });
       const existingVerification = await ProviderVerification.findOne({ providerId });
-      if (existingVerification?.status === 'verified') {
+      if (
+        existingProfile?.verificationStatus?.overall === 'approved' ||
+        existingVerification?.status === 'verified'
+      ) {
         throw new ApiError(400, 'Provider is already approved');
       }
 
-      const verification = await ProviderVerification.findOne({ providerId });
+      logger.info('Provider approval: Step 2 - Finding verification record', {
+        providerId,
+        action: 'PROVIDER_APPROVAL_STEP_2'
+      });
+
+      let verification = existingVerification;
+
       if (!verification) {
-        throw new ApiError(404, 'Verification record not found');
+        // Create verification record if it doesn't exist
+        logger.info('Creating verification record for provider', { providerId });
+        verification = new ProviderVerification({
+          providerId,
+          status: 'verified',
+          kycScore: 100,
+          kycLevel: 'standard',
+          documents: [],
+          backgroundChecks: [],
+          fraudFlags: [],
+          reviewHistory: [],
+          metadata: { verificationAttempts: 1, lastAttemptAt: new Date() },
+        });
+        
       }
 
+      logger.info('Provider approval: Step 3 - Updating verification status', {
+        providerId,
+        verificationId: verification._id,
+        currentStatus: verification.status,
+        action: 'PROVIDER_APPROVAL_STEP_3'
+      });
+
       // Update verification status
+      const previousStatus = verification.status; // Capture BEFORE changing
       verification.status = 'verified';
       verification.reviewHistory.push({
         action: 'approved',
         performedBy: new mongoose.Types.ObjectId(adminId),
         performedAt: new Date(),
         notes,
-        previousStatus: verification.status,
+        previousStatus,
         newStatus: 'verified',
+      });
+
+      logger.info('Provider approval: Step 4 - Saving verification', {
+        providerId,
+        action: 'PROVIDER_APPROVAL_STEP_4'
       });
       await verification.save();
 
+      logger.info('Provider approval: Step 5 - Updating user status', {
+        providerId,
+        action: 'PROVIDER_APPROVAL_STEP_5'
+      });
       // Update user status
       await User.findByIdAndUpdate(providerId, {
         accountStatus: 'active',
       });
 
-      // Update provider profile
-      const providerProfile = await ProviderProfile.findOne({ userId: providerId });
-      if (providerProfile) {
-        providerProfile.verificationStatus.overall = 'approved';
-        providerProfile.instagramStyleProfile.isVerified = true;
-        await providerProfile.save();
-      }
+      // Update provider profile - use updateOne to avoid validation errors on incomplete profiles
+      // The provider profile may be incomplete (missing businessInfo, locationInfo, etc.) during onboarding
+      await ProviderProfile.updateOne(
+        { userId: providerId },
+        {
+          $set: {
+            'verificationStatus.overall': 'approved',
+            'instagramStyleProfile.isVerified': true,
+          }
+        },
+        { runValidators: false }
+      );
 
       // Activate services that were pending review
       const activatedServices = await Service.updateMany(
@@ -1105,6 +1292,20 @@ export class ProviderOpsService {
         metrics,
       };
       return result;
+    } catch (error) {
+      // Detailed error logging to pinpoint exact failure
+      logger.error('Provider approval FAILED', {
+        providerId,
+        adminId,
+        error: error instanceof Error ? {
+          name: error.name,
+          message: error.message,
+          stack: error.stack
+        } : String(error),
+        errorType: typeof error,
+        action: 'PROVIDER_APPROVAL_FAILED'
+      });
+      throw error;
     } finally {
       // SECURITY FIX: Always release the distributed lock
       if (lockAcquired && redis && isRedisAvailable()) {
@@ -1136,34 +1337,38 @@ export class ProviderOpsService {
     reason: string,
     notes?: string
   ): Promise<{ provider: any; verification: any }> {
-    const verification = await ProviderVerification.findOne({ providerId });
+    let verification = await ProviderVerification.findOne({ providerId });
     if (!verification) {
-      throw new ApiError(404, 'Verification record not found');
+      verification = await ProviderVerification.create({
+        providerId,
+        status: 'pending',
+        documents: [],
+        backgroundChecks: [],
+        fraudFlags: [],
+        reviewHistory: [],
+        metadata: { verificationAttempts: 0 },
+      });
     }
 
+    const previousStatus = verification.status;
     verification.status = 'rejected';
     verification.reviewHistory.push({
       action: 'rejected',
       performedBy: new mongoose.Types.ObjectId(adminId),
       performedAt: new Date(),
       notes: notes || reason,
-      previousStatus: verification.status,
+      previousStatus,
       newStatus: 'rejected',
     });
     await verification.save();
 
-    // Update user status
-    await User.findByIdAndUpdate(providerId, {
-      accountStatus: 'suspended',
-    });
+    await this.syncProviderStatus(providerId, 'rejected', 'rejected', 'deactivated');
 
-    // Update provider profile
-    const providerProfile = await ProviderProfile.findOne({ userId: providerId });
-    if (providerProfile) {
-      providerProfile.verificationStatus.overall = 'rejected';
-      providerProfile.instagramStyleProfile.isVerified = false;
-      await providerProfile.save();
-    }
+    await ProviderProfile.updateOne(
+      { userId: providerId },
+      { $set: { 'instagramStyleProfile.isVerified': false } },
+      { runValidators: false }
+    );
 
     // Deactivate services
     await Service.updateMany(
@@ -1210,10 +1415,36 @@ export class ProviderOpsService {
   // ========================================
 
   /**
-   * Run fraud check on a provider
+   * Run fraud check on a provider and persist flags to verification record
    */
-  async runFraudCheck(providerId: string): Promise<FraudReport> {
-    return fraudDetectionService.analyzeProvider(providerId);
+  async runFraudCheck(providerId: string): Promise<{ report: FraudReport; flagsPersisted: number }> {
+    const report = await fraudDetectionService.analyzeProvider(providerId);
+    let flagsPersisted = 0;
+
+    const today = new Date().toISOString().slice(0, 10);
+    for (const activity of report.suspiciousActivities) {
+      const verification = await ProviderVerification.findOne({ providerId });
+      const existingToday = verification?.fraudFlags?.some(
+        (f) =>
+          f.type === activity.type &&
+          !f.resolved &&
+          f.detectedAt.toISOString().slice(0, 10) === today
+      );
+      if (!existingToday) {
+        await fraudDetectionService.flagSuspiciousActivity(providerId, activity);
+        flagsPersisted += 1;
+      }
+    }
+
+    if (report.suspiciousActivities.some((a) => a.severity === 'critical')) {
+      await this.syncProviderStatus(providerId, 'suspended', 'suspended', 'suspended');
+      await Service.updateMany(
+        { providerId },
+        { $set: { isActive: false, status: 'suspended' } }
+      );
+    }
+
+    return { report, flagsPersisted };
   }
 
   /**
