@@ -1,9 +1,4 @@
-import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { useAuthStore } from '../../stores/authStore';
-import PageLayout from '../layout/PageLayout';
-import { AdminPageShell } from '../admin/AdminPageShell';
-import { toast } from 'react-hot-toast';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Gift,
   Plus,
@@ -12,7 +7,6 @@ import {
   ToggleLeft,
   ToggleRight,
   Search,
-  Filter,
   X,
   Save,
   Calendar,
@@ -21,196 +15,130 @@ import {
   DollarSign,
   Users,
   Clock,
-  AlertCircle
+  RefreshCw,
+  Loader2,
+  Info,
+  Link2,
 } from 'lucide-react';
+import { toast } from 'react-hot-toast';
+import { AdminPageShell } from '../admin/AdminPageShell';
+import ErrorBoundary from '../common/ErrorBoundary';
+import { cn } from '../../lib/utils';
+import {
+  adminOfferApi,
+  type AdminOffer,
+  type OfferFormPayload,
+} from '../../services/adminOfferApi';
+import {
+  formatOfferDateRange,
+  formatOfferValue,
+  getOfferValidityLabel,
+  resolveOfferGradient,
+  OFFER_GRADIENT_MAP,
+} from '../../utils/offerDisplay';
 
-interface Offer {
-  _id: string;
-  title: string;
-  description?: string;
-  code: string;
-  type: 'percentage' | 'fixed' | 'free_service';
-  value: number;
-  maxDiscount?: number;
-  minOrderValue: number;
-  displayTitle?: string;
-  displaySubtitle?: string;
-  displayGradient?: string;
-  displayBadge?: string;
-  imageUrl?: string;
-  featured?: boolean;
-  isActive: boolean;
-  validFrom: string;
-  validUntil: string;
-  maxUses: number;
-  currentUses: number;
-  createdAt: string;
-  applicableServices?: string[];
-  applicableCategories?: string[];
-}
+const GRADIENT_OPTIONS = Object.keys(OFFER_GRADIENT_MAP);
 
-interface ServiceOption {
-  _id: string;
-  name: string;
-  category?: { name: string };
-}
+const emptyForm = (): OfferFormPayload => ({
+  title: '',
+  displayTitle: '',
+  displaySubtitle: '',
+  description: '',
+  code: '',
+  type: 'percentage',
+  value: 10,
+  maxDiscount: 0,
+  minOrderValue: 0,
+  maxUses: 1000,
+  maxUsesPerUser: 1,
+  validFrom: new Date().toISOString().split('T')[0],
+  validUntil: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+  displayBadge: '',
+  displayGradient: 'from-nilin-rose to-nilin-coral',
+  featured: false,
+  applicableServices: [],
+  applicableCategories: [],
+});
 
-interface CategoryOption {
-  _id: string;
-  name: string;
+function extractError(err: unknown): string | undefined {
+  if (err && typeof err === 'object' && 'response' in err) {
+    return (err as { response?: { data?: { message?: string } } }).response?.data?.message;
+  }
+  return undefined;
 }
 
 const AdminOffersManagement: React.FC = () => {
-  const navigate = useNavigate();
-  const { user, tokens } = useAuthStore();
-  const [offers, setOffers] = useState<Offer[]>([]);
-  const [services, setServices] = useState<ServiceOption[]>([]);
-  const [categories, setCategories] = useState<CategoryOption[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [offers, setOffers] = useState<AdminOffer[]>([]);
+  const [services, setServices] = useState<Array<{ _id: string; name: string; category?: { name: string } }>>([]);
+  const [categories, setCategories] = useState<Array<{ _id: string; name: string }>>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState<string>('all');
+  const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'inactive' | 'expired'>('all');
   const [showModal, setShowModal] = useState(false);
-  const [editingOffer, setEditingOffer] = useState<Offer | null>(null);
+  const [editingOffer, setEditingOffer] = useState<AdminOffer | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [togglingId, setTogglingId] = useState<string | null>(null);
   const [showServiceSelector, setShowServiceSelector] = useState(false);
   const [showCategorySelector, setShowCategorySelector] = useState(false);
+  const [formData, setFormData] = useState<OfferFormPayload>(emptyForm());
 
-  const [formData, setFormData] = useState({
-    title: '',
-    displayTitle: '',
-    displaySubtitle: '',
-    description: '',
-    code: '',
-    type: 'percentage' as 'percentage' | 'fixed' | 'free_service',
-    value: 0,
-    maxDiscount: 0,
-    minOrderValue: 0,
-    maxUses: 100,
-    validFrom: '',
-    validUntil: '',
-    displayBadge: '',
-    displayGradient: 'from-nilin-rose to-nilin-coral',
-    featured: false,
-    applicableServices: [] as string[],
-    applicableCategories: [] as string[],
-  });
-
-  useEffect(() => {
-    loadOffers();
-    loadServicesAndCategories();
-  }, []);
-
-  const loadServicesAndCategories = async () => {
+  const loadData = useCallback(async (isRefresh = false) => {
+    if (isRefresh) setRefreshing(true);
+    else setLoading(true);
     try {
-      const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
-      const token = tokens?.accessToken || '';
-
-      const [servicesRes, categoriesRes] = await Promise.all([
-        fetch(`${API_URL}/services?limit=100`, {
-          headers: { Authorization: `Bearer ${token}` }
-        }),
-        fetch(`${API_URL}/categories`, {
-          headers: { Authorization: `Bearer ${token}` }
-        })
+      const [offerList, serviceList, categoryList] = await Promise.all([
+        adminOfferApi.list(),
+        adminOfferApi.loadServiceOptions(),
+        adminOfferApi.loadCategoryOptions(),
       ]);
-
-      const servicesData = await servicesRes.json();
-      const categoriesData = await categoriesRes.json();
-
-      if (servicesData.success) {
-        setServices(servicesData.data?.services || servicesData.data || []);
-      }
-      if (categoriesData.success) {
-        setCategories(categoriesData.data?.categories || categoriesData.data || []);
-      }
-    } catch (error) {
-      console.error('Failed to load services/categories:', error);
-    }
-  };
-
-  const toggleService = (serviceId: string) => {
-    setFormData(prev => ({
-      ...prev,
-      applicableServices: prev.applicableServices.includes(serviceId)
-        ? prev.applicableServices.filter(id => id !== serviceId)
-        : [...prev.applicableServices, serviceId]
-    }));
-  };
-
-  const toggleCategory = (categoryId: string) => {
-    setFormData(prev => ({
-      ...prev,
-      applicableCategories: prev.applicableCategories.includes(categoryId)
-        ? prev.applicableCategories.filter(id => id !== categoryId)
-        : [...prev.applicableCategories, categoryId]
-    }));
-  };
-
-  const loadOffers = async () => {
-    setIsLoading(true);
-    try {
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
-      if (tokens?.accessToken) {
-        headers['Authorization'] = `Bearer ${tokens.accessToken}`;
-      }
-
-      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:5000/api'}/offers/admin/all`, {
-        headers,
-      });
-      const data = await response.json();
-      if (data.success) {
-        setOffers(data.data);
-      }
-    } catch (error) {
-      console.error('Failed to load offers:', error);
+      setOffers(offerList);
+      setServices(serviceList);
+      setCategories(categoryList);
+      if (isRefresh) toast.success('Offers refreshed');
+    } catch {
       toast.error('Failed to load offers');
     } finally {
-      setIsLoading(false);
+      setLoading(false);
+      setRefreshing(false);
     }
+  }, []);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  const filteredOffers = offers.filter((offer) => {
+    const q = searchTerm.toLowerCase();
+    const matchesSearch =
+      offer.title.toLowerCase().includes(q) ||
+      offer.code.toLowerCase().includes(q) ||
+      (offer.displayTitle || '').toLowerCase().includes(q);
+    const matchesType = filterType === 'all' || offer.type === filterType;
+    const validity = getOfferValidityLabel(offer.validFrom, offer.validUntil, offer.isActive);
+    const matchesStatus =
+      filterStatus === 'all' ||
+      (filterStatus === 'active' && offer.isActive && validity.tone !== 'danger') ||
+      (filterStatus === 'inactive' && !offer.isActive) ||
+      (filterStatus === 'expired' && validity.tone === 'danger');
+    return matchesSearch && matchesType && matchesStatus;
+  });
+
+  const stats = {
+    total: offers.length,
+    active: offers.filter((o) => o.isActive && getOfferValidityLabel(o.validFrom, o.validUntil, true).tone !== 'danger').length,
+    featured: offers.filter((o) => o.featured).length,
+    claims: offers.reduce((s, o) => s + (o.currentUses || 0), 0),
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsSaving(true);
-
-    try {
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
-      if (tokens?.accessToken) {
-        headers['Authorization'] = `Bearer ${tokens.accessToken}`;
-      }
-
-      const url = editingOffer
-        ? `${import.meta.env.VITE_API_URL || 'http://localhost:5000/api'}/offers/admin/${editingOffer._id}`
-        : `${import.meta.env.VITE_API_URL || 'http://localhost:5000/api'}/offers/admin`;
-
-      const response = await fetch(url, {
-        method: editingOffer ? 'PUT' : 'POST',
-        headers,
-        body: JSON.stringify(formData),
-      });
-
-      const data = await response.json();
-
-      if (data.success) {
-        toast.success(editingOffer ? 'Offer updated successfully' : 'Offer created successfully');
-        setShowModal(false);
-        setEditingOffer(null);
-        loadOffers();
-      } else {
-        toast.error(data.message || 'Failed to save offer');
-      }
-    } catch (error) {
-      toast.error('Failed to save offer');
-    } finally {
-      setIsSaving(false);
-    }
+  const openCreate = () => {
+    setEditingOffer(null);
+    setFormData(emptyForm());
+    setShowModal(true);
   };
 
-  const handleEdit = (offer: Offer) => {
+  const openEdit = (offer: AdminOffer) => {
     setEditingOffer(offer);
     setFormData({
       title: offer.title,
@@ -223,6 +151,7 @@ const AdminOffersManagement: React.FC = () => {
       maxDiscount: offer.maxDiscount || 0,
       minOrderValue: offer.minOrderValue,
       maxUses: offer.maxUses,
+      maxUsesPerUser: offer.maxUsesPerUser ?? 1,
       validFrom: new Date(offer.validFrom).toISOString().split('T')[0],
       validUntil: new Date(offer.validUntil).toISOString().split('T')[0],
       displayBadge: offer.displayBadge || '',
@@ -234,468 +163,444 @@ const AdminOffersManagement: React.FC = () => {
     setShowModal(true);
   };
 
-  const handleDelete = async (offerId: string) => {
-    if (!confirm('Are you sure you want to delete this offer?')) return;
-
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!formData.title.trim() || !formData.code.trim()) {
+      toast.error('Title and promo code are required');
+      return;
+    }
+    if (new Date(formData.validUntil) < new Date(formData.validFrom)) {
+      toast.error('End date must be after start date');
+      return;
+    }
+    setIsSaving(true);
     try {
-      const headers: Record<string, string> = {};
-      if (tokens?.accessToken) {
-        headers['Authorization'] = `Bearer ${tokens.accessToken}`;
-      }
-
-      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:5000/api'}/offers/admin/${offerId}`, {
-        method: 'DELETE',
-        headers,
-      });
-
-      const data = await response.json();
-
-      if (data.success) {
-        toast.success('Offer deleted successfully');
-        loadOffers();
+      if (editingOffer) {
+        await adminOfferApi.update(editingOffer._id, formData);
+        toast.success('Offer updated');
       } else {
-        toast.error(data.message || 'Failed to delete offer');
+        await adminOfferApi.create({ ...formData, isActive: true });
+        toast.success('Offer created — visible on homepage when active and in date range');
       }
-    } catch (error) {
-      toast.error('Failed to delete offer');
+      setShowModal(false);
+      setEditingOffer(null);
+      await loadData();
+    } catch (err) {
+      toast.error(extractError(err) || 'Failed to save offer');
+    } finally {
+      setIsSaving(false);
     }
   };
 
-  const handleToggleActive = async (offer: Offer) => {
+  const handleDeactivate = async (offer: AdminOffer) => {
+    if (
+      !confirm(
+        `Deactivate "${offer.displayTitle || offer.title}"? It will disappear from the customer homepage and checkout.`
+      )
+    ) {
+      return;
+    }
     try {
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
-      if (tokens?.accessToken) {
-        headers['Authorization'] = `Bearer ${tokens.accessToken}`;
-      }
-
-      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:5000/api'}/offers/admin/${offer._id}`, {
-        method: 'PUT',
-        headers,
-        body: JSON.stringify({ isActive: !offer.isActive }),
-      });
-
-      const data = await response.json();
-
-      if (data.success) {
-        toast.success(`Offer ${offer.isActive ? 'deactivated' : 'activated'} successfully`);
-        loadOffers();
-      } else {
-        toast.error(data.message || 'Failed to update offer');
-      }
-    } catch (error) {
-      toast.error('Failed to update offer');
+      await adminOfferApi.deactivate(offer._id);
+      toast.success('Offer deactivated');
+      await loadData();
+    } catch (err) {
+      toast.error(extractError(err) || 'Failed to deactivate offer');
     }
   };
 
-  const filteredOffers = offers.filter(offer => {
-    const matchesSearch = offer.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      offer.code.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesFilter = filterType === 'all' || offer.type === filterType;
-    return matchesSearch && matchesFilter;
-  });
-
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric'
-    });
+  const handleToggleActive = async (offer: AdminOffer) => {
+    setTogglingId(offer._id);
+    try {
+      await adminOfferApi.setActive(offer._id, !offer.isActive);
+      toast.success(offer.isActive ? 'Offer hidden from customers' : 'Offer is live for customers');
+      await loadData();
+    } catch (err) {
+      toast.error(extractError(err) || 'Failed to update offer status');
+    } finally {
+      setTogglingId(null);
+    }
   };
 
-  const getTypeIcon = (type: string) => {
-    switch (type) {
-      case 'percentage': return <Percent className="w-4 h-4" />;
-      case 'fixed': return <DollarSign className="w-4 h-4" />;
-      case 'free_service': return <Gift className="w-4 h-4" />;
-      default: return <Tag className="w-4 h-4" />;
+  const toggleService = (id: string) => {
+    setFormData((prev) => ({
+      ...prev,
+      applicableServices: prev.applicableServices?.includes(id)
+        ? prev.applicableServices.filter((x) => x !== id)
+        : [...(prev.applicableServices || []), id],
+    }));
+  };
+
+  const toggleCategory = (id: string) => {
+    setFormData((prev) => ({
+      ...prev,
+      applicableCategories: prev.applicableCategories?.includes(id)
+        ? prev.applicableCategories.filter((x) => x !== id)
+        : [...(prev.applicableCategories || []), id],
+    }));
+  };
+
+  const validityToneClass = (tone: string) => {
+    switch (tone) {
+      case 'danger':
+        return 'text-red-600';
+      case 'warning':
+        return 'text-amber-700';
+      case 'success':
+        return 'text-emerald-700';
+      default:
+        return 'text-nilin-warmGray';
     }
   };
 
   return (
-    <AdminPageShell
-      title="Offers Management"
-      subtitle="Create and manage promotional offers"
-      breadcrumbItems={[
-        { label: 'Admin', href: '/admin/dashboard' },
-        { label: 'Offers', current: true },
-      ]}
-    >
-      <div className="space-y-6">
-          <div className="flex justify-end">
+    <ErrorBoundary>
+      <AdminPageShell
+        wideLayout
+        title="Offers Management"
+        subtitle="Promotions flow to customers on the homepage, offer detail, and booking checkout"
+        breadcrumbItems={[
+          { label: 'Admin', href: '/admin/dashboard' },
+          { label: 'Offers', current: true },
+        ]}
+        headerActions={
+          <div className="flex flex-wrap gap-2">
             <button
               type="button"
-              onClick={() => {
-                setEditingOffer(null);
-                setFormData({
-                  title: '',
-                  displayTitle: '',
-                  displaySubtitle: '',
-                  description: '',
-                  code: '',
-                  type: 'percentage',
-                  value: 0,
-                  maxDiscount: 0,
-                  minOrderValue: 0,
-                  maxUses: 100,
-                  validFrom: new Date().toISOString().split('T')[0],
-                  validUntil: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-                  displayBadge: '',
-                  displayGradient: 'from-nilin-rose to-nilin-coral',
-                  featured: false,
-                  applicableServices: [],
-                  applicableCategories: [],
-                });
-                setShowModal(true);
-              }}
-              className="btn-nilin flex items-center gap-2"
+              onClick={() => loadData(true)}
+              disabled={refreshing}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl glass glass-blur border border-nilin-border/50 text-sm font-sans hover:bg-nilin-blush/40 disabled:opacity-50"
             >
+              <RefreshCw className={cn('w-4 h-4', refreshing && 'animate-spin')} />
+              Refresh
+            </button>
+            <button type="button" onClick={openCreate} className="btn-nilin flex items-center gap-2">
               <Plus className="w-5 h-5" />
-              Create Offer
+              Create offer
             </button>
           </div>
+        }
+      >
+        <div className="space-y-6">
+          <div className="rounded-2xl border border-sky-200/80 bg-sky-50/70 px-5 py-4 flex gap-3">
+            <Info className="w-5 h-5 text-sky-700 flex-shrink-0 mt-0.5" />
+            <div className="text-sm text-sky-900 font-sans space-y-1">
+              <p className="font-medium">How offers reach customers & providers</p>
+              <p>
+                Active offers appear on the <strong>homepage</strong> and <strong>/offers</strong> page.
+                Customers <strong>claim</strong> an offer, then apply it at <strong>booking checkout</strong>.
+                Linking services or categories limits where the discount applies — providers earn bookings on
+                their linked services when customers use the code.
+              </p>
+            </div>
+          </div>
 
-          {/* Filters */}
-          <div className="glass-nilin rounded-nilin-lg p-4 mb-6">
-            <div className="flex flex-col md:flex-row gap-4">
-              <div className="flex-1 relative">
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            {[
+              { label: 'Total offers', value: stats.total },
+              { label: 'Live now', value: stats.active },
+              { label: 'Featured', value: stats.featured },
+              { label: 'Total redemptions', value: stats.claims },
+            ].map((kpi) => (
+              <div key={kpi.label} className="glass glass-blur rounded-2xl border border-nilin-border/50 p-5">
+                <p className="text-xs uppercase tracking-wide text-nilin-warmGray font-sans">{kpi.label}</p>
+                <p className="text-2xl font-serif text-nilin-charcoal mt-1">{kpi.value}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="glass glass-blur rounded-2xl border border-nilin-border/50 p-4">
+            <div className="flex flex-col lg:flex-row gap-3">
+              <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-nilin-warmGray" />
                 <input
-                  type="text"
-                  placeholder="Search offers..."
+                  type="search"
+                  placeholder="Search title or code…"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2 rounded-xl border-2 border-nilin-border bg-white/80 focus:border-nilin-coral focus:outline-none"
+                  className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-nilin-border/50 bg-white/60 font-sans focus:ring-2 focus:ring-nilin-coral/30"
                 />
               </div>
               <select
                 value={filterType}
                 onChange={(e) => setFilterType(e.target.value)}
-                className="px-4 py-2 rounded-xl border-2 border-nilin-border bg-white/80 focus:border-nilin-coral focus:outline-none"
+                className="px-4 py-2.5 rounded-xl border border-nilin-border/50 bg-white/60 font-sans"
               >
-                <option value="all">All Types</option>
+                <option value="all">All types</option>
                 <option value="percentage">Percentage</option>
-                <option value="fixed">Fixed Amount</option>
-                <option value="free_service">Free Service</option>
+                <option value="fixed">Fixed (AED)</option>
+                <option value="free_service">Free service</option>
+              </select>
+              <select
+                value={filterStatus}
+                onChange={(e) => setFilterStatus(e.target.value as typeof filterStatus)}
+                className="px-4 py-2.5 rounded-xl border border-nilin-border/50 bg-white/60 font-sans"
+              >
+                <option value="all">All statuses</option>
+                <option value="active">Live</option>
+                <option value="inactive">Inactive</option>
+                <option value="expired">Expired</option>
               </select>
             </div>
           </div>
 
-          {/* Offers Grid */}
-          {isLoading ? (
-            <div className="flex justify-center py-12">
-              <div className="w-10 h-10 border-2 border-nilin-coral border-t-transparent rounded-full animate-spin" />
+          {loading ? (
+            <div className="flex justify-center py-16">
+              <Loader2 className="w-10 h-10 text-nilin-coral animate-spin" />
             </div>
           ) : filteredOffers.length === 0 ? (
-            <div className="glass-nilin rounded-nilin-lg p-12 text-center">
-              <Gift className="w-16 h-16 text-nilin-warmGray mx-auto mb-4" />
-              <h3 className="text-xl font-medium text-nilin-charcoal mb-2">No offers found</h3>
-              <p className="text-nilin-warmGray">Create your first offer to get started</p>
+            <div className="glass glass-blur rounded-2xl border border-nilin-border/50 p-12 text-center">
+              <Gift className="w-14 h-14 text-nilin-warmGray mx-auto mb-4 opacity-60" />
+              <p className="font-medium text-nilin-charcoal font-sans">No offers match this view</p>
+              <button type="button" onClick={openCreate} className="btn-nilin mt-4">
+                Create offer
+              </button>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {filteredOffers.map((offer) => (
-                <div
-                  key={offer._id}
-                  className={`glass-nilin rounded-nilin-lg overflow-hidden hover-lift transition-all ${
-                    !offer.isActive ? 'opacity-60' : ''
-                  }`}
-                >
-                  <div className={`h-32 bg-gradient-to-br ${offer.displayGradient || 'from-nilin-rose to-nilin-coral'} p-4 relative`}>
-                    {offer.displayBadge && (
-                      <span className="absolute top-3 left-3 px-3 py-1 bg-white/20 backdrop-blur-sm rounded-full text-white text-xs font-medium">
-                        {offer.displayBadge}
-                      </span>
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+              {filteredOffers.map((offer) => {
+                const validity = getOfferValidityLabel(offer.validFrom, offer.validUntil, offer.isActive);
+                const serviceCount = offer.applicableServices?.length ?? 0;
+                const categoryCount = offer.applicableCategories?.length ?? 0;
+
+                return (
+                  <article
+                    key={offer._id}
+                    className={cn(
+                      'glass glass-blur rounded-2xl border border-nilin-border/50 overflow-hidden flex flex-col',
+                      !offer.isActive && 'opacity-75'
                     )}
-                    <div className="absolute bottom-3 right-3">
+                  >
+                    <div
+                      className={cn(
+                        'h-28 p-4 relative bg-gradient-to-br',
+                        resolveOfferGradient(offer.displayGradient)
+                      )}
+                    >
+                      {offer.displayBadge && (
+                        <span className="absolute top-3 left-3 px-2.5 py-0.5 bg-white/25 backdrop-blur-sm rounded-full text-white text-xs font-medium">
+                          {offer.displayBadge}
+                        </span>
+                      )}
                       <button
+                        type="button"
+                        disabled={togglingId === offer._id}
                         onClick={() => handleToggleActive(offer)}
-                        className="p-2 rounded-full bg-white/20 backdrop-blur-sm hover:bg-white/30 transition-colors"
+                        className="absolute top-3 right-3 p-2 rounded-full bg-white/20 backdrop-blur-sm hover:bg-white/35 transition-colors disabled:opacity-50"
+                        title={offer.isActive ? 'Deactivate for customers' : 'Activate for customers'}
                       >
-                        {offer.isActive ? (
+                        {togglingId === offer._id ? (
+                          <Loader2 className="w-5 h-5 text-white animate-spin" />
+                        ) : offer.isActive ? (
                           <ToggleRight className="w-6 h-6 text-white" />
                         ) : (
-                          <ToggleLeft className="w-6 h-6 text-white/60" />
+                          <ToggleLeft className="w-6 h-6 text-white/70" />
                         )}
                       </button>
-                    </div>
-                  </div>
-                  <div className="p-4">
-                    <div className="flex items-start justify-between mb-2">
-                      <div>
-                        <h3 className="font-medium text-nilin-charcoal">
-                          {offer.displayTitle || offer.title}
-                        </h3>
-                        {offer.displayTitle && (
-                          <p className="text-sm text-nilin-warmGray">{offer.title}</p>
-                        )}
+                      <div className="absolute bottom-3 right-3 px-2.5 py-1 rounded-full bg-white/90 text-sm font-semibold text-nilin-charcoal shadow-sm">
+                        {formatOfferValue(offer.type, offer.value)}
                       </div>
-                      <div className="flex items-center gap-1 px-2 py-1 bg-nilin-blush rounded-full">
-                        {getTypeIcon(offer.type)}
-                        <span className="text-sm font-medium text-nilin-coral">
-                          {offer.type === 'percentage'
-                            ? `${offer.value}%`
-                            : offer.type === 'fixed'
-                            ? `AED ${offer.value}`
-                            : 'Free'}
+                    </div>
+
+                    <div className="p-4 flex-1 flex flex-col font-sans">
+                      <h3 className="font-semibold text-nilin-charcoal leading-snug">
+                        {offer.displayTitle || offer.title}
+                      </h3>
+                      {offer.displayTitle && offer.title !== offer.displayTitle && (
+                        <p className="text-xs text-nilin-warmGray mt-0.5">{offer.title}</p>
+                      )}
+                      <p className="text-sm text-nilin-warmGray mt-2 line-clamp-2">
+                        {offer.displaySubtitle || offer.description}
+                      </p>
+
+                      <div className="flex items-center gap-2 mt-3">
+                        <Tag className="w-3.5 h-3.5 text-nilin-warmGray" />
+                        <code className="text-xs font-mono bg-nilin-blush/50 text-nilin-coral px-2 py-0.5 rounded">
+                          {offer.code}
+                        </code>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 mt-2 text-xs text-nilin-warmGray">
+                        <Calendar className="w-3.5 h-3.5 flex-shrink-0" />
+                        <span>{formatOfferDateRange(offer.validFrom, offer.validUntil)}</span>
+                      </div>
+
+                      {(serviceCount > 0 || categoryCount > 0) && (
+                        <div className="flex flex-wrap gap-1.5 mt-3">
+                          {serviceCount > 0 && (
+                            <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+                              <Link2 className="w-3 h-3" />
+                              {serviceCount} service{serviceCount !== 1 ? 's' : ''}
+                            </span>
+                          )}
+                          {categoryCount > 0 && (
+                            <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-800">
+                              {categoryCount} categor{categoryCount !== 1 ? 'ies' : 'y'}
+                            </span>
+                          )}
+                        </div>
+                      )}
+
+                      <div className="flex items-center justify-between mt-auto pt-4 text-xs">
+                        <span className="flex items-center gap-1 text-nilin-warmGray">
+                          <Users className="w-3.5 h-3.5" />
+                          {offer.currentUses} / {offer.maxUses} used
+                        </span>
+                        <span className={cn('flex items-center gap-1 font-medium', validityToneClass(validity.tone))}>
+                          <Clock className="w-3.5 h-3.5" />
+                          {validity.text}
                         </span>
                       </div>
-                    </div>
-                    <p className="text-sm text-nilin-warmGray mb-3 line-clamp-2">
-                      {offer.displaySubtitle || offer.description}
-                    </p>
-                    <div className="flex items-center gap-2 text-xs text-nilin-lightGray mb-3">
-                      <Tag className="w-3 h-3" />
-                      <code className="font-mono bg-nilin-muted px-2 py-1 rounded">{offer.code}</code>
-                    </div>
-                    <div className="flex items-center gap-4 text-xs text-nilin-lightGray mb-4">
-                      <div className="flex items-center gap-1">
-                        <Calendar className="w-3 h-3" />
-                        {formatDate(offer.validFrom)} - {formatDate(offer.validUntil)}
+
+                      <div className="flex gap-2 mt-4">
+                        <button
+                          type="button"
+                          onClick={() => openEdit(offer)}
+                          className="flex-1 btn-nilin py-2 text-sm inline-flex items-center justify-center gap-1"
+                        >
+                          <Edit3 className="w-4 h-4" />
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeactivate(offer)}
+                          className="px-3 py-2 rounded-xl border border-red-200 text-red-600 hover:bg-red-50"
+                          title="Deactivate offer"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
                       </div>
                     </div>
-                    {(offer.applicableServices?.length ?? 0) > 0 || (offer.applicableCategories?.length ?? 0) > 0 ? (
-                      <div className="flex flex-wrap gap-1 mb-4">
-                        {offer.applicableServices?.slice(0, 2).map((serviceId, idx) => (
-                          <span key={`svc-${serviceId}-${idx}`} className="text-xs px-2 py-1 bg-green-100 text-green-700 rounded-full">
-                            Service linked
-                          </span>
-                        ))}
-                        {offer.applicableCategories?.slice(0, 2).map((catId, idx) => (
-                          <span key={`cat-${catId}-${idx}`} className="text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded-full">
-                            Category linked
-                          </span>
-                        ))}
-                        {((offer.applicableServices?.length ?? 0) + (offer.applicableCategories?.length ?? 0)) > 4 && (
-                          <span className="text-xs px-2 py-1 bg-gray-100 text-gray-600 rounded-full">
-                            +{((offer.applicableServices?.length ?? 0) + (offer.applicableCategories?.length ?? 0) - 4)}
-                          </span>
-                        )}
-                      </div>
-                    ) : null}
-                    <div className="flex items-center justify-between text-xs text-nilin-lightGray mb-4">
-                      <div className="flex items-center gap-1">
-                        <Users className="w-3 h-3" />
-                        {offer.currentUses} / {offer.maxUses} used
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <Clock className="w-3 h-3" />
-                        {offer.validUntil && new Date(offer.validUntil) < new Date() ? (
-                          <span className="text-red-500">Expired</span>
-                        ) : (
-                          `${Math.ceil((new Date(offer.validUntil).getTime() - Date.now()) / (1000 * 60 * 60 * 24))} days left`
-                        )}
-                      </div>
-                    </div>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => handleEdit(offer)}
-                        className="flex-1 btn-nilin py-2 text-sm flex items-center justify-center gap-1"
-                      >
-                        <Edit3 className="w-4 h-4" />
-                        Edit
-                      </button>
-                      <button
-                        onClick={() => handleDelete(offer._id)}
-                        className="px-3 py-2 rounded-xl border border-red-200 text-red-500 hover:bg-red-50 transition-colors"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ))}
+                  </article>
+                );
+              })}
             </div>
           )}
         </div>
 
-      {/* Modal */}
-      {showModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="sticky top-0 bg-white border-b border-nilin-border px-6 py-4 flex items-center justify-between">
-              <h2 className="text-xl font-serif text-nilin-charcoal">
-                {editingOffer ? 'Edit Offer' : 'Create New Offer'}
-              </h2>
-              <button
-                onClick={() => setShowModal(false)}
-                className="p-2 hover:bg-nilin-muted rounded-full transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <form onSubmit={handleSubmit} className="p-6">
-              <div className="space-y-4">
-                {/* Title */}
-                <div>
-                  <label className="block text-sm font-medium text-nilin-charcoal mb-1">
-                    Title *
-                  </label>
+        {showModal && (
+          <div
+            className="fixed inset-0 bg-black/50 flex items-center justify-center z-[200] p-4"
+            role="dialog"
+            aria-modal="true"
+            onClick={() => !isSaving && setShowModal(false)}
+          >
+            <div
+              className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto border border-nilin-border/50 shadow-xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="sticky top-0 bg-white border-b border-nilin-border/50 px-6 py-4 flex justify-between items-center z-10">
+                <h2 className="text-xl font-serif text-nilin-charcoal">
+                  {editingOffer ? 'Edit offer' : 'Create offer'}
+                </h2>
+                <button type="button" onClick={() => setShowModal(false)} className="p-2 hover:bg-nilin-muted rounded-full">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <form onSubmit={handleSubmit} className="p-6 space-y-4 font-sans">
+                <label className="block text-sm font-medium">
+                  Internal title *
                   <input
-                    type="text"
                     required
                     value={formData.title}
                     onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-                    className="w-full px-4 py-2 rounded-xl border-2 border-nilin-border focus:border-nilin-coral focus:outline-none"
-                    placeholder="e.g., Summer Sale 20% Off"
+                    className="mt-1 w-full px-4 py-2 rounded-xl border border-nilin-border/50"
+                    placeholder="Summer sale 15% off"
                   />
-                </div>
-
-                {/* Display Title & Subtitle */}
+                </label>
                 <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-nilin-charcoal mb-1">
-                      Display Title
-                    </label>
+                  <label className="block text-sm font-medium">
+                    Display title
                     <input
-                      type="text"
                       value={formData.displayTitle}
                       onChange={(e) => setFormData({ ...formData, displayTitle: e.target.value })}
-                      className="w-full px-4 py-2 rounded-xl border-2 border-nilin-border focus:border-nilin-coral focus:outline-none"
-                      placeholder="For homepage banner"
+                      className="mt-1 w-full px-4 py-2 rounded-xl border border-nilin-border/50"
                     />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-nilin-charcoal mb-1">
-                      Display Subtitle
-                    </label>
+                  </label>
+                  <label className="block text-sm font-medium">
+                    Display subtitle
                     <input
-                      type="text"
                       value={formData.displaySubtitle}
                       onChange={(e) => setFormData({ ...formData, displaySubtitle: e.target.value })}
-                      className="w-full px-4 py-2 rounded-xl border-2 border-nilin-border focus:border-nilin-coral focus:outline-none"
-                      placeholder="Subtitle text"
+                      className="mt-1 w-full px-4 py-2 rounded-xl border border-nilin-border/50"
                     />
-                  </div>
-                </div>
-
-                {/* Code */}
-                <div>
-                  <label className="block text-sm font-medium text-nilin-charcoal mb-1">
-                    Promo Code *
                   </label>
+                </div>
+                <label className="block text-sm font-medium">
+                  Promo code *
                   <input
-                    type="text"
                     required
                     value={formData.code}
                     onChange={(e) => setFormData({ ...formData, code: e.target.value.toUpperCase() })}
-                    className="w-full px-4 py-2 rounded-xl border-2 border-nilin-border focus:border-nilin-coral focus:outline-none font-mono"
-                    placeholder="e.g., SUMMER20"
+                    className="mt-1 w-full px-4 py-2 rounded-xl border border-nilin-border/50 font-mono"
                   />
-                </div>
-
-                {/* Type & Value */}
+                </label>
                 <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-nilin-charcoal mb-1">
-                      Type *
-                    </label>
+                  <label className="block text-sm font-medium">
+                    Type *
                     <select
-                      required
                       value={formData.type}
-                      onChange={(e) => setFormData({ ...formData, type: e.target.value as any })}
-                      className="w-full px-4 py-2 rounded-xl border-2 border-nilin-border focus:border-nilin-coral focus:outline-none"
+                      onChange={(e) =>
+                        setFormData({ ...formData, type: e.target.value as OfferFormPayload['type'] })
+                      }
+                      className="mt-1 w-full px-4 py-2 rounded-xl border border-nilin-border/50"
                     >
                       <option value="percentage">Percentage</option>
-                      <option value="fixed">Fixed Amount (AED)</option>
-                      <option value="free_service">Free Service</option>
+                      <option value="fixed">Fixed (AED)</option>
+                      <option value="free_service">Free service</option>
                     </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-nilin-charcoal mb-1">
-                      {formData.type === 'percentage' ? 'Discount %' : formData.type === 'fixed' ? 'Amount (AED)' : 'Value'}
-                    </label>
+                  </label>
+                  <label className="block text-sm font-medium">
+                    {formData.type === 'percentage' ? 'Discount %' : 'Amount (AED)'}
                     <input
                       type="number"
+                      min={0}
                       required
-                      min="0"
                       value={formData.value}
-                      onChange={(e) => setFormData({ ...formData, value: parseFloat(e.target.value) || 0 })}
-                      className="w-full px-4 py-2 rounded-xl border-2 border-nilin-border focus:border-nilin-coral focus:outline-none"
+                      onChange={(e) => setFormData({ ...formData, value: Number(e.target.value) || 0 })}
+                      className="mt-1 w-full px-4 py-2 rounded-xl border border-nilin-border/50"
                     />
-                  </div>
+                  </label>
                 </div>
-
-                {/* Max Discount & Min Order */}
                 <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-nilin-charcoal mb-1">
-                      Max Discount (AED)
-                    </label>
-                    <input
-                      type="number"
-                      min="0"
-                      value={formData.maxDiscount}
-                      onChange={(e) => setFormData({ ...formData, maxDiscount: parseFloat(e.target.value) || 0 })}
-                      className="w-full px-4 py-2 rounded-xl border-2 border-nilin-border focus:border-nilin-coral focus:outline-none"
-                      placeholder="0 for no limit"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-nilin-charcoal mb-1">
-                      Min Order (AED)
-                    </label>
-                    <input
-                      type="number"
-                      min="0"
-                      value={formData.minOrderValue}
-                      onChange={(e) => setFormData({ ...formData, minOrderValue: parseFloat(e.target.value) || 0 })}
-                      className="w-full px-4 py-2 rounded-xl border-2 border-nilin-border focus:border-nilin-coral focus:outline-none"
-                    />
-                  </div>
-                </div>
-
-                {/* Dates */}
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-nilin-charcoal mb-1">
-                      Valid From *
-                    </label>
+                  <label className="block text-sm font-medium">
+                    Valid from *
                     <input
                       type="date"
                       required
                       value={formData.validFrom}
                       onChange={(e) => setFormData({ ...formData, validFrom: e.target.value })}
-                      className="w-full px-4 py-2 rounded-xl border-2 border-nilin-border focus:border-nilin-coral focus:outline-none"
+                      className="mt-1 w-full px-4 py-2 rounded-xl border border-nilin-border/50"
                     />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-nilin-charcoal mb-1">
-                      Valid Until *
-                    </label>
+                  </label>
+                  <label className="block text-sm font-medium">
+                    Valid until *
                     <input
                       type="date"
                       required
                       value={formData.validUntil}
                       onChange={(e) => setFormData({ ...formData, validUntil: e.target.value })}
-                      className="w-full px-4 py-2 rounded-xl border-2 border-nilin-border focus:border-nilin-coral focus:outline-none"
+                      className="mt-1 w-full px-4 py-2 rounded-xl border border-nilin-border/50"
                     />
-                  </div>
+                  </label>
                 </div>
-
-                {/* Max Uses & Badge */}
                 <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-nilin-charcoal mb-1">
-                      Max Uses
-                    </label>
+                  <label className="block text-sm font-medium">
+                    Max uses
                     <input
                       type="number"
-                      min="1"
+                      min={1}
                       value={formData.maxUses}
-                      onChange={(e) => setFormData({ ...formData, maxUses: parseInt(e.target.value) || 100 })}
-                      className="w-full px-4 py-2 rounded-xl border-2 border-nilin-border focus:border-nilin-coral focus:outline-none"
+                      onChange={(e) => setFormData({ ...formData, maxUses: Number(e.target.value) || 1 })}
+                      className="mt-1 w-full px-4 py-2 rounded-xl border border-nilin-border/50"
                     />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-nilin-charcoal mb-1">
-                      Badge
-                    </label>
+                  </label>
+                  <label className="block text-sm font-medium">
+                    Badge
                     <select
                       value={formData.displayBadge}
                       onChange={(e) => setFormData({ ...formData, displayBadge: e.target.value })}
-                      className="w-full px-4 py-2 rounded-xl border-2 border-nilin-border focus:border-nilin-coral focus:outline-none"
+                      className="mt-1 w-full px-4 py-2 rounded-xl border border-nilin-border/50"
                     >
                       <option value="">None</option>
                       <option value="Limited Time">Limited Time</option>
@@ -703,152 +608,121 @@ const AdminOffersManagement: React.FC = () => {
                       <option value="Popular">Popular</option>
                       <option value="Hot">Hot</option>
                     </select>
-                  </div>
-                </div>
-
-                {/* Description */}
-                <div>
-                  <label className="block text-sm font-medium text-nilin-charcoal mb-1">
-                    Description
                   </label>
+                </div>
+                <label className="block text-sm font-medium">
+                  Card gradient
+                  <select
+                    value={formData.displayGradient}
+                    onChange={(e) => setFormData({ ...formData, displayGradient: e.target.value })}
+                    className="mt-1 w-full px-4 py-2 rounded-xl border border-nilin-border/50"
+                  >
+                    {GRADIENT_OPTIONS.map((g) => (
+                      <option key={g} value={g}>
+                        {g.replace('from-', '').replace(/ to-/g, ' → ')}
+                      </option>
+                    ))}
+                  </select>
+                  <div
+                    className={cn('mt-2 h-10 rounded-xl bg-gradient-to-r', resolveOfferGradient(formData.displayGradient))}
+                  />
+                </label>
+                <label className="block text-sm font-medium">
+                  Description
                   <textarea
-                    rows={3}
+                    rows={2}
                     value={formData.description}
                     onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                    className="w-full px-4 py-2 rounded-xl border-2 border-nilin-border focus:border-nilin-coral focus:outline-none resize-none"
-                    placeholder="Detailed description of the offer"
+                    className="mt-1 w-full px-4 py-2 rounded-xl border border-nilin-border/50 resize-none"
                   />
-                </div>
+                </label>
 
-                {/* Applicable Services */}
                 <div>
-                  <label className="block text-sm font-medium text-nilin-charcoal mb-2">
-                    Applicable Services
-                    <span className="text-nilin-warmGray font-normal ml-1">(Leave empty for all services)</span>
-                  </label>
                   <button
                     type="button"
                     onClick={() => setShowServiceSelector(!showServiceSelector)}
-                    className="w-full px-4 py-2 rounded-xl border-2 border-nilin-border focus:border-nilin-coral focus:outline-none text-left flex items-center justify-between"
+                    className="w-full px-4 py-2 rounded-xl border border-nilin-border/50 text-left flex justify-between"
                   >
-                    <span className="text-nilin-warmGray">
-                      {formData.applicableServices.length === 0
-                        ? 'All services'
-                        : `${formData.applicableServices.length} service(s) selected`}
+                    <span>
+                      {formData.applicableServices?.length
+                        ? `${formData.applicableServices.length} service(s)`
+                        : 'All services (no restriction)'}
                     </span>
-                    <span className="text-nilin-coral">{showServiceSelector ? '▲' : '▼'}</span>
+                    <span>{showServiceSelector ? '▲' : '▼'}</span>
                   </button>
                   {showServiceSelector && (
-                    <div className="mt-2 p-3 bg-nilin-muted rounded-xl max-h-48 overflow-y-auto">
-                      {services.length === 0 ? (
-                        <p className="text-sm text-nilin-warmGray text-center py-2">No services available</p>
-                      ) : (
-                        services.map(service => (
-                          <label key={service._id} className="flex items-center gap-2 py-1.5 cursor-pointer hover:bg-white rounded px-2">
-                            <input
-                              type="checkbox"
-                              checked={formData.applicableServices.includes(service._id)}
-                              onChange={() => toggleService(service._id)}
-                              className="w-4 h-4 rounded border-nilin-border text-nilin-coral"
-                            />
-                            <span className="text-sm text-nilin-charcoal">
-                              {service.name}
-                              {service.category?.name && (
-                                <span className="text-nilin-warmGray ml-1">({service.category.name})</span>
-                              )}
-                            </span>
-                          </label>
-                        ))
-                      )}
+                    <div className="mt-2 p-3 rounded-xl border border-nilin-border/40 max-h-40 overflow-y-auto bg-nilin-muted/30">
+                      {services.map((s) => (
+                        <label key={s._id} className="flex items-center gap-2 py-1 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={formData.applicableServices?.includes(s._id)}
+                            onChange={() => toggleService(s._id)}
+                          />
+                          <span className="text-sm">{s.name}</span>
+                        </label>
+                      ))}
                     </div>
                   )}
                 </div>
 
-                {/* Applicable Categories */}
                 <div>
-                  <label className="block text-sm font-medium text-nilin-charcoal mb-2">
-                    Applicable Categories
-                    <span className="text-nilin-warmGray font-normal ml-1">(Leave empty for all categories)</span>
-                  </label>
                   <button
                     type="button"
                     onClick={() => setShowCategorySelector(!showCategorySelector)}
-                    className="w-full px-4 py-2 rounded-xl border-2 border-nilin-border focus:border-nilin-coral focus:outline-none text-left flex items-center justify-between"
+                    className="w-full px-4 py-2 rounded-xl border border-nilin-border/50 text-left flex justify-between"
                   >
-                    <span className="text-nilin-warmGray">
-                      {formData.applicableCategories.length === 0
-                        ? 'All categories'
-                        : `${formData.applicableCategories.length} category(ies) selected`}
+                    <span>
+                      {formData.applicableCategories?.length
+                        ? `${formData.applicableCategories.length} categor(ies)`
+                        : 'All categories'}
                     </span>
-                    <span className="text-nilin-coral">{showCategorySelector ? '▲' : '▼'}</span>
+                    <span>{showCategorySelector ? '▲' : '▼'}</span>
                   </button>
                   {showCategorySelector && (
-                    <div className="mt-2 p-3 bg-nilin-muted rounded-xl max-h-48 overflow-y-auto">
-                      {categories.length === 0 ? (
-                        <p className="text-sm text-nilin-warmGray text-center py-2">No categories available</p>
-                      ) : (
-                        categories.map(category => (
-                          <label key={category._id} className="flex items-center gap-2 py-1.5 cursor-pointer hover:bg-white rounded px-2">
-                            <input
-                              type="checkbox"
-                              checked={formData.applicableCategories.includes(category._id)}
-                              onChange={() => toggleCategory(category._id)}
-                              className="w-4 h-4 rounded border-nilin-border text-nilin-coral"
-                            />
-                            <span className="text-sm text-nilin-charcoal">{category.name}</span>
-                          </label>
-                        ))
-                      )}
+                    <div className="mt-2 p-3 rounded-xl border border-nilin-border/40 max-h-40 overflow-y-auto bg-nilin-muted/30">
+                      {categories.map((c) => (
+                        <label key={c._id} className="flex items-center gap-2 py-1 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={formData.applicableCategories?.includes(c._id)}
+                            onChange={() => toggleCategory(c._id)}
+                          />
+                          <span className="text-sm">{c.name}</span>
+                        </label>
+                      ))}
                     </div>
                   )}
                 </div>
 
-                {/* Featured */}
-                <div className="flex items-center gap-2">
+                <label className="flex items-center gap-2 cursor-pointer">
                   <input
                     type="checkbox"
-                    id="featured"
                     checked={formData.featured}
                     onChange={(e) => setFormData({ ...formData, featured: e.target.checked })}
-                    className="w-5 h-5 rounded border-nilin-border text-nilin-coral focus:ring-nilin-coral"
                   />
-                  <label htmlFor="featured" className="text-sm font-medium text-nilin-charcoal">
-                    Feature this offer on homepage
-                  </label>
-                </div>
-              </div>
+                  <span className="text-sm">Feature on homepage carousel</span>
+                </label>
 
-              <div className="flex gap-3 mt-6">
-                <button
-                  type="button"
-                  onClick={() => setShowModal(false)}
-                  className="flex-1 px-4 py-2 rounded-xl border-2 border-nilin-border text-nilin-charcoal hover:bg-nilin-muted transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSaving}
-                  className="flex-1 btn-nilin flex items-center justify-center gap-2"
-                >
-                  {isSaving ? (
-                    <>
-                      <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                      Saving...
-                    </>
-                  ) : (
-                    <>
-                      <Save className="w-5 h-5" />
-                      {editingOffer ? 'Update Offer' : 'Create Offer'}
-                    </>
-                  )}
-                </button>
-              </div>
-            </form>
+                <div className="flex gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowModal(false)}
+                    className="flex-1 px-4 py-2 rounded-xl border border-nilin-border/50"
+                  >
+                    Cancel
+                  </button>
+                  <button type="submit" disabled={isSaving} className="flex-1 btn-nilin flex justify-center gap-2">
+                    {isSaving ? <Loader2 className="w-5 h-5 animate-spin" /> : <Save className="w-5 h-5" />}
+                    {editingOffer ? 'Save changes' : 'Create offer'}
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
-        </div>
-      )}
-    </AdminPageShell>
+        )}
+      </AdminPageShell>
+    </ErrorBoundary>
   );
 };
 

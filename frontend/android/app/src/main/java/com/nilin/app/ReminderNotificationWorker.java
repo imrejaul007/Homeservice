@@ -54,7 +54,7 @@ public class ReminderNotificationWorker extends Worker {
                 getApplicationContext(),
                 MainActivity.CHANNEL_REMINDERS
             )
-                .setSmallIcon(R.drawable.ic_notification)
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
                 .setContentTitle(title)
                 .setContentText(body)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)

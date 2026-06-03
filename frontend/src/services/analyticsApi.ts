@@ -84,6 +84,7 @@ export interface ChurnOverview {
   segments: CustomerSegment[];
   recentAlerts: Array<{
     userId: string;
+    customerName?: string;
     riskLevel: 'low' | 'medium' | 'high' | 'critical';
     riskScore: number;
     daysSinceLastBooking: number;
@@ -592,7 +593,7 @@ export const analyticsApi = {
     endDate: string,
     granularity: 'day' | 'week' | 'month' = 'day'
   ): Promise<TimeSeriesData[]> => {
-    const response = await api.get('/analytics/timeseries', {
+    const response = await api.get('/analytics/dashboard/timeseries', {
       params: { startDate, endDate, granularity },
     });
     return response.data.data;
@@ -604,7 +605,7 @@ export const analyticsApi = {
     startDate: string,
     endDate: string
   ): Promise<AggregatedMetric> => {
-    const response = await api.get('/analytics/trends', {
+    const response = await api.get('/analytics/dashboard/trends', {
       params: { metric, startDate, endDate },
     });
     return response.data.data;
@@ -615,7 +616,7 @@ export const analyticsApi = {
     cohortType: 'weekly' | 'monthly' = 'monthly',
     retentionPeriods: number = 6
   ): Promise<CohortData[]> => {
-    const response = await api.get('/analytics/cohorts', {
+    const response = await api.get('/analytics/dashboard/cohorts', {
       params: { cohortType, retentionPeriods },
     });
     return response.data.data;
@@ -648,7 +649,7 @@ export const analyticsApi = {
     startDate: string,
     endDate: string
   ): Promise<CategoryPerformance[]> => {
-    const response = await api.get('/analytics/categories', {
+    const response = await api.get('/analytics/dashboard/categories', {
       params: { startDate, endDate },
     });
     return response.data.data;
@@ -1199,7 +1200,7 @@ export const churnApi = {
 
   // Get customer segments
   getCustomerSegments: async (): Promise<CustomerSegment[]> => {
-    const response = await api.get('/churn/segments');
+    const response = await api.get('/admin/churn/segments');
     return response.data.data;
   },
 
@@ -1217,7 +1218,7 @@ export const churnApi = {
 
   // Execute retention action for a user
   executeRetentionAction: async (userId: string, action: RetentionAction): Promise<{ success: boolean; message: string; actionTaken: string }> => {
-    const response = await api.post(`/churn/execute/${userId}`, { action });
+    const response = await api.post(`/admin/churn/execute/${userId}`, { action });
     return response.data.data;
   },
 
@@ -1241,7 +1242,7 @@ export const churnApi = {
 
   // Get churn risk for specific customer (admin endpoint)
   getChurnRiskAdmin: async (customerId: string): Promise<ChurnRiskAdmin> => {
-    const response = await api.get(`/admin/churn/customers/${customerId}/risk`);
+    const response = await api.get(`/churn/admin/churn/customers/${customerId}/risk`);
     return response.data.data;
   },
 

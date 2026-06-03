@@ -1,697 +1,657 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
-import { AlertTriangle } from 'lucide-react';
-import { api } from '../../services/api';
+import {
+  Key,
+  Plus,
+  Search,
+  RefreshCw,
+  Loader2,
+  Copy,
+  Trash2,
+  RotateCcw,
+  ToggleLeft,
+  ToggleRight,
+  AlertTriangle,
+  X,
+  Save,
+  Info,
+  Link2,
+  Shield,
+} from 'lucide-react';
 import { ErrorBoundary } from '../../components/common/ErrorBoundary';
 import { AdminPageShell } from '../../components/admin/AdminPageShell';
 import { useAuthStore } from '@/stores/authStore';
+import { cn } from '../../lib/utils';
+import {
+  adminApiKeyApi,
+  API_KEY_PERMISSIONS,
+  type AdminApiKeyRecord,
+  type ApiKeyFormPayload,
+  type ApiKeyStats,
+} from '../../services/adminApiKeyApi';
 
-// ============================================
-// Confirm Modal Component
-// ============================================
+const emptyForm = (): ApiKeyFormPayload => ({
+  name: '',
+  description: '',
+  permissions: ['read'],
+  expiresAt: '',
+  rateLimit: 100,
+});
 
-interface ConfirmModalProps {
-  isOpen: boolean;
-  title: string;
-  message: string;
-  confirmLabel?: string;
-  cancelLabel?: string;
-  variant?: 'danger' | 'warning' | 'info';
-  onConfirm: () => void;
-  onCancel: () => void;
-}
-
-const ConfirmModal: React.FC<ConfirmModalProps> = ({
-  isOpen,
-  title,
-  message,
-  confirmLabel = 'Confirm',
-  cancelLabel = 'Cancel',
-  variant = 'danger',
-  onConfirm,
-  onCancel,
-}) => {
-  if (!isOpen) return null;
-
-  const variantStyles = {
-    danger: {
-      button: 'bg-red-600 hover:bg-red-700 text-white',
-      icon: 'text-red-600',
-      bg: 'bg-red-50',
-    },
-    warning: {
-      button: 'bg-yellow-600 hover:bg-yellow-700 text-white',
-      icon: 'text-yellow-600',
-      bg: 'bg-yellow-50',
-    },
-    info: {
-      button: 'bg-blue-600 hover:bg-blue-700 text-white',
-      icon: 'text-blue-600',
-      bg: 'bg-blue-50',
-    },
-  };
-
-  const styles = variantStyles[variant];
-
-  return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden">
-        <div className={`p-6 ${styles.bg}`}>
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 rounded-full flex items-center justify-center bg-white">
-              <AlertTriangle className={`w-6 h-6 ${styles.icon}`} />
-            </div>
-            <div>
-              <h3 className="text-lg font-semibold text-gray-900">{title}</h3>
-              <p className="text-sm text-gray-600 mt-1">{message}</p>
-            </div>
-          </div>
-        </div>
-        <div className="p-4 bg-gray-50 flex justify-end gap-3">
-          <button
-            onClick={onCancel}
-            className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-100 transition-colors"
-          >
-            {cancelLabel}
-          </button>
-          <button
-            onClick={onConfirm}
-            className={`px-4 py-2 rounded-lg transition-colors ${styles.button}`}
-          >
-            {confirmLabel}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-// ============================================
-// ApiKeyManagement Component
-// ============================================
-
-interface ApiKey {
-  _id: string;
-  name: string;
-  description?: string;
-  keyPrefix: string;
-  permissions: string[];
-  expiresAt?: string;
-  lastUsedAt?: string;
-  isActive: boolean;
-  rateLimit: number;
-  createdBy?: {
-    firstName: string;
-    lastName: string;
-    email: string;
-  };
-  createdAt: string;
-}
-
-interface ApiKeyStats {
-  total: number;
-  active: number;
-  inactive: number;
-  expiringSoon: number;
-}
-
-interface ApiKeyFormData {
-  name: string;
-  description: string;
-  permissions: string[];
-  expiresAt: string;
-  rateLimit: number;
-}
-
-interface ValidationErrors {
-  name?: string;
-  permissions?: string;
-  expiresAt?: string;
-  rateLimit?: string;
-}
-
-const validateApiKey = (data: ApiKeyFormData): ValidationErrors => {
-  const errors: ValidationErrors = {};
-
-  // Name validation
-  if (!data.name || data.name.trim().length === 0) {
-    errors.name = 'Name is required';
-  } else if (data.name.trim().length < 3) {
-    errors.name = 'Name must be at least 3 characters';
-  } else if (data.name.trim().length > 100) {
-    errors.name = 'Name must be less than 100 characters';
+function extractError(err: unknown): string | undefined {
+  if (err && typeof err === 'object' && 'response' in err) {
+    return (err as { response?: { data?: { message?: string } } }).response?.data?.message;
   }
+  return undefined;
+}
 
-  // Permissions validation
-  if (data.permissions.length === 0) {
-    errors.permissions = 'At least one permission is required';
-  }
-
-  // Rate limit validation
-  if (data.rateLimit < 1) {
-    errors.rateLimit = 'Rate limit must be at least 1';
-  } else if (data.rateLimit > 10000) {
-    errors.rateLimit = 'Rate limit cannot exceed 10000';
-  }
-
-  // Expiration date validation (if provided)
-  if (data.expiresAt) {
-    const expiresDate = new Date(data.expiresAt);
-    const now = new Date();
-    if (expiresDate <= now) {
-      errors.expiresAt = 'Expiration date must be in the future';
-    }
-  }
-
-  return errors;
-};
+function formatExpiryLabel(key: AdminApiKeyRecord): string {
+  if (!key.expiresAt) return 'Never';
+  const exp = new Date(key.expiresAt);
+  if (key.isExpired) return `Expired ${exp.toLocaleDateString('en-AE')}`;
+  const days = Math.ceil((exp.getTime() - Date.now()) / 86_400_000);
+  if (days <= 7) return `${days}d left`;
+  return exp.toLocaleDateString('en-AE', { day: 'numeric', month: 'short', year: 'numeric' });
+}
 
 const ApiKeyManagement: React.FC = () => {
   const { user } = useAuthStore();
   const navigate = useNavigate();
 
-  // Permission guard - redirect non-admins to unauthorized page
   useEffect(() => {
-    if (!user || user.role !== 'admin') {
+    if (user && user.role !== 'admin') {
       navigate('/unauthorized');
     }
   }, [user, navigate]);
 
-  const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
+  const [apiKeys, setApiKeys] = useState<AdminApiKeyRecord[]>([]);
   const [stats, setStats] = useState<ApiKeyStats | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
-  const [filterActive, setFilterActive] = useState<string>('');
-  const [currentPage, setCurrentPage] = useState(1);
+  const [filterActive, setFilterActive] = useState('');
+  const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [showModal, setShowModal] = useState(false);
   const [showKeyModal, setShowKeyModal] = useState(false);
-  const [createdKey, setCreatedKey] = useState<string | null>(null);
-  const [validationErrors, setValidationErrors] = useState<ValidationErrors>({});
-  const [confirmAction, setConfirmAction] = useState<{
-    isOpen: boolean;
-    type: 'regenerate' | 'delete' | null;
-    keyId: string | null;
-  }>({ isOpen: false, type: null, keyId: null });
-  const [formData, setFormData] = useState({
-    name: '',
-    description: '',
-    permissions: [] as string[],
-    expiresAt: '',
-    rateLimit: 100,
-  });
-
-  const availablePermissions = [
-    { value: 'read', label: 'Read' },
-    { value: 'write', label: 'Write' },
-    { value: 'delete', label: 'Delete' },
-    { value: 'admin', label: 'Admin' },
-    { value: 'analytics', label: 'Analytics' },
-    { value: 'webhooks', label: 'Webhooks' },
-    { value: 'broadcast', label: 'Broadcast' },
-    { value: 'coupons', label: 'Coupons' },
-  ];
-
-  const fetchApiKeys = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const params = new URLSearchParams({
-        page: currentPage.toString(),
-        limit: '20',
-      });
-      if (search) params.append('search', search);
-      if (filterActive) params.append('isActive', filterActive);
-
-      const response = await api.get(`/admin/api-keys?${params}`);
-      setApiKeys(response.data.data.apiKeys);
-      setTotalPages(response.data.data.pagination.pages);
-    } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to load API keys');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchStats = async () => {
-    try {
-      const response = await api.get('/admin/api-keys/stats');
-      setStats(response.data.data.stats);
-    } catch (err) {
-      console.error('Failed to load stats:', err);
-    }
-  };
+  const [plainKey, setPlainKey] = useState<string | null>(null);
+  const [keyModalTitle, setKeyModalTitle] = useState('API key created');
+  const [saving, setSaving] = useState(false);
+  const [actionId, setActionId] = useState<string | null>(null);
+  const [formData, setFormData] = useState<ApiKeyFormPayload>(emptyForm());
+  const [confirm, setConfirm] = useState<{
+    type: 'regenerate' | 'delete';
+    id: string;
+    name: string;
+  } | null>(null);
 
   useEffect(() => {
-    fetchApiKeys();
-    fetchStats();
-  }, [currentPage, search, filterActive]);
+    const t = setTimeout(() => {
+      setSearch(searchInput.trim());
+      setPage(1);
+    }, 350);
+    return () => clearTimeout(t);
+  }, [searchInput]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const loadData = useCallback(
+    async (isRefresh = false) => {
+      if (isRefresh) setRefreshing(true);
+      else setLoading(true);
+      try {
+        const [list, statsRes] = await Promise.all([
+          adminApiKeyApi.list({
+            page,
+            limit: 20,
+            search: search || undefined,
+            isActive: filterActive || undefined,
+          }),
+          adminApiKeyApi.stats(),
+        ]);
+        setApiKeys(list.apiKeys);
+        setTotalPages(list.pagination.pages || 1);
+        setStats(statsRes);
+        if (isRefresh) toast.success('API keys refreshed');
+      } catch (err) {
+        toast.error(extractError(err) || 'Failed to load API keys');
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [page, search, filterActive]
+  );
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  const openCreate = () => {
+    setFormData(emptyForm());
+    setShowModal(true);
+  };
+
+  const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
-
-    // Validate form data
-    const errors = validateApiKey(formData);
-    setValidationErrors(errors);
-
-    if (Object.keys(errors).length > 0) {
+    if (!formData.name.trim()) {
+      toast.error('Name is required');
       return;
     }
-
+    if (formData.permissions.length === 0) {
+      toast.error('Select at least one permission');
+      return;
+    }
+    setSaving(true);
     try {
-      const payload = {
-        ...formData,
-        expiresAt: formData.expiresAt ? new Date(formData.expiresAt).toISOString() : undefined,
-      };
-
-      const response = await api.post('/admin/api-keys', payload);
-      setCreatedKey(response.data.data.key);
+      const result = await adminApiKeyApi.create(formData);
+      setPlainKey(result.key);
+      setKeyModalTitle('API key created');
       setShowKeyModal(true);
       setShowModal(false);
-      setValidationErrors({});
-      resetForm();
-      fetchApiKeys();
-      fetchStats();
-    } catch (err: any) {
-      toast.error(err.response?.data?.message || 'Failed to create API key');
-    }
-  };
-
-  const handleRegenerate = async (id: string) => {
-    setConfirmAction({ isOpen: true, type: 'regenerate', keyId: id });
-  };
-
-  const handleToggle = async (id: string) => {
-    try {
-      await api.post(`/admin/api-keys/${id}/toggle`);
-      fetchApiKeys();
-      fetchStats();
-    } catch (err: any) {
-      toast.error(err.response?.data?.message || 'Failed to toggle API key');
-    }
-  };
-
-  const handleDelete = async (id: string) => {
-    setConfirmAction({ isOpen: true, type: 'delete', keyId: id });
-  };
-
-  const executeConfirmAction = async () => {
-    if (!confirmAction.keyId) return;
-
-    try {
-      if (confirmAction.type === 'regenerate') {
-        const response = await api.post(`/admin/api-keys/${confirmAction.keyId}/regenerate`);
-        setCreatedKey(response.data.data.key);
-        setShowKeyModal(true);
-      } else if (confirmAction.type === 'delete') {
-        await api.delete(`/admin/api-keys/${confirmAction.keyId}`);
-        toast.success('API key deleted successfully');
-        fetchApiKeys();
-        fetchStats();
-      }
-    } catch (err: any) {
-      const actionType = confirmAction.type === 'regenerate' ? 'regenerate' : 'delete';
-      toast.error(err.response?.data?.message || `Failed to ${actionType} API key`);
+      toast.success('API key created');
+      await loadData(true);
+    } catch (err) {
+      toast.error(extractError(err) || 'Failed to create API key');
     } finally {
-      setConfirmAction({ isOpen: false, type: null, keyId: null });
+      setSaving(false);
     }
   };
 
-  const resetForm = () => {
-    setFormData({
-      name: '',
-      description: '',
-      permissions: [],
-      expiresAt: '',
-      rateLimit: 100,
-    });
-    setValidationErrors({});
+  const runConfirm = async () => {
+    if (!confirm) return;
+    setActionId(confirm.id);
+    try {
+      if (confirm.type === 'regenerate') {
+        const result = await adminApiKeyApi.regenerate(confirm.id);
+        setPlainKey(result.key);
+        setKeyModalTitle('API key regenerated');
+        setShowKeyModal(true);
+        toast.success('Key regenerated — update your integration');
+      } else {
+        await adminApiKeyApi.delete(confirm.id);
+        toast.success('API key deleted');
+      }
+      await loadData(true);
+    } catch (err) {
+      toast.error(extractError(err) || `Failed to ${confirm.type} key`);
+    } finally {
+      setActionId(null);
+      setConfirm(null);
+    }
   };
 
-  const togglePermission = (permission: string) => {
-    setFormData(prev => ({
+  const handleToggle = async (key: AdminApiKeyRecord) => {
+    setActionId(key._id);
+    try {
+      await adminApiKeyApi.toggle(key._id);
+      toast.success(key.isActive ? 'Key deactivated' : 'Key activated');
+      await loadData(true);
+    } catch (err) {
+      toast.error(extractError(err) || 'Failed to toggle key');
+    } finally {
+      setActionId(null);
+    }
+  };
+
+  const copyKey = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success('Copied to clipboard');
+    } catch {
+      toast.error('Could not copy');
+    }
+  };
+
+  const togglePermission = (perm: string) => {
+    setFormData((prev) => ({
       ...prev,
-      permissions: prev.permissions.includes(permission)
-        ? prev.permissions.filter(p => p !== permission)
-        : [...prev.permissions, permission],
+      permissions: prev.permissions.includes(perm)
+        ? prev.permissions.filter((p) => p !== perm)
+        : [...prev.permissions, perm],
     }));
-  };
-
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
-    toast.success('Copied to clipboard!');
   };
 
   return (
     <ErrorBoundary>
       <AdminPageShell
+        wideLayout
         title="API Key Management"
-        subtitle="Manage integration keys and permissions"
+        subtitle="Create and manage integration keys for external systems"
         breadcrumbItems={[
           { label: 'Admin', href: '/admin/dashboard' },
           { label: 'API Keys', current: true },
         ]}
         headerActions={
-          <button
-            type="button"
-            onClick={() => { resetForm(); setShowModal(true); }}
-            className="px-4 py-2 rounded-xl bg-gradient-to-r from-nilin-rose to-nilin-coral text-white text-sm font-medium font-sans"
-          >
-            Create API Key
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => loadData(true)}
+              disabled={refreshing}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl glass glass-blur border border-nilin-border/50 text-sm hover:bg-nilin-blush/40 disabled:opacity-50"
+            >
+              <RefreshCw className={cn('w-4 h-4', refreshing && 'animate-spin')} />
+              Refresh
+            </button>
+            <button type="button" onClick={openCreate} className="btn-nilin inline-flex items-center gap-2">
+              <Plus className="w-5 h-5" />
+              Create API key
+            </button>
+          </div>
         }
       >
-      <div className="space-y-6">
-
-        {/* Stats Cards */}
-        {stats && (
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-            <div className="bg-white rounded-lg shadow p-4">
-              <p className="text-sm text-gray-500">Total Keys</p>
-              <p className="text-2xl font-bold text-gray-900">{stats.total}</p>
-            </div>
-            <div className="bg-white rounded-lg shadow p-4">
-              <p className="text-sm text-gray-500">Active</p>
-              <p className="text-2xl font-bold text-green-600">{stats.active}</p>
-            </div>
-            <div className="bg-white rounded-lg shadow p-4">
-              <p className="text-sm text-gray-500">Inactive</p>
-              <p className="text-2xl font-bold text-red-600">{stats.inactive}</p>
-            </div>
-            <div className="bg-white rounded-lg shadow p-4">
-              <p className="text-sm text-gray-500">Expiring Soon</p>
-              <p className="text-2xl font-bold text-yellow-600">{stats.expiringSoon}</p>
+        <div className="space-y-6">
+          <div className="rounded-2xl border border-indigo-200/70 bg-indigo-50/60 px-5 py-4 flex gap-3">
+            <Shield className="w-5 h-5 text-indigo-800 flex-shrink-0 mt-0.5" />
+            <div className="text-sm text-indigo-950 space-y-1">
+              <p className="font-medium flex items-center gap-2">
+                <Link2 className="w-4 h-4" />
+                How integrations use keys
+              </p>
+              <p>
+                Keys are shown <strong>once</strong> at creation or regeneration. Send them as{' '}
+                <code className="text-xs bg-white/80 px-1 rounded">Authorization: Bearer admin_…</code> or{' '}
+                <code className="text-xs bg-white/80 px-1 rounded">X-API-Key: admin_…</code>.
+                Test with <code className="text-xs bg-white/80 px-1 rounded">GET /api/integrations/v1/health</code>{' '}
+                (requires <strong>read</strong> permission).
+              </p>
             </div>
           </div>
-        )}
 
-        {/* Filters */}
-        <div className="bg-white rounded-lg shadow p-4 mb-6">
-          <div className="flex flex-wrap gap-4">
-            <input
-              type="text"
-              placeholder="Search API keys..."
-              value={search}
-              onChange={(e) => { setSearch(e.target.value); setCurrentPage(1); }}
-              className="flex-1 min-w-[200px] px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-            />
-            <select
-              value={filterActive}
-              onChange={(e) => { setFilterActive(e.target.value); setCurrentPage(1); }}
-              className="px-3 py-2 border rounded-lg"
-            >
-              <option value="">All Status</option>
-              <option value="true">Active</option>
-              <option value="false">Inactive</option>
-            </select>
-          </div>
-        </div>
-
-        {/* Error Message */}
-        {error && (
-          <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
-            {error}
-          </div>
-        )}
-
-        {/* API Keys Table */}
-        <div className="bg-white rounded-lg shadow overflow-hidden">
-          {loading ? (
-            <div className="p-8 text-center text-gray-500">Loading...</div>
-          ) : apiKeys.length === 0 ? (
-            <div className="p-8 text-center text-gray-500">No API keys found</div>
-          ) : (
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Key Prefix</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Permissions</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Rate Limit</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Expires</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Last Used</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200">
-                {apiKeys.map((key) => (
-                  <tr key={key._id}>
-                    <td className="px-6 py-4">
-                      <div className="font-medium text-gray-900">{key.name}</div>
-                      {key.description && (
-                        <div className="text-sm text-gray-500">{key.description}</div>
-                      )}
-                    </td>
-                    <td className="px-6 py-4">
-                      <code className="bg-gray-100 px-2 py-1 rounded text-sm">{key.keyPrefix}...</code>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="flex flex-wrap gap-1">
-                        {key.permissions.map((perm) => (
-                          <span
-                            key={perm}
-                            className="px-2 py-1 bg-blue-100 text-blue-800 rounded-full text-xs"
-                          >
-                            {perm}
-                          </span>
-                        ))}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 text-gray-900">
-                      {key.rateLimit}/min
-                    </td>
-                    <td className="px-6 py-4 text-gray-900">
-                      {key.expiresAt ? new Date(key.expiresAt).toLocaleDateString() : 'Never'}
-                    </td>
-                    <td className="px-6 py-4 text-gray-900">
-                      {key.lastUsedAt ? new Date(key.lastUsedAt).toLocaleDateString() : 'Never'}
-                    </td>
-                    <td className="px-6 py-4">
-                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                        key.isActive ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
-                      }`}>
-                        {key.isActive ? 'Active' : 'Inactive'}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => handleRegenerate(key._id)}
-                          className="text-blue-600 hover:text-blue-800 text-sm"
-                        >
-                          Regenerate
-                        </button>
-                        <button
-                          onClick={() => handleToggle(key._id)}
-                          className="text-yellow-600 hover:text-yellow-800 text-sm"
-                        >
-                          {key.isActive ? 'Deactivate' : 'Activate'}
-                        </button>
-                        <button
-                          onClick={() => handleDelete(key._id)}
-                          className="text-red-600 hover:text-red-800 text-sm"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          {stats && (
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              {[
+                { label: 'Total keys', value: stats.total },
+                { label: 'Active', value: stats.active, accent: 'text-emerald-700' },
+                { label: 'Inactive', value: stats.inactive, accent: 'text-red-600' },
+                { label: 'Expiring soon', value: stats.expiringSoon, accent: 'text-amber-700' },
+              ].map((kpi) => (
+                <div
+                  key={kpi.label}
+                  className="glass glass-blur rounded-2xl border border-nilin-border/50 p-5"
+                >
+                  <p className="text-xs uppercase tracking-wide text-nilin-warmGray">{kpi.label}</p>
+                  <p className={cn('text-2xl font-serif mt-1', kpi.accent || 'text-nilin-charcoal')}>
+                    {kpi.value}
+                  </p>
+                </div>
+              ))}
+            </div>
           )}
-        </div>
 
-        {/* Pagination */}
-        {totalPages > 1 && (
-          <div className="flex justify-center gap-2 mt-4">
-            <button
-              onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-              disabled={currentPage === 1}
-              className="px-3 py-1 border rounded disabled:opacity-50"
-            >
-              Previous
-            </button>
-            <span className="px-3 py-1">
-              Page {currentPage} of {totalPages}
-            </span>
-            <button
-              onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-              disabled={currentPage === totalPages}
-              className="px-3 py-1 border rounded disabled:opacity-50"
-            >
-              Next
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* Create Modal */}
-      {showModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
-            <h2 className="text-xl font-bold mb-4">Create API Key</h2>
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Name *</label>
+          <div className="glass glass-blur rounded-2xl border border-nilin-border/50 p-4">
+            <div className="flex flex-col lg:flex-row gap-3">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-nilin-warmGray" />
                 <input
-                  type="text"
-                  value={formData.name}
-                  onChange={(e) => {
-                    setFormData({ ...formData, name: e.target.value });
-                    setValidationErrors(prev => ({ ...prev, name: undefined }));
-                  }}
-                  className={`mt-1 w-full px-3 py-2 border rounded-lg ${validationErrors.name ? 'border-red-500' : ''}`}
-                  required
-                  placeholder="e.g., Production API Key"
-                />
-                {validationErrors.name && (
-                  <p className="mt-1 text-sm text-red-600">{validationErrors.name}</p>
-                )}
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Description</label>
-                <textarea
-                  value={formData.description}
-                  onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                  className="mt-1 w-full px-3 py-2 border rounded-lg"
-                  rows={2}
-                  placeholder="Optional description for this API key"
+                  type="search"
+                  placeholder="Search by name or description…"
+                  value={searchInput}
+                  onChange={(e) => setSearchInput(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-nilin-border/60 bg-white/80 text-sm"
                 />
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Permissions *</label>
-                <div className="grid grid-cols-2 gap-2">
-                  {availablePermissions.map((perm) => (
-                    <label key={perm.value} className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={formData.permissions.includes(perm.value)}
-                        onChange={() => {
-                          togglePermission(perm.value);
-                          setValidationErrors(prev => ({ ...prev, permissions: undefined }));
-                        }}
-                        className="h-4 w-4 text-blue-600 border-gray-300 rounded"
-                      />
-                      <span className="text-sm text-gray-700">{perm.label}</span>
-                    </label>
-                  ))}
-                </div>
-                {validationErrors.permissions && (
-                  <p className="mt-1 text-sm text-red-600">{validationErrors.permissions}</p>
-                )}
+              <select
+                value={filterActive}
+                onChange={(e) => {
+                  setFilterActive(e.target.value);
+                  setPage(1);
+                }}
+                className="px-4 py-2.5 rounded-xl border border-nilin-border/60 bg-white/80 text-sm"
+              >
+                <option value="">All status</option>
+                <option value="true">Active</option>
+                <option value="false">Inactive</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="glass glass-blur rounded-2xl border border-nilin-border/50 overflow-hidden">
+            {loading ? (
+              <div className="flex justify-center py-16">
+                <Loader2 className="w-8 h-8 text-nilin-coral animate-spin" />
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">Expires At</label>
-                  <input
-                    type="date"
-                    value={formData.expiresAt}
-                    onChange={(e) => {
-                      setFormData({ ...formData, expiresAt: e.target.value });
-                      setValidationErrors(prev => ({ ...prev, expiresAt: undefined }));
-                    }}
-                    className={`mt-1 w-full px-3 py-2 border rounded-lg ${validationErrors.expiresAt ? 'border-red-500' : ''}`}
-                  />
-                  {validationErrors.expiresAt && (
-                    <p className="mt-1 text-sm text-red-600">{validationErrors.expiresAt}</p>
-                  )}
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">Rate Limit (per min)</label>
-                  <input
-                    type="number"
-                    value={formData.rateLimit}
-                    onChange={(e) => {
-                      setFormData({ ...formData, rateLimit: Number(e.target.value) });
-                      setValidationErrors(prev => ({ ...prev, rateLimit: undefined }));
-                    }}
-                    className={`mt-1 w-full px-3 py-2 border rounded-lg ${validationErrors.rateLimit ? 'border-red-500' : ''}`}
-                    min="1"
-                    max="10000"
-                  />
-                  {validationErrors.rateLimit && (
-                    <p className="mt-1 text-sm text-red-600">{validationErrors.rateLimit}</p>
-                  )}
-                </div>
+            ) : apiKeys.length === 0 ? (
+              <div className="py-16 text-center text-nilin-warmGray">
+                <Key className="w-12 h-12 mx-auto mb-3 opacity-40" />
+                <p className="font-medium text-nilin-charcoal">No API keys yet</p>
+                <p className="text-sm mt-1">Create a key to connect external integrations</p>
+                <button type="button" onClick={openCreate} className="btn-nilin mt-4 inline-flex items-center gap-2">
+                  <Plus className="w-4 h-4" />
+                  Create API key
+                </button>
               </div>
-              <div className="flex justify-end gap-3 pt-4">
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm font-sans">
+                  <thead>
+                    <tr className="border-b border-nilin-border/50 bg-nilin-blush/20">
+                      {['Name', 'Prefix', 'Permissions', 'Rate', 'Expires', 'Last used', 'Status', 'Actions'].map(
+                        (h) => (
+                          <th
+                            key={h}
+                            className={cn(
+                              'px-5 py-3 text-xs font-semibold uppercase text-nilin-warmGray',
+                              h === 'Actions' ? 'text-right' : 'text-left'
+                            )}
+                          >
+                            {h}
+                          </th>
+                        )
+                      )}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-nilin-border/40">
+                    {apiKeys.map((key) => {
+                      const busy = actionId === key._id;
+                      const statusLabel = key.isExpired
+                        ? 'Expired'
+                        : key.isActive
+                          ? 'Active'
+                          : 'Inactive';
+                      const statusClass = key.isExpired
+                        ? 'bg-amber-100 text-amber-800'
+                        : key.isActive
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : 'bg-gray-100 text-gray-600';
+
+                      return (
+                        <tr key={key._id} className="hover:bg-nilin-blush/10">
+                          <td className="px-5 py-4">
+                            <p className="font-medium text-nilin-charcoal">{key.name}</p>
+                            {key.description && (
+                              <p className="text-xs text-nilin-warmGray truncate max-w-[200px]">
+                                {key.description}
+                              </p>
+                            )}
+                          </td>
+                          <td className="px-5 py-4">
+                            <code className="text-xs bg-nilin-blush/40 px-2 py-1 rounded font-mono">
+                              {key.keyPrefix}…
+                            </code>
+                          </td>
+                          <td className="px-5 py-4">
+                            <div className="flex flex-wrap gap-1 max-w-[200px]">
+                              {key.permissions.map((p) => (
+                                <span
+                                  key={p}
+                                  className="px-1.5 py-0.5 rounded text-xs bg-sky-100 text-sky-800"
+                                >
+                                  {p}
+                                </span>
+                              ))}
+                            </div>
+                          </td>
+                          <td className="px-5 py-4 text-nilin-charcoal">{key.rateLimit}/min</td>
+                          <td className="px-5 py-4 text-nilin-warmGray">{formatExpiryLabel(key)}</td>
+                          <td className="px-5 py-4 text-nilin-warmGray">
+                            {key.lastUsedAt
+                              ? new Date(key.lastUsedAt).toLocaleDateString('en-AE')
+                              : 'Never'}
+                          </td>
+                          <td className="px-5 py-4">
+                            <span className={cn('px-2 py-0.5 rounded-full text-xs font-medium', statusClass)}>
+                              {statusLabel}
+                            </span>
+                          </td>
+                          <td className="px-5 py-4">
+                            <div className="flex justify-end gap-1">
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() => handleToggle(key)}
+                                className="p-2 rounded-lg hover:bg-nilin-blush/50 disabled:opacity-50"
+                                title={key.isActive ? 'Deactivate' : 'Activate'}
+                              >
+                                {busy ? (
+                                  <Loader2 className="w-4 h-4 animate-spin" />
+                                ) : key.isActive ? (
+                                  <ToggleRight className="w-4 h-4 text-emerald-600" />
+                                ) : (
+                                  <ToggleLeft className="w-4 h-4 text-gray-400" />
+                                )}
+                              </button>
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() =>
+                                  setConfirm({ type: 'regenerate', id: key._id, name: key.name })
+                                }
+                                className="p-2 rounded-lg hover:bg-sky-50"
+                                title="Regenerate"
+                              >
+                                <RotateCcw className="w-4 h-4 text-sky-700" />
+                              </button>
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() =>
+                                  setConfirm({ type: 'delete', id: key._id, name: key.name })
+                                }
+                                className="p-2 rounded-lg hover:bg-red-50"
+                                title="Delete"
+                              >
+                                <Trash2 className="w-4 h-4 text-red-600" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {totalPages > 1 && (
+              <div className="px-5 py-4 border-t border-nilin-border/40 flex justify-center gap-3 text-sm">
                 <button
                   type="button"
-                  onClick={() => setShowModal(false)}
-                  className="px-4 py-2 border rounded-lg hover:bg-gray-50"
+                  disabled={page <= 1}
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  className="px-4 py-2 rounded-xl border disabled:opacity-40"
+                >
+                  Previous
+                </button>
+                <span className="py-2 text-nilin-warmGray">
+                  Page {page} of {totalPages}
+                </span>
+                <button
+                  type="button"
+                  disabled={page >= totalPages}
+                  onClick={() => setPage((p) => p + 1)}
+                  className="px-4 py-2 rounded-xl border disabled:opacity-40"
+                >
+                  Next
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {showModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+            <div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto border border-nilin-border/50">
+              <div className="flex items-center justify-between px-6 py-4 border-b">
+                <h2 className="text-lg font-serif">Create API key</h2>
+                <button type="button" onClick={() => setShowModal(false)} className="p-2 rounded-lg hover:bg-nilin-blush/40">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <form onSubmit={handleCreate} className="p-6 space-y-4 font-sans">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Name *</label>
+                  <input
+                    value={formData.name}
+                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl border border-nilin-border/60"
+                    placeholder="Production CRM sync"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Description</label>
+                  <textarea
+                    value={formData.description}
+                    onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                    rows={2}
+                    className="w-full px-3 py-2 rounded-xl border border-nilin-border/60"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-2">Permissions *</label>
+                  <div className="grid sm:grid-cols-2 gap-2 max-h-48 overflow-y-auto">
+                    {API_KEY_PERMISSIONS.map((perm) => (
+                      <label
+                        key={perm.value}
+                        className={cn(
+                          'flex gap-2 p-2 rounded-lg border cursor-pointer text-sm',
+                          formData.permissions.includes(perm.value)
+                            ? 'border-nilin-coral bg-nilin-blush/30'
+                            : 'border-nilin-border/50'
+                        )}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={formData.permissions.includes(perm.value)}
+                          onChange={() => togglePermission(perm.value)}
+                          className="mt-0.5"
+                        />
+                        <span>
+                          <span className="font-medium">{perm.label}</span>
+                          <span className="block text-xs text-nilin-warmGray">{perm.description}</span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Expires (optional)</label>
+                    <input
+                      type="date"
+                      value={formData.expiresAt}
+                      onChange={(e) => setFormData({ ...formData, expiresAt: e.target.value })}
+                      className="w-full px-3 py-2 rounded-xl border border-nilin-border/60"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Rate limit / min</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={10000}
+                      value={formData.rateLimit}
+                      onChange={(e) =>
+                        setFormData({ ...formData, rateLimit: Number(e.target.value) })
+                      }
+                      className="w-full px-3 py-2 rounded-xl border border-nilin-border/60"
+                    />
+                  </div>
+                </div>
+                <div className="flex justify-end gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowModal(false)}
+                    className="px-4 py-2 rounded-xl border text-sm"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={saving}
+                    className="btn-nilin inline-flex items-center gap-2 disabled:opacity-50"
+                  >
+                    {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                    Create key
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {showKeyModal && plainKey && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+            <div className="bg-white rounded-2xl w-full max-w-lg p-6 border border-nilin-border/50">
+              <h2 className="text-lg font-serif mb-2">{keyModalTitle}</h2>
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 mb-4 flex gap-2 text-sm text-amber-900">
+                <Info className="w-5 h-5 flex-shrink-0" />
+                Copy this key now. It cannot be viewed again.
+              </div>
+              <div className="flex gap-2 mb-4">
+                <code className="flex-1 text-xs bg-gray-100 p-3 rounded-xl break-all font-mono">{plainKey}</code>
+                <button
+                  type="button"
+                  onClick={() => copyKey(plainKey)}
+                  className="px-3 py-2 rounded-xl bg-nilin-blush hover:bg-nilin-blush/80"
+                >
+                  <Copy className="w-5 h-5" />
+                </button>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowKeyModal(false);
+                  setPlainKey(null);
+                }}
+                className="w-full btn-nilin"
+              >
+                I have saved this key
+              </button>
+            </div>
+          </div>
+        )}
+
+        {confirm && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40">
+            <div className="bg-white rounded-2xl max-w-md w-full overflow-hidden border">
+              <div
+                className={cn(
+                  'p-6 flex gap-3',
+                  confirm.type === 'delete' ? 'bg-red-50' : 'bg-amber-50'
+                )}
+              >
+                <AlertTriangle
+                  className={cn(
+                    'w-6 h-6 flex-shrink-0',
+                    confirm.type === 'delete' ? 'text-red-600' : 'text-amber-600'
+                  )}
+                />
+                <div>
+                  <h3 className="font-semibold">
+                    {confirm.type === 'delete' ? 'Delete API key?' : 'Regenerate API key?'}
+                  </h3>
+                  <p className="text-sm text-gray-600 mt-1">
+                    {confirm.type === 'delete'
+                      ? `"${confirm.name}" will be permanently removed.`
+                      : `"${confirm.name}" — the current key stops working immediately.`}
+                  </p>
+                </div>
+              </div>
+              <div className="p-4 flex justify-end gap-3 bg-gray-50">
+                <button
+                  type="button"
+                  onClick={() => setConfirm(null)}
+                  className="px-4 py-2 rounded-lg border"
                 >
                   Cancel
                 </button>
                 <button
-                  type="submit"
-                  disabled={formData.permissions.length === 0}
-                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                  type="button"
+                  disabled={!!actionId}
+                  onClick={runConfirm}
+                  className={cn(
+                    'px-4 py-2 rounded-lg text-white disabled:opacity-50',
+                    confirm.type === 'delete' ? 'bg-red-600' : 'bg-amber-600'
+                  )}
                 >
-                  Create
+                  {actionId ? 'Working…' : confirm.type === 'delete' ? 'Delete' : 'Regenerate'}
                 </button>
               </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* API Key Display Modal */}
-      {showKeyModal && createdKey && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 w-full max-w-lg">
-            <div className="flex items-center gap-2 mb-4">
-              <div className="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center">
-                <svg className="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-              </div>
-              <h2 className="text-xl font-bold">API Key Created</h2>
-            </div>
-            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4">
-              <p className="text-sm text-yellow-800">
-                <strong>Important:</strong> Copy this API key now. You won't be able to see it again.
-              </p>
-            </div>
-            <div className="flex gap-2 mb-4">
-              <code className="flex-1 bg-gray-100 p-3 rounded text-sm break-all">{createdKey}</code>
-              <button
-                onClick={() => copyToClipboard(createdKey)}
-                className="px-3 py-2 bg-blue-100 text-blue-800 rounded hover:bg-blue-200"
-              >
-                Copy
-              </button>
-            </div>
-            <div className="flex justify-end">
-              <button
-                onClick={() => { setShowKeyModal(false); setCreatedKey(null); }}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-              >
-                Done
-              </button>
             </div>
           </div>
-        </div>
-      )}
-
-      {/* Confirmation Modal */}
-      <ConfirmModal
-        isOpen={confirmAction.isOpen}
-        title={confirmAction.type === 'regenerate' ? 'Regenerate API Key' : 'Delete API Key'}
-        message={
-          confirmAction.type === 'regenerate'
-            ? 'Are you sure you want to regenerate this API key? The old key will stop working immediately.'
-            : 'Are you sure you want to delete this API key? This action cannot be undone.'
-        }
-        confirmLabel={confirmAction.type === 'regenerate' ? 'Regenerate' : 'Delete'}
-        cancelLabel="Cancel"
-        variant={confirmAction.type === 'delete' ? 'danger' : 'warning'}
-        onConfirm={executeConfirmAction}
-        onCancel={() => setConfirmAction({ isOpen: false, type: null, keyId: null })}
-      />
+        )}
       </AdminPageShell>
     </ErrorBoundary>
   );

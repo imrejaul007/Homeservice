@@ -212,6 +212,8 @@ export function useRecommendations(
    * Fetch personalized recommendations
    */
   const fetchRecommendations = useCallback(async () => {
+    if (!userId) return [];
+
     // Cancel any pending request
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
@@ -291,6 +293,7 @@ export function useRecommendations(
    * Load more recommendations
    */
   const loadMore = useCallback(async () => {
+    if (!userId) return;
     if (isLoading || !hasMore) return;
 
     try {

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import {
   managedContractApi,
   ManagedContract,
@@ -120,10 +121,23 @@ type TabType = 'overview' | 'details' | 'team' | 'sla' | 'reports';
 // ============================================
 
 const ManagedServicesPage: React.FC = () => {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // URL param helpers
+  const getInitialTab = (): TabType => {
+    const tab = searchParams.get('tab');
+    if (tab && ['overview', 'details', 'team', 'sla', 'reports'].includes(tab)) {
+      return tab as TabType;
+    }
+    return 'overview';
+  };
+
   // View state
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [selectedContractId, setSelectedContractId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<TabType>('overview');
+  const [activeTab, setActiveTab] = useState<TabType>(getInitialTab);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -236,6 +250,11 @@ const ManagedServicesPage: React.FC = () => {
   // Handlers
   // ============================================
 
+  const handleTabChange = (tab: TabType) => {
+    setActiveTab(tab);
+    setSearchParams({ tab });
+  };
+
   const handleRefresh = () => {
     fetchContracts(true);
     fetchStats();
@@ -250,13 +269,14 @@ const ManagedServicesPage: React.FC = () => {
   const handleViewTeamMembers = (contract: ManagedContract) => {
     setSelectedContractId(contract._id);
     setViewMode('detail');
-    setActiveTab('team');
+    handleTabChange('team');
   };
 
   const handleBackToList = () => {
     setViewMode('list');
     setSelectedContractId(null);
     setSelectedContract(null);
+    setSearchParams({});
     fetchContracts();
   };
 
@@ -741,7 +761,7 @@ const ManagedServicesPage: React.FC = () => {
               {(['overview', 'details', 'team', 'sla', 'reports'] as TabType[]).map((tab) => (
                 <button
                   key={tab}
-                  onClick={() => setActiveTab(tab)}
+                  onClick={() => handleTabChange(tab)}
                   className={`px-6 py-3 text-sm font-medium whitespace-nowrap border-b-2 ${
                     activeTab === tab
                       ? 'border-blue-600 text-blue-600'
@@ -1126,17 +1146,26 @@ const ManagedServicesPage: React.FC = () => {
 
         {/* Quick Actions */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <button className="bg-gray-50 rounded-lg p-4 text-left hover:bg-gray-100">
+          <button
+            onClick={() => navigate('/provider/analytics')}
+            className="bg-gray-50 rounded-lg p-4 text-left hover:bg-gray-100"
+          >
             <ChartIcon />
             <h4 className="font-medium mt-2">Performance Report</h4>
             <p className="text-sm text-gray-500">View booking performance metrics</p>
           </button>
-          <button className="bg-gray-50 rounded-lg p-4 text-left hover:bg-gray-100">
+          <button
+            onClick={() => navigate(`/provider/managed-services/${selectedContractId}?tab=sla`)}
+            className="bg-gray-50 rounded-lg p-4 text-left hover:bg-gray-100"
+          >
             <CalendarIcon />
             <h4 className="font-medium mt-2">SLA Report</h4>
             <p className="text-sm text-gray-500">Analyze SLA compliance history</p>
           </button>
-          <button className="bg-gray-50 rounded-lg p-4 text-left hover:bg-gray-100">
+          <button
+            onClick={() => navigate('/provider/earnings-report')}
+            className="bg-gray-50 rounded-lg p-4 text-left hover:bg-gray-100"
+          >
             <ChartIcon />
             <h4 className="font-medium mt-2">Financial Report</h4>
             <p className="text-sm text-gray-500">Revenue and invoice details</p>

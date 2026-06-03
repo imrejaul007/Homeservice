@@ -106,6 +106,11 @@ async function isChannelEnabled(
  * Check if user is within quiet hours
  */
 async function isInQuietHours(userId: string): Promise<boolean> {
+  const { isPlatformQuietHours } = await import('./platformSettingsPolicy.service');
+  if (isPlatformQuietHours()) {
+    return true;
+  }
+
   const user = await User.findById(userId).select('communicationPreferences.quietHours');
   if (!user?.communicationPreferences?.quietHours?.enabled) {
     return false;

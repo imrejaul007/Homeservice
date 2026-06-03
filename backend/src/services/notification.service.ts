@@ -945,6 +945,12 @@ export class NotificationService {
   // ========================================
 
   async sendEmail(data: EmailData, notificationType: NotificationType = 'promotion'): Promise<void> {
+    const { isChannelEnabledByPlatform } = await import('./platformSettingsPolicy.service');
+    if (!isChannelEnabledByPlatform('email')) {
+      logger.debug('Email skipped - disabled in platform settings');
+      return;
+    }
+
     // FIX: Check user email preferences before sending
     // Need to find user by email to check preferences
     const user = await User.findOne({ email: data.to });
@@ -1000,6 +1006,11 @@ export class NotificationService {
     data?: Record<string, any>,
     notificationType: NotificationType = 'booking_reminder'
   ): Promise<boolean> {
+    const { isChannelEnabledByPlatform } = await import('./platformSettingsPolicy.service');
+    if (!isChannelEnabledByPlatform('push')) {
+      return false;
+    }
+
     if (!firebaseApp) {
       logger.debug('Firebase not configured - skipping push', {
         context: 'NotificationService',
@@ -1221,6 +1232,11 @@ export class NotificationService {
     message: string,
     notificationType: NotificationType = 'booking_reminder'
   ): Promise<boolean> {
+    const { isChannelEnabledByPlatform } = await import('./platformSettingsPolicy.service');
+    if (!isChannelEnabledByPlatform('sms')) {
+      return false;
+    }
+
     // FIX: Check user SMS preferences before sending
     // Find user by phone to check preferences
     const cleanedPhone = phoneNumber.replace(/[^\d+]/g, '');

@@ -1,5 +1,6 @@
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft,
   Wallet,
@@ -360,9 +361,25 @@ const PayoutDashboard: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuthStore();
   const toast = useToast();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // URL param helpers
+  const getInitialTab = (): TabType => {
+    const tab = searchParams.get('tab');
+    if (tab && ['overview', 'payouts', 'settlements', 'settings'].includes(tab)) {
+      return tab as TabType;
+    }
+    return 'overview';
+  };
+
+  const getInitialPayoutStatus = (): string => {
+    const status = searchParams.get('status');
+    if (status) return status;
+    return '';
+  };
 
   // State
-  const [activeTab, setActiveTab] = useState<TabType>('overview');
+  const [activeTab, setActiveTab] = useState<TabType>(getInitialTab);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -382,7 +399,7 @@ const PayoutDashboard: React.FC = () => {
   const [settlementsTotalPages, setSettlementsTotalPages] = useState(1);
 
   // Filters
-  const [payoutStatusFilter, setPayoutStatusFilter] = useState<string>('');
+  const [payoutStatusFilter, setPayoutStatusFilter] = useState<string>(getInitialPayoutStatus);
   const [settlementStatusFilter, setSettlementStatusFilter] = useState<string>('');
   const [periodFilter, setPeriodFilter] = useState<'week' | 'month' | 'year'>('month');
 
@@ -585,6 +602,21 @@ const PayoutDashboard: React.FC = () => {
   }, [payoutsPage, fetchPayouts, fetchOverviewData, toast]);
 
   // Handlers
+  const handleTabChange = (tab: TabType) => {
+    setActiveTab(tab);
+    const newParams: Record<string, string> = { tab };
+    const status = payoutStatusFilter;
+    if (status) newParams.status = status;
+    setSearchParams(newParams);
+  };
+
+  const handlePayoutStatusChange = (status: string) => {
+    setPayoutStatusFilter(status);
+    const newParams: Record<string, string> = { tab: activeTab };
+    if (status) newParams.status = status;
+    setSearchParams(newParams);
+  };
+
   const handleRefresh = () => {
     fetchOverviewData(true);
     if (activeTab === 'payouts') fetchPayouts(payoutsPage);
@@ -819,7 +851,7 @@ const PayoutDashboard: React.FC = () => {
         <div className="flex items-center space-x-4">
           <select
             value={payoutStatusFilter}
-            onChange={(e) => setPayoutStatusFilter(e.target.value)}
+            onChange={(e) => handlePayoutStatusChange(e.target.value)}
             className="px-4 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
           >
             <option value="">All Status</option>
@@ -1186,7 +1218,7 @@ const PayoutDashboard: React.FC = () => {
             ].map((tab) => (
               <button
                 key={tab.id}
-                onClick={() => setActiveTab(tab.id as TabType)}
+                onClick={() => handleTabChange(tab.id as TabType)}
                 className={`flex items-center pb-4 px-1 border-b-2 font-medium text-xs sm:text-sm whitespace-nowrap ${
                   activeTab === tab.id
                     ? 'border-blue-500 text-blue-600'

@@ -17,6 +17,19 @@ import { getSocketServer } from '../socket';
 import { NotificationService } from '../services/notification.service';
 import { cache, isRedisAvailable } from '../config/redis';
 import { escapeRegex } from '../utils/formatBookingListItem';
+import Review, { PUBLIC_REVIEW_QUERY } from '../models/review.model';
+import { getCommissionRate, DEFAULT_PLATFORM_FEE_CONFIG } from '../services/settlement.service';
+import { deleteFromCloudinary } from '../utils/cloudinary';
+
+function estimateNetFromGross(gross: number): number {
+  if (!gross) return 0;
+  const commissionRate = getCommissionRate(gross);
+  const platformFee =
+    DEFAULT_PLATFORM_FEE_CONFIG.type === 'percentage'
+      ? gross * DEFAULT_PLATFORM_FEE_CONFIG.value
+      : 0;
+  return Math.round((gross - gross * commissionRate - platformFee) * 100) / 100;
+}
 
 const CATEGORIES_CACHE_KEY = 'categories:all:active';
 const CATEGORIES_CACHE_TTL = 300; // 5 minutes
@@ -233,8 +246,11 @@ export const getMyServices = asyncHandler(async (req: Request, res: Response) =>
     search
   } = req.query;
 
-  // Build query
-  const query: any = { providerId: (req.user as IUser)._id.toString() };
+  // Build query - EXCLUDE soft-deleted services
+  const query: any = {
+    providerId: (req.user as IUser)._id.toString(),
+    isDeleted: { $ne: true } // Exclude soft-deleted services
+  };
 
   if (status && status !== 'all') {
     query.status = status as string;
@@ -402,6 +418,46 @@ export const createService = asyncHandler(async (req: Request, res: Response) =>
       subcategory,
     });
 
+    // FIX: Check for duplicate/similar services before creation
+    const currentUserId = (req.user as IUser)._id.toString();
+    const serviceNameNormalized = (req.body.name || '').toLowerCase().trim();
+    const existingServices = await Service.find({
+      providerId: currentUserId,
+      isDeleted: { $ne: true },
+      $or: [
+        // Exact match
+        { name: { $regex: new RegExp(`^${escapeRegex(serviceNameNormalized)}$`, 'i') } },
+        // Very similar (same category + similar name)
+        {
+          category,
+          name: { $regex: new RegExp(escapeRegex(serviceNameNormalized.split(' ')[0] || ''), 'i') }
+        }
+      ]
+    }).select('_id name category status').lean();
+
+    // Return warning in response if duplicates found (but still allow creation)
+    const duplicateWarning = existingServices.length > 0 ? {
+      hasDuplicates: true,
+      count: existingServices.length,
+      similarServices: existingServices.map(s => ({
+        id: s._id.toString(),
+        name: s.name,
+        category: s.category,
+        status: s.status
+      }))
+    } : null;
+
+    if (duplicateWarning) {
+      logger.info('Similar service detected', {
+        context: 'ProviderController',
+        action: 'DUPLICATE_SERVICE_WARNING',
+        providerId: currentUserId,
+        serviceName: req.body.name,
+        category,
+        duplicateCount: existingServices.length,
+      });
+    }
+
     // ✅ FIX: Extract coordinates properly from provider profile and convert to array format
     // Now uses GeoJSON format: { type: 'Point', coordinates: [lng, lat] }
     let serviceCoordinates: [number, number];
@@ -476,7 +532,7 @@ export const createService = asyncHandler(async (req: Request, res: Response) =>
       },
       status: 'pending_review', // Require admin approval for all new services
       isActive: false, // ✅ FIX: Keep inactive until admin approval
-      providerId: (req.user as IUser)._id.toString(),
+      providerId: currentUserId,
       createdBy: (req.user as IUser)._id,
       updatedBy: (req.user as IUser)._id,
       // Initialize search metadata
@@ -507,8 +563,7 @@ export const createService = asyncHandler(async (req: Request, res: Response) =>
     // Notify admins about new service pending review
     const socketServer = getSocketServer();
     if (socketServer) {
-      const providerId = (req.user as IUser)._id.toString();
-      socketServer.emitNewServicePending(service._id.toString(), providerId, service.name);
+      socketServer.emitNewServicePending(service._id.toString(), currentUserId, service.name);
     }
 
     logger.info('Service created successfully', {
@@ -521,7 +576,10 @@ export const createService = asyncHandler(async (req: Request, res: Response) =>
     res.status(201).json({
       success: true,
       message: 'Service submitted for admin approval',
-      data: { service }
+      data: {
+        service,
+        warning: duplicateWarning // Include duplicate warning if any
+      }
     });
   } catch (error: any) {
     logger.error('Error creating service', {
@@ -565,9 +623,10 @@ export const updateService = asyncHandler(async (req: Request, res: Response) =>
       if (req.body.subcategory) req.body.subcategory = subcategory;
     }
 
-    // Strip system-owned fields; provider may set status (including active)
+    // Strip system-owned fields; status/isActive are admin-only for non-admins
     const {
       isActive: _isActive,
+      status: _status,
       providerId: _providerId,
       location: _location,
       searchMetadata: _searchMetadata,
@@ -582,14 +641,40 @@ export const updateService = asyncHandler(async (req: Request, res: Response) =>
       updatedAt: new Date(),
     };
 
-    if (typeof updateData.status === 'string') {
+    // Providers cannot self-set status/isActive — only admin approval activates services
+    if (!isAdmin) {
+      delete updateData.status;
+      delete updateData.isActive;
+
+      const contentFields = [
+        'name',
+        'category',
+        'subcategory',
+        'description',
+        'shortDescription',
+        'duration',
+        'price',
+        'tags',
+      ] as const;
+      const hasContentChange = contentFields.some((field) => updateData[field] !== undefined);
+
+      // Editing a live service requires re-approval
+      if (existingService.status === 'active' && hasContentChange) {
+        updateData.status = 'pending_review';
+        updateData.isActive = false;
+      }
+    } else if (typeof updateData.status === 'string') {
       updateData.isActive = updateData.status === 'active';
     }
 
-    // FIX: Track if status changed to notify admins
     const previousStatus = existingService.status;
     const newStatus = updateData.status as string | undefined;
     const statusChanged = previousStatus !== newStatus && newStatus !== undefined;
+    const submittedForReview = previousStatus === 'active' && newStatus === 'pending_review';
+
+    // FIX: Detect price/duration changes that affect existing bookings
+    const priceChanged = req.body.price && JSON.stringify(req.body.price) !== JSON.stringify(existingService.price);
+    const durationChanged = req.body.duration && req.body.duration !== existingService.duration;
 
     const service = await Service.findByIdAndUpdate(
       id,
@@ -597,34 +682,174 @@ export const updateService = asyncHandler(async (req: Request, res: Response) =>
       { new: true, runValidators: true }
     ).lean();
 
-    // FIX: Emit socket event when service status changes to notify admins
-    if (statusChanged && service) {
+    // FIX #3: Emit socket event to notify admins when service is updated
+    // This ensures admin dashboard stays in sync with provider changes
+    if (service) {
       const socketServer = getSocketServer();
       const providerId = user._id.toString();
 
       if (socketServer) {
-        // Emit event for admin dashboard to refresh pending services list
+        // Emit event for admin dashboard to refresh services list
         socketServer.emitServiceStatusChanged(
           service._id.toString(),
           providerId,
           service.name,
           service.status
         );
+
+        // If service was submitted for review (status changed from active to pending_review),
+        // also emit admin:new_service_pending to highlight in admin notifications
+        if (submittedForReview) {
+          socketServer.emitNewServicePending(
+            service._id.toString(),
+            providerId,
+            service.name
+          );
+        }
+
+        // Emit event to provider confirming their service was submitted for review
+        socketServer.emitToUser(providerId, 'service:pending_review', {
+          serviceId: service._id.toString(),
+          serviceName: service.name,
+          previousStatus,
+          newStatus: service.status,
+          timestamp: new Date()
+        });
       }
 
-      logger.info('Service status changed by provider', {
+      logger.info('Service updated by provider', {
         context: 'ProviderController',
-        action: 'SERVICE_STATUS_CHANGED',
+        action: 'SERVICE_UPDATED',
         serviceId: service._id.toString(),
         providerId,
         previousStatus,
         newStatus: service.status,
+        submittedForReview,
       });
+
+      // FIX: Notify customers with pending/confirmed bookings when price/duration changes
+      if ((priceChanged || durationChanged) && !submittedForReview) {
+        try {
+          const notificationService = new NotificationService();
+
+          // Find bookings with this service that are pending or confirmed (not yet completed)
+          const affectedBookings = await Booking.find({
+            serviceId: service._id,
+            status: { $in: ['pending', 'confirmed'] }
+          }).populate('customerId', 'firstName lastName email phone communicationPreferences').lean();
+
+          if (affectedBookings.length > 0) {
+            const changeDetails: string[] = [];
+            if (priceChanged) {
+              const oldPrice = existingService.price.amount;
+              const newPrice = (req.body.price as any)?.amount || service.price?.amount;
+              changeDetails.push(`price: ${oldPrice} -> ${newPrice}`);
+            }
+            if (durationChanged) {
+              changeDetails.push(`duration: ${existingService.duration} -> ${req.body.duration} minutes`);
+            }
+
+            // Create notifications for each affected customer
+            const notificationPromises = affectedBookings.map(async (booking: any) => {
+              const customer = booking.customerId as any;
+              if (!customer) return;
+
+              const metadata = {
+                serviceId: service._id.toString(),
+                serviceName: service.name,
+                bookingId: booking._id.toString(),
+                bookingNumber: booking.bookingNumber,
+                changes: changeDetails,
+                oldPrice: existingService.price,
+                newPrice: req.body.price || existingService.price,
+                oldDuration: existingService.duration,
+                newDuration: req.body.duration || existingService.duration,
+              };
+
+              // Create in-app notification
+              await notificationService.createNotification({
+                recipientId: customer._id.toString(),
+                type: 'service_updated',
+                title: 'Service Update',
+                message: `Important: ${service.name} has been updated. ${changeDetails.join(', ')}. Your booking (${booking.bookingNumber}) may be affected.`,
+                actionText: 'View Booking',
+                actionUrl: `/bookings/${booking._id}`,
+                metadata,
+              });
+
+              // Try to send email notification if customer has email
+              if (customer.email) {
+                try {
+                  await notificationService.sendEmail({
+                    to: customer.email,
+                    subject: `Service Update: ${service.name}`,
+                    template: 'service-update',
+                    data: {
+                      customerName: customer.firstName,
+                      serviceName: service.name,
+                      bookingNumber: booking.bookingNumber,
+                      changes: changeDetails,
+                      oldPrice: existingService.price.amount,
+                      newPrice: (req.body.price as any)?.amount || existingService.price.amount,
+                      oldDuration: existingService.duration,
+                      newDuration: req.body.duration || existingService.duration,
+                    }
+                  }, 'service_updated');
+                } catch (emailError) {
+                  logger.warn('Failed to send service update email', {
+                    context: 'ProviderController',
+                    action: 'SERVICE_UPDATE_EMAIL_FAILED',
+                    bookingId: booking._id.toString(),
+                    error: emailError instanceof Error ? emailError.message : String(emailError),
+                  });
+                }
+              }
+
+              // Try to send SMS notification if customer has phone
+              if (customer.phone) {
+                try {
+                  const smsMessage = `${service.name} has been updated (${changeDetails.join(', ')}). Booking #${booking.bookingNumber} may be affected.`;
+                  await notificationService.sendSms(customer.phone, smsMessage, 'service_updated');
+                } catch (smsError) {
+                  logger.warn('Failed to send service update SMS', {
+                    context: 'ProviderController',
+                    action: 'SERVICE_UPDATE_SMS_FAILED',
+                    bookingId: booking._id.toString(),
+                    error: smsError instanceof Error ? smsError.message : String(smsError),
+                  });
+                }
+              }
+            });
+
+            await Promise.all(notificationPromises);
+
+            logger.info('Service update notifications sent to customers', {
+              context: 'ProviderController',
+              action: 'SERVICE_UPDATE_NOTIFICATIONS_SENT',
+              serviceId: service._id.toString(),
+              affectedBookings: affectedBookings.length,
+              changes: changeDetails,
+            });
+          }
+        } catch (notifError) {
+          // Don't fail the update if notification fails
+          logger.error('Failed to send service update notifications', {
+            context: 'ProviderController',
+            action: 'SERVICE_UPDATE_NOTIFICATION_ERROR',
+            serviceId: service._id.toString(),
+            error: notifError instanceof Error ? notifError.message : String(notifError),
+          });
+        }
+      }
     }
 
     res.json({
       success: true,
-      message: isAdmin ? 'Service updated successfully (admin override)' : 'Service updated successfully',
+      message: isAdmin
+        ? 'Service updated successfully (admin override)'
+        : updateData.status === 'pending_review' && previousStatus === 'active'
+          ? 'Service updated and submitted for admin re-approval'
+          : 'Service updated successfully',
       data: { service }
     });
   } catch (error: any) {
@@ -634,10 +859,11 @@ export const updateService = asyncHandler(async (req: Request, res: Response) =>
 });
 
 /**
- * Delete service permanently
+ * Delete service (soft delete)
  * DELETE /api/provider/services/:id
  * SECURITY FIX: Uses verifyServiceOwnership helper to prevent IDOR
  * Admins can delete any service, providers can only delete their own
+ * FIX: Now uses soft delete instead of permanent deletion
  */
 export const deleteService = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
@@ -659,18 +885,171 @@ export const deleteService = asyncHandler(async (req: Request, res: Response) =>
       );
     }
 
-    await Service.findByIdAndDelete(id);
+    // FIX: Soft delete - set isDeleted flag instead of removing
+    await Service.findByIdAndUpdate(id, {
+      isDeleted: true,
+      deletedAt: new Date(),
+      deletedBy: user._id,
+      isActive: false, // Also deactivate the service
+    });
+
+    const serviceId = service._id.toString();
+    const providerIdStr = service.providerId?.toString();
+    const category = service.category;
+
+    // FIX #4: Emit socket event to notify admins when a service is deleted
+    const socketServer = getSocketServer();
+    if (socketServer) {
+      // Use emitServiceStatusChanged to notify about deletion
+      socketServer.emitServiceStatusChanged(serviceId, providerIdStr || '', service.name, 'deleted');
+    }
+
+    try {
+      const { removeServiceFromIndex } = await import('../services/search.service');
+      await removeServiceFromIndex(serviceId);
+    } catch (searchError) {
+      logger.warn('Failed to remove service from search index', {
+        serviceId,
+        error: searchError instanceof Error ? searchError.message : String(searchError),
+      });
+    }
+
+    try {
+      const { getRedisClient } = require('../config/redis');
+      const redisClient = await getRedisClient();
+      if (redisClient) {
+        const cacheKeys = [
+          `service:${serviceId}`,
+          `service:${serviceId}:details`,
+          ...(providerIdStr ? [`services:provider:${providerIdStr}`] : []),
+          ...(category ? [`services:category:${category}`] : []),
+        ];
+        for (const key of cacheKeys) {
+          await redisClient.del(key).catch(() => undefined);
+        }
+      }
+    } catch (cacheError) {
+      logger.warn('Failed to invalidate cache after service delete', {
+        serviceId,
+        error: cacheError instanceof Error ? cacheError.message : String(cacheError),
+      });
+    }
 
     res.json({
       success: true,
       message: isAdmin
-        ? 'Service permanently deleted (admin action)'
-        : 'Service permanently deleted'
+        ? 'Service moved to trash (admin action)'
+        : 'Service moved to trash'
     });
   } catch (error: any) {
     if (error instanceof ApiError) throw error;
     throw new ApiError(500, 'Failed to delete service', error.message);
   }
+});
+
+/**
+ * Restore a soft-deleted service
+ * POST /api/provider/services/:id/restore
+ * FIX: New endpoint to restore soft-deleted services
+ */
+export const restoreService = asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const user = req.user as IUser;
+
+  try {
+    // SECURITY: Use reusable helper for ownership verification
+    // Note: verifyServiceOwnership doesn't check isDeleted, so we need to verify ownership first
+    const service = await Service.findOne({
+      _id: id,
+      providerId: (req.user as IUser)._id.toString(),
+      isDeleted: true // Must be deleted to restore
+    }).lean();
+
+    if (!service) {
+      throw new ApiError(404, 'Deleted service not found or access denied');
+    }
+
+    // Restore the service
+    const restoredService = await Service.findByIdAndUpdate(
+      id,
+      {
+        isDeleted: false,
+        $unset: { deletedAt: '', deletedBy: '' }, // Remove the deletion metadata
+        // Don't automatically reactivate - keep the previous status
+      },
+      { new: true, runValidators: true }
+    ).lean();
+
+    // Emit socket event
+    const socketServer = getSocketServer();
+    if (socketServer) {
+      socketServer.emitServiceStatusChanged(
+        id,
+        service.providerId?.toString() || '',
+        service.name,
+        'restored'
+      );
+    }
+
+    logger.info('Service restored', {
+      context: 'ProviderController',
+      action: 'SERVICE_RESTORED',
+      serviceId: id,
+      userId: user._id.toString(),
+    });
+
+    res.json({
+      success: true,
+      message: 'Service restored successfully',
+      data: { service: restoredService }
+    });
+  } catch (error: any) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, 'Failed to restore service', error.message);
+  }
+});
+
+/**
+ * Get deleted services (trash)
+ * GET /api/provider/services/trash
+ * FIX: New endpoint to list soft-deleted services
+ */
+export const getDeletedServices = asyncHandler(async (req: Request, res: Response) => {
+  const { page = 1, limit = 20 } = req.query;
+
+  const skip = (Number(page) - 1) * Number(limit);
+
+  const [services, totalCount] = await Promise.all([
+    Service.find({
+      providerId: (req.user as IUser)._id.toString(),
+      isDeleted: true
+    })
+      .sort({ deletedAt: -1 })
+      .skip(skip)
+      .limit(Number(limit))
+      .lean(),
+    Service.countDocuments({
+      providerId: (req.user as IUser)._id.toString(),
+      isDeleted: true
+    })
+  ]);
+
+  const totalPages = Math.ceil(totalCount / Number(limit));
+
+  res.json({
+    success: true,
+    data: {
+      services,
+      pagination: {
+        page: Number(page),
+        limit: Number(limit),
+        total: totalCount,
+        pages: totalPages,
+        hasNext: Number(page) < totalPages,
+        hasPrev: Number(page) > 1
+      }
+    }
+  });
 });
 
 /**
@@ -692,7 +1071,17 @@ export const toggleServiceStatus = asyncHandler(async (req: Request, res: Respon
 
   try {
     // SECURITY: Use reusable helper for ownership verification
-    await verifyServiceOwnership(id, user);
+    const { service: existingService, isAdmin } = await verifyServiceOwnership(id, user);
+
+    if (!isAdmin) {
+      const toggleableStatuses = ['active', 'inactive'];
+      if (!toggleableStatuses.includes(existingService.status)) {
+        throw new ApiError(
+          403,
+          'Only approved services can be activated or deactivated. Awaiting admin review.'
+        );
+      }
+    }
 
     const updateData: any = {
       status,
@@ -707,6 +1096,22 @@ export const toggleServiceStatus = asyncHandler(async (req: Request, res: Respon
       updateData,
       { new: true }
     ).lean();
+
+    if (updatedService) {
+      try {
+        const { updateServiceInIndex } = await import('../services/search.service');
+        await updateServiceInIndex(updatedService._id.toString(), {
+          isActive: updatedService.isActive,
+          status: updatedService.status,
+          updatedAt: new Date(),
+        });
+      } catch (searchError) {
+        logger.warn('Failed to update search index after status toggle', {
+          serviceId: id,
+          error: searchError instanceof Error ? searchError.message : String(searchError),
+        });
+      }
+    }
 
     res.json({
       success: true,
@@ -739,7 +1144,10 @@ export const getServiceAnalytics = asyncHandler(async (req: Request, res: Respon
 
     const totalViews = service.searchMetadata.searchCount;
     const totalClicks = service.searchMetadata.clickCount;
-    const totalBookings = service.searchMetadata.bookingCount;
+    const totalBookings = await Booking.countDocuments({
+      serviceId: service._id,
+      status: 'completed',
+    });
 
     const analytics: ServiceAnalytics = {
       totalViews,
@@ -803,6 +1211,7 @@ export const getOverviewAnalytics = asyncHandler(async (req: Request, res: Respo
     const draftServices = services.filter(s => s.status === 'draft').length;
     const inactiveServices = services.filter(s => s.status === 'inactive').length;
     const pendingReviewServices = services.filter(s => s.status === 'pending_review').length;
+    const rejectedServices = services.filter(s => s.status === 'rejected').length;
 
     // Calculate status counts for filter UI
     const statusCounts = {
@@ -810,12 +1219,32 @@ export const getOverviewAnalytics = asyncHandler(async (req: Request, res: Respo
       active: activeServices,
       draft: draftServices,
       inactive: inactiveServices,
-      pending_review: pendingReviewServices
+      pending_review: pendingReviewServices,
+      rejected: rejectedServices,
     };
 
     const totalViews = services.reduce((sum, service) => sum + service.searchMetadata.searchCount, 0);
     const totalClicks = services.reduce((sum, service) => sum + service.searchMetadata.clickCount, 0);
-    const totalBookings = services.reduce((sum, service) => sum + service.searchMetadata.bookingCount, 0);
+
+    const completedBookingCounts = await Booking.aggregate([
+      {
+        $match: {
+          providerId: new mongoose.Types.ObjectId(providerId),
+          status: 'completed',
+        },
+      },
+      { $group: { _id: '$serviceId', count: { $sum: 1 } } },
+    ]);
+    const bookingCountByServiceId = new Map<string, number>(
+      completedBookingCounts.map((row: { _id: mongoose.Types.ObjectId; count: number }) => [
+        row._id.toString(),
+        row.count,
+      ])
+    );
+    const totalBookings = completedBookingCounts.reduce(
+      (sum: number, row: { count: number }) => sum + row.count,
+      0
+    );
 
     const averageRating = totalServices > 0
       ? services.reduce((sum, service) => sum + service.rating.average, 0) / totalServices
@@ -922,7 +1351,7 @@ export const getOverviewAnalytics = asyncHandler(async (req: Request, res: Respo
         category: service.category,
         views: service.searchMetadata.searchCount,
         clicks: service.searchMetadata.clickCount,
-        bookings: service.searchMetadata.bookingCount,
+        bookings: bookingCountByServiceId.get(service._id.toString()) ?? 0,
         rating: service.rating.average,
         popularityScore: service.searchMetadata.popularityScore
       }));
@@ -938,13 +1367,21 @@ export const getOverviewAnalytics = asyncHandler(async (req: Request, res: Respo
 
     const allCategoryNames = allCategories.map(c => c.name);
 
+    const providerProfileDoc = await ProviderProfile.findOne({ userId: providerId })
+      .select('analytics.customerMetrics reviewsData')
+      .lean();
+
+    const monthlyGrossEarnings = monthlyRevenue;
+    const monthlyNetEarnings = estimateNetFromGross(monthlyGrossEarnings);
+
     const overview = {
       serviceStats: {
         total: totalServices,
         active: activeServices,
         draft: draftServices,
         inactive: inactiveServices,
-        pending_review: pendingReviewServices
+        pending_review: pendingReviewServices,
+        rejected: rejectedServices,
       },
       statusCounts,
       performanceStats: {
@@ -955,8 +1392,9 @@ export const getOverviewAnalytics = asyncHandler(async (req: Request, res: Respo
         bookingRate: totalClicks > 0 ? (totalBookings / totalClicks) * 100 : 0
       },
       ratingStats: {
-        averageRating: Math.round(averageRating * 10) / 10,
-        totalReviews
+        averageRating: providerProfileDoc?.reviewsData?.averageRating
+          ?? Math.round(averageRating * 10) / 10,
+        totalReviews: providerProfileDoc?.reviewsData?.totalReviews ?? totalReviews
       },
       bookingStats: {
         newBookings,
@@ -964,8 +1402,16 @@ export const getOverviewAnalytics = asyncHandler(async (req: Request, res: Respo
         todaySchedule: todayBookings,
         completedThisMonth
       },
+      customerMetrics: {
+        repeatCustomers:
+          providerProfileDoc?.analytics?.customerMetrics?.repeatCustomers ?? 0,
+        totalCustomers:
+          providerProfileDoc?.analytics?.customerMetrics?.totalCustomers ?? 0,
+      },
       revenueStats: {
         monthlyRevenue,
+        monthlyGrossEarnings,
+        monthlyNetEarnings,
         avgBookingValue: Math.round(avgBookingValue * 100) / 100
       },
       statusBreakdown: {
@@ -1099,8 +1545,13 @@ export const uploadVerificationDocument = asyncHandler(async (req: Request, res:
   }
 
   // Add document to appropriate category
-  const category = documentType.includes('id') || documentType.includes('passport') || documentType.includes('license')
+  // FIX #3: Handle address proof documents (utility_bill, ejari, dewa)
+  const category = documentType.includes('id') || documentType.includes('passport')
     ? 'identity'
+    : documentType.includes('address') || documentType.includes('utility') ||
+      documentType.includes('ejari') || documentType.includes('dewa') ||
+      documentType.includes('utility_bill') || documentType.includes('address_proof')
+    ? 'business' // Address verification stored in business category
     : documentType.includes('business') || documentType.includes('license') || documentType.includes('certificate')
     ? 'business'
     : 'insurance';
@@ -1126,6 +1577,55 @@ export const uploadVerificationDocument = asyncHandler(async (req: Request, res:
     data: {
       documentType,
       url: documentUrl,
+    },
+  });
+});
+
+/**
+ * Record background check consent
+ * POST /api/provider/verification/consent
+ */
+export const recordBackgroundCheckConsent = asyncHandler(async (req: Request, res: Response) => {
+  const providerId = (req.user as IUser)._id;
+
+  const providerProfile = await ProviderProfile.findOne({ userId: providerId });
+  if (!providerProfile) {
+    throw new ApiError(404, 'Provider profile not found');
+  }
+
+  // Initialize verificationStatus if not exists
+  if (!providerProfile.verificationStatus) {
+    providerProfile.verificationStatus = {
+      identity: { status: 'pending', documents: [] },
+      business: { status: 'pending', documents: [] },
+      insurance: { status: 'pending', documents: [] },
+      background: { status: 'pending' },
+    } as any;
+  }
+
+  // Update background check status
+  providerProfile.verificationStatus.background = {
+    status: 'completed',
+    consentGivenAt: new Date(),
+    consentGiven: true,
+  } as any;
+
+  await providerProfile.save();
+
+  // Emit socket event to notify admins
+  const socketServer = getSocketServer();
+  const businessName = (providerProfile.businessInfo as any)?.businessName || 'Unknown Provider';
+
+  if (socketServer) {
+    socketServer.emitNewProviderSubmission(providerId.toString(), businessName);
+  }
+
+  res.json({
+    success: true,
+    message: 'Background check consent recorded successfully',
+    data: {
+      consentGiven: true,
+      consentGivenAt: new Date(),
     },
   });
 });
@@ -1214,6 +1714,29 @@ export const getPortfolioItems = asyncHandler(async (req: Request, res: Response
   res.json({
     success: true,
     data: featuredItems,
+  });
+});
+
+/**
+ * Get a single portfolio item by ID
+ * GET /api/provider/portfolio/:itemId
+ * SECURITY FIX: Uses verifyPortfolioItemOwnership helper to prevent IDOR
+ */
+export const getPortfolioItemById = asyncHandler(async (req: Request, res: Response) => {
+  const user = req.user as IUser;
+  const { itemId } = req.params;
+
+  // Validate ObjectId format
+  if (!mongoose.Types.ObjectId.isValid(itemId)) {
+    throw new ApiError(400, 'Invalid portfolio item ID format');
+  }
+
+  // SECURITY: Use reusable helper for ownership verification
+  const { item } = await verifyPortfolioItemOwnership(itemId, user._id);
+
+  res.json({
+    success: true,
+    data: item,
   });
 });
 
@@ -1310,13 +1833,17 @@ export const updatePortfolioItem = asyncHandler(async (req: Request, res: Respon
  * Delete a portfolio item
  * DELETE /api/provider/portfolio/:itemId
  * SECURITY FIX: Uses verifyPortfolioItemOwnership helper to prevent IDOR
+ * FIX: Now cleans up images from Cloudinary when item is deleted
  */
 export const deletePortfolioItem = asyncHandler(async (req: Request, res: Response) => {
   const user = req.user as IUser;
   const { itemId } = req.params;
 
   // SECURITY: Use reusable helper for ownership verification
-  const { providerProfile } = await verifyPortfolioItemOwnership(itemId, user._id);
+  const { providerProfile, item } = await verifyPortfolioItemOwnership(itemId, user._id);
+
+  // FIX: Collect image URLs before deletion for cleanup
+  const imageUrls = item.images?.map((img: any) => img.url).filter(Boolean) || [];
 
   const initialLength = providerProfile.portfolio?.featured?.length || 0;
   providerProfile.portfolio.featured = providerProfile.portfolio.featured.filter(
@@ -1329,11 +1856,54 @@ export const deletePortfolioItem = asyncHandler(async (req: Request, res: Respon
 
   await providerProfile.save();
 
+  // FIX: Clean up images from Cloudinary
+  const imageCleanupPromises = imageUrls.map(async (url: string) => {
+    try {
+      // Extract public ID from Cloudinary URL
+      const publicId = extractCloudinaryPublicId(url);
+      if (publicId) {
+        await deleteFromCloudinary(publicId);
+        logger.debug('Deleted image from Cloudinary', {
+          context: 'ProviderController',
+          action: 'CLOUDINARY_DELETE',
+          publicId,
+        });
+      }
+    } catch (error) {
+      // Log but don't fail the request
+      logger.warn('Failed to delete image from Cloudinary', {
+        context: 'ProviderController',
+        action: 'CLOUDINARY_DELETE_ERROR',
+        url,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  // Fire and forget - don't wait for cleanup
+  Promise.all(imageCleanupPromises).catch(() => {});
+
   res.json({
     success: true,
     message: 'Portfolio item deleted successfully',
   });
 });
+
+/**
+ * Helper function to extract Cloudinary public ID from URL
+ */
+function extractCloudinaryPublicId(url: string): string | null {
+  try {
+    // Cloudinary URLs contain /upload/ followed by the public ID
+    const match = url.match(/\/upload\/(.+?)(\.webp|\.jpg|\.jpeg|\.png|\?|$)/i);
+    if (match && match[1]) {
+      return match[1];
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Add images to an existing portfolio item
@@ -1400,6 +1970,240 @@ export const removePortfolioImage = asyncHandler(async (req: Request, res: Respo
 // PROVIDER SETTINGS
 // ===========================================
 
+type ProviderReviewScope = 'approved' | 'all' | 'pending';
+
+function buildProviderReviewScopeQuery(scope: ProviderReviewScope): Record<string, unknown> {
+  const base = { isHidden: false };
+  if (scope === 'approved') {
+    return { ...base, ...PUBLIC_REVIEW_QUERY };
+  }
+  if (scope === 'pending') {
+    return { ...base, moderationStatus: 'pending' };
+  }
+  // all: approved + pending (exclude rejected/hidden)
+  return {
+    ...base,
+    moderationStatus: { $in: ['pending', 'approved'] },
+  };
+}
+
+function computeApprovedReviewStats(reviews: Array<{ rating: number }>) {
+  const total = reviews.length;
+  const ratingDistribution: Record<number, number> = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
+  reviews.forEach((r) => {
+    if (r.rating >= 1 && r.rating <= 5) {
+      ratingDistribution[r.rating] = (ratingDistribution[r.rating] || 0) + 1;
+    }
+  });
+  const averageRating =
+    total > 0
+      ? Math.round((reviews.reduce((sum, r) => sum + r.rating, 0) / total) * 10) / 10
+      : 0;
+  return { averageRating, ratingDistribution, totalReviews: total };
+}
+
+async function transformProviderReviews(reviews: any[]) {
+  const bookingIds = [...new Set(reviews.map((r) => r.bookingId?.toString()).filter(Boolean))];
+
+  // FIX: Use Promise.all for truly parallel fetches instead of sequential queries
+  const fetchBookings = bookingIds.length > 0
+    ? Booking.find({ _id: { $in: bookingIds } })
+        .select('serviceId')
+        .lean()
+    : Promise.resolve([]);
+
+  // Start fetching bookings, then extract serviceIds and fetch services in parallel
+  const bookingsPromise = fetchBookings;
+
+  // Chain the service fetch to happen in parallel with bookings
+  const servicesPromise = fetchBookings.then(bookings => {
+    const serviceIds = [
+      ...new Set(bookings.map((b: { serviceId?: { toString: () => string } }) => b.serviceId?.toString()).filter(Boolean)),
+    ];
+    return serviceIds.length > 0
+      ? Service.find({ _id: { $in: serviceIds } })
+          .select('name')
+          .lean()
+      : [];
+  });
+
+  // Execute both fetches in parallel
+  const [bookings, services] = await Promise.all([bookingsPromise, servicesPromise]);
+
+  const bookingServiceMap = new Map(
+    bookings.map((b: { _id: { toString: () => string }; serviceId?: { toString: () => string } }) => [b._id.toString(), b.serviceId?.toString()])
+  );
+  const serviceMap = new Map(services.map((s: { _id: { toString: () => string }; name: string }) => [s._id.toString(), s.name]));
+
+  return reviews.map((review) => {
+    const bookingId = review.bookingId?.toString();
+    const serviceId = bookingId ? bookingServiceMap.get(bookingId) : undefined;
+    const serviceName = serviceId ? serviceMap.get(serviceId) : undefined;
+    const reviewer = review.reviewerId;
+
+    return {
+      id: review._id.toString(),
+      rating: review.rating,
+      title: review.title,
+      comment: review.comment,
+      photos: review.photos || [],
+      isVerified: review.isVerified,
+      moderationStatus: review.moderationStatus,
+      createdAt: review.createdAt,
+      customer: reviewer
+        ? {
+            id: reviewer._id?.toString() || String(reviewer),
+            firstName: reviewer.firstName,
+            lastName: reviewer.lastName,
+            avatar: reviewer.avatar,
+          }
+        : null,
+      service: serviceName
+        ? { id: serviceId, name: serviceName }
+        : null,
+      response: review.response
+        ? {
+            comment: review.response.content,
+            createdAt: review.response.createdAt?.toISOString?.() || review.response.createdAt,
+          }
+        : undefined,
+    };
+  });
+}
+
+/**
+ * Get provider's received reviews (canonical)
+ * GET /api/provider/reviews?scope=approved|all|pending
+ */
+export const getProviderReviews = asyncHandler(async (req: Request, res: Response) => {
+  const providerUserId = (req.user as IUser)._id;
+  const scopeParam = String(req.query.scope || 'all');
+  const scope: ProviderReviewScope = ['approved', 'all', 'pending'].includes(scopeParam)
+    ? (scopeParam as ProviderReviewScope)
+    : 'all';
+  const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
+  const limit = Math.min(50, Math.max(1, parseInt(String(req.query.limit || '20'), 10) || 20));
+  const skip = (page - 1) * limit;
+  const ratingFilter = req.query.rating ? parseInt(String(req.query.rating), 10) : undefined;
+
+  const baseQuery: Record<string, unknown> = {
+    revieweeId: providerUserId,
+    reviewerType: 'customer',
+    ...buildProviderReviewScopeQuery(scope),
+  };
+  if (ratingFilter && ratingFilter >= 1 && ratingFilter <= 5) {
+    baseQuery.rating = ratingFilter;
+  }
+
+  const providerProfile = await ProviderProfile.findOne({ userId: providerUserId })
+    .select('settings.reviewDisplaySettings')
+    .lean();
+
+  // Use aggregation pipeline to compute stats in a single query (replaces inefficient Review.find().select('rating'))
+  const statsAggregation = Review.aggregate([
+    {
+      $match: {
+        revieweeId: providerUserId,
+        reviewerType: 'customer',
+        isHidden: false,
+        $or: [
+          { moderationStatus: 'approved' },
+          { moderationStatus: { $exists: false } },
+        ],
+        reportCount: { $not: { $gte: 3 } },
+      },
+    },
+    {
+      $facet: {
+        stats: [
+          {
+            $group: {
+              _id: null,
+              avgRating: { $avg: '$rating' },
+              totalReviews: { $sum: 1 },
+            },
+          },
+        ],
+        ratingDistribution: [
+          {
+            $group: {
+              _id: '$rating',
+              count: { $sum: 1 },
+            },
+          },
+        ],
+      },
+    },
+  ]);
+
+  const [reviews, total, approvedCount, pendingCount, aggregationResult] = await Promise.all([
+    Review.find(baseQuery)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .populate('reviewerId', 'firstName lastName avatar')
+      .lean(),
+    Review.countDocuments(baseQuery),
+    Review.countDocuments({
+      revieweeId: providerUserId,
+      reviewerType: 'customer',
+      isHidden: false,
+      ...PUBLIC_REVIEW_QUERY,
+    }),
+    Review.countDocuments({
+      revieweeId: providerUserId,
+      reviewerType: 'customer',
+      isHidden: false,
+      moderationStatus: 'pending',
+    }),
+    statsAggregation,
+  ]);
+
+  // Extract stats from aggregation result
+  const statsData = aggregationResult[0];
+  const stats = {
+    averageRating: statsData?.stats?.[0]?.avgRating
+      ? Math.round(statsData.stats[0].avgRating * 10) / 10
+      : 0,
+    totalReviews: statsData?.stats?.[0]?.totalReviews ?? 0,
+    ratingDistribution: { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 },
+  };
+
+  // Map rating distribution from aggregation results
+  if (statsData?.ratingDistribution) {
+    statsData.ratingDistribution.forEach((item: { _id: number; count: number }) => {
+      if (item._id >= 1 && item._id <= 5) {
+        const ratingKey = item._id as 1 | 2 | 3 | 4 | 5;
+        stats.ratingDistribution[ratingKey] = item.count;
+      }
+    });
+  }
+  const transformedReviews = await transformProviderReviews(reviews);
+
+  res.json({
+    success: true,
+    data: {
+      reviews: transformedReviews,
+      total,
+      totalReviews: stats.totalReviews,
+      averageRating: stats.averageRating,
+      ratingDistribution: stats.ratingDistribution,
+      approvedCount,
+      pendingCount,
+      reviewDisplaySettings: {
+        showPendingOnReviewsPage:
+          providerProfile?.settings?.reviewDisplaySettings?.showPendingOnReviewsPage ?? true,
+      },
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit) || 1,
+      },
+    },
+  });
+});
+
 /**
  * Get provider settings
  * GET /api/provider/settings
@@ -1423,6 +2227,10 @@ export const getProviderSettings = asyncHandler(async (req: Request, res: Respon
     showPhone: settings.privacySettings?.showPhoneNumber ?? true,
     showReviewsPublicly: true,
   };
+  const reviewDisplaySettings = {
+    showPendingOnReviewsPage:
+      settings.reviewDisplaySettings?.showPendingOnReviewsPage ?? true,
+  };
 
   res.json({
     success: true,
@@ -1430,6 +2238,7 @@ export const getProviderSettings = asyncHandler(async (req: Request, res: Respon
       businessSettings,
       locationInfo: providerProfile.locationInfo || {},
       privacySettings,
+      reviewDisplaySettings,
     },
   });
 });
@@ -1444,6 +2253,7 @@ export const updateProviderSettings = asyncHandler(async (req: Request, res: Res
     businessSettings,
     locationInfo,
     privacySettings,
+    reviewDisplaySettings,
   } = req.body;
 
   const providerProfile = await ProviderProfile.findOne({ userId: providerId });
@@ -1491,6 +2301,16 @@ export const updateProviderSettings = asyncHandler(async (req: Request, res: Res
     }
   }
 
+  if (reviewDisplaySettings) {
+    settings.reviewDisplaySettings = settings.reviewDisplaySettings || {
+      showPendingOnReviewsPage: true,
+    };
+    if (reviewDisplaySettings.showPendingOnReviewsPage !== undefined) {
+      settings.reviewDisplaySettings.showPendingOnReviewsPage =
+        reviewDisplaySettings.showPendingOnReviewsPage;
+    }
+  }
+
   providerProfile.settings = settings;
 
   await providerProfile.save();
@@ -1509,6 +2329,10 @@ export const updateProviderSettings = asyncHandler(async (req: Request, res: Res
         showEmail: settings.privacySettings?.showEmail ?? false,
         showPhone: settings.privacySettings?.showPhoneNumber ?? true,
         showReviewsPublicly: true,
+      },
+      reviewDisplaySettings: {
+        showPendingOnReviewsPage:
+          settings.reviewDisplaySettings?.showPendingOnReviewsPage ?? true,
       },
     },
   });

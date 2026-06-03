@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
+import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
 import { Star, ChevronRight, ChevronLeft, Sparkles, ArrowRight } from 'lucide-react';
 import NavigationHeader from '../components/layout/NavigationHeader';
@@ -73,7 +74,8 @@ const HomePage: React.FC = () => {
           setPopularServices(popularRes.data.services);
         }
       } catch (error) {
-        // Ignore abort errors - expected on unmount
+        // Ignore abort/cancel errors — expected on unmount or rapid navigation
+        if (axios.isCancel(error)) return;
         if (error instanceof Error && error.name === 'AbortError') return;
         console.error('Error fetching services:', error);
       } finally {
@@ -169,14 +171,32 @@ const HomePage: React.FC = () => {
               <div className="flex items-center gap-8 mt-10 animate-nilin-in" style={{animationDelay: '0.5s'}}>
                 <div className="flex items-center gap-2">
                   <div className="flex -space-x-3">
-                    {[1, 2, 3, 4].map((i) => (
-                      <div key={i} className="w-10 h-10 rounded-full bg-gradient-to-br from-nilin-blush to-nilin-coral border-2 border-white flex items-center justify-center">
-                        <span className="text-xs text-white font-medium">{i}</span>
+                    {[
+                      { name: 'Sarah', avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=100&h=100&fit=crop' },
+                      { name: 'Amira', avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&h=100&fit=crop' },
+                      { name: 'Fatima', avatar: 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=100&h=100&fit=crop' },
+                      { name: 'Layla', avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=100&h=100&fit=crop' },
+                    ].map((user, i) => (
+                      <div
+                        key={i}
+                        className="w-10 h-10 rounded-full bg-gradient-to-br from-nilin-blush to-nilin-coral border-2 border-white flex items-center justify-center overflow-hidden hover:scale-110 transition-transform cursor-pointer"
+                        title={user.name}
+                      >
+                        <img
+                          src={user.avatar}
+                          alt={user.name}
+                          className="w-full h-full object-cover"
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).style.display = 'none';
+                            (e.target as HTMLImageElement).nextElementSibling!.textContent = user.name.charAt(0);
+                          }}
+                        />
+                        <span className="text-xs text-white font-medium absolute hidden">{user.name.charAt(0)}</span>
                       </div>
                     ))}
                   </div>
                   <div className="text-sm text-white">
-                    <p className="font-medium">2,500+</p>
+                    <p className="font-medium">20,510+</p>
                     <p className="text-white/70">Happy Clients</p>
                   </div>
                 </div>

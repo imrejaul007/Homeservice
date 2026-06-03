@@ -10,7 +10,8 @@ import {
   MessageCircle,
   ArrowLeft,
   AlertCircle,
-  RefreshCw
+  RefreshCw,
+  Edit
 } from 'lucide-react';
 import NavigationHeader from '../../components/layout/NavigationHeader';
 import Footer from '../../components/layout/Footer';
@@ -20,6 +21,9 @@ import { useBookingStore } from '../../stores/bookingStore';
 import { useAuthStore } from '../../stores/authStore';
 import type { TimelineEvent } from '../../components/customer/Timeline';
 import { toast } from 'react-hot-toast';
+import { socketService } from '../../services/socket';
+// Issue #7 fix: Import useBookingAdminUpdates for real-time admin update notifications
+import { useBookingAdminUpdates } from '../../hooks/useSocket';
 
 interface BookingError {
   message: string;
@@ -34,10 +38,14 @@ const BookingDetailPage: React.FC = () => {
     currentBooking,
     getBooking,
     cancelBooking,
-    isLoading
+    rescheduleBooking,
+    isLoading,
+    isSubmitting
   } = useBookingStore();
   const [error, setError] = useState<BookingError | null>(null);
   const [showCancelModal, setShowCancelModal] = useState(false);
+  const [isCancelling, setIsCancelling] = useState(false);
+  const [modalRef, setModalRef] = useState<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (bookingId) {
@@ -51,6 +59,80 @@ const BookingDetailPage: React.FC = () => {
       });
     }
   }, [bookingId]);
+
+  // Socket subscription for real-time booking status updates
+  useEffect(() => {
+    if (!bookingId) return;
+
+    const handleStatusChange = (data: { bookingId: string; status: string }) => {
+      if (data.bookingId === bookingId) {
+        // Refresh booking data when status changes
+        getBooking(bookingId).catch((err: unknown) => {
+          console.error('Failed to refresh booking after status change:', err);
+        });
+        toast.success(`Booking status updated to: ${data.status.replace('_', ' ')}`);
+      }
+    };
+
+    // Subscribe to generic status change event
+    const unsubscribeGeneric = socketService.onBookingStatusChanged(handleStatusChange);
+
+    // Subscribe to specific booking events to ensure all status changes are captured
+    const unsubscribeConfirmed = socketService.on('booking:confirmed', handleStatusChange);
+    const unsubscribeCancelled = socketService.on('booking:cancelled', handleStatusChange);
+    const unsubscribeCompleted = socketService.on('booking:completed', handleStatusChange);
+
+    return () => {
+      unsubscribeGeneric();
+      unsubscribeConfirmed();
+      unsubscribeCancelled();
+      unsubscribeCompleted();
+    };
+  }, [bookingId, getBooking]);
+
+  // Issue #7 fix: Subscribe to admin booking updates for real-time notifications
+  const { bookingUpdated } = useBookingAdminUpdates();
+
+  useEffect(() => {
+    if (bookingUpdated && bookingUpdated.bookingId === bookingId) {
+      // Refresh booking data when admin updates
+      getBooking(bookingId).catch((err: unknown) => {
+        console.error('Failed to refresh booking after admin update:', err);
+      });
+      toast.success(`Admin updated booking: ${bookingUpdated.status.replace('_', ' ')}`);
+    }
+  }, [bookingUpdated, bookingId, getBooking]);
+
+  // Focus trap for cancel modal accessibility
+  useEffect(() => {
+    if (showCancelModal && modalRef) {
+      const focusableElements = modalRef.querySelectorAll<HTMLElement>(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+      );
+      const firstElement = focusableElements[0];
+      const lastElement = focusableElements[focusableElements.length - 1];
+
+      firstElement?.focus();
+
+      const handleKeyDown = (e: KeyboardEvent) => {
+        if (e.key === 'Tab') {
+          if (e.shiftKey && document.activeElement === firstElement) {
+            e.preventDefault();
+            lastElement?.focus();
+          } else if (!e.shiftKey && document.activeElement === lastElement) {
+            e.preventDefault();
+            firstElement?.focus();
+          }
+        }
+        if (e.key === 'Escape') {
+          setShowCancelModal(false);
+        }
+      };
+
+      modalRef.addEventListener('keydown', handleKeyDown);
+      return () => modalRef.removeEventListener('keydown', handleKeyDown);
+    }
+  }, [showCancelModal, modalRef]);
 
   if (!user) {
     return (
@@ -71,6 +153,7 @@ const BookingDetailPage: React.FC = () => {
   const handleConfirmCancel = async () => {
     if (!currentBooking) return;
     setShowCancelModal(false);
+    setIsCancelling(true);
     try {
       await cancelBooking(currentBooking._id, { reason: 'Customer requested cancellation' });
       toast.success('Booking cancelled successfully');
@@ -78,7 +161,19 @@ const BookingDetailPage: React.FC = () => {
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to cancel booking';
       toast.error(errorMessage);
+    } finally {
+      setIsCancelling(false);
     }
+  };
+
+  const handleRescheduleClick = () => {
+    if (!currentBooking) return;
+    // Navigate to reschedule page with booking details pre-filled
+    navigate(`/customer/bookings/${currentBooking._id}/reschedule`, {
+      state: {
+        booking: currentBooking
+      }
+    });
   };
 
   // Convert booking status to timeline events
@@ -272,7 +367,9 @@ const BookingDetailPage: React.FC = () => {
                   <div>
                     <div className="text-sm text-nilin-warmGray">Provider</div>
                     <div className="font-medium">
-                      {currentBooking.provider?.firstName} {currentBooking.provider?.lastName}
+                      {currentBooking.provider?.firstName && currentBooking.provider?.lastName
+                        ? `${currentBooking.provider.firstName} ${currentBooking.provider.lastName}`
+                        : currentBooking.provider?.firstName || currentBooking.provider?.lastName || 'Provider to be assigned'}
                     </div>
                   </div>
                 </div>
@@ -301,7 +398,16 @@ const BookingDetailPage: React.FC = () => {
           {(currentBooking.status === 'pending' || currentBooking.status === 'confirmed') && (
             <div className="bg-white rounded-xl border border-nilin-border p-6">
               <h3 className="text-lg font-semibold text-nilin-charcoal mb-4">Actions</h3>
-              <div className="flex gap-3">
+              <div className="flex flex-wrap gap-3">
+                {currentBooking.status === 'pending' || currentBooking.status === 'confirmed' ? (
+                  <button
+                    onClick={handleRescheduleClick}
+                    className="px-6 py-3 bg-blue-100 text-blue-700 font-semibold rounded-lg hover:bg-blue-200 transition-colors inline-flex items-center gap-2"
+                  >
+                    <Edit className="h-4 w-4" />
+                    Reschedule Booking
+                  </button>
+                ) : null}
                 <button
                   onClick={handleCancelClick}
                   className="px-6 py-3 bg-red-100 text-red-700 font-semibold rounded-lg hover:bg-red-200 transition-colors"
@@ -318,9 +424,21 @@ const BookingDetailPage: React.FC = () => {
 
       {/* Cancel Booking Confirmation Modal */}
       {showCancelModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
-            <h3 className="text-lg font-semibold text-nilin-charcoal mb-4">Cancel Booking</h3>
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
+          role="presentation"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowCancelModal(false);
+          }}
+        >
+          <div
+            ref={setModalRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="cancel-modal-title"
+            className="bg-white rounded-lg p-6 max-w-md w-full mx-4"
+          >
+            <h3 id="cancel-modal-title" className="text-lg font-semibold text-nilin-charcoal mb-4">Cancel Booking</h3>
             <p className="text-nilin-warmGray mb-6">Are you sure you want to cancel this booking?</p>
             <div className="flex justify-end gap-3">
               <button
@@ -331,9 +449,17 @@ const BookingDetailPage: React.FC = () => {
               </button>
               <button
                 onClick={handleConfirmCancel}
-                className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
+                disabled={isCancelling}
+                className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-2"
               >
-                Cancel Booking
+                {isCancelling ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                    Cancelling...
+                  </>
+                ) : (
+                  'Cancel Booking'
+                )}
               </button>
             </div>
           </div>

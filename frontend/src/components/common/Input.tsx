@@ -1,5 +1,6 @@
 import React, { forwardRef } from 'react';
 import { cn } from '../../lib/utils';
+import { useStableId } from '../../hooks/useStableId';
 
 // =============================================================================
 // NILIN Design System - Input Component
@@ -74,8 +75,9 @@ const Input = forwardRef<HTMLInputElement, InputProps>(
     },
     ref
   ) => {
-    // Generate unique ID for accessibility
-    const inputId = id || `input-${React.useId()}`;
+    // Generate unique ID for accessibility using SSR-safe stable ID
+    const generatedId = useStableId('input');
+    const inputId = id || generatedId;
     const errorId = `${inputId}-error`;
     const helperId = `${inputId}-helper`;
 
@@ -253,7 +255,9 @@ const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
     },
     ref
   ) => {
-    const inputId = id || `textarea-${React.useId()}`;
+    // Generate unique ID for accessibility using SSR-safe stable ID
+    const generatedId = useStableId('textarea');
+    const inputId = id || generatedId;
     const errorId = `${inputId}-error`;
     const helperId = `${inputId}-helper`;
 

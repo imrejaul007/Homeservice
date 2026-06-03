@@ -404,7 +404,11 @@ export const chatApi: ChatApi = {
    */
   getUnreadCount: async () => {
     const response = await api.get('/chat/unread');
-    return response.data.data;
+    const data = response.data.data as { unreadCount?: number; total?: number; byRoom?: UnreadCountResponse['byRoom'] };
+    return {
+      total: data.unreadCount ?? data.total ?? 0,
+      byRoom: data.byRoom,
+    };
   },
 
   /**
@@ -483,6 +487,8 @@ export function normalizeMessage(message: ChatMessage): ChatMessage {
     _id: message._id || (message as unknown as { id: string }).id,
     roomId: message.roomId || message.chatRoomId,
     chatRoomId: message.chatRoomId || message.roomId,
+    // Include bookingId if present
+    bookingId: (message as unknown as { bookingId?: string }).bookingId,
     senderId: senderId,
     receiverId: message.receiverId,
     senderName: message.senderName || (sender ? `${sender.firstName} ${sender.lastName}` : undefined),

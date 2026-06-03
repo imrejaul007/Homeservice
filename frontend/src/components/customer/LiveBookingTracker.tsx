@@ -5,7 +5,7 @@ import { Skeleton } from '../common/Skeleton';
 import { Badge } from '../common/Badge';
 import { Button } from '../common/Button';
 import { bookingService } from '../../services/BookingService';
-import { socketService } from '../../services/SocketService';
+import { socketService } from '../../services/socket';
 
 // =============================================================================
 // NILIN Customer Dashboard - Live Booking Tracker Component
@@ -528,10 +528,64 @@ export const LiveBookingTracker: React.FC<LiveBookingTrackerProps> = ({
 
   // Subscribe to real-time updates via socket
   useEffect(() => {
-    // Subscribe to booking status changes
+    // Helper to check if the event is for this booking
+    const isForThisBooking = (data: any): boolean => {
+      return data.bookingId === bookingId || data.bookingNumber === bookingId;
+    };
+
+    // Subscribe to generic booking status changes
     const unsubscribeStatus = socketService.on('booking:status_changed', (data: any) => {
-      if (data.bookingId === bookingId || data.bookingNumber === bookingId) {
-        // Refetch the booking to get updated data
+      if (isForThisBooking(data)) {
+        fetchTrackingData();
+      }
+    });
+
+    // Subscribe to specific booking state events
+    const unsubscribeConfirmed = socketService.on('booking:confirmed', (data: any) => {
+      if (isForThisBooking(data)) {
+        console.log('Booking confirmed event received');
+        fetchTrackingData();
+      }
+    });
+
+    const unsubscribeEnRoute = socketService.on('booking:en_route', (data: any) => {
+      if (isForThisBooking(data)) {
+        console.log('Provider en route event received');
+        fetchTrackingData();
+      }
+    });
+
+    const unsubscribeArrived = socketService.on('booking:arrived', (data: any) => {
+      if (isForThisBooking(data)) {
+        console.log('Provider arrived event received');
+        fetchTrackingData();
+      }
+    });
+
+    const unsubscribeStarted = socketService.on('booking:started', (data: any) => {
+      if (isForThisBooking(data)) {
+        console.log('Service started event received');
+        fetchTrackingData();
+      }
+    });
+
+    const unsubscribeCompleted = socketService.on('booking:completed', (data: any) => {
+      if (isForThisBooking(data)) {
+        console.log('Booking completed event received');
+        fetchTrackingData();
+      }
+    });
+
+    const unsubscribeCancelled = socketService.on('booking:cancelled', (data: any) => {
+      if (isForThisBooking(data)) {
+        console.log('Booking cancelled event received');
+        fetchTrackingData();
+      }
+    });
+
+    const unsubscribeReminder = socketService.on('booking:reminder', (data: any) => {
+      if (isForThisBooking(data)) {
+        console.log('Booking reminder event received');
         fetchTrackingData();
       }
     });
@@ -562,6 +616,13 @@ export const LiveBookingTracker: React.FC<LiveBookingTrackerProps> = ({
 
     return () => {
       unsubscribeStatus();
+      unsubscribeConfirmed();
+      unsubscribeEnRoute();
+      unsubscribeArrived();
+      unsubscribeStarted();
+      unsubscribeCompleted();
+      unsubscribeCancelled();
+      unsubscribeReminder();
       unsubscribeLocation();
     };
   }, [bookingId, fetchTrackingData]);

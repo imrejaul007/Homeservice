@@ -4,6 +4,10 @@ import logger from '../utils/logger';
 // Transaction status state machine type
 export type TransactionStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'reversed';
 
+// Maximum number of transactions to keep in wallet history (most recent)
+// Can be overridden by importing and reassigning
+export const MAX_TRANSACTION_HISTORY = 1000;
+
 export interface IWallet extends Document {
   // Multi-tenant
   tenantId?: mongoose.Types.ObjectId;
@@ -184,14 +188,14 @@ walletSchema.index({ frozenAt: -1, isFrozen: 1 });
 
 // FIX: Pre-save hook to limit unbounded transactions array (max 1000)
 walletSchema.pre('save', function(next) {
-  // Limit transactions to most recent 1000 entries to prevent document size growth
-  const MAX_TRANSACTIONS = 1000;
-  if (this.transactions && this.transactions.length > MAX_TRANSACTIONS) {
+  // Limit transactions to most recent entries to prevent document size growth
+  // Uses exported MAX_TRANSACTION_HISTORY constant for external configurability
+  if (this.transactions && this.transactions.length > MAX_TRANSACTION_HISTORY) {
     // Sort by createdAt descending and keep the most recent
     const sortedTransactions = [...this.transactions].sort(
       (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     );
-    this.transactions = sortedTransactions.slice(0, MAX_TRANSACTIONS);
+    this.transactions = sortedTransactions.slice(0, MAX_TRANSACTION_HISTORY);
   }
   next();
 });

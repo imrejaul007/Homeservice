@@ -4,6 +4,7 @@ import { ApiError } from '../utils/ApiError';
 import logger from '../utils/logger';
 import ServiceCategory from '../models/serviceCategory.model';
 import Service from '../models/service.model';
+import { getSocketServer } from '../socket';
 
 export interface CreateAdInput {
   name: string;
@@ -143,15 +144,18 @@ function touchDailyStats(
 class ProviderAdService {
   /**
    * Active ads eligible for public display
+   * FIX: Enforce time schedule and targeting filters
    */
   async getActivePublicAds(options: {
     limit?: number;
     category?: string;
+    userLocation?: { lat: number; lng: number };
+    userDemographics?: { age?: number };
   }): Promise<IProviderAd[]> {
     const query: Record<string, unknown> = {
       status: 'active',
       isActive: true,
-      approvalStatus: 'approved',
+      approvalStatus: 'approved', // Only show ads that have been approved by admin
       'budget.remaining': { $gt: 0 },
     };
 
@@ -162,10 +166,110 @@ class ProviderAdService {
     const ads = await ProviderAd.find(query)
       .sort({ priority: -1, 'statistics.ctr': -1, createdAt: -1 })
       .limit(options.limit || 5)
-      .select('name content providerId statistics budget status')
+      .select('name content providerId statistics budget status targeting startDate endDate')
       .lean();
 
-    return ads as unknown as IProviderAd[];
+    // FIX: Filter by time schedule and targeting in application code
+    const now = new Date();
+    const currentDayOfWeek = now.getDay();
+    const currentHour = now.getHours();
+
+    return (ads as unknown as IProviderAd[]).filter((ad) => {
+      // Check date range (startDate and endDate)
+      if (ad.startDate && new Date(ad.startDate) > now) {
+        return false;
+      }
+      if (ad.endDate && new Date(ad.endDate) < now) {
+        return false;
+      }
+
+      // Check time schedule targeting
+      if (ad.targeting?.timeSchedule) {
+        const { daysOfWeek, hoursStart, hoursEnd } = ad.targeting.timeSchedule;
+
+        // Check if current day is in the allowed days
+        if (daysOfWeek && daysOfWeek.length > 0 && !daysOfWeek.includes(currentDayOfWeek)) {
+          return false;
+        }
+
+        // Check if current hour is within the allowed range
+        if (typeof hoursStart === 'number' && typeof hoursEnd === 'number') {
+          if (hoursEnd > hoursStart) {
+            // Normal range (e.g., 9 AM to 5 PM)
+            if (currentHour < hoursStart || currentHour >= hoursEnd) {
+              return false;
+            }
+          } else {
+            // Overnight range (e.g., 10 PM to 6 AM)
+            if (currentHour < hoursStart && currentHour >= hoursEnd) {
+              return false;
+            }
+          }
+        }
+      }
+
+      // FIX: Check demographic targeting
+      if (ad.targeting?.demographics && options.userDemographics) {
+        const { ageMin, ageMax } = ad.targeting.demographics;
+        const userAge = options.userDemographics.age;
+
+        if (userAge !== undefined) {
+          if (ageMin !== undefined && userAge < ageMin) {
+            return false;
+          }
+          if (ageMax !== undefined && userAge > ageMax) {
+            return false;
+          }
+        }
+      }
+
+      // FIX: Check location targeting (radius-based)
+      if (
+        ad.targeting?.locations &&
+        ad.targeting.locations.length > 0 &&
+        options.userLocation
+      ) {
+        const hasMatchingLocation = ad.targeting.locations.some((loc) => {
+          if (loc.type === 'radius' && loc.coordinates && loc.radiusKm) {
+            const distance = this.calculateDistance(
+              options.userLocation!.lat,
+              options.userLocation!.lng,
+              loc.coordinates.lat,
+              loc.coordinates.lng
+            );
+            return distance <= loc.radiusKm;
+          }
+          // For city/region types, would need to geocode user location
+          // For now, if there's a radius targeting, require user location
+          return loc.type !== 'radius';
+        });
+
+        if (!hasMatchingLocation) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+  }
+
+  /**
+   * Calculate distance between two coordinates in km (Haversine formula)
+   */
+  private calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+    const R = 6371; // Earth's radius in km
+    const dLat = this.toRad(lat2 - lat1);
+    const dLon = this.toRad(lon2 - lon1);
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(this.toRad(lat1)) * Math.cos(this.toRad(lat2)) *
+      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  }
+
+  private toRad(deg: number): number {
+    return deg * (Math.PI / 180);
   }
 
   /**
@@ -422,8 +526,15 @@ class ProviderAdService {
       if (input.bidAmount !== undefined) ad.bidAmount = input.bidAmount;
       if (input.bidType !== undefined) ad.bidType = input.bidType;
       if (input.targeting !== undefined) {
+        // Validate and sanitize category IDs before casting to ObjectId
+        const validatedCategories = input.targeting.categories?.map(id => {
+          if (!mongoose.Types.ObjectId.isValid(id)) {
+            throw new ApiError(400, `Invalid category ID: ${id}`);
+          }
+          return new Types.ObjectId(id);
+        });
         ad.targeting = {
-          categories: input.targeting.categories as Types.ObjectId[] | undefined,
+          categories: validatedCategories,
           locations: input.targeting.locations || [],
           timeSchedule: input.targeting.timeSchedule,
           demographics: input.targeting.demographics,
@@ -608,12 +719,21 @@ class ProviderAdService {
 
       ad.status = 'active';
       ad.isActive = true;
-      ad.approvalStatus = 'approved';
-      ad.approvedAt = new Date();
+      ad.approvalStatus = 'pending_review'; // FIX: Require admin review before going live
+      // approvedAt will be set when admin approves
       if (!ad.startDate || ad.startDate > new Date()) {
         ad.startDate = new Date();
       }
       await ad.save();
+
+      // FIX: Emit socket events for real-time updates
+      const socketServer = getSocketServer();
+      if (socketServer) {
+        // Emit status changed to provider
+        socketServer.emitAdStatusChanged(adId, providerId, ad.name, 'draft', 'pending_review');
+        // Emit to admins that a new ad needs review
+        socketServer.emitNewAdPending(adId, providerId, `Provider ${providerId}`, ad.name);
+      }
 
       logger.info('Provider ad launched', {
         context: 'ProviderAdService',
@@ -644,10 +764,34 @@ class ProviderAdService {
         return;
       }
 
+      // Check daily budget before recording view
+      if (ad.budget.daily && ad.budget.daily > 0) {
+        const today = new Date().toISOString().split('T')[0];
+        const todaySpent = ad.statistics.dailyStats
+          .filter(s => {
+            const statDate = new Date(s.date).toISOString().split('T')[0];
+            return statDate === today;
+          })
+          .reduce((sum, s) => sum + s.spent, 0);
+
+        const charge = ad.bidType === 'cpm' && ad.bidAmount ? ad.bidAmount / 1000 : 0;
+
+        if (todaySpent + charge > ad.budget.daily) {
+          // Don't record the view, ad is within daily budget limit
+          return;
+        }
+      }
+
       if (ad.budget.remaining <= 0) {
         ad.status = 'completed';
         ad.isActive = false;
         await ad.save();
+
+        // FIX: Emit socket event for budget exhaustion
+        const socketServer = getSocketServer();
+        if (socketServer) {
+          socketServer.emitAdBudgetExhausted(adId, ad.providerId.toString(), ad.name, 'total');
+        }
         return;
       }
 
@@ -669,6 +813,11 @@ class ProviderAdService {
       if (ad.budget.remaining <= 0) {
         ad.status = 'completed';
         ad.isActive = false;
+        // FIX: Emit socket event for budget exhaustion
+        const socketServer = getSocketServer();
+        if (socketServer) {
+          socketServer.emitAdBudgetExhausted(adId, ad.providerId.toString(), ad.name, 'total');
+        }
       }
 
       await ad.save();
@@ -685,18 +834,47 @@ class ProviderAdService {
   /**
    * Record a click for an ad
    */
-  async recordClick(adId: string): Promise<IProviderAd | null> {
+  async recordClick(adId: string): Promise<{ ad: IProviderAd | null; clickTimestamp: Date }> {
+    const clickTimestamp = new Date();
     try {
       const ad = await ProviderAd.findById(adId);
       if (!ad || ad.status !== 'active' || !ad.isActive || ad.approvalStatus !== 'approved') {
-        return null;
+        return { ad: null, clickTimestamp };
+      }
+
+      // Check daily budget before recording click
+      if (ad.budget.daily && ad.budget.daily > 0) {
+        const today = new Date().toISOString().split('T')[0];
+        const todaySpent = ad.statistics.dailyStats
+          .filter(s => {
+            const statDate = new Date(s.date).toISOString().split('T')[0];
+            return statDate === today;
+          })
+          .reduce((sum, s) => sum + s.spent, 0);
+
+        const charge =
+          ad.bidType === 'cpc' && ad.bidAmount
+            ? ad.bidAmount
+            : ad.bidType === 'fixed' && ad.bidAmount
+              ? ad.bidAmount
+              : 0;
+
+        if (todaySpent + charge > ad.budget.daily) {
+          throw new ApiError(400, 'Daily budget exceeded');
+        }
       }
 
       if (ad.budget.remaining <= 0) {
         ad.status = 'completed';
         ad.isActive = false;
         await ad.save();
-        return ad;
+
+        // FIX: Emit socket event for budget exhaustion
+        const socketServer = getSocketServer();
+        if (socketServer) {
+          socketServer.emitAdBudgetExhausted(adId, ad.providerId.toString(), ad.name, 'total');
+        }
+        return { ad, clickTimestamp };
       }
 
       const charge =
@@ -719,10 +897,16 @@ class ProviderAdService {
       if (ad.budget.remaining <= 0) {
         ad.status = 'completed';
         ad.isActive = false;
+
+        // FIX: Emit socket event for budget exhaustion
+        const socketServer = getSocketServer();
+        if (socketServer) {
+          socketServer.emitAdBudgetExhausted(adId, ad.providerId.toString(), ad.name, 'total');
+        }
       }
 
       await ad.save();
-      return ad;
+      return { ad, clickTimestamp };
     } catch (error: any) {
       logger.error('Error recording ad click', {
         context: 'ProviderAdService',
@@ -730,25 +914,52 @@ class ProviderAdService {
         adId,
         error: error.message,
       });
-      return null;
+      throw error;
     }
   }
 
   /**
    * Record a conversion for an ad
+   * FIX: Link conversion to booking for proper attribution and ROAS calculation
    */
-  async recordConversion(adId: string): Promise<void> {
+  async recordConversion(
+    adId: string,
+    bookingId: string,
+    clickTimestamp: Date,
+    revenue: number
+  ): Promise<void> {
     try {
       await ProviderAd.findByIdAndUpdate(adId, {
         $inc: { 'statistics.conversions': 1 },
+        $push: {
+          conversionAttributions: {
+            bookingId: new Types.ObjectId(bookingId),
+            clickTimestamp,
+            conversionTimestamp: new Date(),
+            revenue,
+          },
+        },
       });
+
+      // Recalculate ROAS based on attributed revenue
+      const ad = await ProviderAd.findById(adId);
+      if (ad) {
+        const totalRevenue = ad.conversionAttributions.reduce((sum, attr) => sum + attr.revenue, 0);
+        const totalSpent = ad.statistics.totalSpent;
+        if (totalSpent > 0) {
+          ad.performance.roas = Number((totalRevenue / totalSpent).toFixed(2));
+          await ad.save();
+        }
+      }
     } catch (error: any) {
       logger.error('Error recording ad conversion', {
         context: 'ProviderAdService',
         action: 'RECORD_CONVERSION_ERROR',
         adId,
+        bookingId,
         error: error.message,
       });
+      throw error;
     }
   }
 

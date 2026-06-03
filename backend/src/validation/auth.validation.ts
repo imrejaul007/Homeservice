@@ -1,19 +1,41 @@
 import Joi from 'joi';
+import { getPlatformPolicySync } from '../services/platformSettingsPolicy.service';
 
-// Password validation schema
-// SECURITY FIX: Strengthened password policy
-// - Minimum 12 characters (up from 8)
-// - Requires uppercase, lowercase, number, and special character
+/** Password rules driven by Admin → Settings → Security */
+export const validatePasswordAgainstPolicy = (value: string, helpers: Joi.CustomHelpers) => {
+  const policy = getPlatformPolicySync();
+
+  if (!value || value.length < policy.passwordMinLength) {
+    return helpers.error('any.custom', {
+      message: `Password must be at least ${policy.passwordMinLength} characters long`,
+    });
+  }
+  if (value.length > 128) {
+    return helpers.error('any.custom', { message: 'Password cannot exceed 128 characters' });
+  }
+  if (policy.passwordRequireUppercase && !/[A-Z]/.test(value)) {
+    return helpers.error('any.custom', { message: 'Password must contain an uppercase letter' });
+  }
+  if (policy.passwordRequireNumber && !/\d/.test(value)) {
+    return helpers.error('any.custom', { message: 'Password must contain a number' });
+  }
+  if (policy.passwordRequireSpecialChar && !/[@$!%*?&]/.test(value)) {
+    return helpers.error('any.custom', {
+      message: 'Password must contain a special character (@$!%*?&)',
+    });
+  }
+  if (!/[a-z]/.test(value)) {
+    return helpers.error('any.custom', { message: 'Password must contain a lowercase letter' });
+  }
+  return value;
+};
+
 const passwordSchema = Joi.string()
-  .min(12)
   .max(128)
-  .pattern(new RegExp('^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)(?=.*[@$!%*?&])[A-Za-z\\d@$!%*?&]'))
   .required()
+  .custom(validatePasswordAgainstPolicy)
   .messages({
-    'string.min': 'Password must be at least 12 characters long',
-    'string.max': 'Password cannot exceed 128 characters',
-    'string.pattern.base': 'Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character (@$!%*?&)',
-    'any.required': 'Password is required'
+    'any.required': 'Password is required',
   });
 
 // Email validation schema
@@ -120,10 +142,8 @@ export const customerRegistrationSchema = Joi.object({
     state: Joi.string().max(100).optional(),
     country: Joi.string().max(100).default('US'),
     zipCode: Joi.string().max(20).optional(),
-    coordinates: Joi.object({
-      lat: Joi.number().min(-90).max(90).required(),
-      lng: Joi.number().min(-180).max(180).required()
-    }).optional()
+    // Accept coordinates in ANY format - service layer normalizes it
+    coordinates: Joi.any().optional()
   }).optional(),
   communicationPreferences: Joi.object({
     email: Joi.object({
@@ -149,18 +169,12 @@ export const customerRegistrationSchema = Joi.object({
     currency: Joi.string().default('USD')
   }).optional(),
   referralCode: Joi.string().optional(),
-  agreeToTerms: Joi.alternatives().try(
+  agreeToTermsAndPrivacy: Joi.alternatives().try(
     Joi.boolean().valid(true),
     Joi.string().valid('true')
   ).required().messages({
-    'any.only': 'You must agree to the terms and conditions'
+    'any.only': 'You must agree to the terms and conditions and privacy policy'
   }),
-  agreeToPrivacy: Joi.alternatives().try(
-    Joi.boolean().valid(true),
-    Joi.string().valid('true')
-  ).required().messages({
-    'any.only': 'You must agree to the privacy policy'
-  })
 });
 
 // Provider registration validation
@@ -216,10 +230,8 @@ export const providerRegistrationSchema = Joi.object({
         state: Joi.string().required(),
         zipCode: Joi.string().required(),
         country: Joi.string().empty('').default('AE'),
-        coordinates: Joi.object({
-          lat: Joi.number().min(-90).max(90).required(),
-          lng: Joi.number().min(-180).max(180).required()
-        }).optional() // Make coordinates optional
+        // Accept coordinates in ANY format - service layer normalizes it
+        coordinates: Joi.any().optional()
       }).required(),
       mobileService: Joi.boolean().default(true),
       hasFixedLocation: Joi.boolean().default(false)
@@ -249,17 +261,11 @@ export const providerRegistrationSchema = Joi.object({
   }),
   
   // Agreements
-  agreeToTerms: Joi.alternatives().try(
+  agreeToTermsAndPrivacy: Joi.alternatives().try(
     Joi.boolean().valid(true),
     Joi.string().valid('true')
   ).required().messages({
-    'any.only': 'You must agree to the terms and conditions'
-  }),
-  agreeToPrivacy: Joi.alternatives().try(
-    Joi.boolean().valid(true),
-    Joi.string().valid('true')
-  ).required().messages({
-    'any.only': 'You must agree to the privacy policy'
+    'any.only': 'You must agree to the terms and conditions and privacy policy'
   }),
   agreeToBackground: Joi.alternatives().try(
     Joi.boolean().valid(true),
@@ -397,8 +403,9 @@ export const updateProfileSchema = Joi.object({
     state: Joi.string().max(100).optional(),
     zipCode: Joi.string().max(20).optional(),
     country: Joi.string().max(100).optional(),
-    lat: Joi.number().min(-90).max(90).required(),
-    lng: Joi.number().min(-180).max(180).required(),
+    // Accept lat/lng in ANY format
+    lat: Joi.any().optional(),
+    lng: Joi.any().optional(),
   }).optional(),
 });
 

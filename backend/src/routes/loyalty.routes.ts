@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import loyaltyController from '../controllers/loyalty.controller';
 import authMiddleware from '../middleware/auth.middleware';
+import { requireAdmin } from '../middleware/rbac.middleware';
 
 const router = Router();
 
@@ -33,6 +34,7 @@ router.post('/redeem',
 
 // Expire old points (internal/system endpoint for scheduler)
 router.post('/expire-old-points',
+  requireAdmin,
   loyaltyController.expireOldPoints
 );
 

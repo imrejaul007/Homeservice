@@ -1,6 +1,5 @@
 // ROAS Dashboard - Return on Ad Spend - Provider Analytics Component
-import React, { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import React, { useState, useEffect } from 'react';
 import {
   AreaChart,
   Area,
@@ -57,15 +56,34 @@ export const ROASDashboard: React.FC<ROASDashboardProps> = ({
   const [selectedRange, setSelectedRange] = useState(timeRange);
   const [viewMode, setViewMode] = useState<'roas' | 'spend' | 'combined'>('combined');
 
-  // Use API if providerId is available, otherwise show empty state
+  // Use API if providerId is available, otherwise show fallback data
   const shouldFetch = Boolean(providerId);
-  const effectiveProviderId = providerId || '';
 
-  const { data: apiData, isLoading: loading } = useQuery({
-    queryKey: ['provider', 'roas', effectiveProviderId, selectedRange],
-    queryFn: () => analyticsApi.getROASMetrics(effectiveProviderId),
-    enabled: shouldFetch,
-  });
+  const [apiData, setApiData] = useState<ROASMetricsData | undefined>(undefined);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!shouldFetch) return;
+
+    let cancelled = false;
+    setLoading(true);
+
+    analyticsApi.getROASMetrics(providerId!).then(
+      (data) => {
+        if (!cancelled) {
+          setApiData(data);
+          setLoading(false);
+        }
+      },
+      () => {
+        if (!cancelled) setLoading(false);
+      }
+    );
+
+    return () => {
+      cancelled = true;
+    };
+  }, [shouldFetch, providerId]);
 
   // Use API data if available, otherwise use defaults
   const roasData = apiData?.roasData ?? DEFAULT_ROAS_DATA;

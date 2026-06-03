@@ -177,6 +177,8 @@ export interface SuspiciousActivity {
 
 export interface SLAMetrics {
   providerId: string;
+  periodBookingCount?: number;
+  hasInsufficientData?: boolean;
   responseTime: {
     avgMinutes: number;
     p95Minutes: number;
@@ -405,7 +407,9 @@ export const providerOpsApiService = {
   /**
    * Get provider metrics (quality & reliability scores)
    */
-  getProviderMetrics: async (providerId: string): Promise<{ success: boolean; data: ProviderMetrics }> => {
+  getProviderMetrics: async (
+    providerId: string
+  ): Promise<{ success: boolean; data: { metrics: ProviderMetrics } }> => {
     const response = await api.get(`/provider-ops/metrics/${providerId}`);
     return response.data;
   },
@@ -413,7 +417,9 @@ export const providerOpsApiService = {
   /**
    * Get provider SLA metrics
    */
-  getSlaMetrics: async (providerId: string): Promise<{ success: boolean; data: SLAMetrics }> => {
+  getSlaMetrics: async (
+    providerId: string
+  ): Promise<{ success: boolean; data: { slaMetrics: SLAMetrics } }> => {
     const response = await api.get(`/provider-ops/sla/${providerId}`);
     return response.data;
   },
@@ -512,7 +518,12 @@ export const providerOpsApiService = {
   /**
    * Run fraud check on provider
    */
-  runFraudCheck: async (providerId: string): Promise<{ success: boolean; data: FraudReport }> => {
+  runFraudCheck: async (
+    providerId: string
+  ): Promise<{
+    success: boolean;
+    data: { report: FraudReport; flagsPersisted: number };
+  }> => {
     const response = await api.post(`/provider-ops/fraud/check/${providerId}`);
     return response.data;
   },
@@ -609,6 +620,7 @@ export const providerOpsApiService = {
       providers: {
         total: number;
         pending: number;
+        inProgress: number;
         approved: number;
         suspended: number;
         rejected: number;

@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import mongoose from 'mongoose';
 import { bookingService } from '../services/booking.service';
 import { asyncHandler } from '../utils/asyncHandler';
 import { ApiError } from '../utils/ApiError';
@@ -6,8 +7,14 @@ import { eventBus, EVENT_TYPES } from '../event-bus';
 import Booking from '../models/booking.model';
 import User, { IUser } from '../models/user.model';
 import Service from '../models/service.model';
+import Review from '../models/review.model';
 import Joi from 'joi';
 import logger from '../utils/logger';
+import { hashBookingCancellationToken } from '../utils/tokenUtil';
+import {
+  getPlatformPolicySync,
+  calculateTaxAmount,
+} from '../services/platformSettingsPolicy.service';
 
 // Email service imports
 import {
@@ -51,7 +58,7 @@ const addOnSchema = Joi.object({
 
 const bookingInputSchema = Joi.object({
   serviceId: Joi.string().required(),
-  providerId: Joi.string().required(),
+  providerId: Joi.string().optional(),
   scheduledDate: Joi.string().required(),
   scheduledTime: Joi.string().required(),
   location: locationSchema.required(),
@@ -62,6 +69,9 @@ const bookingInputSchema = Joi.object({
     bookingSource: Joi.string(),
     deviceType: Joi.string(),
     sessionId: Joi.string(),
+    variantDuration: Joi.number().integer().min(15).max(480),
+    variantPrice: Joi.number().min(0),
+    selectedVariantIndex: Joi.number().integer().min(0),
     // FIX: Make idempotencyKey REQUIRED to prevent double-booking
     idempotencyKey: Joi.string()
       .min(16)
@@ -89,7 +99,7 @@ const guestInfoSchema = Joi.object({
 
 const guestBookingInputSchema = Joi.object({
   serviceId: Joi.string().required(),
-  providerId: Joi.string().required(),
+  providerId: Joi.string().optional(),
   scheduledDate: Joi.string().required(),
   scheduledTime: Joi.string().required(),
   location: locationSchema,
@@ -100,6 +110,9 @@ const guestBookingInputSchema = Joi.object({
     bookingSource: Joi.string(),
     deviceType: Joi.string(),
     sessionId: Joi.string(),
+    variantDuration: Joi.number().integer().min(15).max(480),
+    variantPrice: Joi.number().min(0),
+    selectedVariantIndex: Joi.number().integer().min(0),
     // FIX: Make idempotencyKey REQUIRED for guest bookings too
     idempotencyKey: Joi.string()
       .min(16)
@@ -397,7 +410,7 @@ export const createBooking = asyncHandler(async (req: Request, res: Response) =>
   await eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
     bookingId: result.booking._id.toString(),
     customerId,
-    providerId: value.providerId,
+    providerId: result.booking.providerId?.toString(),
     amount: result.booking.pricing?.totalAmount,
     bookingNumber: result.booking.bookingNumber,
     serviceId: value.serviceId,
@@ -700,18 +713,26 @@ export const acceptBooking = asyncHandler(async (req: Request, res: Response) =>
 
   const providerId = (req.user as IUser)._id.toString();
 
+  // SECURITY FIX: Validate booking data exists before using in conflict check
+  const bookingScheduledDate = (req as any).booking?.scheduledDate;
+  const bookingScheduledTime = (req as any).booking?.scheduledTime;
+  const bookingDuration = (req as any).booking?.duration;
+
   // SECURITY: Conflict detection before accepting booking
   // This prevents accepting a booking for a time slot that conflicts with existing bookings
-  const conflictCheck = await bookingService.checkForTimeSlotConflicts(
-    providerId,
-    id,
-    (req as any).booking?.scheduledDate,
-    (req as any).booking?.scheduledTime,
-    (req as any).booking?.duration
-  );
+  // Only check conflicts if we have the required booking data
+  if (bookingScheduledDate && bookingScheduledTime) {
+    const conflictCheck = await bookingService.checkForTimeSlotConflicts(
+      providerId,
+      id,
+      bookingScheduledDate,
+      bookingScheduledTime,
+      bookingDuration
+    );
 
-  if (conflictCheck.hasConflict) {
-    throw new ApiError(409, `Time slot conflict detected. You already have a booking (${conflictCheck.conflictingBookingNumber}) scheduled at this time. Please resolve the conflict before accepting this booking.`);
+    if (conflictCheck.hasConflict) {
+      throw new ApiError(409, `Time slot conflict detected. You already have a booking (${conflictCheck.conflictingBookingNumber}) scheduled at this time. Please resolve the conflict before accepting this booking.`);
+    }
   }
 
   const booking = await bookingService.acceptBooking(id, providerId, value);
@@ -785,12 +806,28 @@ export const startBooking = asyncHandler(async (req: Request, res: Response) => 
   }
 
   const providerId = (req.user as IUser)._id.toString();
-  const booking = await bookingService.startBooking(id, providerId);
+
+  // Fetch booking and verify provider ownership (IDOR prevention)
+  const booking = await Booking.findById(id);
+  if (!booking || booking.deletedAt) {
+    throw new ApiError(404, 'Booking not found');
+  }
+  if (booking.providerId?.toString() !== providerId) {
+    logger.warn('IDOR attempt detected in startBooking', {
+      action: 'IDOR_ATTEMPT',
+      bookingId: id,
+      userId: providerId,
+      userRole: 'provider',
+    });
+    throw new ApiError(403, 'Access denied. You do not have permission to start this booking.');
+  }
+
+  const result = await bookingService.startBooking(id, providerId);
 
   res.json({
     success: true,
     message: 'Booking started successfully',
-    data: { booking },
+    data: { booking: result },
   });
 });
 
@@ -806,6 +843,22 @@ export const completeBooking = asyncHandler(async (req: Request, res: Response) 
   }
 
   const providerId = (req.user as IUser)._id.toString();
+
+  // Fetch booking and verify provider ownership (IDOR prevention)
+  const bookingCheck = await Booking.findById(id);
+  if (!bookingCheck || bookingCheck.deletedAt) {
+    throw new ApiError(404, 'Booking not found');
+  }
+  if (bookingCheck.providerId?.toString() !== providerId) {
+    logger.warn('IDOR attempt detected in completeBooking', {
+      action: 'IDOR_ATTEMPT',
+      bookingId: id,
+      userId: providerId,
+      userRole: 'provider',
+    });
+    throw new ApiError(403, 'Access denied. You do not have permission to complete this booking.');
+  }
+
   const booking = await bookingService.completeBooking(id, providerId, value);
 
   // Publish booking.completed event
@@ -957,6 +1010,453 @@ export const trackBooking = asyncHandler(async (req: Request, res: Response) => 
 });
 
 // ============================================
+// Rating Endpoint (Customer)
+// ============================================
+
+// Validation schema for rating
+const ratingSchema = Joi.object({
+  rating: Joi.number().min(1).max(5).required().messages({
+    'number.min': 'Rating must be at least 1 star',
+    'number.max': 'Rating cannot exceed 5 stars',
+    'any.required': 'Rating is required'
+  }),
+  comment: Joi.string().min(10).max(1000).required().messages({
+    'string.min': 'Review comment must be at least 10 characters',
+    'string.max': 'Review comment cannot exceed 1000 characters',
+    'any.required': 'Review comment is required'
+  }),
+  title: Joi.string().max(100).allow('').optional(),
+  photos: Joi.array().items(Joi.string()).max(5).optional(),
+});
+
+/**
+ * Rate a completed booking
+ * POST /api/bookings/:id/rate
+ */
+export const rateBooking = asyncHandler(async (req: Request, res: Response) => {
+  if (req.user?.role !== 'customer') {
+    throw new ApiError(403, 'Only customers can rate bookings');
+  }
+
+  const { id } = req.params;
+  const { error, value } = ratingSchema.validate(req.body);
+  if (error) {
+    throw new ApiError(400, error.details[0].message);
+  }
+
+  const customerId = (req.user as IUser)._id.toString();
+
+  // Fetch booking and verify ownership
+  const booking = await Booking.findById(id);
+  if (!booking || booking.deletedAt) {
+    throw new ApiError(404, 'Booking not found');
+  }
+
+  // Verify customer owns this booking
+  if (booking.customerId?.toString() !== customerId) {
+    throw new ApiError(403, 'You can only rate your own bookings');
+  }
+
+  // Verify booking is completed
+  if (booking.status !== 'completed') {
+    throw new ApiError(400, 'Only completed bookings can be rated');
+  }
+
+  // Check if already reviewed
+  if (booking.customerReview) {
+    throw new ApiError(400, 'This booking has already been rated');
+  }
+
+  // Create the review document
+  const review = new Review({
+    bookingId: booking._id,
+    reviewerId: req.user._id,
+    reviewerType: 'customer',
+    revieweeId: booking.providerId,
+    revieweeType: 'provider',
+    rating: value.rating,
+    title: value.title || '',
+    comment: value.comment.trim(),
+    photos: value.photos || [],
+    isVerified: true,
+  });
+
+  await review.save();
+
+  // Update booking with review reference
+  booking.customerReview = review._id;
+  await booking.save();
+
+  // Publish review received event for notifications
+  // FIX: Added bookingNumber and serviceName for socket event
+  eventBus.publish(EVENT_TYPES.REVIEW_RECEIVED, {
+    reviewId: review._id.toString(),
+    providerId: booking.providerId.toString(),
+    bookingId: booking._id.toString(),
+    bookingNumber: booking.bookingNumber || '',
+    customerName: `${req.user.firstName} ${req.user.lastName}`,
+    rating: review.rating,
+    comment: review.comment,
+  }, {
+    userId: customerId,
+    ipAddress: req.ip,
+    userAgent: req.get('user-agent'),
+  });
+
+  res.status(201).json({
+    success: true,
+    message: 'Thank you for your rating! Your review helps other customers.',
+    data: {
+      review: {
+        _id: review._id,
+        rating: review.rating,
+        title: review.title,
+        comment: review.comment,
+        photos: review.photos,
+        isVerified: review.isVerified,
+        createdAt: review.createdAt,
+      },
+    },
+  });
+});
+
+// ============================================
+// COUPON OPERATIONS
+// ============================================
+
+/**
+ * Apply coupon to a booking
+ * POST /api/bookings/:id/coupon
+ */
+export const applyCouponToBooking = asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { code, cancellationToken } = req.body;
+  const userId = (req.user as IUser)._id.toString();
+
+  if (!code) {
+    throw new ApiError(400, 'Coupon code is required');
+  }
+
+  // SECURITY FIX: ObjectId validation
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    throw new ApiError(400, 'Invalid booking ID format');
+  }
+
+  // Find booking
+  const booking = await Booking.findById(id);
+  if (!booking || booking.deletedAt) {
+    throw new ApiError(404, 'Booking not found');
+  }
+
+  // SECURITY FIX: Handle guest booking ownership
+  if (booking.customerId) {
+    // Registered user booking - check customerId match
+    if (booking.customerId.toString() !== userId) {
+      throw new ApiError(403, 'You can only apply coupons to your own bookings');
+    }
+  } else if (booking.isGuestBooking && booking.guestInfo?.email) {
+    // Guest booking requires email verification token
+    const guestEmail = booking.guestInfo.email;
+    const providedEmail = req.body.email;
+
+    // For guest bookings, require either a valid cancellation token or matching email
+    if (!cancellationToken && (!providedEmail || providedEmail.toLowerCase() !== guestEmail.toLowerCase())) {
+      throw new ApiError(403, 'Guest booking requires email verification to apply coupons. Please provide the email address used for the booking.');
+    }
+
+    // Validate cancellation token if provided
+    if (cancellationToken) {
+      const expectedToken = hashBookingCancellationToken(id, guestEmail);
+      if (cancellationToken !== expectedToken) {
+        throw new ApiError(403, 'Invalid or expired cancellation token');
+      }
+    }
+  } else {
+    throw new ApiError(403, 'Cannot verify booking ownership');
+  }
+
+  // Check booking status - only pending/confirmed bookings can have coupons applied
+  const allowedStatuses = ['pending', 'confirmed'];
+  if (!allowedStatuses.includes(booking.status as string)) {
+    throw new ApiError(400, 'Cannot apply coupon to this booking');
+  }
+
+  // Check if any discount already exists (prevents stacking coupons with other discounts)
+  const existingDiscounts = booking.pricing.discounts || [];
+  if (existingDiscounts.length > 0) {
+    throw new ApiError(400, 'A discount has already been applied to this booking. Only one discount can be applied per booking.');
+  }
+
+  // Also check the legacy couponDiscount field for backwards compatibility
+  if ((booking.pricing as any).couponDiscount > 0) {
+    throw new ApiError(400, 'A coupon has already been applied to this booking');
+  }
+
+  // Find coupon
+  const Coupon = (await import('../models/coupon.model')).default;
+  const coupon = await Coupon.findOne({ code: code.toUpperCase(), isDeleted: false });
+
+  if (!coupon) {
+    throw new ApiError(404, 'Invalid coupon code');
+  }
+
+  // Check if coupon is valid (methods are added by mongoose-schema)
+  const couponAny = coupon as any;
+  const validityCheck = couponAny.isValid();
+  if (!validityCheck.valid) {
+    throw new ApiError(400, validityCheck.reason || 'Coupon is not valid');
+  }
+
+  // Calculate order value for discount calculation
+  const addOnsTotal = booking.pricing.addOns?.reduce(
+    (sum: number, addon: { price: number }) => sum + addon.price, 0
+  ) || 0;
+  const orderValue = booking.pricing.basePrice + addOnsTotal;
+
+  // Check minimum order value
+  if (orderValue < coupon.minOrderValue) {
+    throw new ApiError(
+      400,
+      `Minimum order value of ${coupon.currency} ${coupon.minOrderValue} required`
+    );
+  }
+
+  // Calculate discount
+  const discountAmount = couponAny.calculateDiscount(orderValue);
+  const discountDetails = couponAny.getDiscountObject(orderValue);
+
+  // Calculate new pricing
+  const newSubtotal = orderValue - discountAmount;
+  const policy = getPlatformPolicySync();
+  const newTax = calculateTaxAmount(newSubtotal, policy);
+  const newTotal = Math.round((newSubtotal + newTax) * 100) / 100;
+
+  // Add coupon to discounts array
+  const discounts = booking.pricing.discounts || [];
+  discounts.push({
+    type: 'coupon',
+    amount: discountAmount,
+    description: coupon.code,
+  });
+
+  // Update booking pricing within a transaction to prevent race conditions
+  const session = await mongoose.startSession();
+  try {
+    session.startTransaction();
+
+    // Update booking pricing
+    (booking.pricing as any).couponDiscount = discountAmount;
+    booking.pricing.subtotal = Math.round(newSubtotal * 100) / 100;
+    booking.pricing.tax = newTax;
+    booking.pricing.totalAmount = newTotal;
+    booking.pricing.discounts = discounts;
+
+    await booking.save({ session });
+    await session.commitTransaction();
+  } catch (error) {
+    await session.abortTransaction();
+    throw error;
+  } finally {
+    session.endSession();
+  }
+
+  res.json({
+    success: true,
+    message: 'Coupon applied successfully',
+    data: {
+      booking: booking.toObject(),
+      appliedCoupon: {
+        code: coupon.code,
+        type: coupon.type,
+        discount: discountAmount,
+        discountDetails,
+        newTotal,
+      },
+    },
+  });
+});
+
+/**
+ * Remove coupon from a booking
+ * DELETE /api/bookings/:id/coupon
+ */
+export const removeCouponFromBooking = asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { cancellationToken } = req.body;
+  const userId = (req.user as IUser)._id.toString();
+
+  // SECURITY FIX: ObjectId validation
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    throw new ApiError(400, 'Invalid booking ID format');
+  }
+
+  // Find booking
+  const booking = await Booking.findById(id);
+  if (!booking || booking.deletedAt) {
+    throw new ApiError(404, 'Booking not found');
+  }
+
+  // SECURITY FIX: Handle guest booking ownership
+  if (booking.customerId) {
+    // Registered user booking - check customerId match
+    if (booking.customerId.toString() !== userId) {
+      throw new ApiError(403, 'You can only modify your own bookings');
+    }
+  } else if (booking.isGuestBooking && booking.guestInfo?.email) {
+    // Guest booking requires email verification token
+    const guestEmail = booking.guestInfo.email;
+    const providedEmail = req.body.email;
+
+    // For guest bookings, require either a valid cancellation token or matching email
+    if (!cancellationToken && (!providedEmail || providedEmail.toLowerCase() !== guestEmail.toLowerCase())) {
+      throw new ApiError(403, 'Guest booking requires email verification to remove coupons. Please provide the email address used for the booking.');
+    }
+
+    // Validate cancellation token if provided
+    if (cancellationToken) {
+      const expectedToken = hashBookingCancellationToken(id, guestEmail);
+      if (cancellationToken !== expectedToken) {
+        throw new ApiError(403, 'Invalid or expired cancellation token');
+      }
+    }
+  } else {
+    throw new ApiError(403, 'Cannot verify booking ownership');
+  }
+
+  // Check booking status
+  const allowedStatuses = ['pending', 'confirmed'];
+  if (!allowedStatuses.includes(booking.status as string)) {
+    throw new ApiError(400, 'Cannot remove coupon from this booking');
+  }
+
+  // Check if coupon is applied
+  if (!(booking.pricing as any).couponDiscount || (booking.pricing as any).couponDiscount <= 0) {
+    throw new ApiError(404, 'No coupon applied to this booking');
+  }
+
+  // Recalculate pricing without coupon
+  const addOnsTotal = booking.pricing.addOns?.reduce(
+    (sum: number, addon: { price: number }) => sum + addon.price, 0
+  ) || 0;
+  const baseTotal = booking.pricing.basePrice + addOnsTotal;
+  const policy = getPlatformPolicySync();
+  const newTax = calculateTaxAmount(baseTotal, policy);
+  const newTotal = Math.round((baseTotal + newTax) * 100) / 100;
+
+  // Remove coupon discount from discounts array
+  const discounts = (booking.pricing.discounts || []).filter((d: any) => d.type !== 'coupon');
+
+  // Update booking pricing within a transaction to prevent race conditions
+  const session = await mongoose.startSession();
+  try {
+    session.startTransaction();
+
+    // Update booking pricing
+    (booking.pricing as any).couponDiscount = 0;
+    booking.pricing.subtotal = Math.round(baseTotal * 100) / 100;
+    booking.pricing.tax = newTax;
+    booking.pricing.totalAmount = newTotal;
+    booking.pricing.discounts = discounts;
+
+    await booking.save({ session });
+    await session.commitTransaction();
+  } catch (error) {
+    await session.abortTransaction();
+    throw error;
+  } finally {
+    session.endSession();
+  }
+
+  res.json({
+    success: true,
+    message: 'Coupon removed successfully',
+    data: { booking: booking.toObject() },
+  });
+});
+
+// ============================================
+// Booking Count Endpoint
+// ============================================
+
+const bookingCountQuerySchema = Joi.object({
+  status: Joi.string()
+    .valid('pending', 'confirmed', 'in_progress', 'completed', 'cancelled', 'no_show', 'active')
+    .optional()
+    .messages({
+      'any.only': 'Status must be one of: pending, confirmed, in_progress, completed, cancelled, no_show, active'
+    }),
+  includeBreakdown: Joi.boolean()
+    .default(false)
+    .messages({
+      'boolean.base': 'includeBreakdown must be a boolean'
+    }),
+}).options({ stripUnknown: true });
+
+/**
+ * Get booking count for the authenticated customer
+ * GET /api/bookings/count?status=active
+ */
+export const getCustomerBookingCount = asyncHandler(async (req: Request, res: Response) => {
+  if (req.user?.role !== 'customer') {
+    throw new ApiError(403, 'Access denied. Only customers can access this endpoint.');
+  }
+
+  const { error, value } = bookingCountQuerySchema.validate(req.query);
+  if (error) {
+    throw new ApiError(400, error.details[0].message);
+  }
+
+  const customerId = (req.user as IUser)._id.toString();
+
+  const options = {
+    status: value.status,
+    activeOnly: value.includeBreakdown || value.status === 'active'
+  };
+
+  const result = await bookingService.getCustomerBookingCount(customerId, options);
+
+  res.json({
+    success: true,
+    data: {
+      count: result.count,
+      ...(result.statusCounts && { statusBreakdown: result.statusCounts })
+    }
+  });
+});
+
+/**
+ * Get booking count for the authenticated provider
+ * GET /api/provider/bookings/count?status=active
+ */
+export const getProviderBookingCount = asyncHandler(async (req: Request, res: Response) => {
+  if (req.user?.role !== 'provider') {
+    throw new ApiError(403, 'Access denied. Only providers can access this endpoint.');
+  }
+
+  const { error, value } = bookingCountQuerySchema.validate(req.query);
+  if (error) {
+    throw new ApiError(400, error.details[0].message);
+  }
+
+  const providerId = (req.user as IUser)._id.toString();
+
+  const options = {
+    status: value.status,
+    activeOnly: value.includeBreakdown || value.status === 'active'
+  };
+
+  const result = await bookingService.getProviderBookingCount(providerId, options);
+
+  res.json({
+    success: true,
+    data: {
+      count: result.count,
+      ...(result.statusCounts && { statusBreakdown: result.statusCounts })
+    }
+  });
+});
+
+// ============================================
 // Export
 // ============================================
 
@@ -975,4 +1475,10 @@ export default {
   markMessagesAsRead,
   createGuestBooking,
   trackBooking,
+  rateBooking,
+  reportProviderNoShow,
+  applyCouponToBooking,
+  removeCouponFromBooking,
+  getCustomerBookingCount,
+  getProviderBookingCount,
 };

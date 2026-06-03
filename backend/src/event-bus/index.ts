@@ -192,6 +192,7 @@ export const EVENT_TYPES = {
 
   // Review events
   REVIEW_SUBMITTED: 'review.submitted',
+  REVIEW_VISIBLE: 'review.visible',
 
   // Package events
   PACKAGE_CREATED: 'package.created',
@@ -809,6 +810,50 @@ async function getSocketEmitter() {
         socket.emitWithdrawalRejected(providerId, withdrawalId, amount, currency, reason);
       }
     },
+    // FIX #8: Added review visibility emitter methods
+    emitReviewVisibleToCustomer: (customerId: string, reviewId: string, rating: number) => {
+      const socket = socketModule.getSocketServer();
+      if (socket) {
+        socket.emitReviewVisibleToCustomer(customerId, reviewId, rating);
+      }
+    },
+    emitReviewVisibleToProvider: (providerId: string, reviewId: string, customerId: string, rating: number) => {
+      const socket = socketModule.getSocketServer();
+      if (socket) {
+        socket.emitReviewVisibleToProvider(providerId, reviewId, customerId, rating);
+      }
+    },
+    // FIX #1: Added payment refunded emitter method
+    emitPaymentRefunded: (payment: { bookingId: string; bookingNumber: string; amount: number; currency: string; customerId: string }) => {
+      const socket = socketModule.getSocketServer();
+      if (socket) {
+        socket.emitPaymentRefunded(payment);
+      }
+    },
+    // MEDIUM PRIORITY FIX: Added review reply emitter method
+    emitReviewReply: (customerId: string, reviewId: string, bookingId: string, providerId: string, providerName: string, reply: string) => {
+      const socket = socketModule.getSocketServer();
+      if (socket) {
+        socket.emitReviewReply(customerId, reviewId, bookingId, providerId, providerName, reply);
+      }
+    },
+    // LOW PRIORITY FIX: Added booking reminder emitter method
+    emitBookingReminder: (customerId: string, bookingId: string, minutesUntil: number) => {
+      const socket = socketModule.getSocketServer();
+      if (socket) {
+        socket.emitToUser(customerId, 'booking:reminder', {
+          bookingId,
+          minutesUntil,
+        });
+      }
+    },
+    // MEDIUM PRIORITY FIX: Added insights update emitter method
+    emitInsightsUpdated: (providerId: string, reason: 'booking_completed' | 'review_submitted' | 'withdrawal_processed' | 'booking_cancelled', affectedMetrics: string[]) => {
+      const socket = socketModule.getSocketServer();
+      if (socket) {
+        socket.emitInsightsUpdated(providerId, reason, affectedMetrics);
+      }
+    },
   };
 }
 
@@ -1082,11 +1127,15 @@ export const initializeEventSubscriptions = async (): Promise<void> => {
         reviewId?: string;
         providerId?: string;
         bookingId?: string;
+        bookingNumber?: string;
         customerName?: string;
         rating?: number;
+        comment?: string;
+        serviceName?: string;
       };
 
       if (data.providerId) {
+        // Send notification via job queue
         await addJob('notification-queue', 'send_notification', {
           userId: data.providerId,
           type: 'review_received',
@@ -1094,6 +1143,23 @@ export const initializeEventSubscriptions = async (): Promise<void> => {
           message: (data.customerName || 'A customer') + ' left you a ' + (data.rating || 0) + '-star review',
           data: { reviewId: data.reviewId, bookingId: data.bookingId },
         });
+
+        // FIX: Emit socket event to provider for real-time notification
+        // Import getSocketServer dynamically to avoid circular dependency
+        const { getSocketServer } = require('../socket');
+        const socketServer = getSocketServer();
+        if (socketServer && data.providerId && data.reviewId) {
+          socketServer.emitNewReview(
+            data.providerId,
+            data.reviewId,
+            data.bookingId || '',
+            data.bookingNumber || '',
+            data.customerName || 'A customer',
+            data.rating || 0,
+            data.comment,
+            data.serviceName
+          );
+        }
       }
     } catch (error) {
       logger.error('Failed to send review.received notifications', {
@@ -1108,8 +1174,10 @@ export const initializeEventSubscriptions = async (): Promise<void> => {
       const data = event.data as {
         reviewId?: string;
         customerId?: string;
+        providerId?: string;
         providerName?: string;
         bookingId?: string;
+        reply?: string;
       };
 
       if (data.customerId) {
@@ -1120,6 +1188,26 @@ export const initializeEventSubscriptions = async (): Promise<void> => {
           message: (data.providerName || 'Your service provider') + ' replied to your review',
           data: { reviewId: data.reviewId, bookingId: data.bookingId },
         });
+      }
+
+      // MEDIUM PRIORITY FIX: Emit socket event to notify customer when provider replies to their review
+      if (data.customerId && data.reviewId && data.bookingId && data.providerId) {
+        try {
+          const socketEmitter = await getSocketEmitter();
+          socketEmitter.emitReviewReply(
+            data.customerId,
+            data.reviewId,
+            data.bookingId,
+            data.providerId,
+            data.providerName || 'Your service provider',
+            data.reply || ''
+          );
+        } catch (socketError) {
+          logger.error('Failed to emit review:reply socket event', {
+            eventId: event.eventId,
+            error: socketError instanceof Error ? socketError.message : String(socketError),
+          });
+        }
       }
     } catch (error) {
       logger.error('Failed to send review.reply_received notifications', {
@@ -1393,6 +1481,38 @@ export const initializeEventSubscriptions = async (): Promise<void> => {
     }, 15); // Higher priority - immediate real-time delivery
   }
 
+  // Socket: Emit booking reminder to customer
+  // LOW PRIORITY FIX: Added subscription for 'booking.reminder' event that emits 'booking:reminder' socket event
+  eventBus.subscribe('booking.reminder', async (event) => {
+    try {
+      const data = event.data as {
+        bookingId?: string;
+        customerId?: string;
+        minutesUntil?: number;
+      };
+
+      if (data.bookingId && data.customerId) {
+        socketEmitter.emitBookingReminder(
+          data.customerId,
+          data.bookingId,
+          data.minutesUntil ?? 30
+        );
+        logger.debug('Socket: Emitted booking reminder to customer', {
+          bookingId: data.bookingId,
+          customerId: data.customerId,
+          minutesUntil: data.minutesUntil ?? 30,
+          action: 'SOCKET_BOOKING_REMINDER',
+        });
+      }
+    } catch (error) {
+      logger.error('Socket: Failed to emit booking:reminder', {
+        eventId: event.eventId,
+        error: error instanceof Error ? error.message : String(error),
+        action: 'SOCKET_EMISSION_FAILED',
+      });
+    }
+  }, 15); // Higher priority - immediate real-time delivery
+
   // Socket: Emit notifications to users
   // Note: This requires NOTIFICATION_CREATED to be published via eventBus.publish()
   // If your notification service publishes events, add this subscription
@@ -1646,6 +1766,251 @@ export const initializeEventSubscriptions = async (): Promise<void> => {
       }
     } catch (error) {
       logger.error('Socket: Failed to emit withdrawal:rejected', {
+        eventId: event.eventId,
+        error: error instanceof Error ? error.message : String(error),
+        action: 'SOCKET_EMISSION_FAILED',
+      });
+    }
+  }, 15);
+
+  // FIX #1: Socket: Emit payment refunded to customer
+  eventBus.subscribe('payment.refunded', async (event) => {
+    try {
+      const data = event.data as {
+        bookingId?: string;
+        bookingNumber?: string;
+        amount?: number;
+        currency?: string;
+        customerId?: string;
+        providerId?: string;
+      };
+
+      if (data.bookingId && data.customerId) {
+        socketEmitter.emitPaymentRefunded({
+          bookingId: data.bookingId,
+          bookingNumber: data.bookingNumber || '',
+          amount: data.amount || 0,
+          currency: data.currency || 'AED',
+          customerId: data.customerId,
+        });
+        logger.debug('Socket: Emitted payment refunded to customer', {
+          bookingId: data.bookingId,
+          customerId: data.customerId,
+          action: 'SOCKET_PAYMENT_REFUNDED',
+        });
+      }
+
+      // FIX [MEDIUM-3]: When a booking is refunded, create settlement deduction to reverse provider payout
+      if (data.bookingId && data.providerId && data.amount) {
+        try {
+          const mongoose = require('mongoose');
+          const Settlement = mongoose.model('Settlement');
+
+          const settlement = await Settlement.findOne({
+            'lineItems.bookingId': new mongoose.Types.ObjectId(data.bookingId)
+          });
+
+          if (settlement) {
+            const lineItem = settlement.lineItems.find(
+              (item: any) => item.bookingId?.toString() === data.bookingId
+            );
+
+            if (lineItem) {
+              // Add deduction for the refund amount (up to the net amount)
+              const deductionAmount = Math.min(data.amount, lineItem.netAmount);
+
+              (settlement as any).addDeduction(
+                'refund_reversal',
+                deductionAmount,
+                `Refund processed for booking ${data.bookingNumber || data.bookingId}. Amount: ${data.amount} ${data.currency || 'AED'}`,
+                data.bookingId
+              );
+              await settlement.save();
+
+              logger.info('Settlement deduction added for refund', {
+                action: 'SETTLEMENT_REFUND_REVERSAL',
+                settlementId: settlement._id.toString(),
+                settlementNumber: settlement.settlementNumber,
+                bookingId: data.bookingId,
+                deductionAmount,
+                refundAmount: data.amount,
+              });
+            }
+          }
+        } catch (settlementError) {
+          logger.error('Failed to add settlement deduction for refund', {
+            eventId: event.eventId,
+            bookingId: data.bookingId,
+            error: settlementError instanceof Error ? settlementError.message : String(settlementError),
+            action: 'SETTLEMENT_REFUND_ERROR',
+          });
+        }
+      }
+    } catch (error) {
+      logger.error('Socket: Failed to emit payment:refunded', {
+        eventId: event.eventId,
+        error: error instanceof Error ? error.message : String(error),
+        action: 'SOCKET_EMISSION_FAILED',
+      });
+    }
+  }, 15);
+
+  // FIX #8: Socket: Emit review visible to customer and provider
+  eventBus.subscribe('review.visible', async (event) => {
+    try {
+      const data = event.data as {
+        reviewId?: string;
+        customerId?: string;
+        providerId?: string;
+        rating?: number;
+        isPublic?: boolean;
+      };
+
+      if (data.reviewId) {
+        // Emit to customer (reviewer)
+        if (data.customerId) {
+          socketEmitter.emitReviewVisibleToCustomer(
+            data.customerId,
+            data.reviewId,
+            data.rating || 0
+          );
+          logger.debug('Socket: Emitted review visible to customer', {
+            reviewId: data.reviewId,
+            customerId: data.customerId,
+            action: 'SOCKET_REVIEW_VISIBLE_CUSTOMER',
+          });
+        }
+
+        // Emit to provider
+        if (data.providerId && data.customerId) {
+          socketEmitter.emitReviewVisibleToProvider(
+            data.providerId,
+            data.reviewId,
+            data.customerId,
+            data.rating || 0
+          );
+          logger.debug('Socket: Emitted review visible to provider', {
+            reviewId: data.reviewId,
+            providerId: data.providerId,
+            action: 'SOCKET_REVIEW_VISIBLE_PROVIDER',
+          });
+        }
+      }
+    } catch (error) {
+      logger.error('Socket: Failed to emit review:visible', {
+        eventId: event.eventId,
+        error: error instanceof Error ? error.message : String(error),
+        action: 'SOCKET_EMISSION_FAILED',
+      });
+    }
+  }, 15);
+
+  // ============================================
+  // Insights Update Subscriptions
+  // Emit insights:updated socket events to trigger dashboard refresh
+  // ============================================
+
+  // Socket: Emit insights:updated when booking is completed
+  eventBus.subscribe('booking.completed', async (event) => {
+    try {
+      const data = event.data as {
+        providerId?: string;
+      };
+
+      if (data.providerId) {
+        socketEmitter.emitInsightsUpdated(
+          data.providerId,
+          'booking_completed',
+          ['performance', 'revenue', 'customerSatisfaction']
+        );
+        logger.debug('Socket: Emitted insights:updated for booking_completed', {
+          providerId: data.providerId,
+          action: 'SOCKET_INSIGHTS_UPDATED',
+        });
+      }
+    } catch (error) {
+      logger.error('Socket: Failed to emit insights:updated for booking.completed', {
+        eventId: event.eventId,
+        error: error instanceof Error ? error.message : String(error),
+        action: 'SOCKET_EMISSION_FAILED',
+      });
+    }
+  }, 15);
+
+  // Socket: Emit insights:updated when booking is cancelled
+  eventBus.subscribe('booking.cancelled', async (event) => {
+    try {
+      const data = event.data as {
+        providerId?: string;
+      };
+
+      if (data.providerId) {
+        socketEmitter.emitInsightsUpdated(
+          data.providerId,
+          'booking_cancelled',
+          ['performance']
+        );
+        logger.debug('Socket: Emitted insights:updated for booking_cancelled', {
+          providerId: data.providerId,
+          action: 'SOCKET_INSIGHTS_UPDATED',
+        });
+      }
+    } catch (error) {
+      logger.error('Socket: Failed to emit insights:updated for booking.cancelled', {
+        eventId: event.eventId,
+        error: error instanceof Error ? error.message : String(error),
+        action: 'SOCKET_EMISSION_FAILED',
+      });
+    }
+  }, 15);
+
+  // Socket: Emit insights:updated when new review is received
+  eventBus.subscribe(EVENT_TYPES.REVIEW_RECEIVED, async (event) => {
+    try {
+      const data = event.data as {
+        providerId?: string;
+      };
+
+      if (data.providerId) {
+        socketEmitter.emitInsightsUpdated(
+          data.providerId,
+          'review_submitted',
+          ['customerSatisfaction']
+        );
+        logger.debug('Socket: Emitted insights:updated for review_submitted', {
+          providerId: data.providerId,
+          action: 'SOCKET_INSIGHTS_UPDATED',
+        });
+      }
+    } catch (error) {
+      logger.error('Socket: Failed to emit insights:updated for review.received', {
+        eventId: event.eventId,
+        error: error instanceof Error ? error.message : String(error),
+        action: 'SOCKET_EMISSION_FAILED',
+      });
+    }
+  }, 15);
+
+  // Socket: Emit insights:updated when withdrawal is processed
+  eventBus.subscribe('withdrawal.approved', async (event) => {
+    try {
+      const data = event.data as {
+        providerId?: string;
+      };
+
+      if (data.providerId) {
+        socketEmitter.emitInsightsUpdated(
+          data.providerId,
+          'withdrawal_processed',
+          ['revenue']
+        );
+        logger.debug('Socket: Emitted insights:updated for withdrawal_processed', {
+          providerId: data.providerId,
+          action: 'SOCKET_INSIGHTS_UPDATED',
+        });
+      }
+    } catch (error) {
+      logger.error('Socket: Failed to emit insights:updated for withdrawal.approved', {
         eventId: event.eventId,
         error: error instanceof Error ? error.message : String(error),
         action: 'SOCKET_EMISSION_FAILED',

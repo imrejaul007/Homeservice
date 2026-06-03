@@ -589,7 +589,7 @@ export const ServiceAnalytics: React.FC<ServiceAnalyticsProps> = ({
     );
   }, [services]);
 
-  const averageRating = totals.totalReviews > 0 ? totals.averageRating / totals.totalReviews : 0;
+  const averageRating = (totals.totalReviews || 0) > 0 ? totals.averageRating / totals.totalReviews : 0;
 
   const sortedServices = useMemo(() => {
     return [...services].sort((a, b) => {

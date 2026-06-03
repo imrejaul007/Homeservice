@@ -50,13 +50,24 @@ export interface ServiceInput {
   isActive?: boolean;
 }
 
-// Verification Status
+// Verification Status - redesigned to match backend structure
 export interface VerificationStatus {
+  identity: {
+    status: 'pending' | 'approved' | 'rejected';
+    verifiedAt?: string;
+    documents?: Array<{ type: string; url: string }>;
+  };
+  documents: {
+    status: 'pending' | 'approved' | 'rejected';
+    verifiedAt?: string;
+    types?: string[];
+  };
+  backgroundCheck: {
+    status: 'pending' | 'approved' | 'rejected';
+    verifiedAt?: string;
+    reportId?: string;
+  };
   overall: 'pending' | 'approved' | 'rejected' | 'suspended';
-  identity: 'pending' | 'approved' | 'rejected';
-  documents: 'pending' | 'approved' | 'rejected';
-  backgroundCheck: 'pending' | 'approved' | 'rejected';
-  businessVerification: 'pending' | 'approved' | 'rejected';
   adminNotes?: string;
 }
 

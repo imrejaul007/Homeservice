@@ -807,6 +807,45 @@ export class DisputeService {
       // Save dispute within transaction
       await dispute.save({ session });
 
+      // FIX [MEDIUM-2]: When dispute is resolved in favor of customer (refund), adjust settlement record
+      if (shouldRefund && data.amount) {
+        const Settlement = mongoose.model('Settlement');
+
+        // Find settlement that includes this booking
+        const settlement = await Settlement.findOne({
+          'lineItems.bookingId': dispute.bookingId
+        }).session(session);
+
+        if (settlement) {
+          const lineItem = settlement.lineItems.find(
+            (item: any) => item.bookingId?.toString() === dispute.bookingId.toString()
+          );
+
+          if (lineItem) {
+            // Add deduction for the refund amount (up to the net amount of this booking's settlement)
+            const deductionAmount = Math.min(data.amount, lineItem.netAmount);
+
+            (settlement as any).addDeduction(
+              'dispute_refund',
+              deductionAmount,
+              `Dispute #${dispute.disputeNumber} resolved with ${data.resolutionType}. Refund: ${deductionAmount} ${dispute.bookingReference?.currency || 'AED'}`,
+              dispute._id.toString()
+            );
+            await settlement.save({ session });
+
+            logger.info('Settlement deduction added for dispute refund', {
+              action: 'DISPUTE_SETTLEMENT_SYNC',
+              disputeId: dispute._id.toString(),
+              disputeNumber: dispute.disputeNumber,
+              settlementId: settlement._id.toString(),
+              settlementNumber: settlement.settlementNumber,
+              deductionAmount,
+              resolutionType: data.resolutionType,
+            });
+          }
+        }
+      }
+
       // Commit the dispute resolution first
       await session.commitTransaction();
     } catch (error) {

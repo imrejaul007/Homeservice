@@ -1,3 +1,11 @@
+/**
+ * Customer Reviews Page
+ *
+ * Displays reviews written by the authenticated customer.
+ * Uses the unified Review type from reviewsApi.ts which consolidates
+ * all review functionality into a single service.
+ */
+
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -13,7 +21,18 @@ import NavigationHeader from '../../components/layout/NavigationHeader';
 import Footer from '../../components/layout/Footer';
 import Breadcrumb from '../../components/common/Breadcrumb';
 import { useAuthStore } from '../../stores/authStore';
-import { reviewApi, type Review } from '../../services/reviewApi';
+import { reviewsApi, type Review } from '../../services/reviewsApi';
+
+// Helper to safely extract error message from various error types
+const getErrorMessage = (err: unknown): string => {
+  if (err instanceof Error) {
+    return err.message;
+  }
+  if (err && typeof err === 'object' && 'message' in err) {
+    return (err as { message: unknown }).message as string;
+  }
+  return 'An unexpected error occurred';
+};
 
 const ReviewsPage: React.FC = () => {
   const navigate = useNavigate();
@@ -42,10 +61,11 @@ const ReviewsPage: React.FC = () => {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await reviewApi.getMyReviews();
+      const response = await reviewsApi.getCustomerReviews();
       setReviews(response.data.reviews);
-    } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to load reviews');
+    } catch (err: unknown) {
+      const axiosErr = err as { response?: { data?: { message?: string } } };
+      setError(axiosErr.response?.data?.message || getErrorMessage(err));
     } finally {
       setIsLoading(false);
     }
@@ -66,14 +86,15 @@ const ReviewsPage: React.FC = () => {
     setError(null);
 
     try {
-      await reviewApi.updateReview(editingReview._id, {
+      await reviewsApi.updateReview(editingReview.id, {
         rating: editForm.rating,
         comment: editForm.comment,
       });
       setEditingReview(null);
       fetchReviews();
-    } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to update review');
+    } catch (err: unknown) {
+      const axiosErr = err as { response?: { data?: { message?: string } } };
+      setError(axiosErr.response?.data?.message || getErrorMessage(err));
     } finally {
       setIsSaving(false);
     }
@@ -81,7 +102,7 @@ const ReviewsPage: React.FC = () => {
 
   const handleDelete = async (reviewId: string) => {
     try {
-      await reviewApi.deleteReview(reviewId);
+      await reviewsApi.deleteReview(reviewId);
       setDeleteConfirm(null);
       fetchReviews();
     } catch (err: any) {
@@ -247,7 +268,7 @@ const ReviewsPage: React.FC = () => {
           ) : (
             <div className="space-y-4">
               {reviews.map((review) => (
-                <div key={review._id} className="glass-nilin rounded-nilin-lg p-6 hover-lift transition-all">
+                <div key={review.id} className="glass-nilin rounded-nilin-lg p-6 hover-lift transition-all">
                   {/* Provider & Service Info */}
                   <div className="flex items-start justify-between mb-4">
                     <div>
@@ -295,7 +316,7 @@ const ReviewsPage: React.FC = () => {
                           <Edit2 className="w-4 h-4" />
                         </button>
                         <button
-                          onClick={() => setDeleteConfirm(review._id)}
+                          onClick={() => setDeleteConfirm(review.id)}
                           className="p-2 rounded-lg hover:bg-red-50 transition-colors text-nilin-warmGray hover:text-red-500"
                           title="Delete review"
                         >

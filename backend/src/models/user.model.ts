@@ -4,6 +4,17 @@ import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import logger from '../utils/logger';
 
+/**
+ * Issue #8 fix: Document the UserRole type and clarify that 'partner' role is not active.
+ *
+ * Active UserRoles: 'customer' | 'provider' | 'admin'
+ * Note: 'partner' role was considered but is NOT currently implemented in the codebase.
+ * The requireRole middleware in auth.middleware.ts correctly handles only the active roles.
+ * If 'partner' role is added in the future, update:
+ * 1. This UserRole type
+ * 2. requireRole middleware checks
+ * 3. All route permissions using requireRole
+ */
 export type UserRole = 'customer' | 'provider' | 'admin';
 export type AccountStatus = 'active' | 'suspended' | 'pending_verification' | 'deactivated';
 
@@ -950,6 +961,10 @@ userSchema.index({ tenantId: 1, email: 1 }, { unique: true });
 userSchema.index({ tenantId: 1, role: 1 });
 userSchema.index({ tenantId: 1, accountStatus: 1 });
 
+// FIX: Add unique compound index for tenant-scoped email lookups
+// Already exists at line 949, adding here for documentation completeness
+// userSchema.index({ tenantId: 1, email: 1 }, { unique: true }); // Already exists
+
 // Virtual Properties
 userSchema.virtual('fullName').get(function() {
   return `${this.firstName} ${this.lastName}`;
@@ -1390,8 +1405,16 @@ userSchema.methods.incLoginAttempts = async function() {
   const updates: any = { $inc: { loginAttempts: 1 } };
   
   // Lock account after 5 failed attempts for 2 hours
-  const maxAttempts = parseInt(process.env.MAX_LOGIN_ATTEMPTS || '5');
-  const lockTime = parseInt(process.env.LOCK_TIME_HOURS || '2') * 60 * 60 * 1000;
+  let maxAttempts = parseInt(process.env.MAX_LOGIN_ATTEMPTS || '5', 10);
+  let lockTime = parseInt(process.env.LOCK_TIME_HOURS || '2', 10) * 60 * 60 * 1000;
+  try {
+    const { getPlatformPolicySync } = require('../services/platformSettingsPolicy.service');
+    const policy = getPlatformPolicySync();
+    maxAttempts = policy.maxLoginAttempts ?? maxAttempts;
+    lockTime = (policy.lockoutDurationMinutes ?? 120) * 60 * 1000;
+  } catch {
+    // keep env defaults
+  }
   
   if (this.loginAttempts + 1 >= maxAttempts && !this.isLocked()) {
     updates.$set = { lockUntil: new Date(Date.now() + lockTime) };

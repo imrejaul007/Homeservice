@@ -12,7 +12,9 @@ import logger from '../utils/logger';
 import { enrichBookingLocation } from './bookingLocation.service';
 import { addTenantFilter, getTenantContext } from '../utils/tenantFilter';
 import { cache, isRedisAvailable } from '../config/redis';
-import { calculateCommission } from './settlement.service';
+import { DEFAULT_MONGO_TRANSACTION_OPTIONS } from '../config/database';
+import { calculateCommission, getCommissionRate, DEFAULT_PLATFORM_FEE_CONFIG } from './settlement.service';
+import { getSocketServer } from '../socket';
 import {
   BookingInputDTO,
   GuestBookingInputDTO,
@@ -29,20 +31,29 @@ import {
   escapeRegex,
   formatBookingListItem,
 } from '../utils/formatBookingListItem';
+import {
+  getPlatformPolicySync,
+  getScheduleSurchargePercent,
+  calculateTaxAmount,
+  getEffectiveBufferMinutes,
+} from './platformSettingsPolicy.service';
 
 // ============================================
 // Slot Locking Constants
 // ============================================
-const SLOT_LOCK_TTL_SECONDS = 900; // 15 minute TTL for slot locks
-const SLOT_LOCK_COOLDOWN_SECONDS = 5; // FIX: 5 second cooldown after lock release to prevent race conditions
+const SLOT_LOCK_TTL_SECONDS = 120; // 2 minute TTL for slot locks (prevents stale locks)
+const SLOT_LOCK_COOLDOWN_SECONDS = 2; // 2 second cooldown after lock release
 const SLOT_LOCK_PREFIX = 'slot:lock:';
 const SLOT_COOLDOWN_PREFIX = 'slot:cooldown:';
+// Maximum time a lock should ever be held (even with extensions)
+const MAX_LOCK_HOLD_TIME_MS = SLOT_LOCK_TTL_SECONDS * 1000;
 
 interface SlotLockResult {
   acquired: boolean;
   lockKey?: string;
   expiresIn?: number;
   reason?: string;
+  retryAfterSeconds?: number;
 }
 
 // ============================================
@@ -95,12 +106,92 @@ function stripHtmlTags(input: string): string {
  * Get cancellation window hours from settings (default: 24)
  */
 async function getCancellationWindowHours(): Promise<number> {
-  try {
-    const { getSetting } = await import('./settings.service');
-    return await getSetting('cancellationWindowHours') || 24;
-  } catch {
-    return 24; // Default fallback
+  return getPlatformPolicySync().cancellationWindowHours;
+}
+
+function isGuestBookingCustomer(customerId: string): boolean {
+  return customerId === 'guest' || !mongoose.Types.ObjectId.isValid(customerId);
+}
+
+async function assertBookingPolicy(
+  customerId: string,
+  data: {
+    scheduledDate: string | Date;
+    scheduledTime: string;
+    providerId: string;
+    guestEmail?: string;
+  },
+  service: { availability?: { instantBooking?: boolean } }
+): Promise<void> {
+  const policy = getPlatformPolicySync();
+
+  const requestedDate = new Date(data.scheduledDate);
+  const [hours, minutes] = data.scheduledTime.split(':').map(Number);
+  const serviceStart = new Date(requestedDate);
+  serviceStart.setHours(hours, minutes, 0, 0);
+
+  const now = new Date();
+  const hoursUntil = (serviceStart.getTime() - now.getTime()) / (1000 * 60 * 60);
+  if (hoursUntil < policy.minBookingAdvanceHours) {
+    throw new ApiError(
+      400,
+      `Bookings must be scheduled at least ${policy.minBookingAdvanceHours} hours in advance`
+    );
   }
+
+  const daysUntil = hoursUntil / 24;
+  if (daysUntil > policy.maxBookingAdvanceDays) {
+    throw new ApiError(
+      400,
+      `Bookings cannot be scheduled more than ${policy.maxBookingAdvanceDays} days in advance`
+    );
+  }
+
+  const startOfDay = new Date(requestedDate);
+  startOfDay.setHours(0, 0, 0, 0);
+  const endOfDay = new Date(requestedDate);
+  endOfDay.setHours(23, 59, 59, 999);
+
+  let dailyCount = 0;
+
+  if (isGuestBookingCustomer(customerId)) {
+    if (data.guestEmail) {
+      dailyCount = await Booking.countDocuments({
+        isGuestBooking: true,
+        'guestInfo.email': data.guestEmail.toLowerCase().trim(),
+        scheduledDate: { $gte: startOfDay, $lte: endOfDay },
+        status: { $nin: ['cancelled', 'failed'] },
+        deletedAt: { $exists: false },
+      });
+    }
+  } else {
+    dailyCount = await Booking.countDocuments({
+      customerId,
+      scheduledDate: { $gte: startOfDay, $lte: endOfDay },
+      status: { $nin: ['cancelled', 'failed'] },
+      deletedAt: { $exists: false },
+    });
+  }
+
+  if (dailyCount >= policy.maxDailyBookings) {
+    throw new ApiError(
+      400,
+      `You have reached the maximum of ${policy.maxDailyBookings} bookings per day`
+    );
+  }
+
+  if (!policy.instantBooking && service?.availability?.instantBooking) {
+    throw new ApiError(400, 'Instant booking is disabled platform-wide');
+  }
+}
+
+function resolveInitialBookingStatus(
+  service: { availability?: { instantBooking?: boolean } }
+): 'pending' | 'confirmed' {
+  const policy = getPlatformPolicySync();
+  if (policy.autoConfirmEnabled) return 'confirmed';
+  if (policy.instantBooking && service?.availability?.instantBooking) return 'confirmed';
+  return 'pending';
 }
 
 // ============================================
@@ -119,8 +210,65 @@ function generateSlotLockKey(providerId: string, scheduledDate: string | Date, s
 }
 
 /**
+ * Re-acquire or extend a lock when the same session already owns it.
+ * Used for retries and parallel duplicate requests from the same checkout session.
+ */
+async function tryReacquireIfOwner(
+  redisClient: any,
+  lockKey: string,
+  sessionId: string,
+  lockValue: string
+): Promise<boolean> {
+  try {
+    const existingLockRaw = await redisClient.get(lockKey);
+    if (!existingLockRaw) return false;
+
+    const existingLock = JSON.parse(existingLockRaw);
+    if (existingLock.sessionId === sessionId) {
+      await redisClient.setex(lockKey, SLOT_LOCK_TTL_SECONDS, lockValue);
+      logger.info('Slot lock re-acquired by same session', {
+        action: 'SLOT_LOCK_REACQUIRED',
+        lockKey,
+        sessionId,
+        ttl: SLOT_LOCK_TTL_SECONDS,
+      });
+      return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+/**
+ * Clean up stale locks from crashed sessions
+ * Checks if lock timestamp is too old and removes it
+ */
+async function cleanupStaleLock(lockKey: string, redisClient: any): Promise<boolean> {
+  try {
+    const lockValue = await redisClient.get(lockKey);
+    if (!lockValue) return false; // Lock doesn't exist
+
+    const parsed = JSON.parse(lockValue);
+    const lockAge = Date.now() - parsed.lockedAt;
+
+    // If lock is older than TTL, it's stale (orphaned from crashed sessions)
+    if (lockAge > MAX_LOCK_HOLD_TIME_MS) {
+      logger.warn('Removing stale lock', { lockKey, lockAge, lockedAt: new Date(parsed.lockedAt) });
+      await redisClient.del(lockKey);
+      return true; // Lock was stale and removed
+    }
+    return false; // Lock is still valid
+  } catch (err) {
+    logger.error('Error cleaning up stale lock', { lockKey, error: err });
+    return false;
+  }
+}
+
+/**
  * Acquire a Redis-based lock for a time slot during checkout
  * Uses SET NX (set if not exists) with TTL for atomic lock acquisition
+ * Automatically cleans up stale locks before attempting acquisition
  * @returns SlotLockResult with acquired status and lock details
  */
 async function acquireSlotLock(
@@ -162,14 +310,26 @@ async function acquireSlotLock(
       };
     }
 
-    // Use SET with NX (only set if not exists) and EX (expire in seconds)
-    // This is atomic - prevents race conditions in lock acquisition
+    // CRITICAL FIX: Clean up stale locks before attempting to acquire
+    // This handles cases where a previous session crashed and left an orphaned lock
+    await cleanupStaleLock(lockKey, redisClient);
+
     const lockValue = JSON.stringify({
       sessionId,
       lockedAt: Date.now(),
     });
 
-    // FIX: Use atomic Lua script to check cooldown AND acquire lock in single operation
+    // Re-entrant acquire: same session can reclaim/extend its own lock (retry after failure)
+    if (await tryReacquireIfOwner(redisClient, lockKey, sessionId, lockValue)) {
+      return {
+        acquired: true,
+        lockKey,
+        expiresIn: SLOT_LOCK_TTL_SECONDS,
+      };
+    }
+
+    // Use SET with NX (only set if not exists) and EX (expire in seconds)
+    // This is atomic - prevents race conditions in lock acquisition
     // This prevents race conditions between cooldown check and lock acquisition
     const cooldownKey = `${SLOT_COOLDOWN_PREFIX}${providerId}:${new Date(scheduledDate).toISOString().split('T')[0]}:${scheduledTime}`;
 
@@ -225,13 +385,32 @@ async function acquireSlotLock(
         reason: 'This time slot was just released. Please wait a moment and try again.',
       };
     } else {
-      // Lock already exists - another session has it
+      // NX failed — often a parallel duplicate request from the same session (double-click)
+      if (await tryReacquireIfOwner(redisClient, lockKey, sessionId, lockValue)) {
+        return {
+          acquired: true,
+          lockKey,
+          expiresIn: SLOT_LOCK_TTL_SECONDS,
+        };
+      }
+
+      // Lock held by a different session
+      let retryAfterSeconds = SLOT_LOCK_TTL_SECONDS;
+      try {
+        const ttl = await redisClient.ttl(lockKey);
+        if (typeof ttl === 'number' && ttl > 0) {
+          retryAfterSeconds = ttl;
+        }
+      } catch {
+        // Use default TTL estimate
+      }
       logger.warn('Slot lock acquisition failed - slot already locked', {
         action: 'SLOT_LOCK_CONFLICT',
         lockKey,
         requestedBy: sessionId,
+        retryAfterSeconds,
       });
-      return { acquired: false };
+      return { acquired: false, retryAfterSeconds };
     }
   } catch (error) {
     logger.error('Slot lock acquisition error', {
@@ -256,7 +435,8 @@ async function releaseSlotLock(
   providerId: string,
   scheduledDate: string | Date,
   scheduledTime: string,
-  sessionId: string
+  sessionId: string,
+  options?: { skipCooldown?: boolean }
 ): Promise<boolean> {
   const lockKey = generateSlotLockKey(providerId, scheduledDate, scheduledTime);
 
@@ -295,21 +475,23 @@ async function releaseSlotLock(
         lockKey,
         sessionId,
         wasOwned: result === 1,
+        skipCooldown: options?.skipCooldown === true,
       });
 
-      // FIX: Set cooldown to prevent race condition between lock release and reacquisition
-      // This ensures the slot is reserved during the booking creation process
-      const cooldownKey = `${SLOT_COOLDOWN_PREFIX}${providerId}:${new Date(scheduledDate).toISOString().split('T')[0]}:${scheduledTime}`;
-      await redisClient.setex(cooldownKey, SLOT_LOCK_COOLDOWN_SECONDS, JSON.stringify({
-        releasedAt: Date.now(),
-        previousSessionId: sessionId,
-      }));
+      // Cooldown only after failed/aborted checkout — not after successful booking
+      if (!options?.skipCooldown) {
+        const cooldownKey = `${SLOT_COOLDOWN_PREFIX}${providerId}:${new Date(scheduledDate).toISOString().split('T')[0]}:${scheduledTime}`;
+        await redisClient.setex(cooldownKey, SLOT_LOCK_COOLDOWN_SECONDS, JSON.stringify({
+          releasedAt: Date.now(),
+          previousSessionId: sessionId,
+        }));
 
-      logger.debug('Slot cooldown set', {
-        action: 'SLOT_COOLDOWN_SET',
-        cooldownKey,
-        cooldownSeconds: SLOT_LOCK_COOLDOWN_SECONDS,
-      });
+        logger.debug('Slot cooldown set', {
+          action: 'SLOT_COOLDOWN_SET',
+          cooldownKey,
+          cooldownSeconds: SLOT_LOCK_COOLDOWN_SECONDS,
+        });
+      }
 
       return true;
     }
@@ -537,7 +719,7 @@ export class BookingService {
 
     // Get provider profile for buffer time
     const providerProfile = await ProviderProfile.findOne({ userId: providerId });
-    const bufferTime = providerProfile?.availability?.bufferTime || 0;
+    const bufferTime = getEffectiveBufferMinutes(providerProfile?.availability?.bufferTime);
 
     const [hours, minutes] = scheduledTime.split(':').map(Number);
     const requestedStartMinutes = hours * 60 + minutes;
@@ -592,8 +774,59 @@ export class BookingService {
   // ========================================
 
   async createCustomerBooking(customerId: string, data: BookingInputDTO): Promise<BookingResult> {
-    // Generate unique lock owner ID for this booking attempt
-    const lockOwnerId = data.metadata?.sessionId || crypto.randomUUID();
+    const isGuestBooking = isGuestBookingCustomer(customerId);
+    const rawGuestInfo = (data as GuestBookingInputDTO).guestInfo;
+    const guestInfo = rawGuestInfo
+      ? {
+          name: rawGuestInfo.name.trim(),
+          email: rawGuestInfo.email.toLowerCase().trim(),
+          phone: rawGuestInfo.phone.trim(),
+        }
+      : undefined;
+
+    const { getPlatformPolicySync } = await import('./platformSettingsPolicy.service');
+    const {
+      assignMarketplaceProvider,
+      validateProviderForService,
+    } = await import('./providerAssignment.service');
+
+    let resolvedProviderId = data.providerId;
+    let assignmentMeta: Record<string, unknown> = {};
+
+    if (!resolvedProviderId) {
+      const policy = getPlatformPolicySync();
+      if (!policy.autoAssignmentEnabled) {
+        throw new ApiError(400, 'Provider is required when auto-assignment is disabled');
+      }
+      const serviceForDuration = await Service.findById(data.serviceId).select('duration').lean();
+      const assignment = await assignMarketplaceProvider({
+        serviceId: data.serviceId,
+        scheduledDate: data.scheduledDate,
+        scheduledTime: data.scheduledTime,
+        serviceDurationMinutes: data.selectedDuration || serviceForDuration?.duration,
+        professionalPreference: data.professionalPreference,
+      });
+      resolvedProviderId = assignment.providerId;
+      assignmentMeta = {
+        assignmentMethod: assignment.assignmentMethod,
+        assignmentCandidateCount: assignment.assignmentCandidateCount,
+      };
+    } else {
+      await validateProviderForService(data.serviceId, resolvedProviderId);
+      assignmentMeta = { assignmentMethod: 'manual' };
+    }
+
+    data.providerId = resolvedProviderId;
+    data.metadata = {
+      ...data.metadata,
+      ...assignmentMeta,
+    };
+
+    // Stable lock owner: same client session can re-acquire lock on retry
+    const lockOwnerId =
+      data.metadata?.sessionId ||
+      data.metadata?.idempotencyKey ||
+      crypto.randomUUID();
 
     // SECURITY FIX: Idempotency check - prevent duplicate bookings from retry
     // CRITICAL FIX: Generate server-side idempotency key if not provided
@@ -601,12 +834,19 @@ export class BookingService {
     const idempotencyKey = clientIdempotencyKey || crypto.randomUUID();
 
     // Always store idempotency key in metadata for tracking
-    const existingBooking = await Booking.findOne({
-      customerId,
+    // FIX: Handle guest bookings where customerId is 'guest' (not a valid ObjectId)
+    // Also filter by serviceId to ensure idempotency is service-specific
+    const existingBookingQuery: any = {
       'metadata.idempotencyKey': idempotencyKey,
+      serviceId: data.serviceId, // Add serviceId to prevent cross-service collision
       status: { $nin: ['failed', 'cancelled'] },
-      deletedAt: { $exists: false } // FIX: Exclude deleted bookings (soft delete uses deletedAt)
-    });
+      deletedAt: { $exists: false }
+    };
+    // Only add customerId filter for actual customers, not guests
+    if (!isGuestBooking) {
+      existingBookingQuery.customerId = customerId;
+    }
+    const existingBooking = await Booking.findOne(existingBookingQuery);
     if (existingBooking) {
       logger.info('Duplicate booking request detected', {
         bookingId: existingBooking._id.toString(),
@@ -622,6 +862,9 @@ export class BookingService {
     // RACE CONDITION FIX: Pre-validate coupon BEFORE acquiring lock to prevent holding lock during external calls
     let preValidatedCouponDiscount = 0;
     let preValidatedCouponCode = data.couponCode;
+    if (preValidatedCouponCode && isGuestBooking) {
+      throw new ApiError(400, 'Coupon codes cannot be applied to guest bookings. Please sign in to use a promo code.');
+    }
     if (preValidatedCouponCode) {
       try {
         const { OfferService } = await import("./offer.service");
@@ -629,7 +872,13 @@ export class BookingService {
         // First get base pricing to check for existing discounts
         const tempService = await Service.findById(data.serviceId);
         if (tempService) {
-          const tempPricing = this.calculatePricing(tempService, data.addOns, data.selectedDuration);
+          const tempPricing = this.calculatePricing(
+            tempService,
+            data.addOns,
+            data.selectedDuration,
+            undefined,
+            data.metadata
+          );
           // Check for existing discounts to prevent coupon stacking
           if (tempPricing.discounts && tempPricing.discounts.length > 0) {
             throw new ApiError(400, 'Only one coupon can be applied per booking');
@@ -669,7 +918,16 @@ export class BookingService {
     );
 
     if (!lockResult.acquired) {
-      throw new ApiError(409, 'This time slot is currently being booked by another user. Please select a different time or try again.');
+      const conflictError = new ApiError(
+        409,
+        lockResult.reason ||
+          'This time slot is currently being booked by another user. Please select a different time or try again.'
+      );
+      conflictError.data = {
+        retryAfterSeconds: lockResult.retryAfterSeconds ?? SLOT_LOCK_TTL_SECONDS,
+        errorCode: 'SLOT_LOCK_CONFLICT',
+      };
+      throw conflictError;
     }
 
     // SECURITY FIX: Generate booking number AFTER lock acquisition to prevent sequence waste on failed requests
@@ -693,20 +951,53 @@ export class BookingService {
       throw new ApiError(404, 'Provider not found');
     }
 
-    // CRITICAL: Check provider is verified to receive bookings
-    if ((provider as any).verificationStatus?.overall !== 'approved') {
+    // Verification lives on ProviderProfile (not User) — align with auth.middleware / marketplace
+    const providerProfile = await ProviderProfile.findOne({
+      userId: data.providerId,
+      isDeleted: { $ne: true },
+    }).select('verificationStatus.overall isActive');
+
+    if (!providerProfile) {
       await releaseSlotLock(data.providerId, data.scheduledDate, data.scheduledTime, lockOwnerId);
-      throw new ApiError(403, 'Provider is not verified to receive bookings');
+      throw new ApiError(403, 'Provider profile not found');
     }
 
-    // CRITICAL: Check provider is not suspended (explicit check)
-    if ((provider as any).verificationStatus?.overall === 'suspended') {
+    const verificationOverall = providerProfile.verificationStatus?.overall;
+
+    if (verificationOverall === 'suspended') {
       await releaseSlotLock(data.providerId, data.scheduledDate, data.scheduledTime, lockOwnerId);
       throw new ApiError(403, 'Provider account is suspended');
     }
 
+    const isVerified =
+      verificationOverall === 'approved' || verificationOverall === 'verified';
+
+    if (!isVerified) {
+      await releaseSlotLock(data.providerId, data.scheduledDate, data.scheduledTime, lockOwnerId);
+      throw new ApiError(403, 'Provider is not verified to receive bookings');
+    }
+
+    if (providerProfile.isActive === false) {
+      await releaseSlotLock(data.providerId, data.scheduledDate, data.scheduledTime, lockOwnerId);
+      throw new ApiError(403, 'Provider is not active');
+    }
+
+    const requestedDate = new Date(data.scheduledDate);
+
+    await assertBookingPolicy(customerId, {
+      ...data,
+      providerId: resolvedProviderId,
+      guestEmail: guestInfo?.email,
+    }, service);
+
     // Calculate pricing (done outside transaction - read-only operation)
-    const pricing = this.calculatePricing(service, data.addOns, data.selectedDuration);
+    const pricing = this.calculatePricing(
+      service,
+      data.addOns,
+      data.selectedDuration,
+      requestedDate,
+      data.metadata
+    );
 
     // RACE CONDITION FIX: Re-validate within lock context to ensure atomicity
     // If coupon was pre-validated, re-check pricing.discounts is still empty
@@ -720,7 +1011,6 @@ export class BookingService {
     const couponCode = preValidatedCouponCode;
 
     // Calculate times
-    const requestedDate = new Date(data.scheduledDate);
     const [hours, minutes] = data.scheduledTime.split(':').map(Number);
     const serviceStart = new Date(requestedDate);
     serviceStart.setHours(hours, minutes, 0, 0);
@@ -730,16 +1020,18 @@ export class BookingService {
 
     // Process and enrich location from booking input + customer/provider profiles
     const processedLocation = await enrichBookingLocation(
-      customerId,
+      isGuestBooking ? undefined : customerId,
       data.providerId,
       data.location,
       data.locationType
     );
 
     // Create booking object (will be saved within transaction)
-    const bookingData = {
+    const bookingData: Record<string, unknown> = {
       bookingNumber,
-      customerId,
+      ...(isGuestBooking ? {} : { customerId }),
+      isGuestBooking,
+      ...(isGuestBooking && guestInfo ? { guestInfo } : {}),
       providerId: data.providerId,
       serviceId: data.serviceId,
       scheduledDate: requestedDate,
@@ -784,7 +1076,7 @@ export class BookingService {
         sessionId: lockOwnerId,
         idempotencyKey: idempotencyKey, // Always store idempotency key
       },
-      status: 'pending',
+      status: resolveInitialBookingStatus(service),
     };
 
     // Use transaction to prevent race condition (TOCTOU vulnerability fix)
@@ -796,17 +1088,14 @@ export class BookingService {
     logSagaStep(bookingNumber, bookingNumber, 'booking_creation', 'started');
 
     try {
-      session.startTransaction({
-        readConcern: { level: 'snapshot' },
-        writeConcern: { w: 'majority' }
-      });
+      session.startTransaction(DEFAULT_MONGO_TRANSACTION_OPTIONS);
 
       // Re-validate availability within transaction to ensure consistency
       const availabilityResult = await validateProviderSlotAvailability({
         providerId: data.providerId,
         scheduledDate: data.scheduledDate,
         scheduledTime: data.scheduledTime,
-        serviceDurationMinutes: service.duration,
+        serviceDurationMinutes: pricing.bookingDuration,
         session,
       });
 
@@ -834,7 +1123,7 @@ export class BookingService {
 
       // FIX: Mark coupon as used INSIDE the transaction to ensure atomicity
       // This prevents scenarios where booking succeeds but coupon marking fails
-      if (couponCode && couponDiscount > 0) {
+      if (couponCode && couponDiscount > 0 && !isGuestBooking) {
         try {
           const { OfferService } = await import("./offer.service");
           const offerService = new OfferService();
@@ -965,7 +1254,21 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
   serviceId: booking.serviceId,
 });
 
-    return booking;
+    void this.syncProviderAnalytics(booking.providerId);
+
+    // Release lock after successful booking so the slot is not blocked for 120s
+    await releaseSlotLock(
+      data.providerId,
+      data.scheduledDate,
+      data.scheduledTime,
+      lockOwnerId,
+      { skipCooldown: true }
+    );
+
+    return {
+      booking,
+      message: 'Booking created successfully',
+    };
   }
 
   // ========================================
@@ -989,10 +1292,7 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
     let refundRecord: any = null;
 
     try {
-      session.startTransaction({
-        readConcern: { level: 'snapshot' },
-        writeConcern: { w: 'majority' }
-      });
+      session.startTransaction(DEFAULT_MONGO_TRANSACTION_OPTIONS);
 
       // Find booking within transaction to prevent race condition
       booking = await Booking.findById(bookingId).session(session);
@@ -1122,6 +1422,8 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
 
       // ATOMIC: Commit transaction only AFTER both booking cancellation AND refund record are saved
       await session.commitTransaction();
+
+      void this.syncProviderAnalytics(booking.providerId);
 
       // Log status transition after successful commit
       logStatusTransition({
@@ -1270,10 +1572,7 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
     const session = await mongoose.startSession();
 
     try {
-      session.startTransaction({
-        readConcern: { level: 'snapshot' },
-        writeConcern: { w: 'majority' }
-      });
+      session.startTransaction(DEFAULT_MONGO_TRANSACTION_OPTIONS);
 
       // Re-validate availability within transaction to ensure consistency
       const availabilityResult = await validateProviderSlotAvailability({
@@ -1389,10 +1688,7 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
     let booking: any;
 
     try {
-      session.startTransaction({
-        readConcern: { level: 'snapshot' },
-        writeConcern: { w: 'majority' }
-      });
+      session.startTransaction(DEFAULT_MONGO_TRANSACTION_OPTIONS);
 
       booking = await Booking.findById(bookingId).session(session);
       if (!booking) {
@@ -1463,6 +1759,15 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
       providerId: booking.providerId,
     });
 
+    // Emit socket events for real-time updates
+    const socketServer = getSocketServer();
+    if (socketServer) {
+      // Emit to provider
+      socketServer.emitBookingNoShow(booking._id.toString(), booking.providerId.toString(), booking.customerId?.toString() || '');
+      // Emit to customer
+      socketServer.emitBookingNoShowToCustomer(booking._id.toString(), booking.customerId?.toString() || '');
+    }
+
     return booking;
   }
 
@@ -1485,10 +1790,7 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
     let booking: any;
 
     try {
-      session.startTransaction({
-        readConcern: { level: 'snapshot' },
-        writeConcern: { w: 'majority' }
-      });
+      session.startTransaction(DEFAULT_MONGO_TRANSACTION_OPTIONS);
 
       booking = await Booking.findById(bookingId).session(session);
       if (!booking) {
@@ -1563,6 +1865,15 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
 
     // Flag provider for no-show
     await this.flagProviderNoShow(booking.providerId);
+
+    // Emit socket events for real-time updates
+    const socketServer = getSocketServer();
+    if (socketServer) {
+      // Emit to provider (they were reported as no-show)
+      socketServer.emitBookingNoShow(booking._id.toString(), booking.providerId.toString(), booking.customerId?.toString() || '');
+      // Emit to customer (confirmation that provider was reported)
+      socketServer.emitBookingNoShowToCustomer(booking._id.toString(), booking.customerId?.toString() || '');
+    }
 
     return booking;
   }
@@ -1699,6 +2010,54 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
   }
 
   // ========================================
+  // Link guest bookings to a registered customer (same email)
+  // ========================================
+
+  async linkGuestBookingsToCustomer(
+    customerId: string,
+    email: string
+  ): Promise<{ linkedCount: number; bookingNumbers: string[] }> {
+    if (!mongoose.Types.ObjectId.isValid(customerId)) {
+      throw new ApiError(400, 'Invalid customer ID');
+    }
+
+    const normalizedEmail = email.toLowerCase().trim();
+    if (!normalizedEmail) {
+      return { linkedCount: 0, bookingNumbers: [] };
+    }
+
+    const filter = {
+      isGuestBooking: true,
+      $or: [{ customerId: { $exists: false } }, { customerId: null }],
+      'guestInfo.email': { $regex: new RegExp(`^${escapeRegex(normalizedEmail)}$`, 'i') },
+      deletedAt: { $exists: false },
+    };
+
+    const pending = await Booking.find(filter).select('bookingNumber').lean();
+    if (!pending.length) {
+      return { linkedCount: 0, bookingNumbers: [] };
+    }
+
+    await Booking.updateMany(filter, {
+      $set: {
+        customerId: new mongoose.Types.ObjectId(customerId),
+        isGuestBooking: false,
+      },
+    });
+
+    const bookingNumbers = pending.map((b) => b.bookingNumber);
+    logger.info('Guest bookings linked to customer account', {
+      context: 'BookingService',
+      action: 'GUEST_BOOKINGS_LINKED',
+      customerId,
+      linkedCount: bookingNumbers.length,
+      bookingNumbers,
+    });
+
+    return { linkedCount: bookingNumbers.length, bookingNumbers };
+  }
+
+  // ========================================
   // Get Customer Bookings (Interface Implementation)
   // ========================================
 
@@ -1728,6 +2087,10 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
       ];
     }
 
+    // Category filter - use aggregation pipeline to filter on populated serviceId.category
+    // FIX: serviceId is ObjectId reference, so we need aggregation to filter on populated field
+    const hasCategoryFilter = !!filters?.category;
+
     // PERFORMANCE FIX: Use projection to limit fields returned, reducing data transfer
     const projection = {
       bookingNumber: 1,
@@ -1742,16 +2105,94 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
       updatedAt: 1,
     };
 
-    const [bookings, total] = await Promise.all([
-      Booking.find(query, projection)
-        .populate('serviceId', 'name category images')
-        .populate('providerId', 'firstName lastName')
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit)
-        .lean(),
-      Booking.countDocuments(query)
-    ]);
+    // Base query excluding category filter (handled by aggregation when needed)
+    const baseQuery = { ...query };
+    if (hasCategoryFilter) {
+      delete baseQuery['serviceId.category'];
+    }
+
+    let bookings: any[];
+    let total: number;
+
+    if (hasCategoryFilter) {
+      // Use aggregation pipeline to properly filter on populated serviceId.category
+      const matchStage: any = { ...baseQuery };
+
+      // Count query for total (before pagination)
+      const countResult = await Booking.aggregate([
+        { $match: matchStage },
+        {
+          $lookup: {
+            from: 'services',
+            localField: 'serviceId',
+            foreignField: '_id',
+            as: 'servicePopulated'
+          }
+        },
+        { $unwind: { path: '$servicePopulated', preserveNullAndEmptyArrays: true } },
+        { $match: { 'servicePopulated.category': filters.category } },
+        { $count: 'total' }
+      ]);
+      total = countResult.length > 0 ? countResult[0].total : 0;
+
+      // Paginated query
+      bookings = await Booking.aggregate([
+        { $match: matchStage },
+        {
+          $lookup: {
+            from: 'services',
+            localField: 'serviceId',
+            foreignField: '_id',
+            as: 'servicePopulated'
+          }
+        },
+        { $unwind: { path: '$servicePopulated', preserveNullAndEmptyArrays: true } },
+        { $match: { 'servicePopulated.category': filters.category } },
+        {
+          $lookup: {
+            from: 'providers',
+            localField: 'providerId',
+            foreignField: '_id',
+            as: 'providerPopulated'
+          }
+        },
+        {
+          $project: {
+            ...projection,
+            serviceId: {
+              _id: '$servicePopulated._id',
+              name: '$servicePopulated.name',
+              category: '$servicePopulated.category',
+              images: '$servicePopulated.images'
+            },
+            providerId: {
+              $cond: {
+                if: { $gt: [{ $size: '$providerPopulated' }, 0] },
+                then: { _id: { $arrayElemAt: ['$providerPopulated._id', 0] }, firstName: { $arrayElemAt: ['$providerPopulated.firstName', 0] }, lastName: { $arrayElemAt: ['$providerPopulated.lastName', 0] } },
+                else: null
+              }
+            }
+          }
+        },
+        { $sort: { createdAt: -1 } },
+        { $skip: skip },
+        { $limit: limit }
+      ]);
+    } else {
+      // Standard query without category filter
+      const [bookingsResult, countResult] = await Promise.all([
+        Booking.find(baseQuery, projection)
+          .populate('serviceId', 'name category images')
+          .populate('providerId', 'firstName lastName')
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(limit)
+          .lean(),
+        Booking.countDocuments(baseQuery)
+      ]);
+      bookings = bookingsResult;
+      total = countResult;
+    }
 
     return {
       bookings,
@@ -1759,9 +2200,7 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
         page,
         limit,
         total,
-        totalPages: Math.ceil(total / limit),
-        hasNextPage: page * limit < total,
-        hasPrevPage: page > 1
+        pages: Math.ceil(total / limit)
       }
     };
   }
@@ -1815,15 +2254,82 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
     }
 
     // Authorization check
-    const isCustomer = (booking as any).customerId?._id?.toString() === userId;
+    const bookingCustomerId =
+      (booking as any).customerId?._id?.toString() ?? (booking as any).customerId?.toString();
+    const isCustomer = bookingCustomerId === userId;
     const isProvider = (booking as any).providerId?._id?.toString() === userId;
     const isAdmin = userRole === 'admin' || userRole === 'super_admin';
 
-    if (!isCustomer && !isProvider && !isAdmin) {
+    let isGuestOwnerByEmail = false;
+    if (!isCustomer && !isProvider && !isAdmin && userRole === 'customer') {
+      const viewer = await User.findById(userId).select('email').lean();
+      const guestEmail = (booking as any).guestInfo?.email;
+      if (
+        viewer?.email &&
+        guestEmail &&
+        (booking as any).isGuestBooking &&
+        !bookingCustomerId &&
+        viewer.email.toLowerCase().trim() === guestEmail.toLowerCase().trim()
+      ) {
+        isGuestOwnerByEmail = true;
+      }
+    }
+
+    if (!isCustomer && !isProvider && !isAdmin && !isGuestOwnerByEmail) {
       throw new ApiError(403, 'Access denied');
     }
 
-    return booking;
+    // FIX: Extract flat timestamp fields from statusHistory for frontend compatibility
+    const bookingObj = (booking as any).toObject ? (booking as any).toObject() : booking;
+    const statusTimestamps = this.extractTimestampsFromHistory(bookingObj.statusHistory);
+
+    // FIX: Add estimatedDuration alias for frontend compatibility (frontend expects estimatedDuration, backend returns duration)
+    return {
+      ...bookingObj,
+      estimatedDuration: bookingObj.duration,
+      ...statusTimestamps
+    };
+  }
+
+  // ========================================
+  // Helper method to extract timestamps from statusHistory
+  // ========================================
+  private extractTimestampsFromHistory(statusHistory: Array<{ status: string; timestamp: Date | string }>): Record<string, string | undefined> {
+    const timestamps: Record<string, string | undefined> = {
+      confirmedAt: undefined,
+      startedAt: undefined,
+      completedAt: undefined,
+      cancelledAt: undefined
+    };
+
+    if (!statusHistory || !Array.isArray(statusHistory)) {
+      return timestamps;
+    }
+
+    for (const entry of statusHistory) {
+      const timestamp = entry.timestamp instanceof Date
+        ? entry.timestamp.toISOString()
+        : (typeof entry.timestamp === 'string' ? entry.timestamp : undefined);
+
+      if (!timestamp) continue;
+
+      switch (entry.status) {
+        case 'confirmed':
+          if (!timestamps.confirmedAt) timestamps.confirmedAt = timestamp;
+          break;
+        case 'in_progress':
+          if (!timestamps.startedAt) timestamps.startedAt = timestamp;
+          break;
+        case 'completed':
+          if (!timestamps.completedAt) timestamps.completedAt = timestamp;
+          break;
+        case 'cancelled':
+          if (!timestamps.cancelledAt) timestamps.cancelledAt = timestamp;
+          break;
+      }
+    }
+
+    return timestamps;
   }
 
   // ========================================
@@ -1835,10 +2341,19 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
     filters?: BookingFiltersDTO,
     pagination?: { page?: number; limit?: number }
   ): Promise<{ bookings: any[]; pagination: any }> {
-    const page = pagination?.page || 1;
+    const page = filters?.page || pagination?.page || 1;
     // FIX: Enforce maximum pagination limit to prevent excessive queries
-    const limit = Math.min(pagination?.limit || 20, 100);
+    const limit = Math.min(filters?.limit || pagination?.limit || 20, 100);
     const skip = (page - 1) * limit;
+
+    const sortField = filters?.sortBy || 'scheduledDate';
+    const sortDirection = filters?.sortOrder === 'asc' ? 1 : -1;
+    const sortKey =
+      sortField === 'totalAmount' ? 'pricing.totalAmount' : sortField;
+    const sort: Record<string, 1 | -1> = { [sortKey]: sortDirection };
+    if (sortField === 'scheduledDate') {
+      sort.scheduledTime = sortDirection;
+    }
 
     const query: any = { providerId: new mongoose.Types.ObjectId(providerId), deletedAt: { $exists: false } }; // FIX: Exclude deleted bookings
 
@@ -1854,6 +2369,11 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
       query.$or = [
         { bookingNumber: { $regex: filters.search, $options: 'i' } }
       ];
+    }
+
+    // Category filter - filter by service category
+    if (filters?.category) {
+      query['serviceId.category'] = filters.category;
     }
 
     // PERFORMANCE FIX: Use projection to limit fields returned, reducing data transfer
@@ -1877,7 +2397,7 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
       Booking.find(query, projection)
         .populate('customerId', 'firstName lastName phone')
         .populate('serviceId', 'name category duration images')
-        .sort({ scheduledDate: 1, scheduledTime: 1 })
+        .sort(sort)
         .skip(skip)
         .limit(limit)
         .lean(),
@@ -1915,7 +2435,7 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
     const session = await mongoose.startSession();
 
     try {
-      session.startTransaction();
+      session.startTransaction(DEFAULT_MONGO_TRANSACTION_OPTIONS);
 
       // 1. Read booking with session to ensure consistency
       const booking = await Booking.findOne({
@@ -1926,6 +2446,10 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
 
       if (!booking) {
         throw new ApiError(404, 'Booking not found or no longer available');
+      }
+
+      if (booking.providerId.toString() !== providerId) {
+        throw new ApiError(403, 'Booking does not belong to this provider');
       }
 
       // 2. Check for time slot conflicts WITHIN transaction (atomic check)
@@ -1986,6 +2510,7 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
       });
 
       await session.commitTransaction();
+      void this.syncProviderAnalytics(providerId);
       return confirmedBooking;
 
     } catch (error) {
@@ -2016,10 +2541,7 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
     const session = await mongoose.startSession();
 
     try {
-      session.startTransaction({
-        readConcern: { level: 'snapshot' },
-        writeConcern: { w: 'majority' }
-      });
+      session.startTransaction(DEFAULT_MONGO_TRANSACTION_OPTIONS);
 
       // FIX: Add explicit ownership verification (same pattern as acceptBooking)
       // FIX: Include deletedAt check in the query to prevent operating on deleted bookings
@@ -2117,6 +2639,7 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
       }
 
       await session.commitTransaction();
+      void this.syncProviderAnalytics(providerId);
       return booking;
 
     } catch (error) {
@@ -2147,10 +2670,7 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
     const session = await mongoose.startSession();
 
     try {
-      session.startTransaction({
-        readConcern: { level: 'snapshot' },
-        writeConcern: { w: 'majority' }
-      });
+      session.startTransaction(DEFAULT_MONGO_TRANSACTION_OPTIONS);
 
       // FIX: Add explicit isDeleted check to prevent operating on deleted bookings
       const booking = await Booking.findOne({
@@ -2192,6 +2712,13 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
         providerId: booking.providerId,
       });
 
+      // Emit socket events for real-time updates
+      const socketServer = getSocketServer();
+      if (socketServer) {
+        socketServer.emitBookingStarted(booking._id.toString(), booking.providerId.toString());
+        socketServer.emitBookingStartedToCustomer(booking._id.toString(), booking.customerId?.toString() || '', booking.providerId.toString());
+      }
+
       return booking;
 
     } catch (error) {
@@ -2222,10 +2749,7 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
     const session = await mongoose.startSession();
 
     try {
-      session.startTransaction({
-        readConcern: { level: 'snapshot' },
-        writeConcern: { w: 'majority' }
-      });
+      session.startTransaction(DEFAULT_MONGO_TRANSACTION_OPTIONS);
 
       // FIX: Add explicit isDeleted check to prevent operating on deleted bookings
       const booking = await Booking.findOne({
@@ -2257,36 +2781,87 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
 
       await booking.save({ session });
 
-      await session.commitTransaction();
-
-      // CRITICAL FIX: Process booking completion - add provider earnings to pending balance
-      // This is done outside the transaction since it may involve external services (Stripe, etc.)
+      // CRITICAL FIX: Process booking completion within the same transaction
+      // Calculate commission and update provider wallet atomically
       try {
-        const { processBookingCompletion } = require('./settlement.service');
-        const settlementResult = await processBookingCompletion(bookingId);
+        const { calculateCommission } = require('./settlement.service');
+        const Wallet = mongoose.model('Wallet');
 
-        if (!settlementResult.success) {
-          logger.warn('Booking completion processed but settlement skipped', {
-            bookingId,
-            action: 'SETTLEMENT_SKIPPED',
+        // Calculate commission
+        const { commission, platformFee, netAmount: providerEarnings } = await calculateCommission(bookingId);
+
+        // Update provider wallet atomically within the transaction
+        const providerWallet = await Wallet.findOne({ userId: booking.providerId }).session(session);
+
+        if (!providerWallet) {
+          // Create wallet if it doesn't exist
+          const newWallet = new Wallet({
+            userId: booking.providerId,
+            balance: 0,
+            pendingBalance: providerEarnings,
+            currency: 'AED',
+            transactions: [{
+              id: `txn_${crypto.randomUUID()}`,
+              type: 'credit',
+              amount: providerEarnings,
+              description: `Earnings from booking ${booking.bookingNumber}`,
+              reference: bookingId,
+              referenceType: 'commission',
+              status: 'completed',
+              balanceAfter: providerEarnings,
+              createdAt: new Date(),
+            }],
+            totalEarned: providerEarnings,
+            version: 1,
           });
+          await newWallet.save({ session });
         } else {
-          logger.info('Booking completion settlement processed', {
-            bookingId,
-            settlementId: settlementResult.settlementId,
-            providerEarnings: settlementResult.providerEarnings,
-            commission: settlementResult.commission,
-            action: 'SETTLEMENT_PROCESSED',
-          });
+          // Update existing wallet atomically within transaction
+          await Wallet.findOneAndUpdate(
+            { userId: booking.providerId },
+            {
+              $inc: {
+                pendingBalance: providerEarnings,
+                totalEarned: providerEarnings,
+              },
+              $push: {
+                transactions: {
+                  id: `txn_${crypto.randomUUID()}`,
+                  type: 'credit',
+                  amount: providerEarnings,
+                  description: `Earnings from booking ${booking.bookingNumber}`,
+                  reference: bookingId,
+                  referenceType: 'commission',
+                  status: 'completed',
+                  balanceAfter: (providerWallet.pendingBalance || 0) + providerEarnings,
+                  createdAt: new Date(),
+                },
+              },
+            },
+            { session }
+          );
         }
+
+        logger.info('Booking completion settlement processed within transaction', {
+          bookingId,
+          providerEarnings,
+          commission,
+          platformFee,
+          action: 'SETTLEMENT_PROCESSED_IN_TXN',
+        });
       } catch (settlementError) {
-        // Log error but don't fail the booking completion
-        logger.error('Failed to process booking settlement', {
+        // CRITICAL: Abort transaction if settlement processing fails
+        await session.abortTransaction();
+        logger.error('Failed to process booking settlement - transaction aborted', {
           bookingId,
           error: settlementError instanceof Error ? settlementError.message : String(settlementError),
-          action: 'SETTLEMENT_ERROR',
+          action: 'SETTLEMENT_ERROR_ABORTED',
         });
+        throw new ApiError(500, 'Failed to process booking settlement');
       }
+
+      // Commit transaction only after successful settlement processing
+      await session.commitTransaction();
 
       eventBus.publish(EVENT_TYPES.BOOKING_COMPLETED, {
         bookingId: booking._id,
@@ -2295,6 +2870,8 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
         providerId: booking.providerId,
         totalAmount: booking.pricing?.totalAmount,
       });
+
+      void this.syncProviderAnalytics(providerId);
 
       return booking;
 
@@ -2345,7 +2922,7 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
   // ========================================
 
   async trackBooking(bookingNumber: string): Promise<any> {
-    const booking = await Booking.findOne({ bookingNumber, deletedAt: { $exists: false } }) // FIX: Exclude deleted bookings
+    const booking = await Booking.findOne({ bookingNumber, deletedAt: { $exists: false } })
       .populate('serviceId', 'name category subcategory images')
       .populate('providerId', 'firstName lastName businessInfo phone');
 
@@ -2353,23 +2930,47 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
       throw new ApiError(404, 'Booking not found');
     }
 
+    const guest = booking.guestInfo;
+    const customerSnapshot = booking.customerInfo as
+      | { firstName?: string; lastName?: string; email?: string; phone?: string }
+      | undefined;
+
     return {
+      _id: booking._id,
       bookingNumber: booking.bookingNumber,
       status: booking.status,
       statusHistory: booking.statusHistory || [],
-      service: booking.serviceId ? {
-        name: (booking.serviceId as any).name,
-        category: (booking.serviceId as any).category,
-        subcategory: (booking.serviceId as any).subcategory,
-        image: (booking.serviceId as any).images?.[0]
-      } : undefined,
+      service: booking.serviceId
+        ? {
+            name: (booking.serviceId as any).name,
+            category: (booking.serviceId as any).category,
+            subcategory: (booking.serviceId as any).subcategory,
+            image: (booking.serviceId as any).images?.[0],
+          }
+        : undefined,
       scheduledDate: booking.scheduledDate,
       scheduledTime: booking.scheduledTime,
-      provider: booking.providerId ? {
-        name: `${(booking.providerId as any).firstName} ${(booking.providerId as any).lastName}`,
-        businessName: (booking.providerId as any).businessInfo?.businessName,
-        phone: (booking.providerId as any).phone
-      } : undefined
+      duration: booking.duration,
+      location: booking.location,
+      pricing: booking.pricing,
+      isGuestBooking: Boolean(booking.isGuestBooking),
+      createdAt: booking.createdAt,
+      provider: booking.providerId
+        ? {
+            name: `${(booking.providerId as any).firstName} ${(booking.providerId as any).lastName}`,
+            businessName: (booking.providerId as any).businessInfo?.businessName,
+            phone: (booking.providerId as any).phone,
+          }
+        : undefined,
+      customerInfo: booking.isGuestBooking && guest
+        ? {
+            firstName: guest.name?.split(' ')[0],
+            lastName: guest.name?.split(' ').slice(1).join(' '),
+            email: guest.email,
+            phone: guest.phone,
+          }
+        : customerSnapshot,
+      guestEmail: guest?.email,
     };
   }
 
@@ -2382,7 +2983,13 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
    * SECURITY FIX: All prices are calculated server-side, client prices are NEVER trusted
    * This prevents price manipulation attacks
    */
-  private calculatePricing(service: any, addOns?: any[], selectedDuration?: number): any {
+  private calculatePricing(
+    service: any,
+    addOns?: any[],
+    selectedDuration?: number,
+    scheduledDate?: Date,
+    metadata?: { variantDuration?: number; variantPrice?: number }
+  ): any {
     // CRITICAL: Server-side price calculation - NEVER trust client prices
     // Validate service exists and is active
     if (!service || !service.isActive) {
@@ -2401,8 +3008,20 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
     // FIX: Enforce decimal precision (max 2 decimal places for currency)
     basePrice = Math.round(basePrice * 100) / 100;
 
-    // Check for duration options
-    if (selectedDuration && service.durationOptions && service.durationOptions.length > 0) {
+    // Subcategory / marketplace variant (metadata from booking wizard)
+    if (
+      selectedDuration &&
+      typeof metadata?.variantPrice === 'number' &&
+      metadata.variantPrice > 0 &&
+      (metadata.variantDuration === undefined || metadata.variantDuration === selectedDuration)
+    ) {
+      const maxAllowedPrice = basePrice * 10;
+      if (metadata.variantPrice > maxAllowedPrice) {
+        throw new ApiError(400, 'Invalid variant price');
+      }
+      bookingDuration = metadata.variantDuration ?? selectedDuration;
+      basePrice = Math.round(metadata.variantPrice * 100) / 100;
+    } else if (selectedDuration && service.durationOptions && service.durationOptions.length > 0) {
       const selectedOption = service.durationOptions.find((opt: any) => opt.duration === selectedDuration);
       if (selectedOption) {
         bookingDuration = selectedOption.duration;
@@ -2425,11 +3044,19 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
       }
     }
 
-    // FIX: Enforce decimal precision throughout
-    const subtotal = Math.round((basePrice + addOnTotal) * 100) / 100;
-    const tax = Math.round(subtotal * 0.05 * 100) / 100; // 5% UAE VAT
+    const policy = getPlatformPolicySync();
+    let subtotal = Math.round((basePrice + addOnTotal) * 100) / 100;
+
+    if (scheduledDate) {
+      const surchargePct = getScheduleSurchargePercent(scheduledDate, policy);
+      if (surchargePct > 0) {
+        subtotal = Math.round(subtotal * (1 + surchargePct / 100) * 100) / 100;
+      }
+    }
+
+    const tax = calculateTaxAmount(subtotal, policy);
     const totalAmount = Math.round((subtotal + tax) * 100) / 100;
-    const currency = service.price?.currency || 'AED';
+    const currency = service.price?.currency || policy.currency || 'AED';
 
     // FIX: Validate currency is allowed
     const allowedCurrencies = ['AED', 'USD', 'INR', 'EUR', 'GBP'];
@@ -2603,122 +3230,13 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
     return messages[type]?.[recipient] || 'Your booking has been updated.';
   }
 
-  private async updateProviderAnalytics(providerId: any): Promise<void> {
+  private async syncProviderAnalytics(providerId: string | mongoose.Types.ObjectId): Promise<void> {
     try {
-      const providerObjectId = providerId instanceof mongoose.Types.ObjectId
-        ? providerId
-        : new mongoose.Types.ObjectId(providerId);
-
-      const now = new Date();
-      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-
-      // PERFORMANCE FIX: Single aggregation pipeline to get all stats at once
-      // This replaces multiple sequential queries with 1 efficient pipeline
-      const [analyticsStats] = await Promise.all([
-        Booking.aggregate([
-          { $match: { providerId: providerObjectId } },
-          {
-            $facet: {
-              // Status breakdown and total bookings
-              statusStats: [
-                { $group: {
-                  _id: '$status',
-                  count: { $sum: 1 },
-                }},
-              ],
-              // Unique customers and customer bookings
-              customerStats: [
-                { $match: { customerId: { $exists: true, $ne: null } } },
-                { $group: {
-                  _id: null,
-                  uniqueCustomers: { $addToSet: '$customerId' },
-                  totalCustomerBookings: { $sum: 1 },
-                }},
-                { $project: {
-                  _id: 0,
-                  uniqueCustomers: { $size: {
-                    $filter: {
-                      input: '$uniqueCustomers',
-                      as: 'cid',
-                      cond: { $ne: ['$$cid', null] }
-                    }
-                  }},
-                  totalCustomerBookings: 1,
-                }},
-              ],
-              // Revenue stats (completed bookings)
-              revenueStats: [
-                { $match: { status: 'completed' } },
-                { $group: {
-                  _id: null,
-                  totalRevenue: { $sum: '$pricing.totalAmount' },
-                  avgValue: { $avg: '$pricing.totalAmount' },
-                  count: { $sum: 1 },
-                }},
-              ],
-              // Monthly revenue (completed in current month)
-              monthlyStats: [
-                { $match: {
-                  status: 'completed',
-                  completedAt: { $gte: startOfMonth },
-                }},
-                { $group: {
-                  _id: null,
-                  monthlyEarnings: { $sum: '$pricing.totalAmount' },
-                }},
-              ],
-            },
-          },
-        ]),
-      ]);
-
-      // Extract results from facet
-      const result = analyticsStats[0] || {};
-      const statusStats: Array<{_id: string; count: number}> = result.statusStats || [];
-      const customerData = result.customerStats?.[0] || { uniqueCustomers: 0, totalCustomerBookings: 0 };
-      const revenueData = result.revenueStats?.[0] || { totalRevenue: 0, avgValue: 0, count: 0 };
-      const monthlyData = result.monthlyStats?.[0] || { monthlyEarnings: 0 };
-
-      // Process status stats
-      const statusMap = new Map<string, number>(statusStats.map((s) => [s._id, s.count]));
-      const totalBookings = Array.from(statusMap.values()).reduce((a, b) => a + b, 0);
-      const completedBookings = statusMap.get('completed') || 0;
-      const cancelledBookings = statusMap.get('cancelled') || 0;
-      const completionRate = totalBookings > 0 ? Math.round((completedBookings / totalBookings) * 100) : 0;
-
-      // Process customer stats
-      const uniqueCustomers = customerData.uniqueCustomers || 0;
-      const totalCustomerBookings = customerData.totalCustomerBookings || 0;
-      const repeatCustomers = Math.max(0, totalCustomerBookings - uniqueCustomers);
-      const repeatCustomerRate = uniqueCustomers > 0 ? Math.round((repeatCustomers / uniqueCustomers) * 100) : 0;
-
-      // Process revenue stats
-      const totalEarnings = revenueData.totalRevenue || 0;
-      const averageBookingValue = Math.round(revenueData.avgValue || 0);
-      const currentMonthEarnings = monthlyData.monthlyEarnings || 0;
-
-      await ProviderProfile.findOneAndUpdate(
-        { userId: providerId },
-        {
-          $set: {
-            'analytics.bookingStats.totalBookings': totalBookings,
-            'analytics.bookingStats.completedBookings': completedBookings,
-            'analytics.bookingStats.cancelledBookings': cancelledBookings,
-            'analytics.bookingStats.repeatCustomerRate': repeatCustomerRate,
-            'analytics.bookingStats.averageBookingValue': averageBookingValue,
-            'analytics.performanceMetrics.completionRate': completionRate,
-            'analytics.customerMetrics.totalCustomers': uniqueCustomers,
-            'analytics.customerMetrics.repeatCustomers': repeatCustomers,
-            'analytics.customerMetrics.customerRetentionRate': repeatCustomerRate,
-            'analytics.revenueStats.totalEarnings': totalEarnings,
-            'analytics.revenueStats.currentMonthEarnings': currentMonthEarnings,
-          },
-        }
-      );
+      await ProviderProfile.recalculateAllAnalytics(providerId.toString());
     } catch (error) {
-      logger.warn('Failed to update provider analytics', {
+      logger.warn('Failed to sync provider analytics', {
         context: 'BookingService',
-        action: 'UPDATE_ANALYTICS_ERROR',
+        action: 'SYNC_ANALYTICS_ERROR',
         providerId: providerId.toString(),
         error: error instanceof Error ? error.message : String(error),
       });
@@ -2873,6 +3391,137 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
       });
       return { success: false, message: 'Internal error' };
     }
+  }
+
+  // ========================================
+  // Get Booking Count (Interface Implementation)
+  // ========================================
+
+  /**
+   * Get booking count for a customer with optional status filter
+   * Supports counting all bookings or filtering by status
+   * Used for dashboard badges and quick stats
+   *
+   * @param customerId - The customer ID to count bookings for
+   * @param options - Optional filter options (status, etc.)
+   * @returns Object with total count and optionally counts by status
+   */
+  async getCustomerBookingCount(
+    customerId: string,
+    options?: { status?: string; activeOnly?: boolean }
+  ): Promise<{ count: number; statusCounts?: Record<string, number> }> {
+    // SECURITY FIX: Input validation for customer ID
+    if (!mongoose.Types.ObjectId.isValid(customerId)) {
+      throw new ApiError(400, 'Invalid customer ID');
+    }
+
+    const query: Record<string, unknown> = {
+      customerId: new mongoose.Types.ObjectId(customerId),
+      deletedAt: { $exists: false }
+    };
+
+    // Handle status filtering
+    if (options?.status) {
+      if (options.status === 'active') {
+        // Active bookings = not in terminal states
+        query.status = { $nin: ['cancelled', 'completed', 'no_show'] };
+      } else {
+        query.status = options.status;
+      }
+    }
+
+    // Count with the filter
+    const count = await Booking.countDocuments(query);
+
+    // If activeOnly is true, also return breakdown by status
+    if (options?.activeOnly || options?.status === 'active') {
+      const statusBreakdown = await Booking.aggregate([
+        {
+          $match: {
+            customerId: new mongoose.Types.ObjectId(customerId),
+            deletedAt: { $exists: false },
+            status: { $nin: ['cancelled', 'completed', 'no_show'] }
+          }
+        },
+        {
+          $group: {
+            _id: '$status',
+            count: { $sum: 1 }
+          }
+        }
+      ]);
+
+      const statusCounts: Record<string, number> = {};
+      statusBreakdown.forEach(item => {
+        statusCounts[item._id] = item.count;
+      });
+
+      return { count, statusCounts };
+    }
+
+    return { count };
+  }
+
+  /**
+   * Get booking count for a provider with optional status filter
+   * Used for provider dashboard badges and quick stats
+   *
+   * @param providerId - The provider ID to count bookings for
+   * @param options - Optional filter options
+   * @returns Object with total count and optionally counts by status
+   */
+  async getProviderBookingCount(
+    providerId: string,
+    options?: { status?: string; activeOnly?: boolean }
+  ): Promise<{ count: number; statusCounts?: Record<string, number> }> {
+    // SECURITY FIX: Input validation for provider ID
+    if (!mongoose.Types.ObjectId.isValid(providerId)) {
+      throw new ApiError(400, 'Invalid provider ID');
+    }
+
+    const query: Record<string, unknown> = {
+      providerId: new mongoose.Types.ObjectId(providerId),
+      deletedAt: { $exists: false }
+    };
+
+    // Handle status filtering
+    if (options?.status) {
+      if (options.status === 'active') {
+        query.status = { $nin: ['cancelled', 'completed', 'no_show'] };
+      } else {
+        query.status = options.status;
+      }
+    }
+
+    const count = await Booking.countDocuments(query);
+
+    // If activeOnly is true, also return breakdown by status
+    if (options?.activeOnly || options?.status === 'active') {
+      const statusBreakdown = await Booking.aggregate([
+        {
+          $match: {
+            providerId: new mongoose.Types.ObjectId(providerId),
+            deletedAt: { $exists: false },
+            status: { $nin: ['cancelled', 'completed', 'no_show'] }
+          }
+        },
+        {
+          $group: {
+            _id: '$status',
+            count: { $sum: 1 }
+          }
+        }
+      ]);
+
+      const statusCounts: Record<string, number> = {};
+      statusBreakdown.forEach(item => {
+        statusCounts[item._id] = item.count;
+      });
+
+      return { count, statusCounts };
+    }
+
+    return { count };
   }
 }
 

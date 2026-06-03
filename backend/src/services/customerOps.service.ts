@@ -173,22 +173,34 @@ export class CustomerOpsService {
     const sortObj: Record<string, 1 | -1> = {};
     sortObj[sortBy] = sortOrder === 'asc' ? 1 : -1;
 
-    // Execute query with pagination
+    // Execute query with pagination - stats aggregation runs in single query (no separate collection scan)
     const skip = (page - 1) * limit;
 
-    const [metricsList, total, allStats] = await Promise.all([
+    const [metricsList, total, statsAggregation] = await Promise.all([
       CustomerMetrics.find(query)
         .sort(sortObj)
         .skip(skip)
         .limit(limit)
         .lean(),
       CustomerMetrics.countDocuments(query),
+      // Single aggregation for all stats: total, avgTrustScore, tier and risk distributions
       CustomerMetrics.aggregate([
         {
           $group: {
             _id: null,
             totalCustomers: { $sum: 1 },
             avgTrustScore: { $avg: '$trustScore' },
+            // Tier distribution
+            tier_new: { $sum: { $cond: [{ $eq: ['$tier', 'new'] }, 1, 0] } },
+            tier_regular: { $sum: { $cond: [{ $eq: ['$tier', 'regular'] }, 1, 0] } },
+            tier_trusted: { $sum: { $cond: [{ $eq: ['$tier', 'trusted'] }, 1, 0] } },
+            tier_flagged: { $sum: { $cond: [{ $eq: ['$tier', 'flagged'] }, 1, 0] } },
+            tier_banned: { $sum: { $cond: [{ $eq: ['$tier', 'banned'] }, 1, 0] } },
+            // Risk distribution
+            risk_low: { $sum: { $cond: [{ $eq: ['$riskLevel', 'low'] }, 1, 0] } },
+            risk_medium: { $sum: { $cond: [{ $eq: ['$riskLevel', 'medium'] }, 1, 0] } },
+            risk_high: { $sum: { $cond: [{ $eq: ['$riskLevel', 'high'] }, 1, 0] } },
+            risk_critical: { $sum: { $cond: [{ $eq: ['$riskLevel', 'critical'] }, 1, 0] } },
           },
         },
       ]),
@@ -226,27 +238,22 @@ export class CustomerOpsService {
       };
     });
 
-    // Calculate distribution stats
+    // Build distribution maps from single aggregation result
+    const stats = statsAggregation[0];
     const tierDistribution: Record<CustomerTier, number> = {
-      new: 0,
-      regular: 0,
-      trusted: 0,
-      flagged: 0,
-      banned: 0,
+      new: stats?.tier_new || 0,
+      regular: stats?.tier_regular || 0,
+      trusted: stats?.tier_trusted || 0,
+      flagged: stats?.tier_flagged || 0,
+      banned: stats?.tier_banned || 0,
     };
 
     const riskDistribution: Record<string, number> = {
-      low: 0,
-      medium: 0,
-      high: 0,
-      critical: 0,
+      low: stats?.risk_low || 0,
+      medium: stats?.risk_medium || 0,
+      high: stats?.risk_high || 0,
+      critical: stats?.risk_critical || 0,
     };
-
-    const allMetrics = await CustomerMetrics.find({}).select('tier riskLevel').lean();
-    allMetrics.forEach((m) => {
-      tierDistribution[m.tier as CustomerTier] = (tierDistribution[m.tier as CustomerTier] || 0) + 1;
-      riskDistribution[m.riskLevel] = (riskDistribution[m.riskLevel] || 0) + 1;
-    });
 
     return {
       customers,
@@ -254,8 +261,8 @@ export class CustomerOpsService {
       page,
       pages: Math.ceil(total / limit),
       stats: {
-        totalCustomers: allStats[0]?.totalCustomers || 0,
-        averageTrustScore: Math.round(allStats[0]?.avgTrustScore || 0),
+        totalCustomers: stats?.totalCustomers || 0,
+        averageTrustScore: Math.round(stats?.avgTrustScore || 0),
         tierDistribution,
         riskDistribution,
       },
@@ -575,7 +582,6 @@ export class CustomerOpsService {
     adminId: string
   ): Promise<AdminActionResult> {
     const userObjectId = new Types.ObjectId(userId);
-    const adminObjectId = new Types.ObjectId(adminId);
 
     const metrics = await CustomerMetrics.getOrCreateForUser(userObjectId);
 

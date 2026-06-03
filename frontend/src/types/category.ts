@@ -13,9 +13,17 @@ export interface Subcategory {
   description: string;
   icon: string;
   color: string;
-  sortOrder?: number;
+  sortOrder: number; // Required with default value
   isActive?: boolean;
   metadata?: SubcategoryMetadata;
+}
+
+// Category metadata with aggregated stats
+export interface CategoryMetadata {
+  totalProviders: number;
+  totalServices: number;
+  averageRating: number;
+  popularityScore: number;
 }
 
 export interface CategorySEO {
@@ -37,7 +45,7 @@ export interface Category {
   subcategoryCount: number;
   subcategories: Subcategory[];
   imageUrl?: string;
-  metadata?: Record<string, unknown>;
+  metadata?: CategoryMetadata;
   seo?: CategorySEO;
 }
 

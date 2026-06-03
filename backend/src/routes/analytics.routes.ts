@@ -58,14 +58,14 @@ function parseAnalyticsDateRange(query: Request['query']): { start: Date; end: D
  * @desc    Get analytics overview (all metrics)
  * @access  Admin
  */
-router.get('/overview', authenticate, requireRole('admin'), asyncHandler(async (_req: Request, res: Response) => {
-  const { period = 'month' } = _req.query;
+router.get('/overview', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
+  const { period = 'month' } = req.query;
 
   const [bookings, providers, customers, revenue] = await Promise.all([
-    getBookingAnalytics(period as string),
-    getProviderAnalytics(period as string),
-    getCustomerAnalytics(period as string),
-    getRevenueAnalytics(period as string),
+    getBookingAnalytics(period as string, req),
+    getProviderAnalytics(period as string, req),
+    getCustomerAnalytics(period as string, req),
+    getRevenueAnalytics(period as string, req),
   ]);
 
   res.json({
@@ -85,10 +85,10 @@ router.get('/overview', authenticate, requireRole('admin'), asyncHandler(async (
  * @desc    Get booking analytics
  * @access  Admin
  */
-router.get('/bookings', authenticate, requireRole('admin'), asyncHandler(async (_req: Request, res: Response) => {
-  const { period = 'month' } = _req.query;
+router.get('/bookings', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
+  const { period = 'month' } = req.query;
 
-  const analytics = await getBookingAnalytics(period as string);
+  const analytics = await getBookingAnalytics(period as string, req);
 
   res.json({
     success: true,
@@ -101,9 +101,9 @@ router.get('/bookings', authenticate, requireRole('admin'), asyncHandler(async (
  * @desc    Get provider analytics
  * @access  Admin
  */
-router.get('/providers', authenticate, requireRole('admin'), asyncHandler(async (_req: Request, res: Response) => {
-  const { period = 'month' } = _req.query;
-  const analytics = await getProviderAnalytics(period as string);
+router.get('/providers', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
+  const { period = 'month' } = req.query;
+  const analytics = await getProviderAnalytics(period as string, req);
 
   res.json({
     success: true,
@@ -116,9 +116,9 @@ router.get('/providers', authenticate, requireRole('admin'), asyncHandler(async 
  * @desc    Get customer analytics
  * @access  Admin
  */
-router.get('/customers', authenticate, requireRole('admin'), asyncHandler(async (_req: Request, res: Response) => {
-  const { period = 'month' } = _req.query;
-  const analytics = await getCustomerAnalytics(period as string);
+router.get('/customers', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
+  const { period = 'month' } = req.query;
+  const analytics = await getCustomerAnalytics(period as string, req);
 
   res.json({
     success: true,
@@ -131,10 +131,10 @@ router.get('/customers', authenticate, requireRole('admin'), asyncHandler(async 
  * @desc    Get revenue analytics
  * @access  Admin
  */
-router.get('/revenue', authenticate, requireRole('admin'), asyncHandler(async (_req: Request, res: Response) => {
-  const { period = 'month' } = _req.query;
+router.get('/revenue', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
+  const { period = 'month' } = req.query;
 
-  const analytics = await getRevenueAnalytics(period as string);
+  const analytics = await getRevenueAnalytics(period as string, req);
 
   res.json({
     success: true,
@@ -213,7 +213,9 @@ router.get('/dashboard', authenticate, requireRole('admin'), asyncHandler(async 
     Booking.countDocuments({
       createdAt: { $gte: startOfMonth },
     }),
-    ProviderProfile.countDocuments({ verificationStatus: 'pending' }),
+    ProviderProfile.countDocuments({
+      'verificationStatus.overall': { $in: ['pending', 'in_progress'] },
+    }),
   ]);
 
   res.json({

@@ -16,6 +16,7 @@ import crypto from 'crypto';
 import Joi from 'joi';
 import Booking from '../models/booking.model';
 import { IUser } from '../models/user.model';
+import mongoose from 'mongoose';
 
 const router = Router();
 
@@ -50,7 +51,8 @@ const IDEMPOTENCY_TTL = 24 * 60 * 60;
 /**
  * @route   POST /api/payments/create-intent
  * @desc    Create a payment intent for a booking
- * @access  Private (Customer)
+ * @access  Private (Customer or Provider owning the booking)
+ * @security Ownership check: Only booking customer or assigned provider can create payment intent
  */
 router.post('/create-intent', paymentLimiter, authenticate, asyncHandler(async (req: Request, res: Response) => {
   const { error, value } = createPaymentIntentSchema.validate(req.body);
@@ -61,6 +63,33 @@ router.post('/create-intent', paymentLimiter, authenticate, asyncHandler(async (
   const { bookingId } = value;
   const user = req.user as IUser;
   const userId = user._id;
+
+  // SECURITY FIX: Verify user owns the booking or is the assigned provider
+  const booking = await Booking.findById(bookingId).lean();
+  if (!booking) {
+    throw new ApiError(404, 'Booking not found');
+  }
+
+  // SECURITY FIX: Enhanced ownership verification for guest bookings
+  // Check if user is the customer (owner) or the assigned provider
+  const isCustomer = booking.customerId?.toString() === userId.toString();
+  const isProvider = booking.providerId.toString() === userId.toString();
+
+  // SECURITY FIX: For guest bookings, verify ownership via guest email from booking
+  // This allows the same guest who made the booking to create payment intent
+  let hasGuestAccess = false;
+  if (!isCustomer && !isProvider) {
+    // Allow access if user is the guest with matching email from booking
+    const guestEmail = req.headers['x-guest-email'] as string;
+    if (guestEmail && booking.guestInfo?.email) {
+      // Case-insensitive comparison to handle email format variations
+      hasGuestAccess = guestEmail.toLowerCase() === booking.guestInfo.email.toLowerCase();
+    }
+  }
+
+  if (!isCustomer && !isProvider && !hasGuestAccess && user.role !== 'admin') {
+    throw new ApiError(403, 'You do not have permission to create a payment intent for this booking');
+  }
 
   // Get or generate idempotency key
   const idempotencyKey = (req.headers['idempotency-key'] as string) || crypto.randomUUID();
@@ -116,12 +145,20 @@ router.post('/create-intent', paymentLimiter, authenticate, asyncHandler(async (
  * @desc    Extend slot lock TTL during long checkout/payment processes
  * @access  Private (Customer)
  * @security Verifies user owns the booking before extending lock
+ * SECURITY FIX: Validates bookingId is a proper MongoDB ObjectId
  */
 router.post('/heartbeat', paymentLimiter, authenticate, asyncHandler(async (req: Request, res: Response) => {
   const heartbeatSchema = Joi.object({
-    bookingId: Joi.string().required().messages({
+    bookingId: Joi.string().required().custom((value, helpers) => {
+      // SECURITY FIX: Validate MongoDB ObjectId format to prevent injection
+      if (!mongoose.Types.ObjectId.isValid(value)) {
+        return helpers.error('string.pattern.base');
+      }
+      return value;
+    }).messages({
       'string.empty': 'Booking ID is required',
       'any.required': 'Booking ID is required',
+      'string.pattern.base': 'Invalid booking ID format',
     }),
     sessionId: Joi.string().required().messages({
       'string.empty': 'Session ID is required',

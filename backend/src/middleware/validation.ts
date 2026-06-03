@@ -6,6 +6,30 @@ import logger from '../utils/logger';
 // BOOKING VALIDATION SCHEMAS
 // ===================================
 
+/** Shared metadata — variant fields must be allowed or Joi strips them before pricing */
+const bookingMetadataSchema = Joi.object({
+  bookingSource: Joi.string()
+    .valid('search', 'profile', 'recommendation', 'repeat')
+    .default('search'),
+  deviceType: Joi.string()
+    .valid('mobile', 'desktop', 'tablet')
+    .default('desktop'),
+  sessionId: Joi.string().optional(),
+  idempotencyKey: Joi.string()
+    .min(16)
+    .max(64)
+    .pattern(/^[a-zA-Z0-9_-]+$/)
+    .required()
+    .messages({
+      'string.min': 'Idempotency key must be at least 16 characters',
+      'string.max': 'Idempotency key cannot exceed 64 characters',
+      'any.required': 'Idempotency key is required to prevent duplicate bookings',
+    }),
+  variantDuration: Joi.number().integer().min(15).max(480).optional(),
+  variantPrice: Joi.number().min(0).optional(),
+  selectedVariantIndex: Joi.number().integer().min(0).optional(),
+});
+
 const createBookingSchema = Joi.object({
   serviceId: Joi.string()
     .pattern(/^[0-9a-fA-F]{24}$/)
@@ -87,28 +111,7 @@ const createBookingSchema = Joi.object({
 
   notes: Joi.string().max(1000).allow('').optional(),
 
-  metadata: Joi.object({
-    bookingSource: Joi.string()
-      .valid('search', 'profile', 'recommendation', 'repeat')
-      .default('search'),
-    deviceType: Joi.string()
-      .valid('mobile', 'desktop', 'tablet')
-      .default('desktop'),
-    sessionId: Joi.string().optional(),
-    // FIX: Make idempotencyKey REQUIRED to prevent double-booking
-    // Clients must generate a unique key per booking attempt and retry with the same key
-    idempotencyKey: Joi.string()
-      .min(16)
-      .max(64)
-      .pattern(/^[a-zA-Z0-9_-]+$/)
-      .required()
-      .messages({
-        'string.min': 'Idempotency key must be at least 16 characters',
-        'string.max': 'Idempotency key cannot exceed 64 characters',
-        'string.pattern.base': 'Idempotency key must contain only alphanumeric characters, underscores, and hyphens',
-        'any.required': 'Idempotency key is required to prevent duplicate bookings'
-      })
-  }).required(),
+  metadata: bookingMetadataSchema.required(),
 
   // New booking flow fields
   locationType: Joi.string()
@@ -248,25 +251,24 @@ const guestBookingSchema = Joi.object({
 
   notes: Joi.string().max(500).allow('').optional(),
 
-  metadata: Joi.object({
-    bookingSource: Joi.string()
-      .valid('search', 'profile', 'recommendation', 'repeat')
-      .default('search'),
-    deviceType: Joi.string()
-      .valid('mobile', 'desktop', 'tablet')
-      .default('desktop'),
-    sessionId: Joi.string().optional(),
-    idempotencyKey: Joi.string()
-      .min(16)
-      .max(64)
-      .pattern(/^[a-zA-Z0-9_-]+$/)
-      .required()
-      .messages({
-        'string.min': 'Idempotency key must be at least 16 characters',
-        'string.max': 'Idempotency key cannot exceed 64 characters',
-        'any.required': 'Idempotency key is required to prevent duplicate bookings'
-      })
-  }).required(),
+  location: Joi.object({
+    type: Joi.string()
+      .valid('customer_address', 'provider_location', 'online', 'hotel')
+      .optional()
+      .default('customer_address'),
+    address: Joi.object({
+      street: Joi.string().allow('').optional(),
+      city: Joi.string().allow('').optional(),
+      state: Joi.string().allow('').optional(),
+      zipCode: Joi.string().allow('').optional(),
+      country: Joi.string().default('AE'),
+    }).optional(),
+    notes: Joi.string().max(500).allow('').optional(),
+  }).optional(),
+
+  selectedDuration: Joi.number().min(15).max(480).optional(),
+
+  metadata: bookingMetadataSchema.required(),
 
   // Honeypot field - should always be empty (bots fill this in)
   website: Joi.string().max(0).allow('').optional()

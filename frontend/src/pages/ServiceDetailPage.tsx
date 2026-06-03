@@ -116,6 +116,16 @@ const ServiceDetailPage: React.FC = () => {
   };
 
   const handleBookNow = () => {
+    // Ensure service is loaded before navigating
+    if (!service || loading) {
+      toast.error('Please wait for service to load');
+      return;
+    }
+    console.log('[ServiceDetailPage] Booking service:', {
+      id: service._id,
+      name: service.name,
+      providerId: service.provider?._id
+    });
     navigate(`/book/${id}`, { state: { service } });
   };
 

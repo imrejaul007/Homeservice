@@ -28,8 +28,7 @@ export const validCustomerData = (overrides = {}) => ({
   email: generateTestEmail('customer'),
   password: 'SecurePass@123',
   phone: '+971501234567',
-  agreeToTerms: true,
-  agreeToPrivacy: true,
+  agreeToTermsAndPrivacy: true,
   address: {
     street: '123 Test Street',
     city: 'Dubai',
@@ -50,8 +49,7 @@ export const validProviderData = (overrides = {}) => ({
   email: generateTestEmail('provider'),
   password: 'SecurePass@123',
   phone: '+971501234568',
-  agreeToTerms: true,
-  agreeToPrivacy: true,
+  agreeToTermsAndPrivacy: true,
   address: {
     street: '456 Service Ave',
     city: 'Dubai',

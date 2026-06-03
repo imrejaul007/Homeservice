@@ -4,8 +4,9 @@ import earningsController from '../controllers/earnings.controller';
 
 const router = Router();
 
-// All routes require authentication
+// All routes require authentication and provider/admin role
 router.use(authMiddleware.authenticate);
+router.use(authMiddleware.requireRole(['provider', 'admin']));
 
 // ============================================
 // COMMISSION ROUTES

@@ -1,6 +1,17 @@
-import axios from 'axios';
+import axios, { AxiosError } from 'axios';
 import { API_BASE_URL } from '@/config/api';
 import { secureStorage } from '@/lib/security';
+
+export class WalletApiError extends Error {
+  constructor(
+    message: string,
+    public statusCode: number | undefined,
+    public code: string
+  ) {
+    super(message);
+    this.name = 'WalletApiError';
+  }
+}
 
 const api = axios.create({
   baseURL: `${API_BASE_URL}/provider`,
@@ -18,12 +29,16 @@ api.interceptors.request.use((config) => {
         config.headers.Authorization = `Bearer ${token}`;
       }
     } catch (e) {
-      // ignore
+      if (process.env.NODE_ENV === 'development') {
+        console.warn('[WalletApi] Failed to parse auth storage:', e);
+      }
     }
   }
   return config;
 });
 
+// Note: Backend returns Date objects that serialize to ISO strings in JSON
+// Frontend accepts both Date (backend response) and string (JSON serialization)
 export interface WalletTransaction {
   id: string;
   type: 'credit' | 'debit';
@@ -31,12 +46,18 @@ export interface WalletTransaction {
   description: string;
   reference: string;
   referenceType: 'booking' | 'refund' | 'bonus' | 'payout' | 'topup' | 'commission';
-  status: 'pending' | 'completed' | 'failed' | 'reversed';
+  status: 'pending' | 'processing' | 'completed' | 'failed' | 'reversed';
   balanceAfter: number;
-  createdAt: string;
+  metadata?: Record<string, unknown>;
+  updatedAt: string | Date;
+  createdAt: string | Date;
+  // Audit fields from backend model
+  processedBy?: string; // Admin/system that processed (mongoose ObjectId as string)
+  reason?: string; // Reason for transaction
 }
 
 export interface Wallet {
+  _id?: string;
   balance: number;
   currency: string;
   pendingBalance: number;
@@ -98,8 +119,19 @@ class WalletApiService {
    * Get wallet balance and summary
    */
   async getWallet(): Promise<WalletResponse> {
-    const response = await api.get('/wallet');
-    return response.data;
+    try {
+      const response = await api.get('/wallet');
+      return response.data;
+    } catch (error) {
+      if (error instanceof AxiosError) {
+        throw new WalletApiError(
+          error.response?.data?.message || 'Failed to fetch wallet',
+          error.response?.status,
+          'GET_WALLET_ERROR'
+        );
+      }
+      throw new WalletApiError('Network error while fetching wallet', undefined, 'NETWORK_ERROR');
+    }
   }
 
   /**
@@ -110,24 +142,46 @@ class WalletApiService {
     limit?: number;
     type?: 'credit' | 'debit';
   }): Promise<TransactionsResponse> {
-    const params = new URLSearchParams();
-    if (options?.page) params.append('page', options.page.toString());
-    if (options?.limit) params.append('limit', options.limit.toString());
-    if (options?.type) params.append('type', options.type);
+    try {
+      const params = new URLSearchParams();
+      if (options?.page) params.append('page', options.page.toString());
+      if (options?.limit) params.append('limit', options.limit.toString());
+      if (options?.type) params.append('type', options.type);
 
-    const queryString = params.toString();
-    const url = queryString ? `/earnings/transactions?${queryString}` : '/earnings/transactions';
+      const queryString = params.toString();
+      const url = queryString ? `/earnings/transactions?${queryString}` : '/earnings/transactions';
 
-    const response = await api.get(url);
-    return response.data;
+      const response = await api.get(url);
+      return response.data;
+    } catch (error) {
+      if (error instanceof AxiosError) {
+        throw new WalletApiError(
+          error.response?.data?.message || 'Failed to fetch transactions',
+          error.response?.status,
+          'GET_TRANSACTIONS_ERROR'
+        );
+      }
+      throw new WalletApiError('Network error while fetching transactions', undefined, 'NETWORK_ERROR');
+    }
   }
 
   /**
    * Get earnings summary
    */
   async getEarningsSummary(period: 'week' | 'month' | 'year' = 'month'): Promise<EarningsSummaryResponse> {
-    const response = await api.get(`/earnings/summary?period=${period}`);
-    return response.data;
+    try {
+      const response = await api.get(`/earnings/summary?period=${period}`);
+      return response.data;
+    } catch (error) {
+      if (error instanceof AxiosError) {
+        throw new WalletApiError(
+          error.response?.data?.message || 'Failed to fetch earnings summary',
+          error.response?.status,
+          'GET_EARNINGS_SUMMARY_ERROR'
+        );
+      }
+      throw new WalletApiError('Network error while fetching earnings summary', undefined, 'NETWORK_ERROR');
+    }
   }
 
   /**

@@ -8,8 +8,12 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { body, query, param, validationResult } from 'express-validator';
 import { authenticate, requireRole } from '../middleware/auth.middleware';
 import { asyncHandler } from '../utils/asyncHandler';
+import { adminLimiter } from '../middleware/rateLimiter';
 
 const router = Router();
+
+// Apply rate limiting to all automation admin routes
+router.use(adminLimiter);
 
 // Mock job data for status dashboard
 interface JobStatus {

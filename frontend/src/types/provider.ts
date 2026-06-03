@@ -89,13 +89,14 @@ export interface Promotion {
 }
 
 export interface BusinessHours {
-  [key: string]: {
-    isOpen: boolean;
-    openTime?: string;
-    closeTime?: string;
-    breakStart?: string;
-    breakEnd?: string;
-  };
+  monday?: BusinessHoursDay;
+  tuesday?: BusinessHoursDay;
+  wednesday?: BusinessHoursDay;
+  thursday?: BusinessHoursDay;
+  friday?: BusinessHoursDay;
+  saturday?: BusinessHoursDay;
+  sunday?: BusinessHoursDay;
+  [key: string]: BusinessHoursDay | undefined;
 }
 
 export interface AvailabilitySchedule {
@@ -113,7 +114,7 @@ export interface AvailabilitySchedule {
 
 // Full Provider Profile (for ProviderDetailPage)
 export interface Provider {
-  id: string;
+  _id: string;
 
   // Basic Info
   firstName: string;
@@ -183,8 +184,17 @@ export interface Provider {
     minNoticeTime: number;
   };
 
-  // Business Hours
-  businessHours: BusinessHours;
+  // Business Hours (lowercase day names)
+  businessHours: {
+    monday?: BusinessHoursDay;
+    tuesday?: BusinessHoursDay;
+    wednesday?: BusinessHoursDay;
+    thursday?: BusinessHoursDay;
+    friday?: BusinessHoursDay;
+    saturday?: BusinessHoursDay;
+    sunday?: BusinessHoursDay;
+    [key: string]: BusinessHoursDay | undefined;
+  };
 
   // Stats
   stats: {
@@ -200,14 +210,62 @@ export interface Provider {
   // Specializations
   specializations: string[];
 
+  // Tier (for provider ranking)
+  tier?: 'elite' | 'premium' | 'standard';
+
+  // Analytics
+  analytics?: {
+    totalBookings: number;
+    totalRevenue: number;
+    averageRating: number;
+    responseRate: number;
+  };
+
+  // Verification Status (detailed)
+  verificationStatus?: {
+    identity: string;
+    documents: string;
+    backgroundCheck: string;
+    overall: string;
+  };
+
+  // Financials
+  financials?: {
+    totalEarnings: number;
+    pendingPayout: number;
+    lifetimeValue: number;
+  };
+
+  // Team Management
+  teamManagement?: {
+    enabled: boolean;
+    members?: Array<{
+      _id: string;
+      firstName: string;
+      lastName: string;
+      email: string;
+      role: string;
+      avatar?: string;
+    }>;
+  };
+
   // Timestamps
   establishedDate?: string;
   memberSince: string;
 }
 
+// Business Hours Day type for lowercase day names
+export interface BusinessHoursDay {
+  isOpen: boolean;
+  openTime?: string;
+  closeTime?: string;
+  breakStart?: string;
+  breakEnd?: string;
+}
+
 // Provider Card (for CategoryPage listings)
 export interface ProviderCard {
-  id: string;
+  _id: string;
   firstName: string;
   lastName: string;
   businessName: string;
@@ -293,7 +351,7 @@ export interface FeaturedProvidersResponse {
   success: boolean;
   data: {
     providers: Array<{
-      id: string;
+      _id: string;
       firstName: string;
       lastName: string;
       businessName: string;

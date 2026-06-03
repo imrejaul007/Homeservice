@@ -35,7 +35,7 @@ export const recordPublicImpression = asyncHandler(async (req: Request, res: Res
  */
 export const recordPublicClick = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
-  const ad = await providerAdService.recordClick(id);
+  const { ad } = await providerAdService.recordClick(id);
   res.json({
     success: true,
     data: {

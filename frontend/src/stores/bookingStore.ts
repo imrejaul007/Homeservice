@@ -3,6 +3,7 @@ import { persist, createJSONStorage, type StateStorage } from 'zustand/middlewar
 import { immer } from 'zustand/middleware/immer';
 import { Capacitor } from '@capacitor/core';
 import { Preferences } from '@capacitor/preferences';
+import logger from '../lib/logger';
 import type {
   Booking,
   BookingFilters,
@@ -16,6 +17,26 @@ import type {
   BookingMessage,
   AvailabilitySettingsUpdate
 } from '../services/BookingService';
+
+// Default timeout for optimistic update operations (30 seconds)
+const OPTIMISTIC_UPDATE_TIMEOUT_MS = 30000;
+
+/**
+ * Creates a timeout race promise that rejects if the operation takes too long.
+ * This ensures optimistic updates are rolled back even when requests hang.
+ */
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  timeoutError: Error
+): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(timeoutError), timeoutMs)
+    )
+  ]);
+}
 
 export interface BookingError {
   message: string;
@@ -69,6 +90,7 @@ export interface BookingState {
   // Actions - Shared
   getBooking: (bookingId: string) => Promise<void>;
   cancelBooking: (bookingId: string, data: BookingCancelData) => Promise<void>;
+  rescheduleBooking: (bookingId: string, newDate: string, newTime: string, reason?: string) => Promise<void>;
   addBookingMessage: (bookingId: string, message: string) => Promise<void>;
   markMessagesRead: (bookingId: string) => Promise<void>;
 
@@ -298,7 +320,13 @@ export const useBookingStore = create<BookingState>()(
             state.errors = [];
           });
 
-          const response = await bookingService.acceptBooking(bookingId, data);
+          // Wrap with timeout to handle hanging requests
+          const timeoutError = new Error('Accept booking request timed out');
+          const response = await withTimeout(
+            bookingService.acceptBooking(bookingId, data),
+            OPTIMISTIC_UPDATE_TIMEOUT_MS,
+            timeoutError
+          );
           const updatedBooking = response.data.booking;
 
           set((state) => {
@@ -313,7 +341,7 @@ export const useBookingStore = create<BookingState>()(
             state.isSubmitting = false;
           });
         } catch (error) {
-          // Rollback on failure
+          // Rollback on failure (including timeout)
           set((state) => {
             state.providerBookings = previousProviderBookings;
             state.currentBooking = previousCurrentBooking;
@@ -364,7 +392,13 @@ export const useBookingStore = create<BookingState>()(
             state.errors = [];
           });
 
-          const response = await bookingService.rejectBooking(bookingId, data);
+          // Wrap with timeout to handle hanging requests
+          const timeoutError = new Error('Reject booking request timed out');
+          const response = await withTimeout(
+            bookingService.rejectBooking(bookingId, data),
+            OPTIMISTIC_UPDATE_TIMEOUT_MS,
+            timeoutError
+          );
           const updatedBooking = response.data.booking;
 
           set((state) => {
@@ -379,7 +413,7 @@ export const useBookingStore = create<BookingState>()(
             state.isSubmitting = false;
           });
         } catch (error) {
-          // Rollback on failure
+          // Rollback on failure (including timeout)
           set((state) => {
             state.providerBookings = previousProviderBookings;
             state.currentBooking = previousCurrentBooking;
@@ -397,7 +431,7 @@ export const useBookingStore = create<BookingState>()(
       startBooking: async (bookingId: string, notes?: string): Promise<void> => {
         const bookingService = (await import('../services/BookingService')).default;
 
-        // FIX: Store previous state for rollback on failure
+        // Store previous state for rollback on failure
         const previousProviderBookings = [...get().providerBookings];
         const previousCurrentBooking = get().currentBooking;
         const previousStats = get().providerBookingsStats;
@@ -430,7 +464,13 @@ export const useBookingStore = create<BookingState>()(
             state.errors = [];
           });
 
-          const response = await bookingService.startBooking(bookingId, notes);
+          // Wrap with timeout to handle hanging requests
+          const timeoutError = new Error('Start booking request timed out');
+          const response = await withTimeout(
+            bookingService.startBooking(bookingId, notes),
+            OPTIMISTIC_UPDATE_TIMEOUT_MS,
+            timeoutError
+          );
           const updatedBooking = response.data.booking;
 
           set((state) => {
@@ -445,7 +485,7 @@ export const useBookingStore = create<BookingState>()(
             state.isSubmitting = false;
           });
         } catch (error) {
-          // FIX: Rollback on failure
+          // Rollback on failure (including timeout)
           set((state) => {
             state.providerBookings = previousProviderBookings;
             state.currentBooking = previousCurrentBooking;
@@ -463,7 +503,7 @@ export const useBookingStore = create<BookingState>()(
       completeBooking: async (bookingId: string, data?: BookingCompleteData): Promise<void> => {
         const bookingService = (await import('../services/BookingService')).default;
 
-        // FIX: Store previous state for rollback on failure
+        // Store previous state for rollback on failure
         const previousProviderBookings = [...get().providerBookings];
         const previousCurrentBooking = get().currentBooking;
         const previousStats = get().providerBookingsStats;
@@ -496,7 +536,13 @@ export const useBookingStore = create<BookingState>()(
             state.errors = [];
           });
 
-          const response = await bookingService.completeBooking(bookingId, data);
+          // Wrap with timeout to handle hanging requests
+          const timeoutError = new Error('Complete booking request timed out');
+          const response = await withTimeout(
+            bookingService.completeBooking(bookingId, data),
+            OPTIMISTIC_UPDATE_TIMEOUT_MS,
+            timeoutError
+          );
           const updatedBooking = response.data.booking;
 
           set((state) => {
@@ -511,7 +557,7 @@ export const useBookingStore = create<BookingState>()(
             state.isSubmitting = false;
           });
         } catch (error) {
-          // FIX: Rollback on failure
+          // Rollback on failure (including timeout)
           set((state) => {
             state.providerBookings = previousProviderBookings;
             state.currentBooking = previousCurrentBooking;
@@ -556,7 +602,7 @@ export const useBookingStore = create<BookingState>()(
       cancelBooking: async (bookingId: string, data: BookingCancelData): Promise<void> => {
         const bookingService = (await import('../services/BookingService')).default;
 
-        // FIX: Store previous state for rollback on failure
+        // Store previous state for rollback on failure
         const previousCustomerBookings = [...get().customerBookings];
         const previousProviderBookings = [...get().providerBookings];
         const previousCurrentBooking = get().currentBooking;
@@ -611,7 +657,13 @@ export const useBookingStore = create<BookingState>()(
             state.errors = [];
           });
 
-          const response = await bookingService.cancelBooking(bookingId, data);
+          // Wrap with timeout to handle hanging requests
+          const timeoutError = new Error('Cancel booking request timed out');
+          const response = await withTimeout(
+            bookingService.cancelBooking(bookingId, data),
+            OPTIMISTIC_UPDATE_TIMEOUT_MS,
+            timeoutError
+          );
           const updatedBooking = response.data.booking;
 
           set((state) => {
@@ -633,7 +685,7 @@ export const useBookingStore = create<BookingState>()(
             state.isSubmitting = false;
           });
         } catch (error) {
-          // FIX: Rollback on failure
+          // Rollback on failure (including timeout)
           set((state) => {
             state.customerBookings = previousCustomerBookings;
             state.providerBookings = previousProviderBookings;
@@ -643,6 +695,95 @@ export const useBookingStore = create<BookingState>()(
             state.errors = [{
               message: error instanceof Error ? error.message : 'Failed to cancel booking',
               code: 'CANCEL_BOOKING_ERROR'
+            }];
+          });
+          throw error;
+        }
+      },
+
+      rescheduleBooking: async (bookingId: string, newDate: string, newTime: string, reason?: string): Promise<void> => {
+        const bookingService = (await import('../services/BookingService')).default;
+
+        // Store previous state for rollback
+        const previousCustomerBookings = [...get().customerBookings];
+        const previousProviderBookings = [...get().providerBookings];
+        const previousCurrentBooking = get().currentBooking;
+
+        // Optimistic update - update local state immediately
+        set((state) => {
+          // Update in customer bookings
+          const customerIndex = state.customerBookings.findIndex(b => b._id === bookingId);
+          if (customerIndex !== -1) {
+            state.customerBookings[customerIndex] = {
+              ...state.customerBookings[customerIndex],
+              scheduledDate: newDate,
+              scheduledTime: newTime
+            };
+          }
+
+          // Update in provider bookings
+          const providerIndex = state.providerBookings.findIndex(b => b._id === bookingId);
+          if (providerIndex !== -1) {
+            state.providerBookings[providerIndex] = {
+              ...state.providerBookings[providerIndex],
+              scheduledDate: newDate,
+              scheduledTime: newTime
+            };
+          }
+
+          // Update current booking if it matches
+          if (state.currentBooking?._id === bookingId) {
+            state.currentBooking = {
+              ...state.currentBooking,
+              scheduledDate: newDate,
+              scheduledTime: newTime
+            };
+          }
+        });
+
+        try {
+          set((state) => {
+            state.isSubmitting = true;
+            state.errors = [];
+          });
+
+          // Wrap with timeout to handle hanging requests
+          const timeoutError = new Error('Reschedule booking request timed out');
+          const response = await withTimeout(
+            bookingService.rescheduleBooking(bookingId, { scheduledDate: newDate, scheduledTime: newTime, reason }),
+            OPTIMISTIC_UPDATE_TIMEOUT_MS,
+            timeoutError
+          );
+          const updatedBooking = response.data.booking;
+
+          set((state) => {
+            // Update with server response
+            const customerIndex = state.customerBookings.findIndex(b => b._id === bookingId);
+            if (customerIndex !== -1) {
+              state.customerBookings[customerIndex] = updatedBooking;
+            }
+
+            const providerIndex = state.providerBookings.findIndex(b => b._id === bookingId);
+            if (providerIndex !== -1) {
+              state.providerBookings[providerIndex] = updatedBooking;
+            }
+
+            if (state.currentBooking?._id === bookingId) {
+              state.currentBooking = updatedBooking;
+            }
+
+            state.isSubmitting = false;
+          });
+        } catch (error) {
+          // Rollback on failure (including timeout)
+          set((state) => {
+            state.customerBookings = previousCustomerBookings;
+            state.providerBookings = previousProviderBookings;
+            state.currentBooking = previousCurrentBooking;
+            state.isSubmitting = false;
+            state.errors = [{
+              message: error instanceof Error ? error.message : 'Failed to reschedule booking',
+              code: 'RESCHEDULE_BOOKING_ERROR'
             }];
           });
           throw error;
@@ -711,7 +852,13 @@ export const useBookingStore = create<BookingState>()(
             }
           });
         } catch (error) {
-          console.error('Failed to mark messages as read:', error);
+          logger.error('Failed to mark messages as read', { error });
+          set((state) => {
+            state.errors = [{
+              message: error instanceof Error ? error.message : 'Failed to mark messages as read',
+              code: 'MARK_MESSAGES_READ_ERROR'
+            }];
+          });
         }
       },
 
@@ -860,6 +1007,7 @@ export const useBookingStore = create<BookingState>()(
         date: string;
         duration: number;
         days?: number;
+        serviceId?: string;
       }): Promise<void> => {
         const bookingService = (await import('../services/BookingService')).default;
 
@@ -953,8 +1101,16 @@ export const useBookingStore = create<BookingState>()(
       name: 'booking-storage',
       storage: createJSONStorage(() => capacitorBookingStorage),
       partialize: (state) => ({
-        // Only persist essential booking data, not loading states
+        // Persist booking data for better UX across sessions
+        // customerBookings: cached bookings for quick display
+        customerBookings: state.customerBookings,
+        // providerBookings: cached bookings for provider dashboard
+        providerBookings: state.providerBookings,
+        // currentBooking: last viewed booking for back navigation
         currentBooking: state.currentBooking,
+        // Persist pagination to maintain scroll position and page info
+        customerBookingsPagination: state.customerBookingsPagination,
+        providerBookingsPagination: state.providerBookingsPagination,
       }),
     }
   )

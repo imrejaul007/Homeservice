@@ -11,18 +11,11 @@ export interface LoyaltyStatus {
   pointsToNextTier: number;
   benefits: string[];
   referralCode?: string;
-  customerProfile?: {
-    currentPoints: number;
-    tierProgress: {
-      currentTierPoints: number;
-      nextTierRequirement: number;
-      nextTier: string;
-    };
-    streakInfo: {
-      currentStreak: number;
-      longestStreak: number;
-      lastBookingDate?: string;
-    };
+  tierProgress: {
+    currentTierPoints: number;
+    nextTierRequirement: number;
+    nextTier: string | null;
+    percentage: number;
   };
 }
 
@@ -69,13 +62,30 @@ interface TierBenefitsResponse {
   };
 }
 
+export class LoyaltyApiError extends Error {
+  constructor(
+    message: string,
+    public readonly statusCode?: number,
+    public readonly originalError?: unknown
+  ) {
+    super(message);
+    this.name = 'LoyaltyApiError';
+  }
+}
+
 class LoyaltyApiService {
   /**
    * Get current loyalty status
    */
   async getStatus(): Promise<LoyaltyStatusResponse> {
-    const response = await api.get('/loyalty/status');
-    return response.data;
+    try {
+      const response = await api.get('/loyalty/status');
+      return response.data;
+    } catch (error) {
+      console.error('[loyaltyApi] getStatus error:', error);
+      const statusCode = (error as { response?: { status?: number } })?.response?.status;
+      throw new LoyaltyApiError('Failed to fetch loyalty status', statusCode, error);
+    }
   }
 
   /**
@@ -86,35 +96,53 @@ class LoyaltyApiService {
     limit?: number;
     type?: 'earned' | 'spent' | 'bonus' | 'referral';
   }): Promise<PointsHistoryResponse> {
-    const params = new URLSearchParams();
-    if (options?.page) params.append('page', options.page.toString());
-    if (options?.limit) params.append('limit', options.limit.toString());
-    if (options?.type) params.append('type', options.type);
+    try {
+      const params = new URLSearchParams();
+      if (options?.page) params.append('page', options.page.toString());
+      if (options?.limit) params.append('limit', options.limit.toString());
+      if (options?.type) params.append('type', options.type);
 
-    const queryString = params.toString();
-    const url = queryString ? `/loyalty/history?${queryString}` : '/loyalty/history';
+      const queryString = params.toString();
+      const url = queryString ? `/loyalty/history?${queryString}` : '/loyalty/history';
 
-    const response = await api.get(url);
-    return response.data;
+      const response = await api.get(url);
+      return response.data;
+    } catch (error) {
+      console.error('[loyaltyApi] getHistory error:', error);
+      const statusCode = (error as { response?: { status?: number } })?.response?.status;
+      throw new LoyaltyApiError('Failed to fetch points history', statusCode, error);
+    }
   }
 
   /**
    * Get tier benefits (public)
    */
   async getTierBenefits(): Promise<TierBenefitsResponse> {
-    const response = await api.get('/loyalty/benefits');
-    return response.data;
+    try {
+      const response = await api.get('/loyalty/benefits');
+      return response.data;
+    } catch (error) {
+      console.error('[loyaltyApi] getTierBenefits error:', error);
+      const statusCode = (error as { response?: { status?: number } })?.response?.status;
+      throw new LoyaltyApiError('Failed to fetch tier benefits', statusCode, error);
+    }
   }
 
   /**
    * Redeem points
    */
   async redeemPoints(points: number, couponCode?: string): Promise<any> {
-    const response = await api.post('/loyalty/redeem', {
-      points,
-      couponCode,
-    });
-    return response.data;
+    try {
+      const response = await api.post('/loyalty/redeem', {
+        points,
+        couponCode,
+      });
+      return response.data;
+    } catch (error) {
+      console.error('[loyaltyApi] redeemPoints error:', error);
+      const statusCode = (error as { response?: { status?: number } })?.response?.status;
+      throw new LoyaltyApiError('Failed to redeem points', statusCode, error);
+    }
   }
 }
 

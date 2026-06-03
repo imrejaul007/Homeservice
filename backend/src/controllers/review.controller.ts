@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import mongoose from 'mongoose';
 import ProviderProfile from '../models/providerProfile.model';
 import Booking from '../models/booking.model';
 import Service from '../models/service.model';
@@ -14,6 +15,11 @@ export const getProviderReviews = asyncHandler(async (req: Request, res: Respons
   const { providerId } = req.params;
   const pageNum = Math.max(1, parseInt(req.query.page as string, 10) || 1);
   const limitNum = Math.min(50, Math.max(1, parseInt(req.query.limit as string, 10) || 10));
+
+  // Validate ObjectId format
+  if (!mongoose.Types.ObjectId.isValid(providerId)) {
+    return res.status(400).json({ success: false, message: 'Invalid provider ID' });
+  }
 
   const providerProfile = await ProviderProfile.findOne({ userId: providerId });
 
@@ -79,7 +85,8 @@ export const getProviderReviews = asyncHandler(async (req: Request, res: Respons
       );
 
       return {
-        id: bookingId?.toString() || '',
+        _id: reviewData?._id?.toString() || '',
+        id: reviewData?._id?.toString() || '',
         rating: reviewData?.rating || 0,
         title: reviewData?.title || '',
         comment: reviewData?.comment || '',
@@ -121,52 +128,109 @@ export const getProviderReviews = asyncHandler(async (req: Request, res: Respons
 
 export const getMyReviews = asyncHandler(async (req: Request, res: Response) => {
   const user = req.user as any;
-  const { page = '1', limit = '20' } = req.query;
+  const pageNum = Math.max(1, parseInt(req.query.page as string, 10) || 1);
+  const limitNum = Math.min(50, Math.max(1, parseInt(req.query.limit as string, 10) || 20));
 
-  // Get all bookings where this user left a review (via customerReview reference)
-  const bookings = await Booking.find({
+  const matchStage = {
     customerId: user._id,
     customerReview: { $exists: true, $ne: null }
-  })
-    .populate('providerId', 'firstName lastName avatar')
-    .populate('serviceId', 'name')
-    .sort({ updatedAt: -1 });
+  };
 
-  // Transform to review format
-  const reviews = bookings.map(booking => ({
-    _id: booking._id.toString(),
-    bookingId: booking._id,
-    provider: {
-      id: (booking.providerId as any)?._id,
-      name: `${(booking.providerId as any)?.firstName || ''} ${(booking.providerId as any)?.lastName || ''}`.trim(),
-      avatar: (booking.providerId as any)?.avatar,
+  // Use aggregation pipeline to apply filtering and pagination at database level
+  // This avoids loading all documents into memory before pagination
+  const aggregationResult = await Booking.aggregate([
+    { $match: matchStage },
+    // Lookup customerReview to filter by moderationStatus
+    {
+      $lookup: {
+        from: 'reviews',
+        localField: 'customerReview',
+        foreignField: '_id',
+        as: 'customerReviewData'
+      }
     },
-    service: {
-      id: (booking.serviceId as any)?._id,
-      name: (booking.serviceId as any)?.name || 'Service',
+    { $unwind: { path: '$customerReviewData', preserveNullAndEmptyArrays: true } },
+    // Filter out rejected reviews at database level
+    {
+      $match: {
+        $or: [
+          { 'customerReviewData.moderationStatus': { $exists: false } },
+          { 'customerReviewData.moderationStatus': { $ne: 'rejected' } }
+        ]
+      }
     },
-    rating: (booking as any).rating || 0,
-    comment: (booking as any).reviewComment || '',
-    images: (booking as any).reviewPhotos || [],
-    isVerified: true,
-    createdAt: (booking as any).customerReviewCreatedAt || booking.updatedAt,
-    updatedAt: booking.updatedAt,
-  }));
+    // Facet to get count and paginated data in single query
+    {
+      $facet: {
+        metadata: [{ $count: 'total' }],
+        data: [
+          { $sort: { updatedAt: -1 } },
+          { $skip: (pageNum - 1) * limitNum },
+          { $limit: limitNum },
+          // Lookup related data
+          {
+            $lookup: {
+              from: 'users',
+              localField: 'providerId',
+              foreignField: '_id',
+              as: 'providerData'
+            }
+          },
+          { $unwind: { path: '$providerData', preserveNullAndEmptyArrays: true } },
+          {
+            $lookup: {
+              from: 'services',
+              localField: 'serviceId',
+              foreignField: '_id',
+              as: 'serviceData'
+            }
+          },
+          { $unwind: { path: '$serviceData', preserveNullAndEmptyArrays: true } },
+          // Project final shape
+          {
+            $project: {
+              _id: 1,
+              provider: {
+                id: '$providerData._id',
+                name: { $concat: [{ $ifNull: ['$providerData.firstName', ''] }, ' ', { $ifNull: ['$providerData.lastName', ''] }] },
+                avatar: '$providerData.avatar'
+              },
+              service: {
+                id: '$serviceData._id',
+                name: { $ifNull: ['$serviceData.name', 'Service'] }
+              },
+              rating: { $ifNull: ['$rating', 0] },
+              comment: { $ifNull: ['$reviewComment', ''] },
+              images: { $ifNull: ['$reviewPhotos', []] },
+              helpfulVotes: 0,
+              isVerified: true,
+              moderationStatus: { $ifNull: ['$customerReviewData.moderationStatus', 'pending'] },
+              createdAt: { $ifNull: ['$customerReviewCreatedAt', '$updatedAt'] },
+              updatedAt: 1
+            }
+          }
+        ]
+      }
+    }
+  ]);
 
-  // Pagination
-  const pageNum = parseInt(page as string, 10);
-  const limitNum = parseInt(limit as string, 10);
-  const startIndex = (pageNum - 1) * limitNum;
-  const endIndex = startIndex + limitNum;
-  const paginatedReviews = reviews.slice(startIndex, endIndex);
+  const total = aggregationResult[0]?.metadata[0]?.total || 0;
+  const reviews = aggregationResult[0]?.data || [];
+  const totalPages = Math.ceil(total / limitNum);
 
   return res.json({
     success: true,
     data: {
-      reviews: paginatedReviews,
-      total: reviews.length,
+      reviews,
+      total,
+      totalReviews: total,
       page: pageNum,
-      pages: Math.ceil(reviews.length / limitNum),
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        pages: totalPages,
+      },
     },
   });
 });

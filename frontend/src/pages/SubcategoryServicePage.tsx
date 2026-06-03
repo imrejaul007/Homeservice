@@ -16,6 +16,9 @@ import ServiceFAQ from '../components/service/ServiceFAQ';
 import ServiceReviews from '../components/service/ServiceReviews';
 import { PageErrorBoundary } from '../components/common/PageErrorBoundary';
 import type { ProviderCard } from '../types/provider';
+import { searchApi } from '../services/searchApi';
+import type { Service } from '../components/customer/ServiceCard';
+import { useState, useEffect } from 'react';
 
 // Subcategory type
 interface Subcategory {
@@ -126,12 +129,44 @@ const SubcategoryServicePage: React.FC = () => {
     categorySlug, subcategorySlug, { limit: 10 }
   );
 
+  // State for real services from database
+  const [services, setServices] = useState<Service[]>([]);
+  const [servicesLoading, setServicesLoading] = useState(true);
+  const [selectedVariantIndex, setSelectedVariantIndex] = useState<number>(0);
+
+  // Fetch real services for this subcategory
+  useEffect(() => {
+    const fetchServices = async () => {
+      if (!categorySlug || !subcategorySlug) return;
+
+      try {
+        setServicesLoading(true);
+        // Search for services matching this subcategory
+        const response = await searchApi.searchServices({
+          q: subcategorySlug.replace(/-/g, ' '), // Convert slug to search term
+          category: categorySlug,
+          limit: 20,
+        });
+
+        if (response.success && response.data?.services) {
+          setServices(response.data.services);
+        }
+      } catch (error) {
+        console.error('Failed to fetch services for subcategory:', error);
+      } finally {
+        setServicesLoading(false);
+      }
+    };
+
+    fetchServices();
+  }, [categorySlug, subcategorySlug]);
+
   const subcategory = useMemo(() =>
     category?.subcategories?.find((s) => s.slug === subcategorySlug) as any,
     [category, subcategorySlug]
   );
 
-  // Get rich content from constants
+  // Get rich content from constants (for display purposes)
   const content = categorySlug && subcategorySlug
     ? SERVICE_CONTENT?.[categorySlug]?.[subcategorySlug]
     : undefined;
@@ -156,12 +191,76 @@ const SubcategoryServicePage: React.FC = () => {
     });
   }, [providers, subcategory]);
 
+  // Handle Book Now - go directly to booking page with first service
   const handleBookClick = (): void => {
+    // First priority: Book a real service from database
+    if (services.length > 0) {
+      const service = services[0];
+      const serviceId = (service as any)._id || (service as any).id || (service as any).serviceId;
+      console.log('[SubcategoryServicePage] Booking service from DB:', service.name);
+      navigate(`/book/${serviceId}`, { state: { service } });
+      return;
+    }
+
+    // Second priority: If no services in DB but we have providers, go to provider's services
     if (transformedProviders.length > 0) {
       navigate(`/provider/${transformedProviders[0].id}`);
-    } else {
-      navigate(`/search?category=${categorySlug}&subcategory=${subcategorySlug}`);
+      return;
     }
+
+    // Last resort: Navigate to search with filters
+    console.log('[SubcategoryServicePage] No services found, navigating to search');
+    navigate(`/search?category=${categorySlug}&subcategory=${subcategorySlug}`);
+  };
+
+  // Handle Book from ServiceVariants - select variant then book
+  const handleVariantSelect = (index: number) => {
+    setSelectedVariantIndex(index);
+  };
+
+  const handleBookFromVariants = () => {
+    // If we have services from DB, book the first one
+    if (services.length > 0) {
+      const service = services[0];
+      const serviceId = (service as any)._id || (service as any).id || (service as any).serviceId;
+
+      // Get the selected variant details
+      const selectedVariant = content?.variants?.[selectedVariantIndex];
+
+      console.log('[SubcategoryServicePage] Booking from variants:', {
+        serviceName: service.name,
+        variantIndex: selectedVariantIndex,
+        selectedVariant
+      });
+
+      // Create enhanced service object with variant details
+      const serviceWithVariant = {
+        ...service,
+        // Override with selected variant details
+        name: selectedVariant?.name || service.name,
+        price: {
+          amount: selectedVariant?.price || (service.price as any)?.amount || 0,
+          currency: 'AED',
+          type: 'fixed' as const
+        },
+        duration: parseDuration(selectedVariant?.duration || `${service.duration} min`),
+        // Keep track of variant for display
+        selectedVariant: selectedVariantIndex,
+        variantDetails: selectedVariant
+      };
+
+      navigate(`/book/${serviceId}`, { state: { service: serviceWithVariant } });
+      return;
+    }
+
+    // Fallback to regular book click
+    handleBookClick();
+  };
+
+  // Helper to parse duration string like "60 min" or "90 min" to number
+  const parseDuration = (durationStr: string): number => {
+    const match = durationStr.match(/(\d+)/);
+    return match ? parseInt(match[1], 10) : 60;
   };
 
   const handleProviderClick = (provider: TransformedProvider): void => {
@@ -252,7 +351,11 @@ const SubcategoryServicePage: React.FC = () => {
         {/* Service Variants */}
         {content?.variants && content.variants.length > 0 && (
           <div className="animate-nilin-in" style={{animationDelay: '0.2s'}}>
-            <ServiceVariants variants={content.variants} />
+            <ServiceVariants
+              variants={content.variants}
+              onSelect={(_, index) => handleVariantSelect(index)}
+              onBook={handleBookFromVariants}
+            />
           </div>
         )}
 

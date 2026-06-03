@@ -32,7 +32,7 @@ const createApiKeySchema = Joi.object({
     )
     .min(1)
     .required(),
-  expiresAt: Joi.date().iso().greater('now').optional(),
+  expiresAt: Joi.date().iso().optional(),
   rateLimit: Joi.number().integer().min(1).max(10000).default(100),
 });
 
@@ -76,6 +76,10 @@ export const createApiKey = asyncHandler(async (req: Request, res: Response) => 
       error.details.map(d => ({ field: d.path.join('.'), message: d.message })),
       ERROR_CODES.VALIDATION_ERROR
     );
+  }
+
+  if (value.expiresAt && new Date(value.expiresAt) <= new Date()) {
+    throw ApiError.badRequest('Expiration date must be in the future', [], ERROR_CODES.VALIDATION_ERROR);
   }
 
   // Generate the API key
@@ -164,14 +168,21 @@ export const getAllApiKeys = asyncHandler(async (req: Request, res: Response) =>
       .sort(sort)
       .skip(skip)
       .limit(limitNum)
-      .populate('createdBy', 'firstName lastName email'),
+      .populate('createdBy', 'firstName lastName email')
+      .lean(),
     AdminApiKey.countDocuments(filter),
   ]);
+
+  const now = new Date();
+  const enrichedKeys = apiKeys.map((key) => ({
+    ...key,
+    isExpired: Boolean(key.expiresAt && new Date(key.expiresAt) < now),
+  }));
 
   res.json({
     success: true,
     data: {
-      apiKeys,
+      apiKeys: enrichedKeys,
       pagination: {
         page: pageNum,
         limit: limitNum,

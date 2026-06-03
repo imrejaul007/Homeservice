@@ -3,6 +3,8 @@ import * as nodemailer from 'nodemailer';
 import crypto from 'crypto';
 import { ApiError } from '../utils/ApiError';
 import logger from '../utils/logger';
+import { sendPlatformEmail } from './platformEmailTemplate.service';
+import { sendViaPlatformTransport } from './platformEmailTransport.service';
 import { withCircuitBreaker, createCircuitBreaker } from './circuitBreaker.service';
 import { withRetry, retryConfigs } from '../utils/retry.util';
 import User from '../models/user.model';
@@ -549,85 +551,15 @@ export const sendBatch = async (emails: BatchEmailData[]): Promise<{ sent: numbe
 // Base email function with retry support and circuit breaker
 // ============================================
 
-// Internal email function that does the actual sending
+// Internal email function — uses platform transport (DB config with env fallback)
 const sendEmailInternal = async (
   to: string,
   subject: string,
   html: string,
-  text?: string
+  text?: string,
+  options?: { forceSend?: boolean }
 ): Promise<{ messageId: string }> => {
-  // Check if either SMTP or Resend is configured
-  const hasSmtp = smtpTransporter !== null;
-  const hasResend = resend !== null;
-
-  if (!hasSmtp && !hasResend) {
-    logger.warn('Email service not configured - skipping email', { to, subject });
-    logger.info('Configure SMTP_HOST, SMTP_USER, SMTP_PASS or RESEND_API_KEY to enable emails');
-    return { messageId: 'not-configured' };
-  }
-
-  let lastError: Error | null = null;
-
-  // Try SMTP first if available
-  if (hasSmtp) {
-    try {
-      const info: nodemailer.SentMessageInfo = await smtpTransporter!.sendMail({
-        from: `"${FROM_NAME}" <${FROM_EMAIL}>`,
-        to,
-        subject,
-        html,
-        text: text || html.replace(/<[^>]*>/g, ''),
-      });
-      logger.info('Email sent successfully via SMTP', {
-        to,
-        subject,
-        messageId: info.messageId || 'unknown',
-        action: 'EMAIL_SENT',
-      });
-      return { messageId: info.messageId || 'unknown' };
-    } catch (error) {
-      lastError = error as Error;
-      logger.warn('SMTP send failed, trying Resend', {
-        to,
-        subject,
-        error: lastError.message,
-        action: 'SMTP_FAILED_TRY_RESEND',
-      });
-    }
-  }
-
-  // Try Resend as fallback
-  if (hasResend) {
-    try {
-      const result = await resend!.emails.send({
-        from: `${FROM_NAME} <${FROM_EMAIL}>`,
-        to: [to],
-        subject,
-        html,
-        text: text || html.replace(/<[^>]*>/g, ''),
-      });
-      if (result.error) {
-        throw ApiError.internal(result.error.message);
-      }
-      logger.info('Email sent successfully via Resend', {
-        to,
-        subject,
-        messageId: result.data?.id || 'unknown',
-        action: 'EMAIL_SENT',
-      });
-      return { messageId: result.data?.id || 'unknown' };
-    } catch (error) {
-      lastError = error as Error;
-      logger.warn('Resend send failed', {
-        to,
-        subject,
-        error: lastError.message,
-        action: 'RESEND_FAILED',
-      });
-    }
-  }
-
-  throw ApiError.internal(lastError?.message || 'All email methods failed');
+  return sendViaPlatformTransport({ to, subject, html, text }, options);
 };
 
 // Public sendEmail function with circuit breaker and retry
@@ -931,8 +863,12 @@ export const sendVerificationEmail = async (
   firstName: string, 
   verificationToken: string
 ): Promise<void> => {
-  const template = getVerificationEmailTemplate(firstName, verificationToken, email);
-  await sendEmail(email, template.subject, template.html, template.text);
+  await sendPlatformEmail({
+    templateKey: 'emailVerification',
+    to: email,
+    variables: { userName: firstName, firstName, verificationToken },
+    fallbackHtmlBuilder: () => getVerificationEmailTemplate(firstName, verificationToken, email),
+  });
 };
 
 export const sendWelcomeEmail = async (
@@ -941,8 +877,12 @@ export const sendWelcomeEmail = async (
   role: string,
   userId?: string
 ): Promise<void> => {
-  const template = getWelcomeEmailTemplate(firstName, role, email, userId);
-  await sendEmail(email, template.subject, template.html);
+  await sendPlatformEmail({
+    templateKey: 'welcomeEmail',
+    to: email,
+    variables: { userName: firstName, firstName, role },
+    fallbackHtmlBuilder: () => getWelcomeEmailTemplate(firstName, role, email, userId),
+  });
 };
 
 export const sendPasswordResetEmail = async (
@@ -950,8 +890,12 @@ export const sendPasswordResetEmail = async (
   firstName: string, 
   resetToken: string
 ): Promise<void> => {
-  const template = getPasswordResetEmailTemplate(firstName, resetToken, email);
-  await sendEmail(email, template.subject, template.html);
+  await sendPlatformEmail({
+    templateKey: 'passwordReset',
+    to: email,
+    variables: { userName: firstName, firstName, resetToken },
+    fallbackHtmlBuilder: () => getPasswordResetEmailTemplate(firstName, resetToken, email),
+  });
 };
 
 // ===================================
@@ -984,8 +928,21 @@ export const sendBookingConfirmationEmail = async (
   firstName: string,
   bookingDetails: any
 ): Promise<void> => {
-  const template = getBookingConfirmationTemplate(firstName, bookingDetails);
-  await sendEmail(email, template.subject, template.html, template.text);
+  await sendPlatformEmail({
+    templateKey: 'bookingConfirmation',
+    to: email,
+    variables: {
+      userName: firstName,
+      customerName: firstName,
+      bookingNumber: bookingDetails.bookingNumber,
+      serviceName: bookingDetails.serviceName,
+      scheduledDate: bookingDetails.scheduledDate,
+      scheduledTime: bookingDetails.scheduledTime,
+      providerName: bookingDetails.providerName,
+      totalAmount: bookingDetails.totalAmount,
+    },
+    fallbackHtmlBuilder: () => getBookingConfirmationTemplate(firstName, bookingDetails),
+  });
 };
 
 // Booking accepted notification (Provider)
@@ -1005,8 +962,17 @@ export const sendBookingCancelledEmail = async (
   bookingDetails: any,
   isProvider: boolean = false
 ): Promise<void> => {
-  const template = getBookingCancelledTemplate(firstName, bookingDetails, isProvider);
-  await sendEmail(email, template.subject, template.html, template.text);
+  await sendPlatformEmail({
+    templateKey: 'bookingCancellation',
+    to: email,
+    variables: {
+      userName: firstName,
+      bookingNumber: bookingDetails.bookingNumber,
+      serviceName: bookingDetails.serviceName,
+      cancellationReason: bookingDetails.cancellationReason,
+    },
+    fallbackHtmlBuilder: () => getBookingCancelledTemplate(firstName, bookingDetails, isProvider),
+  });
 };
 
 // Booking rejected email (Customer)
@@ -1026,18 +992,37 @@ export const sendBookingCompletedEmail = async (
   bookingDetails: any,
   isProvider: boolean = false
 ): Promise<void> => {
-  const template = getBookingCompletedTemplate(firstName, bookingDetails, isProvider);
-  await sendEmail(email, template.subject, template.html, template.text);
+  await sendPlatformEmail({
+    templateKey: 'bookingCompletion',
+    to: email,
+    variables: {
+      userName: firstName,
+      bookingNumber: bookingDetails.bookingNumber,
+      serviceName: bookingDetails.serviceName,
+    },
+    fallbackHtmlBuilder: () => getBookingCompletedTemplate(firstName, bookingDetails, isProvider),
+  });
 };
 
-// Booking reminder email (24 hours before)
+// Booking reminder email (hours from platform settings)
 export const sendBookingReminderEmail = async (
   email: string,
   firstName: string,
   bookingDetails: any
 ): Promise<void> => {
-  const template = getBookingReminderTemplate(firstName, bookingDetails);
-  await sendEmail(email, template.subject, template.html, template.text);
+  await sendPlatformEmail({
+    templateKey: 'bookingReminder',
+    to: email,
+    variables: {
+      userName: firstName,
+      bookingNumber: bookingDetails.bookingNumber,
+      serviceName: bookingDetails.serviceName,
+      scheduledDate: bookingDetails.scheduledDate,
+      scheduledTime: bookingDetails.scheduledTime,
+      providerName: bookingDetails.providerName,
+    },
+    fallbackHtmlBuilder: () => getBookingReminderTemplate(firstName, bookingDetails),
+  });
 };
 
 // ===================================
@@ -1545,7 +1530,22 @@ View booking details: ${viewBookingUrl}
 If you have any questions, please contact our support team.
   `;
 
-  await sendEmail(customerEmail, subject, html, text);
+  await sendPlatformEmail({
+    templateKey: 'paymentReceipt',
+    to: customerEmail,
+    variables: {
+      userName: customerName,
+      customerName,
+      bookingNumber,
+      serviceName,
+      providerName,
+      scheduledDate: formattedDate,
+      scheduledTime: formattedTime,
+      totalAmount: formattedAmount,
+      transactionId,
+    },
+    fallbackHtmlBuilder: () => ({ subject, html, text }),
+  });
 };
 
 // Add the remaining template functions
@@ -1967,8 +1967,16 @@ export const sendProviderApproval = async (
 ): Promise<void> => {
   try {
     const dashboardUrl = `${FRONTEND_URL}/provider/dashboard`;
-    const template = getProviderApprovalTemplate(provider, dashboardUrl);
-    await sendEmail(provider.email, template.subject, template.html, template.text);
+    await sendPlatformEmail({
+      templateKey: 'providerApproval',
+      to: provider.email,
+      variables: {
+        userName: provider.firstName,
+        businessName: provider.businessName,
+        dashboardUrl,
+      },
+      fallbackHtmlBuilder: () => getProviderApprovalTemplate(provider, dashboardUrl),
+    });
 
     logger.info('Provider approval email sent', {
       email: provider.email,
@@ -1997,8 +2005,17 @@ export const sendProviderRejection = async (
 ): Promise<void> => {
   try {
     const helpUrl = `${FRONTEND_URL}/support`;
-    const template = getProviderRejectionTemplate(provider, reason, helpUrl);
-    await sendEmail(provider.email, template.subject, template.html, template.text);
+    await sendPlatformEmail({
+      templateKey: 'providerRejection',
+      to: provider.email,
+      variables: {
+        userName: provider.firstName,
+        businessName: provider.businessName,
+        rejectionReason: reason,
+        helpUrl,
+      },
+      fallbackHtmlBuilder: () => getProviderRejectionTemplate(provider, reason, helpUrl),
+    });
 
     logger.info('Provider rejection email sent', {
       email: provider.email,

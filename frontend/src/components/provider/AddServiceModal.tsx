@@ -60,7 +60,7 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
   });
 
   // Fetch categories from API (single source of truth)
-  const { categories, isLoading: categoriesLoading } = useCategories();
+  const { categories, isLoading: categoriesLoading, error: categoriesError, refetch: refetchCategories } = useCategories();
 
   // Transform categories for dropdown - show all categories with their subcategories
   const categoryOptions = useMemo(() => {
@@ -154,7 +154,7 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
   const addTag = () => {
     const normalizedTag = currentTag.trim().toLowerCase();
     if (normalizedTag && !formData.tags.some(tag => tag.toLowerCase() === normalizedTag)) {
-      handleInputChange('tags', [...formData.tags, currentTag.trim()]);
+      handleInputChange('tags', [...formData.tags, normalizedTag]);
       setCurrentTag('');
     }
   };
@@ -225,11 +225,32 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
           </button>
         </div>
 
-        {/* Loading state for categories */}
+        {/* Loading/Error/Empty state for categories */}
         {categoriesLoading && (
-          <div className="p-6 flex items-center justify-center">
+          <div className="px-6 pt-4 flex items-center justify-center">
             <Loader2 className="w-5 h-5 animate-spin text-nilin-coral mr-2" />
             <span className="text-nilin-warmGray text-sm">Loading categories...</span>
+          </div>
+        )}
+
+        {(categoriesError || (!categoriesLoading && categoryOptions.length === 0)) && !errors.submit && (
+          <div className="px-6 pt-4">
+            <div className="flex items-center p-4 rounded-xl bg-red-50 border border-red-200">
+              <AlertCircle className="w-5 h-5 text-red-500 mr-3 flex-shrink-0" />
+              <div className="flex-1">
+                <p className="text-sm text-red-600 font-medium">Unable to load categories</p>
+                <p className="text-xs text-red-500/80 mt-0.5">
+                  {categoriesError || 'No categories available. Please try again later.'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => refetchCategories()}
+                className="ml-3 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-100 rounded-lg transition-colors"
+              >
+                Retry
+              </button>
+            </div>
           </div>
         )}
 

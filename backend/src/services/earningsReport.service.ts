@@ -68,7 +68,7 @@ export interface EarningsReport {
   // Document references
   taxDocumentId?: Types.ObjectId;
   invoiceNumbers: string[];
-  // Status
+  // Status - aligned with frontend and database schema
   status: 'draft' | 'generated' | 'sent' | 'archived';
   generatedAt: Date;
   createdAt: Date;
@@ -248,6 +248,7 @@ export const EarningsReportModel: mongoose.Model<EarningsReport> = mongoose.mode
 export class EarningsReportService {
   /**
    * Generate comprehensive earnings report for a provider
+   * PERFORMANCE FIX: Uses MongoDB aggregation pipeline instead of loading all records into memory
    */
   async generateEarningsReport(
     providerId: string | Types.ObjectId,
@@ -262,127 +263,169 @@ export class EarningsReportService {
       typeof providerId === 'string' ? new Types.ObjectId(providerId) : providerId;
     const region = options.region || 'AE';
 
-    // Get all commissions in the period
-    const commissions = await Commission.find({
-      providerId: providerObjectId,
-      'metadata.bookingDate': { $gte: startDate, $lte: endDate },
-    });
+    // Use aggregation pipeline for database-level computation
+    const aggregationResult = await Commission.aggregate([
+      // Match by provider and date range (check both bookingDate and completedAt)
+      {
+        $match: {
+          providerId: providerObjectId,
+          $or: [
+            { 'metadata.bookingDate': { $gte: startDate, $lte: endDate } },
+            { completedAt: { $gte: startDate, $lte: endDate } },
+          ],
+        },
+      },
+      // Facet to compute multiple aggregations in single pass
+      {
+        $facet: {
+          // Overall totals
+          totals: [
+            {
+              $group: {
+                _id: null,
+                totalGross: { $sum: '$grossAmount' },
+                totalDiscounts: { $sum: '$discountAmount' },
+                totalNet: { $sum: '$netAmount' },
+                totalCommission: { $sum: '$commissionAmount' },
+                totalPlatformFee: { $sum: '$platformFee' },
+                totalPaymentProcessingFee: { $sum: '$paymentProcessingFee' },
+                totalTax: { $sum: '$taxAmount' },
+                totalProviderEarnings: { $sum: '$providerEarnings' },
+                totalBookings: { $sum: 1 },
+                completedBookings: {
+                  $sum: {
+                    $cond: [
+                      { $in: ['$status', ['calculated', 'pending', 'approved', 'paid']] },
+                      1,
+                      0,
+                    ],
+                  },
+                },
+                cancelledBookings: {
+                  $sum: { $cond: [{ $eq: ['$status', 'reversed'] }, 1, 0] },
+                },
+              },
+            },
+          ],
+          // By rule type
+          byRuleType: [
+            {
+              $group: {
+                _id: '$ruleType',
+                count: { $sum: 1 },
+                amount: { $sum: '$commissionAmount' },
+              },
+            },
+          ],
+          // By tier
+          byTier: [
+            { $match: { tierApplied: { $exists: true } } },
+            {
+              $group: {
+                _id: {
+                  minAmount: '$tierApplied.minAmount',
+                  maxAmount: '$tierApplied.maxAmount',
+                },
+                count: { $sum: 1 },
+                amount: { $sum: '$commissionAmount' },
+              },
+            },
+          ],
+          // By category
+          byCategory: [
+            {
+              $group: {
+                _id: { $ifNull: ['$categoryId', null] },
+                categoryName: { $first: { $ifNull: ['$metadata.categoryName', 'Uncategorized'] } },
+                count: { $sum: 1 },
+                grossAmount: { $sum: '$grossAmount' },
+                commission: { $sum: '$commissionAmount' },
+                earnings: { $sum: '$providerEarnings' },
+              },
+            },
+          ],
+          // By month
+          byMonth: [
+            {
+              $group: {
+                _id: { $dateToString: { format: '%Y-%m', date: '$calculatedAt' } },
+                count: { $sum: 1 },
+                grossAmount: { $sum: '$grossAmount' },
+                commission: { $sum: '$commissionAmount' },
+                earnings: { $sum: '$providerEarnings' },
+              },
+            },
+            { $sort: { _id: 1 } },
+          ],
+          // Invoice numbers
+          invoiceNumbers: [{ $group: { _id: null, numbers: { $push: '$bookingNumber' } } }],
+        },
+      },
+    ]);
 
-    // Calculate totals
-    let totalGross = 0;
-    let totalDiscounts = 0;
-    let totalNet = 0;
-    let totalCommission = 0;
-    let totalPlatformFee = 0;
-    let totalPaymentProcessingFee = 0;
-    let totalTax = 0;
-    let totalProviderEarnings = 0;
-    let totalBookings = commissions.length;
-    let completedBookings = 0;
-    let cancelledBookings = 0;
+    const result = aggregationResult[0] || {};
+    const totals = result.totals?.[0] || {
+      totalGross: 0,
+      totalDiscounts: 0,
+      totalNet: 0,
+      totalCommission: 0,
+      totalPlatformFee: 0,
+      totalPaymentProcessingFee: 0,
+      totalTax: 0,
+      totalProviderEarnings: 0,
+      totalBookings: 0,
+      completedBookings: 0,
+      cancelledBookings: 0,
+    };
+
+    const totalGross = totals.totalGross;
+    const totalDiscounts = totals.totalDiscounts;
+    const totalNet = totals.totalNet;
+    const totalCommission = totals.totalCommission;
+    const totalPlatformFee = totals.totalPlatformFee;
+    const totalPaymentProcessingFee = totals.totalPaymentProcessingFee;
+    const totalTax = totals.totalTax;
+    const totalProviderEarnings = totals.totalProviderEarnings;
+    const totalBookings = totals.totalBookings;
+    const completedBookings = totals.completedBookings;
+    const cancelledBookings = totals.cancelledBookings;
 
     // Commission breakdown
-    const ruleTypeMap = new Map<string, { count: number; amount: number }>();
-    const tierMap = new Map<string, { tierName: string; minAmount: number; maxAmount: number; count: number; amount: number }>();
+    const byRuleType = (result.byRuleType || []).map((item: any) => ({
+      ruleType: item._id,
+      count: item.count,
+      amount: item.amount,
+    }));
+
+    const byTier = (result.byTier || []).map((item: any) => ({
+      tierName: `${item._id.minAmount}-${item._id.maxAmount}`,
+      minAmount: item._id.minAmount,
+      maxAmount: item._id.maxAmount,
+      count: item.count,
+      amount: item.amount,
+    }));
 
     // Category breakdown
-    const categoryMap = new Map<
-      string,
-      {
-        categoryId: Types.ObjectId;
-        categoryName: string;
-        count: number;
-        grossAmount: number;
-        commission: number;
-        earnings: number;
-      }
-    >();
+    const byCategory = (result.byCategory || []).map((item: any) => ({
+      categoryId: item._id || new Types.ObjectId(),
+      categoryName: item.categoryName,
+      count: item.count,
+      grossAmount: item.grossAmount,
+      commission: item.commission,
+      earnings: item.earnings,
+    }));
 
     // Monthly breakdown
-    const monthlyMap = new Map<string, { count: number; grossAmount: number; commission: number; earnings: number }>();
+    const monthlyBreakdown = (result.byMonth || []).map((item: any) => ({
+      month: item._id,
+      count: item.count,
+      grossAmount: item.grossAmount,
+      commission: item.commission,
+      earnings: item.earnings,
+    }));
 
     // Invoice numbers
-    const invoiceNumbers: string[] = [];
-
-    for (const comm of commissions) {
-      totalGross += comm.grossAmount;
-      totalDiscounts += comm.discountAmount;
-      totalNet += comm.netAmount;
-      totalCommission += comm.commissionAmount;
-      totalPlatformFee += comm.platformFee;
-      totalPaymentProcessingFee += comm.paymentProcessingFee;
-      totalTax += comm.taxAmount;
-      totalProviderEarnings += comm.providerEarnings;
-
-      if (comm.status === 'calculated' || comm.status === 'pending' || comm.status === 'approved' || comm.status === 'paid') {
-        completedBookings++;
-      } else if (comm.status === 'reversed') {
-        cancelledBookings++;
-      }
-
-      // By rule type
-      const ruleTypeKey = comm.ruleType;
-      const existingRuleType = ruleTypeMap.get(ruleTypeKey) || { count: 0, amount: 0 };
-      ruleTypeMap.set(ruleTypeKey, {
-        count: existingRuleType.count + 1,
-        amount: existingRuleType.amount + comm.commissionAmount,
-      });
-
-      // By tier
-      if (comm.tierApplied) {
-        const tierKey = `${comm.tierApplied.minAmount}-${comm.tierApplied.maxAmount}`;
-        const existingTier = tierMap.get(tierKey) || {
-          tierName: tierKey,
-          minAmount: comm.tierApplied.minAmount,
-          maxAmount: comm.tierApplied.maxAmount,
-          count: 0,
-          amount: 0,
-        };
-        tierMap.set(tierKey, {
-          ...existingTier,
-          count: existingTier.count + 1,
-          amount: existingTier.amount + comm.commissionAmount,
-        });
-      }
-
-      // By category
-      const categoryKey = comm.categoryId?.toString() || 'uncategorized';
-      const existingCategory = categoryMap.get(categoryKey) || {
-        categoryId: comm.categoryId || new Types.ObjectId(),
-        categoryName: comm.metadata?.categoryName || 'Uncategorized',
-        count: 0,
-        grossAmount: 0,
-        commission: 0,
-        earnings: 0,
-      };
-      categoryMap.set(categoryKey, {
-        ...existingCategory,
-        count: existingCategory.count + 1,
-        grossAmount: existingCategory.grossAmount + comm.grossAmount,
-        commission: existingCategory.commission + comm.commissionAmount,
-        earnings: existingCategory.earnings + comm.providerEarnings,
-      });
-
-      // By month
-      const monthKey = new Date(comm.calculatedAt).toISOString().substring(0, 7);
-      const existingMonth = monthlyMap.get(monthKey) || {
-        count: 0,
-        grossAmount: 0,
-        commission: 0,
-        earnings: 0,
-      };
-      monthlyMap.set(monthKey, {
-        count: existingMonth.count + 1,
-        grossAmount: existingMonth.grossAmount + comm.grossAmount,
-        commission: existingMonth.commission + comm.commissionAmount,
-        earnings: existingMonth.earnings + comm.providerEarnings,
-      });
-
-      // Collect invoice numbers
-      if (comm.bookingNumber) {
-        invoiceNumbers.push(comm.bookingNumber);
-      }
-    }
+    const invoiceNumbers = result.invoiceNumbers?.[0]?.numbers || [];
 
     // Get tax info
     const taxConfig = await taxService.getTaxConfig(region);
@@ -414,23 +457,11 @@ export class EarningsReportService {
       completedBookings,
       cancelledBookings,
       commissionBreakdown: {
-        byRuleType: Array.from(ruleTypeMap.entries()).map(([ruleType, data]) => ({
-          ruleType,
-          count: data.count,
-          amount: data.amount,
-        })),
-        byTier: Array.from(tierMap.entries()).map(([, data]) => data),
+        byRuleType,
+        byTier,
       },
-      categoryBreakdown: Array.from(categoryMap.entries()).map(([, data]) => ({
-        ...data,
-        categoryId: data.categoryId || new Types.ObjectId(),
-      })),
-      monthlyBreakdown: Array.from(monthlyMap.entries())
-        .sort((a, b) => a[0].localeCompare(b[0]))
-        .map(([month, data]) => ({
-          month,
-          ...data,
-        })),
+      categoryBreakdown: byCategory,
+      monthlyBreakdown,
       taxInfo: {
         region,
         taxRate: taxConfig?.rate || 0,
@@ -439,7 +470,7 @@ export class EarningsReportService {
       },
       taxDocumentId,
       invoiceNumbers,
-      status: 'generated',
+      status: 'generated', // Aligned with frontend and database schema
       generatedAt: new Date(),
     });
 
@@ -511,7 +542,27 @@ export class EarningsReportService {
   }
 
   /**
+   * Build aggregation pipeline for stats calculation
+   * Helper method for getDashboardSummary
+   */
+  private buildStatsAggregation() {
+    return [
+      {
+        $group: {
+          _id: null,
+          grossEarnings: { $sum: '$grossAmount' },
+          netEarnings: { $sum: '$netAmount' },
+          totalCommission: { $sum: '$commissionAmount' },
+          totalBookings: { $sum: 1 },
+          averageBookingValue: { $avg: '$grossAmount' },
+        },
+      },
+    ];
+  }
+
+  /**
    * Get dashboard summary with period comparison
+   * PERFORMANCE FIX: Uses single aggregation with $facet instead of two separate queries
    */
   async getDashboardSummary(
     providerId: string | Types.ObjectId,
@@ -551,28 +602,73 @@ export class EarningsReportService {
         break;
     }
 
-    // Get current and previous period data
-    const [currentCommissionsRaw, previousCommissionsRaw] = await Promise.all([
-      Commission.find({
-        providerId: providerObjectId,
-        'metadata.bookingDate': { $gte: currentStart, $lte: currentEnd },
-        status: { $in: ['calculated', 'pending', 'approved', 'paid'] },
-      }).lean(),
-      Commission.find({
-        providerId: providerObjectId,
-        'metadata.bookingDate': { $gte: previousStart, $lte: previousEnd },
-        status: { $in: ['calculated', 'pending', 'approved', 'paid'] },
-      }).lean(),
+    // Use single aggregation with $facet to get both periods in one query
+    const result = await Commission.aggregate([
+      {
+        $match: {
+          providerId: providerObjectId,
+          status: { $in: ['calculated', 'pending', 'approved', 'paid'] },
+        },
+      },
+      {
+        $facet: {
+          currentPeriod: [
+            {
+              $match: {
+                $or: [
+                  { 'metadata.bookingDate': { $gte: currentStart, $lte: currentEnd } },
+                  { completedAt: { $gte: currentStart, $lte: currentEnd } },
+                ],
+              },
+            },
+            {
+              $group: {
+                _id: null,
+                grossEarnings: { $sum: '$grossAmount' },
+                netEarnings: { $sum: '$providerEarnings' },
+                totalCommission: { $sum: '$commissionAmount' },
+                totalBookings: { $sum: 1 },
+                averageBookingValue: { $avg: '$grossAmount' },
+              },
+            },
+          ],
+          previousPeriod: [
+            {
+              $match: {
+                $or: [
+                  { 'metadata.bookingDate': { $gte: previousStart, $lte: previousEnd } },
+                  { completedAt: { $gte: previousStart, $lte: previousEnd } },
+                ],
+              },
+            },
+            {
+              $group: {
+                _id: null,
+                grossEarnings: { $sum: '$grossAmount' },
+                netEarnings: { $sum: '$providerEarnings' },
+                totalCommission: { $sum: '$commissionAmount' },
+                totalBookings: { $sum: 1 },
+                averageBookingValue: { $avg: '$grossAmount' },
+              },
+            },
+          ],
+        },
+      },
     ]);
 
-    const currentCommissions = currentCommissionsRaw as unknown as ICommission[];
-    const previousCommissions = previousCommissionsRaw as unknown as ICommission[];
-
-    // Calculate current period stats
-    const current = this.calculatePeriodStats(currentCommissions);
-
-    // Calculate previous period stats
-    const previous = this.calculatePeriodStats(previousCommissions);
+    const facetResult = result[0] || { currentPeriod: [], previousPeriod: [] };
+    const current = facetResult.currentPeriod[0] || {
+      grossEarnings: 0,
+      netEarnings: 0,
+      totalCommission: 0,
+      totalBookings: 0,
+    };
+    const previous = facetResult.previousPeriod[0] || {
+      grossEarnings: 0,
+      netEarnings: 0,
+      totalCommission: 0,
+      totalBookings: 0,
+    };
 
     // Calculate growth percentages
     const calculateGrowth = (current: number, previous: number): number => {
@@ -587,46 +683,57 @@ export class EarningsReportService {
       averageBookingValue: calculateGrowth(current.averageBookingValue, previous.averageBookingValue),
     };
 
-    // Get top performing day of week
-    const dayOfWeekMap = new Map<string, { count: number; earnings: number }>();
+    // Get top performing day of week using aggregation
+    const dayOfWeekResult = await Commission.aggregate([
+      {
+        $match: {
+          providerId: providerObjectId,
+          status: { $in: ['calculated', 'pending', 'approved', 'paid'] },
+          $or: [
+            { 'metadata.bookingDate': { $gte: currentStart, $lte: currentEnd } },
+            { completedAt: { $gte: currentStart, $lte: currentEnd } },
+          ],
+        },
+      },
+      {
+        $group: {
+          _id: { $dayOfWeek: '$calculatedAt' },
+          count: { $sum: 1 },
+          earnings: { $sum: '$providerEarnings' },
+        },
+      },
+      { $sort: { earnings: -1 } },
+      { $limit: 1 },
+    ]);
+
     const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const topDayOfWeek = dayOfWeekResult.length > 0
+      ? { day: days[dayOfWeekResult[0]._id - 1] || 'N/A', count: dayOfWeekResult[0].count, earnings: dayOfWeekResult[0].earnings }
+      : { day: 'N/A', count: 0, earnings: 0 };
 
-    for (const comm of currentCommissions) {
-      const dayName = days[new Date(comm.calculatedAt).getDay()];
-      const existing = dayOfWeekMap.get(dayName) || { count: 0, earnings: 0 };
-      dayOfWeekMap.set(dayName, {
-        count: existing.count + 1,
-        earnings: existing.earnings + comm.providerEarnings,
-      });
-    }
+    // Get pending and approved commissions using aggregation (single query)
+    const statusResult = await Commission.aggregate([
+      {
+        $match: {
+          providerId: providerObjectId,
+          status: { $in: ['pending', 'approved'] },
+        },
+      },
+      {
+        $group: {
+          _id: '$status',
+          count: { $sum: 1 },
+          amount: { $sum: '$providerEarnings' },
+        },
+      },
+    ]);
 
-    let topDayOfWeek = { day: 'N/A', count: 0, earnings: 0 };
-    for (const [day, data] of dayOfWeekMap) {
-      if (data.earnings > topDayOfWeek.earnings) {
-        topDayOfWeek = { day, ...data };
-      }
-    }
-
-    // Get pending payments
-    const pendingCommissions = await Commission.find({
-      providerId: providerObjectId,
-      status: 'pending',
-    });
-
-    const pendingPayments = {
-      count: pendingCommissions.length,
-      amount: pendingCommissions.reduce((sum, c) => sum + c.providerEarnings, 0),
-    };
+    const pendingData = statusResult.find(r => r._id === 'pending') || { count: 0, amount: 0 };
+    const approvedData = statusResult.find(r => r._id === 'approved') || { count: 0, amount: 0 };
 
     // Calculate next payout (simplified - every 7 days)
     const daysUntilNextPayout = 7 - now.getDay();
     const nextPayoutDate = new Date(now.getTime() + daysUntilNextPayout * 24 * 60 * 60 * 1000);
-
-    // Get approved commissions ready for payout
-    const approvedCommissions = await Commission.find({
-      providerId: providerObjectId,
-      status: 'approved',
-    });
 
     return {
       providerId: providerObjectId,
@@ -636,41 +743,14 @@ export class EarningsReportService {
       previous,
       growth,
       topDayOfWeek,
-      pendingPayments,
-      nextPayout: {
-        date: nextPayoutDate,
-        amount: approvedCommissions.reduce((sum, c) => sum + c.providerEarnings, 0),
-      },
-    };
-  }
-
-  /**
-   * Calculate stats for a period of commissions
-   */
-  private calculatePeriodStats(commissions: ICommission[]): EarningsDashboardSummary['current'] {
-    let grossEarnings = 0;
-    let netEarnings = 0;
-    let totalCommission = 0;
-    let totalBookings = 0;
-
-    for (const comm of commissions) {
-      grossEarnings += comm.grossAmount;
-      netEarnings += comm.providerEarnings;
-      totalCommission += comm.commissionAmount;
-      totalBookings++;
-    }
-
-    return {
-      grossEarnings,
-      netEarnings,
-      totalCommission,
-      totalBookings,
-      averageBookingValue: totalBookings > 0 ? grossEarnings / totalBookings : 0,
+      pendingPayments: { count: pendingData.count, amount: pendingData.amount },
+      nextPayout: { date: nextPayoutDate, amount: approvedData.amount },
     };
   }
 
   /**
    * Get annual statement for tax purposes
+   * PERFORMANCE FIX: Uses MongoDB aggregation pipeline instead of loading all records into memory
    */
   async getAnnualStatement(
     providerId: string | Types.ObjectId,
@@ -694,35 +774,65 @@ export class EarningsReportService {
     const startDate = new Date(year, 0, 1);
     const endDate = new Date(year, 11, 31, 23, 59, 59);
 
-    // Get all commissions for the year
-    const commissions = await Commission.find({
-      providerId: providerObjectId,
-      'metadata.bookingDate': { $gte: startDate, $lte: endDate },
-      status: { $in: ['calculated', 'pending', 'approved', 'paid'] },
+    // Use aggregation pipeline to compute totals and quarterly breakdown at database level
+    const aggregationResult = await Commission.aggregate([
+      {
+        $match: {
+          providerId: providerObjectId,
+          'metadata.bookingDate': { $gte: startDate, $lte: endDate },
+          status: { $in: ['calculated', 'pending', 'approved', 'paid'] },
+        },
+      },
+      {
+        $facet: {
+          // Overall totals
+          totals: [
+            {
+              $group: {
+                _id: null,
+                totalEarnings: { $sum: '$providerEarnings' },
+                totalCommission: { $sum: '$commissionAmount' },
+                totalTax: { $sum: '$taxAmount' },
+              },
+            },
+          ],
+          // Quarterly breakdown
+          quarterly: [
+            {
+              $group: {
+                _id: {
+                  $ceil: {
+                    $divide: [{ $add: [{ $month: '$calculatedAt' }, 2] }, 3],
+                  },
+                },
+                count: { $sum: 1 },
+                earnings: { $sum: '$providerEarnings' },
+                tax: { $sum: '$taxAmount' },
+              },
+            },
+            { $sort: { _id: 1 } },
+          ],
+        },
+      },
+    ]);
+
+    const result = aggregationResult[0] || {};
+    const totals = result.totals?.[0] || {
+      totalEarnings: 0,
+      totalCommission: 0,
+      totalTax: 0,
+    };
+
+    // Build quarterly breakdown with all quarters (fill missing with zeros)
+    const quarterlyBreakdown = [1, 2, 3, 4].map((quarter) => {
+      const quarterData = result.quarterly?.find((q: any) => q._id === quarter);
+      return {
+        quarter,
+        count: quarterData?.count || 0,
+        earnings: quarterData?.earnings || 0,
+        tax: quarterData?.tax || 0,
+      };
     });
-
-    // Calculate totals
-    let totalEarnings = 0;
-    let totalCommission = 0;
-    let totalTax = 0;
-
-    // Quarterly breakdown
-    const quarterlyMap = new Map<number, { count: number; earnings: number; tax: number }>();
-
-    for (const comm of commissions) {
-      totalEarnings += comm.providerEarnings;
-      totalCommission += comm.commissionAmount;
-      totalTax += comm.taxAmount;
-
-      const quarter = Math.floor(new Date(comm.calculatedAt).getMonth() / 3) + 1;
-      const existing = quarterlyMap.get(quarter) || { count: 0, earnings: 0, tax: 0 };
-
-      quarterlyMap.set(quarter, {
-        count: existing.count + 1,
-        earnings: existing.earnings + comm.providerEarnings,
-        tax: existing.tax + comm.taxAmount,
-      });
-    }
 
     // Get or generate tax document
     let taxDocument: TaxDocument | null = null;
@@ -732,16 +842,11 @@ export class EarningsReportService {
       logger.warn('Failed to generate annual tax statement', { error, providerId: providerObjectId, year });
     }
 
-    const quarterlyBreakdown = [1, 2, 3, 4].map((quarter) => ({
-      quarter,
-      ...(quarterlyMap.get(quarter) || { count: 0, earnings: 0, tax: 0 }),
-    }));
-
     return {
       year,
-      totalEarnings,
-      totalCommission,
-      totalTax,
+      totalEarnings: totals.totalEarnings,
+      totalCommission: totals.totalCommission,
+      totalTax: totals.totalTax,
       quarterlyBreakdown,
       taxDocument,
     };
@@ -749,28 +854,100 @@ export class EarningsReportService {
 
   /**
    * Export earnings data for external accounting systems
+   * PERFORMANCE FIX: Uses cursor-based pagination with limit to prevent OutOfMemory
    */
   async exportEarningsData(
     providerId: string | Types.ObjectId,
     startDate: Date,
     endDate: Date,
     format: 'csv' | 'json' = 'json'
-  ): Promise<{ data: string; filename: string; contentType: string }> {
+  ): Promise<{ data: string; filename: string; contentType: string; recordCount: number; truncated: boolean }> {
     const providerObjectId =
       typeof providerId === 'string' ? new Types.ObjectId(providerId) : providerId;
 
-    // Get all commissions in the period
-    const commissions = await Commission.find({
-      providerId: providerObjectId,
-      'metadata.bookingDate': { $gte: startDate, $lte: endDate },
-      status: { $in: ['calculated', 'pending', 'approved', 'paid'] },
-    })
-      .populate('bookingId')
-      .populate('serviceId');
+    const MAX_EXPORT_RECORDS = 10000;
+    let recordCount = 0;
+    let truncated = false;
 
-    // Get provider info
+    // First, get provider info
     const User = mongoose.model('User');
     const provider = await User.findById(providerObjectId);
+
+    // First pass: compute summary using aggregation (database-level)
+    const summaryResult = await Commission.aggregate([
+      {
+        $match: {
+          providerId: providerObjectId,
+          'metadata.bookingDate': { $gte: startDate, $lte: endDate },
+          status: { $in: ['calculated', 'pending', 'approved', 'paid'] },
+        },
+      },
+      {
+        $group: {
+          _id: null,
+          totalTransactions: { $sum: 1 },
+          totalGross: { $sum: '$grossAmount' },
+          totalCommission: { $sum: '$commissionAmount' },
+          totalTax: { $sum: '$taxAmount' },
+          totalEarnings: { $sum: '$providerEarnings' },
+        },
+      },
+    ]);
+
+    const summary = summaryResult[0] || {
+      totalTransactions: 0,
+      totalGross: 0,
+      totalCommission: 0,
+      totalTax: 0,
+      totalEarnings: 0,
+    };
+
+    // Check if we need to truncate
+    if (summary.totalTransactions > MAX_EXPORT_RECORDS) {
+      truncated = true;
+      logger.warn('Export truncated due to large dataset', {
+        providerId: providerObjectId,
+        totalRecords: summary.totalTransactions,
+        maxRecords: MAX_EXPORT_RECORDS,
+      });
+    }
+
+    // Stream commissions using cursor-based pagination (fetch in batches)
+    const commissions: any[] = [];
+    let lastId: Types.ObjectId | null = null;
+    const batchSize = 1000;
+
+    while (commissions.length < MAX_EXPORT_RECORDS) {
+      const query: any = {
+        providerId: providerObjectId,
+        'metadata.bookingDate': { $gte: startDate, $lte: endDate },
+        status: { $in: ['calculated', 'pending', 'approved', 'paid'] },
+      };
+
+      // Cursor-based pagination using _id
+      if (lastId) {
+        query._id = { $gt: lastId };
+      }
+
+      const batch = await Commission.find(query)
+        .sort({ _id: 1 })
+        .limit(batchSize)
+        .lean();
+
+      if (batch.length === 0) {
+        break;
+      }
+
+      commissions.push(...batch);
+      lastId = batch[batch.length - 1]._id as Types.ObjectId;
+
+      // Safety check - exit if no more records to fetch
+      if (batch.length < batchSize) {
+        break;
+      }
+    }
+
+    recordCount = commissions.length;
 
     if (format === 'csv') {
       const headers = [
@@ -788,8 +965,8 @@ export class EarningsReportService {
       ];
 
       const rows = commissions.map((comm) => [
-        comm.bookingNumber,
-        new Date(comm.calculatedAt).toISOString(),
+        comm.bookingNumber || '',
+        comm.calculatedAt ? new Date(comm.calculatedAt).toISOString() : '',
         comm.metadata?.serviceTitle || '',
         comm.metadata?.categoryName || '',
         comm.grossAmount.toFixed(2),
@@ -807,6 +984,8 @@ export class EarningsReportService {
         data: csvContent,
         filename: `earnings_${provider?.firstName || 'provider'}_${startDate.toISOString().split('T')[0]}_${endDate.toISOString().split('T')[0]}.csv`,
         contentType: 'text/csv',
+        recordCount,
+        truncated,
       };
     } else {
       const exportData = {
@@ -822,7 +1001,7 @@ export class EarningsReportService {
         },
         transactions: commissions.map((comm) => ({
           bookingNumber: comm.bookingNumber,
-          date: new Date(comm.calculatedAt).toISOString(),
+          date: comm.calculatedAt ? new Date(comm.calculatedAt).toISOString() : null,
           serviceTitle: comm.metadata?.serviceTitle,
           categoryName: comm.metadata?.categoryName,
           grossAmount: comm.grossAmount,
@@ -838,18 +1017,25 @@ export class EarningsReportService {
           ruleName: comm.ruleName,
         })),
         summary: {
-          totalTransactions: commissions.length,
-          totalGross: commissions.reduce((sum, c) => sum + c.grossAmount, 0),
-          totalCommission: commissions.reduce((sum, c) => sum + c.commissionAmount, 0),
-          totalTax: commissions.reduce((sum, c) => sum + c.taxAmount, 0),
-          totalEarnings: commissions.reduce((sum, c) => sum + c.providerEarnings, 0),
+          totalTransactions: summary.totalTransactions,
+          totalGross: summary.totalGross,
+          totalCommission: summary.totalCommission,
+          totalTax: summary.totalTax,
+          totalEarnings: summary.totalEarnings,
+          exportedRecords: recordCount,
+          truncated,
         },
+        warning: truncated
+          ? `Export limited to ${MAX_EXPORT_RECORDS} records. Total records: ${summary.totalTransactions}`
+          : undefined,
       };
 
       return {
         data: JSON.stringify(exportData, null, 2),
         filename: `earnings_${provider?.firstName || 'provider'}_${startDate.toISOString().split('T')[0]}_${endDate.toISOString().split('T')[0]}.json`,
         contentType: 'application/json',
+        recordCount,
+        truncated,
       };
     }
   }

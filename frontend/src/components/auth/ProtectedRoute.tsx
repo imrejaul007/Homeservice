@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { Navigate, useLocation } from 'react-router-dom';
+import { Navigate, useLocation, useSearchParams } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
 
 interface ProtectedRouteProps {
@@ -201,6 +201,8 @@ export const PublicRoute: React.FC<{
   redirectTo 
 }) => {
   const { isAuthenticated, user, isInitialized, initialize } = useAuthStore();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
 
   useEffect(() => {
     if (!isInitialized) {
@@ -219,15 +221,25 @@ export const PublicRoute: React.FC<{
 
   // Redirect authenticated users if required
   if (redirectAuthenticated && isAuthenticated && user) {
+    const stateReturn =
+      (location.state as { returnTo?: string; from?: string } | null)?.returnTo ||
+      (location.state as { from?: string } | null)?.from;
+    const queryReturn = searchParams.get('returnTo');
+    const safeReturn =
+      queryReturn?.startsWith('/') ? queryReturn : stateReturn?.startsWith('/') ? stateReturn : null;
+
     const defaultRedirect = redirectTo || (
       user.role === 'admin'
         ? '/admin/dashboard'
         : user.role === 'provider'
           ? '/provider/dashboard'
-          : '/'
+          : '/customer/dashboard'
     );
 
-    return <Navigate to={defaultRedirect} replace />;
+    const destination =
+      user.role === 'customer' && safeReturn ? safeReturn : defaultRedirect;
+
+    return <Navigate to={destination} replace />;
   }
 
   return <>{children}</>;

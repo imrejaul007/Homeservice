@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Filter, Search, Calendar, X } from 'lucide-react';
 import NavigationHeader from '../../components/layout/NavigationHeader';
@@ -10,6 +10,8 @@ import type { BookingFilters } from '../../services/BookingService';
 import { toast } from 'react-hot-toast';
 import { PageErrorBoundary } from '../../components/common/PageErrorBoundary';
 import { BookingCardSkeleton } from '../../components/common/Loading';
+import { useBookingAdminUpdates } from '../../hooks/useSocket';
+import { CANCELLATION_REASONS } from '../../constants/booking';
 
 const CustomerBookingsPage: React.FC = () => {
   const navigate = useNavigate();
@@ -31,12 +33,26 @@ const CustomerBookingsPage: React.FC = () => {
   const [cancellingBookingId, setCancellingBookingId] = useState<string | null>(null);
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [cancelBookingId, setCancelBookingId] = useState<string | null>(null);
+  const isFetchingRef = useRef(false);
+
+  // Subscribe to real-time booking updates from admin actions
+  const { bookingUpdated } = useBookingAdminUpdates();
 
   // Fetch bookings when filters change
   useEffect(() => {
     getCustomerBookings(filters);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filters.page, filters.limit, filters.status]);
+  }, [filters.page, filters.limit, filters.status, getCustomerBookings]);
+
+  // Refresh bookings when admin updates a booking (real-time update)
+  useEffect(() => {
+    if (bookingUpdated && !isFetchingRef.current) {
+      // Show toast notification about the update
+      toast.success(`Booking #${bookingUpdated.bookingNumber.slice(-6)} status updated to ${bookingUpdated.status.replace('_', ' ')} by admin`);
+      // Refresh the bookings list
+      getCustomerBookings(filters);
+    }
+  }, [bookingUpdated, getCustomerBookings, filters]);
 
   const handleStatusChange = (status: string) => {
     setSelectedStatus(status);
@@ -57,7 +73,7 @@ const CustomerBookingsPage: React.FC = () => {
     setCancellingBookingId(cancelBookingId);
     setShowCancelModal(false);
     try {
-      await cancelBooking(cancelBookingId, { reason: 'Customer requested cancellation' });
+      await cancelBooking(cancelBookingId, { reason: CANCELLATION_REASONS.CUSTOMER_REQUEST });
       toast.success('Booking cancelled successfully');
       getCustomerBookings(filters);
     } catch (err: unknown) {
@@ -157,7 +173,9 @@ const CustomerBookingsPage: React.FC = () => {
                         totalPrice: booking.pricing?.totalAmount || booking.pricing?.total || 0,
                         location: booking.location?.address ? {
                           address: `${booking.location.address.street || ''}, ${booking.location.address.city || ''}`
-                        } : undefined
+                        } : undefined,
+                        isGuestBooking: booking.isGuestBooking,
+                        guestInfo: booking.guestInfo
                       }}
                       onView={() => handleViewBooking(booking._id)}
                       onCancel={
@@ -174,7 +192,7 @@ const CustomerBookingsPage: React.FC = () => {
                 {customerBookingsPagination && customerBookingsPagination.pages > 1 && (
                   <div className="flex justify-center items-center gap-2">
                     <button
-                      onClick={() => setFilters((prev) => ({ ...prev, page: prev.page! - 1 }))}
+                      onClick={() => setFilters((prev) => ({ ...prev, page: (prev.page ?? 1) - 1 }))}
                       disabled={filters.page === 1}
                       className="px-4 py-2 rounded-nilin bg-white border border-nilin-border font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-nilin-muted transition-colors"
                     >
@@ -184,7 +202,7 @@ const CustomerBookingsPage: React.FC = () => {
                       Page {filters.page} of {customerBookingsPagination.pages}
                     </span>
                     <button
-                      onClick={() => setFilters((prev) => ({ ...prev, page: prev.page! + 1 }))}
+                      onClick={() => setFilters((prev) => ({ ...prev, page: (prev.page ?? 1) + 1 }))}
                       disabled={filters.page === customerBookingsPagination.pages}
                       className="px-4 py-2 rounded-nilin bg-white border border-nilin-border font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-nilin-muted transition-colors"
                     >

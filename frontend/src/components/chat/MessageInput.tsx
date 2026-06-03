@@ -57,6 +57,7 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
     // Refs
     const inputRef = useRef<HTMLTextAreaElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
     // Expose methods via ref
     useImperativeHandle(ref, () => ({
@@ -83,9 +84,24 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
       }
     }, [autoFocus]);
 
-    // Handle typing with debounce
+    // Cleanup typing timeout on unmount
+    useEffect(() => {
+      return () => {
+        if (typingTimeoutRef.current) {
+          clearTimeout(typingTimeoutRef.current);
+        }
+      };
+    }, []);
+
+    // Handle typing with debounce (500ms)
     const handleTyping = useCallback(() => {
-      onTyping?.();
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+
+      typingTimeoutRef.current = setTimeout(() => {
+        onTyping?.();
+      }, 500);
     }, [onTyping]);
 
     // Handle input change

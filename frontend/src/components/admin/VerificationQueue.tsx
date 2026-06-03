@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useAuthStore } from '../../stores/authStore';
 import {
   UserCheck,
   Search,
@@ -146,10 +147,12 @@ export const VerificationQueue: React.FC<VerificationQueueProps> = ({
   embedded = false,
   onClose
 }) => {
+  const user = useAuthStore((state) => state.user);
   const [items, setItems] = useState<VerificationItem[]>([]);
   const [stats, setStats] = useState<VerificationQueueStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isDemoMode, setIsDemoMode] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('pending');
@@ -162,6 +165,9 @@ export const VerificationQueue: React.FC<VerificationQueueProps> = ({
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [bulkMode, setBulkMode] = useState(false);
   const [selectedItems, setSelectedItems] = useState<string[]>([]);
+  const [showRejectionModal, setShowRejectionModal] = useState(false);
+  const [rejectionDocInfo, setRejectionDocInfo] = useState<{ itemId: string; docId: string; docLabel: string } | null>(null);
+  const [rejectionReason, setRejectionReason] = useState('');
 
   const fetchData = useCallback(async () => {
     try {
@@ -171,228 +177,139 @@ export const VerificationQueue: React.FC<VerificationQueueProps> = ({
       if (response.data?.success) {
         setItems(response.data.data.items || []);
         setStats(response.data.data.stats);
+        setIsDemoMode(false);
       } else {
-        // Mock data
-        setItems([
-          {
-            id: 'vq-001',
-            providerId: 'prov-001',
-            providerName: 'Ahmed Al-Rashid',
-            providerEmail: 'ahmed.rashid@email.com',
-            providerPhone: '+971501234567',
-            submittedAt: new Date(Date.now() - 3600000 * 2).toISOString(),
-            status: 'pending',
-            priority: 'urgent',
-            documents: [
-              { id: 'doc-1', type: 'id_front', label: 'Emirates ID Front', url: '/docs/id-front-001.jpg', status: 'pending' },
-              { id: 'doc-2', type: 'id_back', label: 'Emirates ID Back', url: '/docs/id-back-001.jpg', status: 'pending' },
-              { id: 'doc-3', type: 'selfie', label: 'Selfie with ID', url: '/docs/selfie-001.jpg', status: 'pending' },
-              { id: 'doc-4', type: 'address_proof', label: 'Utility Bill', url: '/docs/utility-001.pdf', status: 'pending' }
-            ],
-            profile: {
-              avatar: '/avatars/prov-001.jpg',
-              bio: 'Professional electrician with 10+ years experience in residential and commercial properties.',
-              services: ['Electrical', 'AC Repair', 'Appliance Installation'],
-              experience: '10 years',
-              certifications: ['Dubai Electricity Authority Licensed', 'First Aid Certified'],
-              rating: 4.8,
-              completedJobs: 245
-            },
-            verificationData: {
-              identityVerified: false,
-              addressVerified: false,
-              phoneVerified: true,
-              emailVerified: true,
-              backgroundChecked: false
-            },
-            notes: [],
-            reviewHistory: []
-          },
-          {
-            id: 'vq-002',
-            providerId: 'prov-002',
-            providerName: 'Fatima Hassan',
-            providerEmail: 'fatima.h@email.com',
-            providerPhone: '+971552345678',
-            submittedAt: new Date(Date.now() - 3600000 * 5).toISOString(),
-            status: 'in_review',
-            priority: 'high',
-            assignedTo: 'admin@nilin.com',
-            assignedAt: new Date(Date.now() - 3600000).toISOString(),
-            documents: [
-              { id: 'doc-5', type: 'id_front', label: 'Emirates ID Front', url: '/docs/id-front-002.jpg', status: 'verified', verifiedAt: new Date(Date.now() - 3600000 * 2).toISOString() },
-              { id: 'doc-6', type: 'id_back', label: 'Emirates ID Back', url: '/docs/id-back-002.jpg', status: 'verified', verifiedAt: new Date(Date.now() - 3600000 * 2).toISOString() },
-              { id: 'doc-7', type: 'selfie', label: 'Selfie with ID', url: '/docs/selfie-002.jpg', status: 'verified', verifiedAt: new Date(Date.now() - 3600000 * 2).toISOString() },
-              { id: 'doc-8', type: 'address_proof', label: 'Utility Bill', url: '/docs/utility-002.pdf', status: 'pending' },
-              { id: 'doc-9', type: 'certifications', label: 'Beauty License', url: '/docs/license-002.pdf', status: 'verified', verifiedAt: new Date(Date.now() - 3600000).toISOString() }
-            ],
-            profile: {
-              avatar: '/avatars/prov-002.jpg',
-              bio: 'Experienced beauty therapist specializing in hair styling and makeup.',
-              services: ['Hair Styling', 'Makeup', 'Nail Care', 'Facials'],
-              experience: '7 years',
-              certifications: ['DHCC Certified', 'International Makeup Artist'],
-              rating: 4.9,
-              completedJobs: 312
-            },
-            verificationData: {
-              identityVerified: true,
-              addressVerified: false,
-              phoneVerified: true,
-              emailVerified: true,
-              backgroundChecked: true
-            },
-            notes: [
-              { id: 'n1', text: 'Address document needs additional verification - name mismatch', author: 'admin@nilin.com', createdAt: new Date(Date.now() - 3600000).toISOString() }
-            ],
-            reviewHistory: []
-          },
-          {
-            id: 'vq-003',
-            providerId: 'prov-003',
-            providerName: 'Omar Malik',
-            providerEmail: 'omar.malik@email.com',
-            providerPhone: '+971504567890',
-            submittedAt: new Date(Date.now() - 3600000 * 24).toISOString(),
-            status: 'pending',
-            priority: 'normal',
-            documents: [
-              { id: 'doc-10', type: 'id_front', label: 'Emirates ID Front', url: '/docs/id-front-003.jpg', status: 'pending' },
-              { id: 'doc-11', type: 'id_back', label: 'Emirates ID Back', url: '/docs/id-back-003.jpg', status: 'pending' },
-              { id: 'doc-12', type: 'selfie', label: 'Selfie with ID', url: '/docs/selfie-003.jpg', status: 'pending' },
-              { id: 'doc-13', type: 'address_proof', label: 'Tenancy Contract', url: '/docs/tenancy-003.pdf', status: 'pending' },
-              { id: 'doc-14', type: 'insurance', label: 'Professional Liability', url: '/docs/insurance-003.pdf', status: 'pending' }
-            ],
-            profile: {
-              avatar: '/avatars/prov-003.jpg',
-              bio: 'Expert plumber for all your residential and commercial plumbing needs.',
-              services: ['Plumbing', 'Drain Cleaning', 'Water Heater Installation'],
-              experience: '8 years',
-              certifications: ['Dubai Municipality Licensed', 'ISO 9001 Certified'],
-              rating: 4.6,
-              completedJobs: 189
-            },
-            verificationData: {
-              identityVerified: false,
-              addressVerified: false,
-              phoneVerified: true,
-              emailVerified: true,
-              backgroundChecked: false
-            },
-            notes: [],
-            reviewHistory: []
-          },
-          {
-            id: 'vq-004',
-            providerId: 'prov-004',
-            providerName: 'Sara Khan',
-            providerEmail: 'sara.khan@email.com',
-            providerPhone: '+971556789012',
-            submittedAt: new Date(Date.now() - 3600000 * 48).toISOString(),
-            status: 'needs_info',
-            priority: 'high',
-            documents: [
-              { id: 'doc-15', type: 'id_front', label: 'Emirates ID Front', url: '/docs/id-front-004.jpg', status: 'rejected', rejectionReason: 'Image too blurry, please resubmit' },
-              { id: 'doc-16', type: 'id_back', label: 'Emirates ID Back', url: '/docs/id-back-004.jpg', status: 'pending' },
-              { id: 'doc-17', type: 'selfie', label: 'Selfie with ID', url: '/docs/selfie-004.jpg', status: 'pending' },
-              { id: 'doc-18', type: 'address_proof', label: 'DEWA Bill', url: '/docs/dewa-004.pdf', status: 'pending' }
-            ],
-            profile: {
-              avatar: '/avatars/prov-004.jpg',
-              bio: 'Professional cleaning services for homes and offices.',
-              services: ['Home Cleaning', 'Deep Cleaning', 'Office Cleaning'],
-              experience: '5 years',
-              certifications: [],
-              rating: 4.7,
-              completedJobs: 156
-            },
-            verificationData: {
-              identityVerified: false,
-              addressVerified: false,
-              phoneVerified: true,
-              emailVerified: true,
-              backgroundChecked: false
-            },
-            notes: [
-              { id: 'n2', text: 'Requested clearer ID document - awaiting response', author: 'admin@nilin.com', createdAt: new Date(Date.now() - 3600000 * 12).toISOString() }
-            ],
-            reviewHistory: []
-          },
-          {
-            id: 'vq-005',
-            providerId: 'prov-005',
-            providerName: 'Youssef Ibrahim',
-            providerEmail: 'y.ibrahim@email.com',
-            providerPhone: '+971501234999',
-            submittedAt: new Date(Date.now() - 3600000 * 72).toISOString(),
-            status: 'approved',
-            priority: 'normal',
-            documents: [
-              { id: 'doc-19', type: 'id_front', label: 'Emirates ID Front', url: '/docs/id-front-005.jpg', status: 'verified', verifiedAt: new Date(Date.now() - 3600000 * 36).toISOString() },
-              { id: 'doc-20', type: 'id_back', label: 'Emirates ID Back', url: '/docs/id-back-005.jpg', status: 'verified', verifiedAt: new Date(Date.now() - 3600000 * 36).toISOString() },
-              { id: 'doc-21', type: 'selfie', label: 'Selfie with ID', url: '/docs/selfie-005.jpg', status: 'verified', verifiedAt: new Date(Date.now() - 3600000 * 36).toISOString() },
-              { id: 'doc-22', type: 'address_proof', label: 'Tenancy Contract', url: '/docs/tenancy-005.pdf', status: 'verified', verifiedAt: new Date(Date.now() - 3600000 * 24).toISOString() },
-              { id: 'doc-23', type: 'certifications', label: 'Carpentry Certificate', url: '/docs/cert-005.pdf', status: 'verified', verifiedAt: new Date(Date.now() - 3600000 * 24).toISOString() }
-            ],
-            profile: {
-              avatar: '/avatars/prov-005.jpg',
-              bio: 'Master carpenter with expertise in custom furniture and renovations.',
-              services: ['Carpentry', 'Furniture Repair', 'Cabinet Installation'],
-              experience: '12 years',
-              certifications: ['Master Carpenter Certificate', 'Safety Training'],
-              rating: 4.8,
-              completedJobs: 278
-            },
-            verificationData: {
-              identityVerified: true,
-              addressVerified: true,
-              phoneVerified: true,
-              emailVerified: true,
-              backgroundChecked: true
-            },
-            decision: {
-              action: 'approved',
-              reason: 'All documents verified, profile complete',
-              reviewedBy: 'admin@nilin.com',
-              reviewedAt: new Date(Date.now() - 3600000 * 24).toISOString()
-            },
-            notes: [],
-            reviewHistory: [
-              { action: 'Submitted for review', by: 'System', at: new Date(Date.now() - 3600000 * 72).toISOString() },
-              { action: 'Identity verified', by: 'admin@nilin.com', at: new Date(Date.now() - 3600000 * 48).toISOString() },
-              { action: 'Documents verified', by: 'admin@nilin.com', at: new Date(Date.now() - 3600000 * 36).toISOString() },
-              { action: 'Approved', by: 'admin@nilin.com', at: new Date(Date.now() - 3600000 * 24).toISOString() }
-            ]
-          }
-        ]);
-        setStats({
-          total: 89,
-          pending: 23,
-          inReview: 15,
-          approved: 45,
-          rejected: 4,
-          needsInfo: 2,
-          avgReviewTime: 4.2,
-          completionRate: 94.5,
-          urgentCount: 5,
-          byDocument: [
-            { type: 'ID Document', count: 89, pending: 12, verified: 77 },
-            { type: 'Selfie', count: 85, pending: 8, verified: 77 },
-            { type: 'Address Proof', count: 82, pending: 15, verified: 67 },
-            { type: 'Certifications', count: 45, pending: 10, verified: 35 },
-            { type: 'Insurance', count: 28, pending: 5, verified: 23 }
-          ],
-          recentDecisions: [
-            { action: 'approved', count: 12, date: 'Today' },
-            { action: 'rejected', count: 2, date: 'Today' },
-            { action: 'approved', count: 18, date: 'Yesterday' },
-            { action: 'rejected', count: 1, date: 'Yesterday' }
-          ]
-        });
+        // API returned but not in expected format - show error instead of mock data
+        console.error('Unexpected API response format:', response.data);
+        setError('Unable to load verification data. Please try again.');
+        setIsDemoMode(false);
+        return;
       }
     } catch (err) {
       console.error('Error fetching verification queue:', err);
-      setError('Failed to load verification queue');
+      // Only use demo data as a last resort fallback
+      setError('Using demo data - API unavailable');
+      setIsDemoMode(true);
+      setItems([
+        {
+          id: 'vq-001',
+          providerId: 'prov-001',
+          providerName: 'Ahmed Al-Rashid',
+          providerEmail: 'ahmed.rashid@email.com',
+          providerPhone: '+971501234567',
+          submittedAt: new Date(Date.now() - 3600000 * 2).toISOString(),
+          status: 'pending',
+          priority: 'urgent',
+          documents: [
+            { id: 'doc-1', type: 'id_front', label: 'Emirates ID Front', url: '/docs/id-front-001.jpg', status: 'pending' },
+            { id: 'doc-2', type: 'id_back', label: 'Emirates ID Back', url: '/docs/id-back-001.jpg', status: 'pending' },
+            { id: 'doc-3', type: 'selfie', label: 'Selfie with ID', url: '/docs/selfie-001.jpg', status: 'pending' },
+            { id: 'doc-4', type: 'address_proof', label: 'Utility Bill', url: '/docs/utility-001.pdf', status: 'pending' }
+          ],
+          profile: {
+            avatar: '/avatars/prov-001.jpg',
+            bio: 'Professional electrician with 10+ years experience.',
+            services: ['Electrical', 'AC Repair'],
+            experience: '10 years',
+            certifications: ['Dubai Electricity Authority Licensed'],
+            rating: 4.8,
+            completedJobs: 245
+          },
+          verificationData: {
+            identityVerified: false,
+            addressVerified: false,
+            phoneVerified: true,
+            emailVerified: true,
+            backgroundChecked: false
+          },
+          notes: [],
+          reviewHistory: []
+        },
+        {
+          id: 'vq-002',
+          providerId: 'prov-002',
+          providerName: 'Fatima Hassan',
+          providerEmail: 'fatima.h@email.com',
+          providerPhone: '+971552345678',
+          submittedAt: new Date(Date.now() - 3600000 * 5).toISOString(),
+          status: 'in_review',
+          priority: 'high',
+          documents: [
+            { id: 'doc-5', type: 'id_front', label: 'Emirates ID Front', url: '/docs/id-front-002.jpg', status: 'verified', verifiedAt: new Date(Date.now() - 3600000 * 2).toISOString() },
+            { id: 'doc-6', type: 'id_back', label: 'Emirates ID Back', url: '/docs/id-back-002.jpg', status: 'pending' },
+            { id: 'doc-7', type: 'selfie', label: 'Selfie with ID', url: '/docs/selfie-002.jpg', status: 'pending' }
+          ],
+          profile: {
+            avatar: '/avatars/prov-002.jpg',
+            bio: 'Experienced beauty therapist.',
+            services: ['Hair Styling', 'Makeup', 'Nail Care'],
+            experience: '7 years',
+            certifications: ['DHCC Certified'],
+            rating: 4.9,
+            completedJobs: 312
+          },
+          verificationData: {
+            identityVerified: true,
+            addressVerified: false,
+            phoneVerified: true,
+            emailVerified: true,
+            backgroundChecked: true
+          },
+          notes: [],
+          reviewHistory: []
+        },
+        {
+          id: 'vq-003',
+          providerId: 'prov-003',
+          providerName: 'Omar Malik',
+          providerEmail: 'omar.malik@email.com',
+          providerPhone: '+971504567890',
+          submittedAt: new Date(Date.now() - 3600000 * 24).toISOString(),
+          status: 'pending',
+          priority: 'normal',
+          documents: [
+            { id: 'doc-10', type: 'id_front', label: 'Emirates ID Front', url: '/docs/id-front-003.jpg', status: 'pending' },
+            { id: 'doc-11', type: 'id_back', label: 'Emirates ID Back', url: '/docs/id-back-003.jpg', status: 'pending' },
+            { id: 'doc-12', type: 'selfie', label: 'Selfie with ID', url: '/docs/selfie-003.jpg', status: 'pending' },
+            { id: 'doc-13', type: 'address_proof', label: 'Tenancy Contract', url: '/docs/tenancy-003.pdf', status: 'pending' }
+          ],
+          profile: {
+            avatar: '/avatars/prov-003.jpg',
+            bio: 'Expert plumber for all your needs.',
+            services: ['Plumbing', 'Drain Cleaning'],
+            experience: '8 years',
+            certifications: ['Dubai Municipality Licensed'],
+            rating: 4.6,
+            completedJobs: 189
+          },
+          verificationData: {
+            identityVerified: false,
+            addressVerified: false,
+            phoneVerified: true,
+            emailVerified: true,
+            backgroundChecked: false
+          },
+          notes: [],
+          reviewHistory: []
+        }
+      ]);
+      setStats({
+        total: 3,
+        pending: 2,
+        inReview: 1,
+        approved: 0,
+        rejected: 0,
+        needsInfo: 0,
+        avgReviewTime: 2.5,
+        completionRate: 85,
+        urgentCount: 1,
+        byDocument: [
+          { type: 'ID Document', count: 3, pending: 1, verified: 2 },
+          { type: 'Selfie', count: 3, pending: 2, verified: 1 },
+          { type: 'Address Proof', count: 2, pending: 2, verified: 0 }
+        ],
+        recentDecisions: []
+      });
     } finally {
       setLoading(false);
     }
@@ -424,15 +341,16 @@ export const VerificationQueue: React.FC<VerificationQueueProps> = ({
 
   const handleAssignToMe = async (itemId: string) => {
     setActionLoading(itemId);
+    const currentUserEmail = user?.email || 'unknown@user.com';
     try {
       await api.patch(`/admin/verification-queue/${itemId}`, {
-        assignedTo: 'admin@nilin.com',
+        assignedTo: currentUserEmail,
         assignedAt: new Date().toISOString(),
         status: 'in_review'
       });
       setItems(prev => prev.map(item =>
         item.id === itemId
-          ? { ...item, assignedTo: 'admin@nilin.com', assignedAt: new Date().toISOString(), status: 'in_review' as const }
+          ? { ...item, assignedTo: currentUserEmail, assignedAt: new Date().toISOString(), status: 'in_review' as const }
           : item
       ));
     } catch (err) {
@@ -469,6 +387,7 @@ export const VerificationQueue: React.FC<VerificationQueueProps> = ({
     if (!selectedItem || !decisionReason.trim()) return;
 
     setActionLoading('decision');
+    const currentUserEmail = user?.email || 'unknown@user.com';
     try {
       const newStatus = decisionType === 'approve' ? 'approved' : decisionType === 'reject' ? 'rejected' : 'needs_info';
       await api.post(`/admin/verification-queue/${selectedItem.id}/decision`, {
@@ -484,14 +403,14 @@ export const VerificationQueue: React.FC<VerificationQueueProps> = ({
               decision: {
                 action: decisionType === 'approve' ? 'approved' : 'rejected',
                 reason: decisionReason,
-                reviewedBy: 'admin@nilin.com',
+                reviewedBy: currentUserEmail,
                 reviewedAt: new Date().toISOString()
               },
               reviewHistory: [
                 ...item.reviewHistory,
                 {
                   action: `Decision: ${decisionType}`,
-                  by: 'admin@nilin.com',
+                  by: currentUserEmail,
                   at: new Date().toISOString(),
                   notes: decisionReason
                 }
@@ -529,6 +448,15 @@ export const VerificationQueue: React.FC<VerificationQueueProps> = ({
       console.error('Error verifying document:', err);
     } finally {
       setActionLoading(null);
+    }
+  };
+
+  const handleRejectDocument = () => {
+    if (rejectionDocInfo && rejectionReason.trim()) {
+      handleDocumentVerify(rejectionDocInfo.itemId, rejectionDocInfo.docId, 'rejected', rejectionReason.trim());
+      setShowRejectionModal(false);
+      setRejectionReason('');
+      setRejectionDocInfo(null);
     }
   };
 
@@ -799,6 +727,11 @@ export const VerificationQueue: React.FC<VerificationQueueProps> = ({
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1 flex-wrap">
+                      {isDemoMode && (
+                        <span className="px-2 py-0.5 bg-purple-100 text-purple-700 rounded text-xs font-medium">
+                          Demo
+                        </span>
+                      )}
                       <span className="font-medium text-nilin-charcoal">{item.providerName}</span>
                       {item.priority !== 'normal' && (
                         <span className={cn(
@@ -987,7 +920,7 @@ export const VerificationQueue: React.FC<VerificationQueueProps> = ({
                                         <CheckCircle className="w-4 h-4 text-green-600" />
                                       </button>
                                       <button
-                                        onClick={() => handleDocumentVerify(item.id, doc.id, 'rejected', 'Document rejected')}
+                                        onClick={() => { setRejectionDocInfo({ itemId: item.id, docId: doc.id, docLabel: doc.label }); setShowRejectionModal(true); }}
                                         disabled={actionLoading === doc.id}
                                         className="p-1.5 rounded hover:bg-red-100 transition-colors"
                                         title="Reject"
@@ -1111,6 +1044,41 @@ export const VerificationQueue: React.FC<VerificationQueueProps> = ({
                 )}
               >
                 {actionLoading === 'decision' ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Confirm'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Rejection Reason Modal */}
+      {showRejectionModal && rejectionDocInfo && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6">
+            <h3 className="text-lg font-serif text-nilin-charcoal mb-2">Reject Document</h3>
+            <p className="text-sm text-nilin-warmGray mb-4">
+              {rejectionDocInfo.docLabel}
+            </p>
+            <textarea
+              value={rejectionReason}
+              onChange={(e) => setRejectionReason(e.target.value)}
+              placeholder="Reason for rejection (required)..."
+              className="w-full px-4 py-3 border border-nilin-border rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-coral/30 text-sm mb-4"
+              rows={3}
+              autoFocus
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => { setShowRejectionModal(false); setRejectionReason(''); setRejectionDocInfo(null); }}
+                className="px-4 py-2 border border-nilin-border rounded-xl hover:bg-nilin-blush/30 transition-colors text-sm font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleRejectDocument}
+                disabled={!rejectionReason.trim()}
+                className="px-4 py-2 bg-red-500 text-white rounded-xl hover:bg-red-600 transition-colors text-sm font-medium disabled:opacity-50"
+              >
+                Reject Document
               </button>
             </div>
           </div>

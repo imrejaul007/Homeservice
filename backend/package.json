@@ -16,6 +16,7 @@
     "db:seed": "ts-node src/seeders/index.ts",
     "db:seed:services": "ts-node -e \"import './src/seeders/services.seeder'\".then(() => process.exit(0))",
     "db:seed:beauty": "ts-node src/scripts/seed-beauty.ts",
+    "redis:cleanup-locks": "node scripts/cleanup-stale-locks.js",
     "db:create-admin": "ts-node src/scripts/create-admin.ts",
     "db:create-production-admin": "ts-node src/scripts/create-production-admin.ts",
     "db:reset": "ts-node src/scripts/reset-db.ts",

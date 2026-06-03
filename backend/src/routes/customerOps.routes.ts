@@ -15,12 +15,14 @@ import {
   initializeAllMetrics,
 } from '../controllers/customerOps.controller';
 import { authenticate, requireRole } from '../middleware/auth.middleware';
+import { adminLimiter } from '../middleware/rateLimiter';
 
 const router = express.Router();
 
 // All customer ops routes require admin authentication
 router.use(authenticate);
 router.use(requireRole('admin'));
+router.use(adminLimiter);
 
 // ========================================
 // Customer List & Detail

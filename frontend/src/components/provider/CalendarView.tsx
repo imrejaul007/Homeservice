@@ -2,7 +2,7 @@
  * CalendarView - Full calendar integration for bookings
  * Provider Dashboard Component
  */
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { cn } from '../../lib/utils';
 import {
   ChevronLeft,
@@ -20,9 +20,13 @@ import {
   ExternalLink,
   Phone,
   MessageSquare,
+  Ban,
+  RefreshCw,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { toast } from 'sonner';
 import { bookingService } from '../../services/BookingService';
+import { socketService } from '../../services/socket';
 
 // =============================================================================
 // Type Definitions
@@ -97,6 +101,60 @@ export interface CalendarViewProps {
   blockedTimes?: Array<{ start: Date; end: Date; reason?: string }>;
   /** Custom className */
   className?: string;
+}
+
+// =============================================================================
+// API Response Interfaces
+// =============================================================================
+
+/** API response structure for a single booking from the backend */
+interface ApiCustomer {
+  _id?: string;
+  firstName?: string;
+  lastName?: string;
+  avatar?: string;
+  phone?: string;
+}
+
+interface ApiService {
+  name?: string;
+  category?: string;
+}
+
+interface ApiPricing {
+  totalAmount?: number;
+  total?: number;
+  currency?: string;
+}
+
+interface ApiLocation {
+  address?: {
+    street?: string;
+  };
+}
+
+interface ApiCustomerInfo {
+  specialRequests?: string;
+}
+
+interface ApiBookingResponse {
+  _id: string;
+  customer?: ApiCustomer;
+  service?: ApiService;
+  scheduledDate: string;
+  scheduledTime: string;
+  estimatedDuration?: number;
+  status: string;
+  pricing?: ApiPricing;
+  location?: ApiLocation;
+  customerInfo?: ApiCustomerInfo;
+  isInstantBook?: boolean;
+}
+
+/** API response structure for blocked periods */
+interface ApiBlockedPeriod {
+  date: string;
+  reason?: string;
 }
 
 // =============================================================================
@@ -347,6 +405,8 @@ interface DayViewProps {
   onEventClick: (event: CalendarEvent) => void;
   onAcceptBooking?: (bookingId: string) => Promise<void>;
   onDeclineBooking?: (bookingId: string) => Promise<void>;
+  /** Track which booking action is currently in progress */
+  pendingAction?: { bookingId: string; action: 'accept' | 'decline' } | null;
 }
 
 const DayView: React.FC<DayViewProps> = ({
@@ -355,6 +415,7 @@ const DayView: React.FC<DayViewProps> = ({
   onEventClick,
   onAcceptBooking,
   onDeclineBooking,
+  pendingAction = null,
 }) => {
   const hours = Array.from({ length: 24 }, (_, i) => i);
 
@@ -457,18 +518,34 @@ const DayView: React.FC<DayViewProps> = ({
                             e.stopPropagation();
                             onAcceptBooking(event.booking!.id);
                           }}
-                          className="flex-1 py-1 text-xs bg-green-600 text-white rounded hover:bg-green-700 transition-colors"
+                          disabled={pendingAction?.bookingId === event.booking!.id}
+                          className="flex-1 py-1 text-xs bg-green-600 text-white rounded hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1"
                         >
-                          Accept
+                          {pendingAction?.bookingId === event.booking!.id && pendingAction.action === 'accept' ? (
+                            <>
+                              <RefreshCw className="w-3 h-3 animate-spin" />
+                              <span>Accepting...</span>
+                            </>
+                          ) : (
+                            'Accept'
+                          )}
                         </button>
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
                             onDeclineBooking(event.booking!.id);
                           }}
-                          className="flex-1 py-1 text-xs bg-red-100 text-red-600 rounded hover:bg-red-200 transition-colors"
+                          disabled={pendingAction?.bookingId === event.booking!.id}
+                          className="flex-1 py-1 text-xs bg-red-100 text-red-600 rounded hover:bg-red-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1"
                         >
-                          Decline
+                          {pendingAction?.bookingId === event.booking!.id && pendingAction.action === 'decline' ? (
+                            <>
+                              <RefreshCw className="w-3 h-3 animate-spin" />
+                              <span>Declining...</span>
+                            </>
+                          ) : (
+                            'Decline'
+                          )}
                         </button>
                       </div>
                     )}
@@ -487,7 +564,14 @@ const DayView: React.FC<DayViewProps> = ({
 // =============================================================================
 
 // Helper to map API booking to CalendarBooking format
-const mapApiBookingToCalendarBooking = (booking: any): CalendarBooking => {
+// Returns null for invalid data instead of throwing to prevent calendar crashes
+const mapApiBookingToCalendarBooking = (booking: ApiBookingResponse): CalendarBooking | null => {
+  // Validate required fields
+  if (!booking._id || !booking.scheduledDate || !booking.scheduledTime) {
+    console.warn('[CalendarView] Invalid API booking response - missing required fields:', booking);
+    return null;
+  }
+
   return {
     id: booking._id,
     customerName: booking.customer
@@ -527,7 +611,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
   onDeclineBooking,
   onDateSelect,
   initialDate = new Date(),
-  blockedTimes = [],
+  blockedTimes: blockedTimesProp = [],
   className,
 }) => {
   const [currentDate, setCurrentDate] = useState(initialDate);
@@ -537,47 +621,124 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
   const [bookings, setBookings] = useState<CalendarBooking[]>(bookingsProp || []);
   const [isLoading, setIsLoading] = useState(isLoadingProp);
   const [error, setError] = useState<string | null>(null);
+  const [blockedTimes, setBlockedTimes] = useState<Array<{ start: Date; end: Date; reason?: string }>>(blockedTimesProp);
+
+  // Track pending booking actions for optimistic UI
+  const [pendingAction, setPendingAction] = useState<{ bookingId: string; action: 'accept' | 'decline' } | null>(null);
+
+  // Track selected booking for detail modal
+  const [selectedBooking, setSelectedBooking] = useState<CalendarBooking | null>(null);
+
+  // Track mounted state to prevent memory leaks from async operations
+  const isMountedRef = useRef(true);
+
+  // Abort controller ref for cancelling in-flight requests on month change
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  // Debounce ref for month navigation to prevent race conditions
+  const monthChangeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Fetch bookings from API if not provided via props
   useEffect(() => {
-    if (bookingsProp && bookingsProp.length > 0) {
-      setBookings(bookingsProp);
-      setIsLoading(false);
-    } else if (!bookingsProp) {
-      const fetchBookings = async () => {
-        setIsLoading(true);
-        setError(null);
-        try {
-          const response = await bookingService.getProviderBookings({
-            dateFrom: new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).toISOString(),
-            dateTo: new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).toISOString(),
-            limit: 100,
-          });
+    // Update mounted ref
+    isMountedRef.current = true;
 
-          if (response.success && response.data?.bookings) {
-            const mappedBookings = response.data.bookings.map(mapApiBookingToCalendarBooking);
-            setBookings(mappedBookings);
-          }
-        } catch (err) {
-          const errorMessage = err instanceof Error ? err.message : 'Failed to load bookings';
-          setError(errorMessage);
-          console.error('Error fetching provider bookings:', err);
-        } finally {
+    // Abort any in-flight request
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+
+    const fetchBookings = async () => {
+      if (bookingsProp && bookingsProp.length > 0) {
+        if (isMountedRef.current) {
+          setBookings(bookingsProp);
           setIsLoading(false);
         }
-      };
+        return;
+      }
 
-      fetchBookings();
+      if (isMountedRef.current) {
+        setIsLoading(true);
+        setError(null);
+      }
+
+      try {
+        const response = await bookingService.getProviderBookings({
+          dateFrom: new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).toISOString(),
+          dateTo: new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).toISOString(),
+          limit: 100,
+        }, abortController.signal);
+
+        // Check if component is still mounted before updating state
+        if (!isMountedRef.current) return;
+
+        if (response.success && response.data?.bookings) {
+          const mappedBookings = response.data.bookings
+            .map((booking: ApiBookingResponse) => mapApiBookingToCalendarBooking(booking))
+            .filter((b: CalendarBooking | null): b is CalendarBooking => b !== null);
+          setBookings(mappedBookings);
+        }
+      } catch (err) {
+        // Ignore abort errors
+        if (err instanceof Error && err.name === 'AbortError') return;
+
+        // Check if component is still mounted before updating state
+        if (!isMountedRef.current) return;
+
+        const errorMessage = err instanceof Error ? err.message : 'Failed to load bookings';
+        setError(errorMessage);
+        console.error('Error fetching provider bookings:', err);
+      } finally {
+        // Only update loading state if still mounted
+        if (isMountedRef.current) {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    // Debounce the fetch to prevent rapid month changes from causing race conditions
+    if (monthChangeTimeoutRef.current) {
+      clearTimeout(monthChangeTimeoutRef.current);
     }
+    monthChangeTimeoutRef.current = setTimeout(fetchBookings, 150);
+
+    // Cleanup: abort fetch and prevent state updates after unmount
+    return () => {
+      isMountedRef.current = false;
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+      if (monthChangeTimeoutRef.current) {
+        clearTimeout(monthChangeTimeoutRef.current);
+      }
+    };
   }, [bookingsProp, currentDate]);
 
-  // Fetch availability for blocked times
+  // Fetch blocked times from API
   const fetchBlockedTimes = useCallback(async () => {
     try {
       const response = await bookingService.getAvailabilityBlocking();
       if (response.success && response.data?.blockedPeriods) {
-        // These would need to be mapped to the blockedTimes format
-        // For now, the component accepts blockedTimes as props
+        // Map API blocked periods to calendar format
+        // The API returns { date: string, reason?: string } for each blocked day
+        const mappedBlockedTimes = response.data.blockedPeriods
+          .map((period: ApiBlockedPeriod) => {
+            // Validate date before parsing to prevent invalid dates
+            const parsedDate = new Date(period.date);
+            if (isNaN(parsedDate.getTime())) {
+              console.warn('[CalendarView] Invalid blocked period date:', period.date);
+              return null;
+            }
+            return {
+              start: parsedDate,
+              end: new Date(parsedDate.getFullYear(), parsedDate.getMonth(), parsedDate.getDate(), 23, 59, 59, 999),
+              reason: period.reason,
+            };
+          })
+          .filter((bt): bt is { start: Date; end: Date; reason?: string } => bt !== null);
+        setBlockedTimes(mappedBlockedTimes);
       }
     } catch (err) {
       console.error('Error fetching blocked times:', err);
@@ -587,6 +748,125 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
   useEffect(() => {
     fetchBlockedTimes();
   }, [fetchBlockedTimes]);
+
+  // Sync blocked times prop changes
+  useEffect(() => {
+    setBlockedTimes(blockedTimesProp);
+  }, [blockedTimesProp]);
+
+  // Helper to refresh bookings (used by socket handlers)
+  const fetchBookingsFromApi = useCallback(async () => {
+    if (isMountedRef.current) {
+      try {
+        const response = await bookingService.getProviderBookings({
+          dateFrom: new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).toISOString(),
+          dateTo: new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).toISOString(),
+          limit: 100,
+        });
+
+        if (response.success && response.data?.bookings) {
+          const mappedBookings = response.data.bookings
+            .map((booking: ApiBookingResponse) => mapApiBookingToCalendarBooking(booking))
+            .filter((b: CalendarBooking | null): b is CalendarBooking => b !== null);
+          setBookings(mappedBookings);
+        }
+      } catch (err) {
+        console.error('Error refreshing bookings:', err);
+      }
+    }
+  }, [currentDate]);
+
+  // Subscribe to real-time booking updates via socket
+  useEffect(() => {
+    const unsubscribers: Array<() => void> = [];
+
+    // Handle new booking requests
+    const unsubNewRequest = socketService.onNewBookingRequest(() => {
+      // Refresh bookings when a new request arrives
+      if (isMountedRef.current) {
+        fetchBookingsFromApi();
+      }
+    });
+    unsubscribers.push(unsubNewRequest);
+
+    // Handle booking status changes (handles: accepted, rejected, completed, etc.)
+    const unsubStatusChanged = socketService.onBookingStatusChanged((data) => {
+      if (isMountedRef.current) {
+        setBookings(prev => prev.map(booking =>
+          booking.id === data.bookingId
+            ? { ...booking, status: data.status as BookingStatus }
+            : booking
+        ));
+      }
+    });
+    unsubscribers.push(unsubStatusChanged);
+
+    // Handle booking confirmed event
+    const unsubConfirmed = socketService.on('booking:confirmed', (data) => {
+      if (isMountedRef.current) {
+        setBookings(prev => prev.map(booking =>
+          booking.id === data.bookingId
+            ? { ...booking, status: 'confirmed' as BookingStatus }
+            : booking
+        ));
+      }
+    });
+    unsubscribers.push(() => socketService.off('booking:confirmed', unsubConfirmed));
+
+    // Handle booking cancelled event
+    const unsubCancelled = socketService.on('booking:cancelled', (data) => {
+      if (isMountedRef.current) {
+        setBookings(prev => prev.map(booking =>
+          booking.id === data.bookingId
+            ? { ...booking, status: 'cancelled' as BookingStatus }
+            : booking
+        ));
+      }
+    });
+    unsubscribers.push(() => socketService.off('booking:cancelled', unsubCancelled));
+
+    // Handle booking completed event
+    const unsubCompleted = socketService.on('booking:completed', (data) => {
+      if (isMountedRef.current) {
+        setBookings(prev => prev.map(booking =>
+          booking.id === data.bookingId
+            ? { ...booking, status: 'completed' as BookingStatus }
+            : booking
+        ));
+      }
+    });
+    unsubscribers.push(() => socketService.off('booking:completed', unsubCompleted));
+
+    // Handle booking started event
+    const unsubStarted = socketService.on('booking:started', (data) => {
+      if (isMountedRef.current) {
+        setBookings(prev => prev.map(booking =>
+          booking.id === data.bookingId
+            ? { ...booking, status: 'in_progress' as BookingStatus }
+            : booking
+        ));
+      }
+    });
+    unsubscribers.push(() => socketService.off('booking:started', unsubStarted));
+
+    // Handle booking no_show event
+    const unsubNoShow = socketService.on('booking:no_show', (data) => {
+      if (isMountedRef.current) {
+        setBookings(prev => prev.map(booking =>
+          booking.id === data.bookingId
+            ? { ...booking, status: 'cancelled' as BookingStatus }
+            : booking
+        ));
+        toast.warning('Customer did not show up for booking');
+      }
+    });
+    unsubscribers.push(() => socketService.off('booking:no_show', unsubNoShow));
+
+    // Cleanup all socket subscriptions on unmount
+    return () => {
+      unsubscribers.forEach(unsub => unsub());
+    };
+  }, [fetchBookingsFromApi]);
 
   // Convert bookings to calendar events
   const events: CalendarEvent[] = useMemo(() => {
@@ -640,8 +920,89 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
 
   const handleEventClick = (event: CalendarEvent) => {
     if (event.type === 'booking' && event.booking) {
+      // Show booking detail modal
+      setSelectedBooking(event.booking);
       onBookingClick?.(event.booking);
     }
+  };
+
+  // Optimistic UI handler for accepting a booking
+  const handleAcceptBooking = async (bookingId: string) => {
+    // Find the booking to get its current state for potential rollback
+    const booking = bookings.find(b => b.id === bookingId);
+    if (!booking) return;
+
+    // Set pending state to show loading UI
+    setPendingAction({ bookingId, action: 'accept' });
+
+    // Optimistic update: immediately update UI
+    setBookings(prev => prev.map(b =>
+      b.id === bookingId ? { ...b, status: 'confirmed' as BookingStatus } : b
+    ));
+
+    try {
+      // Call the parent handler if provided, otherwise call API directly
+      if (onAcceptBooking) {
+        await onAcceptBooking(bookingId);
+      } else {
+        // Direct API call fallback
+        await bookingService.acceptBooking(bookingId);
+      }
+      toast.success('Booking accepted successfully');
+    } catch (err) {
+      // Revert optimistic update on failure
+      setBookings(prev => prev.map(b =>
+        b.id === bookingId ? booking : b
+      ));
+      const errorMessage = err instanceof Error ? err.message : 'Failed to accept booking';
+      toast.error(errorMessage);
+      console.error('Error accepting booking:', err);
+    } finally {
+      setPendingAction(null);
+    }
+  };
+
+  // Optimistic UI handler for declining a booking
+  const handleDeclineBooking = async (bookingId: string) => {
+    // Find the booking to get its current state for potential rollback
+    const booking = bookings.find(b => b.id === bookingId);
+    if (!booking) return;
+
+    // Set pending state to show loading UI
+    setPendingAction({ bookingId, action: 'decline' });
+
+    // Optimistic update: immediately update UI
+    setBookings(prev => prev.map(b =>
+      b.id === bookingId ? { ...b, status: 'cancelled' as BookingStatus } : b
+    ));
+
+    try {
+      // Call the parent handler if provided, otherwise call API directly
+      if (onDeclineBooking) {
+        await onDeclineBooking(bookingId);
+      } else {
+        // Direct API call fallback
+        await bookingService.declineBooking(bookingId);
+      }
+      toast.success('Booking declined');
+    } catch (err) {
+      // Revert optimistic update on failure
+      setBookings(prev => prev.map(b =>
+        b.id === bookingId ? booking : b
+      ));
+      const errorMessage = err instanceof Error ? err.message : 'Failed to decline booking';
+      toast.error(errorMessage);
+      console.error('Error declining booking:', err);
+    } finally {
+      setPendingAction(null);
+    }
+  };
+
+  // Retry fetching bookings
+  const handleRetry = () => {
+    setError(null);
+    // Trigger a re-render with the same currentDate to refetch
+    setCurrentDate(new Date(currentDate.getTime()));
   };
 
   // Get events for selected date
@@ -655,6 +1016,26 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
         <div className="animate-pulse">
           <div className="h-8 w-48 bg-nilin-muted rounded mb-6" />
           <div className="h-[400px] bg-nilin-muted rounded-xl" />
+        </div>
+      </div>
+    );
+  }
+
+  // Error state with retry button
+  if (error && bookings.length === 0) {
+    return (
+      <div className={cn('bg-white rounded-2xl p-6 shadow-nilin-sm', className)}>
+        <div className="flex flex-col items-center justify-center py-12">
+          <AlertCircle className="w-12 h-12 text-red-400 mb-4" />
+          <p className="text-nilin-charcoal font-medium mb-2">Failed to load bookings</p>
+          <p className="text-sm text-nilin-warmGray mb-6">{error}</p>
+          <button
+            onClick={handleRetry}
+            className="flex items-center gap-2 px-4 py-2 bg-nilin-coral text-white rounded-lg hover:bg-nilin-coral/90 transition-colors"
+          >
+            <RefreshCw className="w-4 h-4" />
+            Try Again
+          </button>
         </div>
       </div>
     );
@@ -756,8 +1137,9 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
               date={selectedDate}
               events={selectedDateEvents}
               onEventClick={handleEventClick}
-              onAcceptBooking={onAcceptBooking}
-              onDeclineBooking={onDeclineBooking}
+              onAcceptBooking={handleAcceptBooking}
+              onDeclineBooking={handleDeclineBooking}
+              pendingAction={pendingAction}
             />
           </motion.div>
         ) : (
@@ -789,6 +1171,182 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
           Blocked
         </span>
       </div>
+
+      {/* Booking Detail Modal */}
+      <AnimatePresence>
+        {selectedBooking && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+            onClick={() => setSelectedBooking(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-2xl shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Modal Header */}
+              <div className="p-6 border-b border-nilin-border">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-lg font-semibold text-nilin-charcoal">Booking Details</h3>
+                  <button
+                    onClick={() => setSelectedBooking(null)}
+                    className="p-2 hover:bg-nilin-muted rounded-lg transition-colors"
+                  >
+                    <XCircle className="w-5 h-5 text-nilin-warmGray" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Modal Content */}
+              <div className="p-6 space-y-4">
+                {/* Status Badge */}
+                <div className="flex items-center justify-between">
+                  <span
+                    className={cn(
+                      'px-3 py-1 rounded-full text-sm font-medium',
+                      statusConfig[selectedBooking.status].bgColor,
+                      statusConfig[selectedBooking.status].color
+                    )}
+                  >
+                    {selectedBooking.status.charAt(0).toUpperCase() + selectedBooking.status.slice(1).replace('_', ' ')}
+                  </span>
+                  {selectedBooking.isInstantBook && (
+                    <span className="px-2 py-1 bg-green-100 text-green-700 text-xs rounded-full font-medium">
+                      Instant Book
+                    </span>
+                  )}
+                </div>
+
+                {/* Service Info */}
+                <div className="bg-nilin-muted rounded-xl p-4">
+                  <h4 className="font-medium text-nilin-charcoal mb-2">{selectedBooking.serviceName}</h4>
+                  {selectedBooking.category && (
+                    <p className="text-sm text-nilin-warmGray">{selectedBooking.category}</p>
+                  )}
+                  <p className="text-lg font-semibold text-nilin-coral mt-2">
+                    {formatPrice(selectedBooking.price, selectedBooking.currency)}
+                  </p>
+                </div>
+
+                {/* Customer Info */}
+                <div className="space-y-3">
+                  <h5 className="text-sm font-medium text-nilin-warmGray uppercase tracking-wide">Customer</h5>
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full bg-nilin-coral/20 flex items-center justify-center">
+                      <User className="w-5 h-5 text-nilin-coral" />
+                    </div>
+                    <div>
+                      <p className="font-medium text-nilin-charcoal">{selectedBooking.customerName}</p>
+                      {selectedBooking.customerPhone && (
+                        <p className="text-sm text-nilin-warmGray flex items-center gap-1">
+                          <Phone className="w-3 h-3" />
+                          {selectedBooking.customerPhone}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Schedule Info */}
+                <div className="space-y-3">
+                  <h5 className="text-sm font-medium text-nilin-warmGray uppercase tracking-wide">Schedule</h5>
+                  <div className="flex items-center gap-2 text-nilin-charcoal">
+                    <Clock className="w-4 h-4 text-nilin-warmGray" />
+                    <span>
+                      {new Date(selectedBooking.startTime).toLocaleDateString('en-US', {
+                        weekday: 'long',
+                        month: 'long',
+                        day: 'numeric',
+                      })}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 text-nilin-charcoal ml-6">
+                    {formatTime(new Date(selectedBooking.startTime))} - {formatTime(new Date(selectedBooking.endTime))}
+                  </div>
+                </div>
+
+                {/* Location Info */}
+                {selectedBooking.location && (
+                  <div className="space-y-3">
+                    <h5 className="text-sm font-medium text-nilin-warmGray uppercase tracking-wide">Location</h5>
+                    <div className="flex items-start gap-2 text-nilin-charcoal">
+                      <MapPin className="w-4 h-4 text-nilin-warmGray mt-0.5" />
+                      <span>{selectedBooking.location}</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Notes */}
+                {selectedBooking.notes && (
+                  <div className="space-y-3">
+                    <h5 className="text-sm font-medium text-nilin-warmGray uppercase tracking-wide">Special Requests</h5>
+                    <div className="bg-amber-50 rounded-xl p-4">
+                      <p className="text-sm text-nilin-charcoal">{selectedBooking.notes}</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Modal Actions */}
+              {selectedBooking.status === 'pending' && (
+                <div className="p-6 border-t border-nilin-border flex items-center gap-3">
+                  <button
+                    onClick={() => handleAcceptBooking(selectedBooking.id)}
+                    disabled={pendingAction?.bookingId === selectedBooking.id}
+                    className="flex-1 py-3 px-4 bg-green-600 text-white rounded-xl font-medium hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                  >
+                    {pendingAction?.bookingId === selectedBooking.id && pendingAction.action === 'accept' ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        Accepting...
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle className="w-4 h-4" />
+                        Accept
+                      </>
+                    )}
+                  </button>
+                  <button
+                    onClick={() => handleDeclineBooking(selectedBooking.id)}
+                    disabled={pendingAction?.bookingId === selectedBooking.id}
+                    className="flex-1 py-3 px-4 bg-red-100 text-red-600 rounded-xl font-medium hover:bg-red-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                  >
+                    {pendingAction?.bookingId === selectedBooking.id && pendingAction.action === 'decline' ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        Declining...
+                      </>
+                    ) : (
+                      <>
+                        <XCircle className="w-4 h-4" />
+                        Decline
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
+
+              {/* Close button for non-pending bookings */}
+              {selectedBooking.status !== 'pending' && (
+                <div className="p-6 border-t border-nilin-border">
+                  <button
+                    onClick={() => setSelectedBooking(null)}
+                    className="w-full py-3 px-4 bg-nilin-muted text-nilin-charcoal rounded-xl font-medium hover:bg-nilin-muted/80 transition-colors"
+                  >
+                    Close
+                  </button>
+                </div>
+              )}
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

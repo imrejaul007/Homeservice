@@ -22,6 +22,9 @@ interface ServiceCardProps {
   onFavorite?: (serviceId: string) => Promise<void>;
   onShare?: (service: Service) => void;
   isFavoriteLoading?: boolean;
+  // NEW: Book Now handler for search results
+  onBookNow?: (service: Service) => void;
+  showBookNow?: boolean;
 }
 
 const ServiceCard: React.FC<ServiceCardProps> = ({
@@ -37,6 +40,8 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
   onFavorite,
   onShare,
   isFavoriteLoading,
+  onBookNow,
+  showBookNow = false,
 }) => {
   const navigate = useNavigate();
   const { isAuthenticated } = useAuthStore();
@@ -51,6 +56,16 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
     }
   };
 
+  const handleBookNow = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (onBookNow) {
+      onBookNow(service);
+    } else {
+      // Default: navigate to booking page
+      navigate(`/book/${service._id}`, { state: { service } });
+    }
+  };
+
   const handleToggleFavorite = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!isAuthenticated) {
@@ -62,13 +77,14 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
     setIsToggling(true);
 
     try {
+      const currentProviderId = service.provider?._id || service.providerId;
       if (isFavorited) {
-        await favoritesApi.removeFavorite(service.providerId);
+        await favoritesApi.removeFavorite(currentProviderId);
         setIsFavorited(false);
         onFavoriteChange?.(false);
         toast.success('Removed from favorites');
       } else {
-        await favoritesApi.addFavorite(service.providerId);
+        await favoritesApi.addFavorite(currentProviderId);
         setIsFavorited(true);
         onFavoriteChange?.(true);
         toast.success('Added to favorites');
@@ -138,6 +154,18 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
             <div className="absolute top-2 right-2 bg-white/90 backdrop-blur-sm px-2 py-0.5 rounded-full flex items-center gap-1 shadow-sm">
               <Star className="h-3 w-3 fill-[#E8B4A8] text-[#E8B4A8]" />
               <span className="text-xs font-semibold text-[#2D2D2D]">{displayRating.toFixed(1)}</span>
+            </div>
+          )}
+
+          {/* Book Now Overlay - shows on hover */}
+          {showBookNow && (
+            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex items-center justify-center">
+              <button
+                onClick={handleBookNow}
+                className="px-4 py-2 bg-white text-[#D4A89A] font-semibold text-sm rounded-full shadow-lg hover:bg-[#F5E6E0] transition-colors"
+              >
+                Book Now
+              </button>
             </div>
           )}
         </div>
@@ -391,7 +419,7 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
           <button
             onClick={(e) => {
               e.stopPropagation();
-              handleClick();
+              handleBookNow(e);
             }}
             className="px-4 py-2 bg-[#E8B4A8] text-white font-medium text-sm rounded-lg
               hover:bg-[#D4A89A] hover:shadow-[0_4px_20px_rgba(232,180,168,0.25)]

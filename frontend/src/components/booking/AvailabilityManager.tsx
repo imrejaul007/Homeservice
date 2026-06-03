@@ -348,9 +348,11 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
     }
   };
 
-  const handleRemoveOverride = async (date: string) => {
+  const handleRemoveOverride = async (override: { _id?: string; date: string }) => {
     try {
-      await removeDateOverride(date);
+      // FIX: Issue #5 - Use overrideId if available, fall back to date
+      const overrideId = override._id || override.date;
+      await removeDateOverride(overrideId);
       setSuccessMessage('Special date removed successfully!');
     } catch {
       // Error handled by store
@@ -700,7 +702,7 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
                   </div>
 
                   <button
-                    onClick={() => handleRemoveOverride(override.date)}
+                    onClick={() => handleRemoveOverride({ _id: (override as any)._id, date: override.date })}
                     disabled={isSubmitting}
                     className="glass-btn p-2 text-nilin-error hover:bg-nilin-error/10 rounded-lg transition-colors"
                   >

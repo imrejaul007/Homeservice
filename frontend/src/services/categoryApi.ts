@@ -65,6 +65,13 @@ export const categoryApi = {
     const response = await api.get('/search', { params: { q: query } });
     return response.data;
   },
+
+  // FIX: Get service categories for frontend portfolio dropdown
+  // Returns simple category names for UI dropdown
+  getServiceCategories: async (): Promise<{ categories: string[] }> => {
+    const response = await api.get('/service-categories/list');
+    return response.data?.data || { categories: [] };
+  },
 };
 
 export default categoryApi;

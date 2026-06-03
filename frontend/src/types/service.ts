@@ -12,6 +12,7 @@ export interface Service {
     amount: number;
     currency: string;
     type: 'fixed' | 'hourly' | 'custom';
+    discounts?: Array<{ code: string; amount: number; type: 'fixed' | 'percentage' }>;
   };
   duration: number;
   images: string[];
@@ -39,10 +40,13 @@ export interface Service {
     average?: number;
     count?: number;
   };
+  status?: 'draft' | 'active' | 'inactive' | 'pending_review' | 'rejected';
   isActive: boolean;
   isFeatured: boolean;
   isPopular: boolean;
   isNew?: boolean;
+  isDeleted?: boolean;
+  deletedAt?: string;
   provider?: {
     _id: string;
     firstName: string;
@@ -55,6 +59,21 @@ export interface Service {
   };
   distance?: number;
   fullLocation?: string;
+  searchMetadata?: {
+    searchCount: number;
+    clickCount: number;
+    bookingCount: number;
+    popularityScore: number;
+  };
+  durationOptions?: Array<{ duration: number; price: number; label: string }>;
+  availability?: {
+    schedule: {
+      [day: string]: {
+        isAvailable: boolean;
+        exceptions?: Array<{ date: string; reason: string }>;
+      };
+    };
+  };
   createdAt: string;
   updatedAt: string;
 }

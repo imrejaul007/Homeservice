@@ -87,6 +87,7 @@ export interface ServiceStats {
   draft: number;
   inactive: number;
   pending_review: number;
+  rejected?: number;
 }
 
 export interface PerformanceStats {
@@ -109,6 +110,18 @@ export interface BookingStats {
   completedThisMonth: number;
 }
 
+export interface RevenueStats {
+  monthlyRevenue?: number;
+  monthlyGrossEarnings?: number;
+  monthlyNetEarnings?: number;
+  avgBookingValue?: number;
+}
+
+export interface CustomerMetrics {
+  repeatCustomers: number;
+  totalCustomers: number;
+}
+
 export interface TopService {
   id: string;
   name: string;
@@ -116,8 +129,22 @@ export interface TopService {
   views: number;
   clicks: number;
   bookings: number;
+  revenue?: number;
   rating: number;
   popularityScore: number;
+}
+
+export interface StatusCounts {
+  pending: number;
+  confirmed: number;
+  in_progress: number;
+  completed: number;
+  cancelled: number;
+}
+
+export interface CategoryStats {
+  name: string;
+  bookingCount: number;
 }
 
 export interface ProviderAnalytics {
@@ -125,8 +152,12 @@ export interface ProviderAnalytics {
   performanceStats: PerformanceStats;
   ratingStats: RatingStats;
   bookingStats: BookingStats;
+  revenueStats?: RevenueStats;
+  customerMetrics?: CustomerMetrics;
   categories: string[];
   topServices: TopService[];
+  statusCounts?: StatusCounts;
+  categoryStats?: CategoryStats[];
 }
 
 export interface ProviderAnalyticsResponse {

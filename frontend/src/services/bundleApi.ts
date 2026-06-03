@@ -134,7 +134,7 @@ export interface BookingBundleResponse {
   status: 'pending' | 'confirmed' | 'failed';
   bundleName: string;
   totalAmount: number;
-  paymentStatus: 'pending' | 'paid' | 'failed';
+  paymentStatus: 'pending' | 'completed' | 'failed';
   scheduledDate: string;
   scheduledTime: string;
   confirmationCode?: string;

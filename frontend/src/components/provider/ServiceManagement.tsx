@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Plus,
   Edit3,
@@ -152,7 +152,7 @@ interface Service {
     bookingCount: number;
     popularityScore: number;
   };
-  status: 'draft' | 'active' | 'inactive' | 'pending_review';
+  status: 'draft' | 'active' | 'inactive' | 'pending_review' | 'rejected';
   isActive: boolean;
   isFeatured: boolean;
   createdAt: string;
@@ -165,6 +165,7 @@ interface ServiceStats {
   draft: number;
   inactive: number;
   pending_review: number;
+  rejected?: number;
 }
 
 interface StatusCounts {
@@ -173,6 +174,7 @@ interface StatusCounts {
   draft: number;
   inactive: number;
   pending_review: number;
+  rejected?: number;
 }
 
 interface PerformanceStats {
@@ -225,12 +227,24 @@ const inputClass =
 const selectClass =
   'w-full bg-white border border-nilin-border rounded-nilin px-4 py-2.5 text-nilin-charcoal font-sans transition-all focus:outline-none focus:ring-2 focus:ring-nilin-coral/30 focus:border-nilin-coral appearance-none cursor-pointer';
 
+// Stable ref pattern: always points to latest callback without causing effect re-runs
+function useCallbackRef<T extends (...args: never[]) => unknown>(callback: T): React.MutableRefObject<T> {
+  const callbackRef = useRef(callback);
+  callbackRef.current = callback;
+  return callbackRef;
+}
+
 const ServiceManagement: React.FC = () => {
   const { user, tokens, isAuthenticated } = useAuthStore();
   const toast = useToastActions();
+  const toastRef = useCallbackRef(toast);
+
+  const userRole = user?.role;
+  const isProvider = isAuthenticated && userRole === 'provider' && !!tokens?.accessToken;
+
   const [services, setServices] = useState<Service[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [listLoading, setListLoading] = useState(false);
+  const [overviewLoading, setOverviewLoading] = useState(true);
+  const [listLoading, setListLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState<ServicesPagination>({
@@ -258,7 +272,8 @@ const ServiceManagement: React.FC = () => {
     active: 0,
     draft: 0,
     inactive: 0,
-    pending_review: 0
+    pending_review: 0,
+    rejected: 0,
   });
 
   // Status counts for filter dropdown
@@ -267,7 +282,8 @@ const ServiceManagement: React.FC = () => {
     active: 0,
     draft: 0,
     inactive: 0,
-    pending_review: 0
+    pending_review: 0,
+    rejected: 0,
   });
 
   // All available categories from API
@@ -309,19 +325,23 @@ const ServiceManagement: React.FC = () => {
   const [deletingServiceName, setDeletingServiceName] = useState<string>('');
   const [isDeleting, setIsDeleting] = useState(false);
 
+  // Status Toggle State (debounce/deduplication)
+  const [isToggling, setIsToggling] = useState(false);
+  const [togglingServiceId, setTogglingServiceId] = useState<string | null>(null);
+
   useEffect(() => {
     setPage(1);
   }, [statusFilter, sortBy, sortOrder, startDate, endDate, categoryFilter, searchTerm]);
 
   const fetchServices = useCallback(
     async (pageNum: number, append: boolean) => {
-      if (!isAuthenticated || !user || user.role !== 'provider' || !tokens?.accessToken) {
+      if (!isProvider) {
         return;
       }
 
       try {
         if (pageNum === 1 && !append) {
-          setLoading(true);
+          setListLoading(true);
         } else {
           setListLoading(true);
         }
@@ -356,19 +376,16 @@ const ServiceManagement: React.FC = () => {
       } catch (err) {
         console.error('Error fetching services:', err);
         setError(err instanceof Error ? err.message : 'Failed to fetch services');
-        toast.error(
+        toastRef.current.error(
           'Failed to load services',
           err instanceof Error ? err.message : 'An error occurred'
         );
       } finally {
-        setLoading(false);
         setListLoading(false);
       }
     },
     [
-      isAuthenticated,
-      user,
-      tokens,
+      isProvider,
       statusFilter,
       sortBy,
       sortOrder,
@@ -379,20 +396,11 @@ const ServiceManagement: React.FC = () => {
     ]
   );
 
-  useEffect(() => {
-    if (!isAuthenticated || !user || user.role !== 'provider' || !tokens?.accessToken) {
-      return;
-    }
-
-    const timer = setTimeout(() => {
-      fetchServices(page, page > 1);
-    }, searchTerm ? 350 : 0);
-
-    return () => clearTimeout(timer);
-  }, [page, fetchServices, isAuthenticated, user, tokens, searchTerm]);
-
   const fetchOverviewStats = useCallback(async () => {
+    if (!isProvider) return;
+
     try {
+      setOverviewLoading(true);
       const data = await authService.get<{
         success: boolean,
         data: {
@@ -409,7 +417,6 @@ const ServiceManagement: React.FC = () => {
 
       if (data.success) {
         setServiceStats(data.data.overview.serviceStats);
-        // Merge statusCounts with defaults - use statusCounts if available, otherwise derive from serviceStats
         const statusCounts = data.data.overview.statusCounts;
         if (statusCounts) {
           setStatusCounts(statusCounts);
@@ -421,6 +428,7 @@ const ServiceManagement: React.FC = () => {
             inactive: stats.inactive ?? 0,
             pending_review: stats.pending_review ?? 0,
             draft: stats.draft ?? 0,
+            rejected: stats.rejected ?? 0,
           });
         }
         setPerformanceStats(data.data.overview.performanceStats);
@@ -429,53 +437,77 @@ const ServiceManagement: React.FC = () => {
       }
     } catch (err) {
       console.error('Error fetching overview stats:', err);
-      toast.error(
+      toastRef.current.error(
         'Failed to load overview',
         err instanceof Error ? err.message : 'An error occurred'
       );
+    } finally {
+      setOverviewLoading(false);
     }
+  }, [isProvider]);
+
+  const fetchServicesRef = useCallbackRef(fetchServices);
+  const fetchOverviewStatsRef = useCallbackRef(fetchOverviewStats);
+
+  // Track component mount state to prevent state updates after unmount
+  const isMountedRef = useRef(true);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
   }, []);
+
+  useEffect(() => {
+    if (!isProvider) return;
+
+    const timer = setTimeout(() => {
+      if (isMountedRef.current) {
+        void fetchServicesRef.current(page, page > 1);
+      }
+    }, searchTerm ? 350 : 0);
+
+    return () => clearTimeout(timer);
+  }, [page, fetchServicesRef, isProvider, searchTerm]);
 
   // Initial fetch of overview stats
   useEffect(() => {
-    // Don't make API calls if user is not authenticated as provider
-    if (!isAuthenticated || !user || user.role !== 'provider' || !tokens?.accessToken) {
-      console.warn('User not properly authenticated as provider:', {
-        isAuthenticated,
-        userRole: user?.role,
-        hasTokens: !!tokens?.accessToken
-      });
+    if (!isProvider) {
       setError('Please log in as a provider to access this page');
-      setLoading(false);
+      setOverviewLoading(false);
+      setListLoading(false);
       return;
     }
 
     void fetchOverviewStats();
-  }, [isAuthenticated, user, tokens, fetchOverviewStats]);
+  }, [isProvider, fetchOverviewStats]);
 
   // Socket listeners for real-time service status updates
   useEffect(() => {
-    // Listen for service approved
-    const unsubServiceApproved = socketService.onServiceApproved((data) => {
-      console.log('Service approved:', data);
-      toast.success('Service Approved', 'Your service has been approved and is now active.');
-      void fetchServices(1, false);
-      void fetchOverviewStats();
+    if (!isProvider) return;
+
+    const unsubServiceApproved = socketService.onServiceApproved(() => {
+      if (isMountedRef.current) {
+        toastRef.current.success('Service Approved', 'Your service has been approved and is now active.');
+        void fetchServicesRef.current(1, false);
+        void fetchOverviewStatsRef.current();
+      }
     });
 
-    // Listen for service rejected
     const unsubServiceRejected = socketService.onServiceRejected((data) => {
-      console.log('Service rejected:', data);
-      toast.error('Service Rejected', data.reason || 'Your service was not approved.');
-      void fetchServices(1, false);
+      if (isMountedRef.current) {
+        toastRef.current.error('Service Rejected', data.reason || 'Your service was not approved.');
+        void fetchServicesRef.current(1, false);
+        void fetchOverviewStatsRef.current();
+      }
     });
 
-    // Cleanup on unmount
     return () => {
       unsubServiceApproved();
       unsubServiceRejected();
     };
-  }, [fetchServices, fetchOverviewStats, toast]);
+  }, [isProvider]);
 
   const openAnalyticsModal = async (service: Service) => {
     setAnalyticsService(service);
@@ -512,7 +544,19 @@ const ServiceManagement: React.FC = () => {
     setAnalyticsError(null);
   };
 
+  const canToggleService = (status: string) => status === 'active' || status === 'inactive';
+
   const toggleServiceStatus = async (serviceId: string, currentStatus: string) => {
+    if (!canToggleService(currentStatus)) {
+      toast.error('Cannot change status', 'This service must be approved by admin first.');
+      return;
+    }
+
+    // Debounce: prevent multiple rapid clicks
+    if (isToggling) return;
+    setIsToggling(true);
+    setTogglingServiceId(serviceId);
+
     try {
       const newStatus = currentStatus === 'active' ? 'inactive' : 'active';
 
@@ -527,8 +571,10 @@ const ServiceManagement: React.FC = () => {
           data.message
         );
         setPage(1);
-        fetchServices(1, false);
-        fetchOverviewStats();
+        if (isMountedRef.current) {
+          void fetchServicesRef.current(1, false);
+          void fetchOverviewStatsRef.current();
+        }
       } else {
         throw new Error('Failed to update service status');
       }
@@ -538,6 +584,9 @@ const ServiceManagement: React.FC = () => {
         'Status update failed',
         err instanceof Error ? err.message : 'Failed to update service status'
       );
+    } finally {
+      setIsToggling(false);
+      setTogglingServiceId(null);
     }
   };
 
@@ -550,7 +599,10 @@ const ServiceManagement: React.FC = () => {
   const confirmDelete = async () => {
     if (!deletingServiceId) return;
 
+    // Deduplication: prevent multiple rapid clicks
+    if (isDeleting) return;
     setIsDeleting(true);
+
     try {
       const data = await authService.delete<{ success: boolean; message?: string }>(
         `/provider/services/${deletingServiceId}`
@@ -559,8 +611,10 @@ const ServiceManagement: React.FC = () => {
       if (data.success) {
         toast.success('Service deleted', data.message || 'The service was permanently removed.');
         setPage(1);
-        fetchServices(1, false);
-        fetchOverviewStats();
+        if (isMountedRef.current) {
+          void fetchServicesRef.current(1, false);
+          void fetchOverviewStatsRef.current();
+        }
       } else {
         throw new Error('Failed to delete service');
       }
@@ -615,6 +669,13 @@ const ServiceManagement: React.FC = () => {
             Inactive
           </span>
         );
+      case 'rejected':
+        return (
+          <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-red-50 text-red-800 border border-red-200">
+            <XCircle className="w-3 h-3 mr-1" />
+            Rejected
+          </span>
+        );
       default:
         return (
           <span className="badge-nilin">Unknown</span>
@@ -622,46 +683,33 @@ const ServiceManagement: React.FC = () => {
     }
   };
 
-  if (loading) {
+  if (!isProvider && !overviewLoading) {
     return (
-      <div className="space-y-6">
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          {[...Array(8)].map((_, i) => (
-            <div key={i} className="glass-nilin rounded-nilin-lg p-5 animate-pulse">
-              <div className="h-4 bg-nilin-muted rounded w-2/3 mb-3" />
-              <div className="h-8 bg-nilin-muted rounded w-1/2" />
-            </div>
-          ))}
-        </div>
-        <div className="glass-nilin rounded-nilin-lg p-6 space-y-4">
-          {[...Array(3)].map((_, i) => (
-            <div key={i} className="h-24 bg-nilin-muted/60 rounded-nilin animate-pulse" />
-          ))}
-        </div>
+      <div className="glass-nilin rounded-nilin-lg p-10 border border-nilin-border text-center">
+        <p className="text-nilin-warmGray">{error || 'Please log in as a provider to access this page'}</p>
       </div>
     );
   }
 
-  if (error) {
-    return (
-      <div className="glass-nilin rounded-nilin-lg p-10 border border-nilin-border text-center">
-        <div className="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-4">
-          <AlertCircle className="h-10 w-10 text-red-500" />
+  const overviewSkeleton = (
+    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      {[...Array(4)].map((_, i) => (
+        <div key={i} className="glass-nilin rounded-nilin-lg p-5 animate-pulse">
+          <div className="h-4 bg-nilin-muted rounded w-2/3 mb-3" />
+          <div className="h-8 bg-nilin-muted rounded w-1/2" />
         </div>
-        <h3 className="text-xl font-serif text-nilin-charcoal mb-2">Error Loading Services</h3>
-        <p className="text-nilin-warmGray mb-6 font-sans max-w-md mx-auto">{error}</p>
-        <button type="button" onClick={() => fetchServices(1, false)} className="btn-nilin inline-flex items-center gap-2">
-          Try Again
-        </button>
-      </div>
-    );
-  }
+      ))}
+    </div>
+  );
 
   return (
     <div className="space-y-8 font-sans">
       {/* Overview stats */}
       <section>
         <h2 className="text-lg font-serif text-nilin-charcoal mb-4">Booking overview</h2>
+        {overviewLoading ? (
+          overviewSkeleton
+        ) : (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <StatCard
             label="New Bookings"
@@ -692,10 +740,18 @@ const ServiceManagement: React.FC = () => {
             iconClass="bg-green-50 text-green-700"
           />
         </div>
+        )}
       </section>
 
       <section>
         <h2 className="text-lg font-serif text-nilin-charcoal mb-4">Service performance</h2>
+        {overviewLoading ? (
+          <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+            {[...Array(5)].map((_, i) => (
+              <div key={i} className="glass-nilin rounded-nilin-lg p-5 animate-pulse h-24" />
+            ))}
+          </div>
+        ) : (
         <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
           <StatCard
             label="Total Services"
@@ -712,25 +768,26 @@ const ServiceManagement: React.FC = () => {
           <StatCard
             label="Search Impressions"
             value={performanceStats.totalViews.toLocaleString()}
-            hint="Times shown in search"
+            hint="All-time · times shown in search"
             icon={Eye}
             iconClass="bg-nilin-muted text-nilin-rose"
           />
           <StatCard
             label="Click-through Rate"
             value={`${performanceStats.conversionRate.toFixed(1)}%`}
-            hint="Clicks ÷ impressions"
+            hint="All-time · detail views ÷ impressions"
             icon={TrendingUp}
             iconClass="bg-nilin-peach text-nilin-charcoal"
           />
           <StatCard
             label="Booking Rate"
             value={`${performanceStats.bookingRate.toFixed(1)}%`}
-            hint="Bookings ÷ clicks"
+            hint="All-time · completed bookings ÷ detail views"
             icon={Users}
             iconClass="bg-green-50 text-green-700"
           />
         </div>
+        )}
       </section>
 
       {/* Services Management */}
@@ -801,6 +858,7 @@ const ServiceManagement: React.FC = () => {
                 <option value="draft">Draft ({statusCounts.draft || serviceStats.draft})</option>
                 <option value="inactive">Inactive ({statusCounts.inactive || serviceStats.inactive})</option>
                 <option value="pending_review">Pending ({statusCounts.pending_review || serviceStats.pending_review || 0})</option>
+                <option value="rejected">Rejected ({statusCounts.rejected || serviceStats.rejected || 0})</option>
               </select>
             </div>
 
@@ -826,7 +884,7 @@ const ServiceManagement: React.FC = () => {
             </div>
 
             <div className="sm:col-span-2 xl:col-span-2">
-              <label className="block text-xs font-medium text-nilin-warmGray mb-1.5">Date range</label>
+              <label className="block text-xs font-medium text-nilin-warmGray mb-1.5">Service created between</label>
               <div className="flex items-center gap-2">
                 <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className={inputClass} />
                 <span className="text-nilin-warmGray shrink-0">to</span>
@@ -857,7 +915,21 @@ const ServiceManagement: React.FC = () => {
 
         {/* Services List */}
         <div className="p-6">
-          {services.length === 0 && !listLoading ? (
+          {listLoading && services.length === 0 ? (
+            <div className="space-y-4">
+              {[...Array(3)].map((_, i) => (
+                <div key={i} className="h-24 bg-nilin-muted/60 rounded-nilin animate-pulse" />
+              ))}
+            </div>
+          ) : error ? (
+            <div className="py-12 text-center">
+              <AlertCircle className="w-10 h-10 text-red-500 mx-auto mb-3" />
+              <p className="text-nilin-warmGray mb-4">{error}</p>
+              <button type="button" onClick={() => fetchServices(1, false)} className="btn-nilin">
+                Try Again
+              </button>
+            </div>
+          ) : services.length === 0 && !listLoading ? (
             <div className="py-16 text-center">
               <div className="w-20 h-20 bg-nilin-blush/50 rounded-full flex items-center justify-center mx-auto mb-4">
                 <Calendar className="h-10 w-10 text-nilin-coral" />
@@ -936,7 +1008,7 @@ const ServiceManagement: React.FC = () => {
                         </span>
                         <span className="flex items-center gap-1">
                           <Users className="w-3.5 h-3.5" />
-                          {service.searchMetadata.clickCount} clicks
+                          {service.searchMetadata.clickCount} detail views
                         </span>
                         <span className="flex items-center gap-1">
                           <Star className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />
@@ -960,14 +1032,27 @@ const ServiceManagement: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => toggleServiceStatus(service._id, service.status)}
-                        className={`p-2.5 rounded-nilin transition-colors ${
-                          service.isActive
+                        disabled={!canToggleService(service.status) || (isToggling && togglingServiceId === service._id)}
+                        className={`p-2.5 rounded-nilin transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                          service.status === 'active'
                             ? 'text-green-700 hover:bg-green-50'
-                            : 'text-nilin-lightGray hover:bg-nilin-muted'
+                            : canToggleService(service.status)
+                              ? 'text-nilin-lightGray hover:bg-nilin-muted'
+                              : 'text-nilin-lightGray/50 cursor-not-allowed'
                         }`}
-                        title={service.isActive ? 'Deactivate service' : 'Activate service'}
+                        title={
+                          canToggleService(service.status)
+                            ? service.status === 'active'
+                              ? 'Deactivate service'
+                              : 'Activate service'
+                            : 'Awaiting admin approval'
+                        }
                       >
-                        {service.isActive ? <ToggleRight className="w-5 h-5" /> : <ToggleLeft className="w-5 h-5" />}
+                        {service.status === 'active' ? (
+                          <ToggleRight className="w-5 h-5" />
+                        ) : (
+                          <ToggleLeft className="w-5 h-5" />
+                        )}
                       </button>
                       <button
                         type="button"
@@ -1132,9 +1217,9 @@ const ServiceManagement: React.FC = () => {
                   </div>
 
                   <div className="border-t border-nilin-border pt-4 space-y-2 text-sm">
-                    <div className="flex justify-between">
+                    <div className="flex justify-between items-center">
                       <span className="text-nilin-warmGray">Status</span>
-                      <span className="font-medium text-nilin-charcoal capitalize">{analyticsService.status}</span>
+                      {getStatusBadge(analyticsService.status)}
                     </div>
                     <div className="flex justify-between">
                       <span className="text-nilin-warmGray">Category</span>

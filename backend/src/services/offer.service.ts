@@ -2,6 +2,7 @@ import Coupon, { ICoupon } from '../models/coupon.model';
 import { OfferClaim } from '../models/offerClaim.model';
 import mongoose from 'mongoose';
 import logger from '../utils/logger';
+import { ApiError } from '../utils/ApiError';
 
 export interface OfferResponse {
   _id: string;
@@ -574,23 +575,84 @@ export class OfferService {
     return true;
   }
 
+  private toDateField(value: unknown): Date | undefined {
+    if (value === null || value === undefined || value === '') return undefined;
+    if (value instanceof Date) return value;
+    if (typeof value === 'string' || typeof value === 'number') {
+      const d = new Date(value);
+      return Number.isNaN(d.getTime()) ? undefined : d;
+    }
+    return undefined;
+  }
+
+  private mapAdminPayload(offerData: any) {
+    const payload: Record<string, unknown> = { ...offerData };
+    if (payload.code && typeof payload.code === 'string') {
+      payload.code = payload.code.toUpperCase().trim();
+    }
+    const validFrom = this.toDateField(payload.validFrom);
+    if (validFrom) payload.validFrom = validFrom;
+    const validUntil = this.toDateField(payload.validUntil);
+    if (validUntil) payload.validUntil = validUntil;
+
+    const serviceIds = payload.applicableServices as string[] | undefined;
+    const categoryIds = payload.applicableCategories as string[] | undefined;
+
+    if (serviceIds !== undefined) {
+      payload.targetServices = serviceIds
+        .filter(Boolean)
+        .map((id) => new mongoose.Types.ObjectId(id));
+      payload.targetType = serviceIds.length > 0 ? 'specific_services' : 'all';
+      delete payload.applicableServices;
+    }
+
+    if (categoryIds !== undefined) {
+      payload.targetCategories = categoryIds
+        .filter(Boolean)
+        .map((id) => new mongoose.Types.ObjectId(id));
+      delete payload.applicableCategories;
+    }
+
+    return payload;
+  }
+
+  private formatAdminOffer(offer: any) {
+    return {
+      ...offer,
+      _id: offer._id.toString(),
+      applicableServices:
+        offer.targetServices?.map((s: mongoose.Types.ObjectId) => s.toString()) ||
+        offer.applicableServices ||
+        [],
+      applicableCategories:
+        offer.targetCategories?.map((c: mongoose.Types.ObjectId) => c.toString()) ||
+        offer.applicableCategories ||
+        [],
+    };
+  }
+
   // Admin: Create offer
-  async createOffer(offerData: any): Promise<any> {
-    const offer = await Coupon.create({
-      ...offerData,
-      code: offerData.code?.toUpperCase(),
-    });
-    return offer;
+  async createOffer(offerData: any, createdByUserId?: string): Promise<any> {
+    const payload = this.mapAdminPayload(offerData);
+    if (createdByUserId) {
+      payload.createdBy = new mongoose.Types.ObjectId(createdByUserId);
+    }
+    if (!payload.createdBy) {
+      throw ApiError.badRequest('Admin user context is required to create an offer');
+    }
+    const offer = await Coupon.create(payload);
+    return this.formatAdminOffer(offer.toObject());
   }
 
   // Admin: Update offer
   async updateOffer(offerId: string, updateData: any): Promise<any> {
+    const payload = this.mapAdminPayload(updateData);
     const offer = await Coupon.findByIdAndUpdate(
       offerId,
-      { ...updateData, updatedAt: new Date() },
+      { ...payload, updatedAt: new Date() },
       { new: true }
-    );
-    return offer;
+    ).lean();
+    return offer ? this.formatAdminOffer(offer) : null;
   }
 
   // Admin: Deactivate offer
@@ -604,7 +666,8 @@ export class OfferService {
 
   // Admin: Get all offers
   async getAllOffers(): Promise<any[]> {
-    return Coupon.find().sort({ createdAt: -1 }).lean();
+    const offers = await Coupon.find().sort({ createdAt: -1 }).lean();
+    return offers.map((o) => this.formatAdminOffer(o));
   }
 }
 

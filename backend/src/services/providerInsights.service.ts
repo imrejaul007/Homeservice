@@ -168,7 +168,8 @@ export const getProviderPerformanceMetrics = async (
     const [
       bookingStats,
       reviewStats,
-      responseStats
+      responseStats,
+      respondedBookings
     ] = await Promise.all([
       // Booking statistics
       Booking.aggregate([
@@ -182,6 +183,36 @@ export const getProviderPerformanceMetrics = async (
           $group: {
             _id: '$status',
             count: { $sum: 1 }
+          }
+        }
+      ]),
+      // Booking statistics with cancellation reason (for response rate calculation)
+      Booking.aggregate([
+        {
+          $match: {
+            providerId: providerObjectId,
+            createdAt: { $gte: startDate, $lte: endDate }
+          }
+        },
+        {
+          $group: {
+            _id: null,
+            total: { $sum: 1 },
+            confirmed: {
+              $sum: { $cond: [{ $eq: ['$status', 'confirmed'] }, 1, 0] }
+            },
+            providerRejected: {
+              $sum: {
+                $cond: [
+                  { $and: [
+                    { $eq: ['$status', 'cancelled'] },
+                    { $eq: ['$cancelledBy', 'provider'] }
+                  ]},
+                  1,
+                  0
+                ]
+              }
+            }
           }
         }
       ]),
@@ -284,6 +315,12 @@ export const getProviderPerformanceMetrics = async (
     const uniqueCount = uniqueCustomers[0]?.total || 0;
     const repeatCustomerRate = uniqueCount > 0 ? (repeatCount / uniqueCount) * 100 : 0;
 
+    // Calculate response rate: (accepted + provider-rejected) / total requests
+    const responseData = respondedBookings[0] || { total: 0, confirmed: 0, providerRejected: 0 };
+    const totalRequests = responseData.total;
+    const respondedRequests = responseData.confirmed + responseData.providerRejected;
+    const responseRate = totalRequests > 0 ? (respondedRequests / totalRequests) * 100 : 0;
+
     return {
       totalBookings,
       completedBookings,
@@ -295,7 +332,7 @@ export const getProviderPerformanceMetrics = async (
       noShowRate: totalBookings > 0 ? (noShowBookings / totalBookings) * 100 : 0,
       averageRating: reviewStats[0]?.avgRating || 0,
       totalReviews: reviewStats[0]?.totalReviews || 0,
-      responseRate: totalBookings > 0 ? ((completedBookings + cancelledBookings) / totalBookings) * 100 : 0,
+      responseRate,
       averageResponseTime: responseStats[0]?.avgResponseTime || 0,
       repeatCustomerRate,
       period
@@ -431,11 +468,13 @@ export const getProviderRevenueMetrics = async (
     const revenueGrowth = previousTotal > 0 ? ((currentTotal - previousTotal) / previousTotal) * 100 : 0;
     const peakHour = hourlyRevenue[0]?._id || 9;
 
-    // Project monthly revenue
+    // Project monthly revenue using actual days in month
     const now = new Date();
-    const daysInPeriod = Math.ceil((endDate.getTime() - startDate.getTime()) / (24 * 60 * 60 * 1000));
+    const year = now.getFullYear();
+    const month = now.getMonth();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
     const daysPassed = now.getDate();
-    const projectedMonthlyRevenue = currentTotal > 0 ? (currentTotal / daysPassed) * (now.getDate() + (now.getMonth() === 1 ? 28 : 30)) : 0;
+    const projectedMonthlyRevenue = currentTotal > 0 && daysPassed > 0 ? (currentTotal / daysPassed) * daysInMonth : 0;
 
     return {
       totalRevenue: currentTotal,
@@ -507,9 +546,12 @@ export const getCustomerSatisfactionMetrics = async (
       .limit(50)
       .lean();
 
-    // Calculate trend data (weekly breakdown)
+    // Calculate trend data (weekly breakdown) - with period filter
     const trendData = await Service.aggregate([
-      { $match: { providerId: providerObjectId } },
+      { $match: {
+        providerId: providerObjectId,
+        'rating.updatedAt': { $gte: startDate, $lte: endDate }
+      }},
       {
         $group: {
           _id: null,

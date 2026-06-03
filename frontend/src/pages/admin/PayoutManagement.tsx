@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
+import { cn } from '../../lib/utils';
 import { ErrorBoundary } from '../../components/common/ErrorBoundary';
 import {
   ArrowLeft,
@@ -29,11 +30,42 @@ import { payoutApi, type AdminWithdrawal, type WithdrawalStats, type WithdrawalF
 import { useAuthStore } from '../../stores/authStore';
 import { AdminPageShell } from '../../components/admin/AdminPageShell';
 
-interface PayoutManagementProps {}
+type WithdrawalStatusFilter = 'pending' | 'processing' | 'completed' | 'failed' | 'rejected' | 'all';
 
-const PayoutManagement: React.FC<PayoutManagementProps> = () => {
+const VALID_STATUS_FILTERS = new Set<string>([
+  'pending',
+  'processing',
+  'completed',
+  'failed',
+  'rejected',
+  'all',
+]);
+
+function withdrawalRowId(w: AdminWithdrawal): string {
+  const id = String(w._id);
+  if (id.includes(':')) return id;
+  return `${id}:${w.transaction.id}`;
+}
+
+function formatProviderName(w: AdminWithdrawal): string {
+  const name = `${w.userFirstName || ''} ${w.userLastName || ''}`.trim();
+  if (name) return name;
+  const email = w.userEmail || '';
+  const local = email.split('@')[0];
+  return local
+    ? local.replace(/[._]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+    : email || 'Provider';
+}
+
+const PayoutManagement: React.FC = () => {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useAuthStore();
+  const getInitialStatus = (): WithdrawalStatusFilter => {
+    const s = searchParams.get('status');
+    if (s && VALID_STATUS_FILTERS.has(s)) return s as WithdrawalStatusFilter;
+    return 'pending';
+  };
 
   // Auth check
   useEffect(() => {
@@ -57,12 +89,14 @@ const PayoutManagement: React.FC<PayoutManagementProps> = () => {
   });
 
   // Filters
+  const initialStatus = getInitialStatus();
   const [filters, setFilters] = useState<WithdrawalFilters>({
-    status: 'pending',
+    status: initialStatus === 'all' ? 'all' : initialStatus,
     page: 1,
     limit: 20,
   });
-  const [searchQuery, setSearchQuery] = useState('');
+  const [searchQuery, setSearchQuery] = useState(searchParams.get('q') || '');
+  const [activeStatus, setActiveStatus] = useState<WithdrawalStatusFilter>(initialStatus);
 
   // Process Modal
   const [showProcessModal, setShowProcessModal] = useState(false);
@@ -80,7 +114,12 @@ const PayoutManagement: React.FC<PayoutManagementProps> = () => {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await payoutApi.getAdminWithdrawals(filters);
+      const response = await payoutApi.getAdminWithdrawals({
+        ...filters,
+        status:
+          filters.status ??
+          (activeStatus === 'all' ? 'all' : activeStatus),
+      });
       if (response.success && response.data) {
         setWithdrawals(response.data.withdrawals);
         setPagination(response.data.pagination);
@@ -92,7 +131,7 @@ const PayoutManagement: React.FC<PayoutManagementProps> = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [filters]);
+  }, [filters, activeStatus]);
 
   // Fetch stats
   const fetchStats = useCallback(async () => {
@@ -133,29 +172,41 @@ const PayoutManagement: React.FC<PayoutManagementProps> = () => {
   }, [fetchWithdrawals, fetchStats]);
 
   // Apply filters
-  const applyFilters = (newFilters: Partial<WithdrawalFilters>) => {
+  const syncStatusToUrl = useCallback(
+    (status: WithdrawalStatusFilter, q?: string) => {
+      const params: Record<string, string> = { status };
+      if (q?.trim()) params.q = q.trim();
+      setSearchParams(params);
+    },
+    [setSearchParams]
+  );
+
+  const applyFilters = (newFilters: Partial<WithdrawalFilters>, statusTab?: WithdrawalStatusFilter) => {
     const updatedFilters = { ...filters, ...newFilters, page: 1 };
     setFilters(updatedFilters);
+    if (statusTab) {
+      setActiveStatus(statusTab);
+      syncStatusToUrl(statusTab, updatedFilters.search ?? searchQuery);
+    }
   };
 
-  // Handle pagination
   const handlePageChange = (newPage: number) => {
     setFilters({ ...filters, page: newPage });
   };
 
-  // Handle status filter
-  const handleStatusFilter = (status: string) => {
-    if (filters.status === status) {
-      applyFilters({ status: undefined });
-    } else {
-      applyFilters({ status });
-    }
+  const handleStatusFilter = (status: WithdrawalStatusFilter) => {
+    applyFilters({ status: status === 'all' ? 'all' : status }, status);
   };
 
-  // Handle search
-  const handleSearch = (e: React.FormEvent) => {
+  const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    applyFilters({ search: searchQuery });
+    applyFilters({ search: searchQuery.trim() || undefined }, activeStatus);
+    syncStatusToUrl(activeStatus, searchQuery);
+  };
+
+  const handleRefresh = async () => {
+    await Promise.all([fetchWithdrawals(), fetchStats()]);
+    toast.success('Payout queue refreshed');
   };
 
   // Open process modal
@@ -188,9 +239,9 @@ const PayoutManagement: React.FC<PayoutManagementProps> = () => {
     try {
       let response;
       if (processAction === 'approve') {
-        response = await payoutApi.approveWithdrawal(selectedWithdrawal._id);
+        response = await payoutApi.approveWithdrawal(withdrawalRowId(selectedWithdrawal));
       } else {
-        response = await payoutApi.rejectWithdrawal(selectedWithdrawal._id, rejectionReason);
+        response = await payoutApi.rejectWithdrawal(withdrawalRowId(selectedWithdrawal), rejectionReason);
       }
 
       if (response.success) {
@@ -216,7 +267,7 @@ const PayoutManagement: React.FC<PayoutManagementProps> = () => {
   const openDetailModal = async (withdrawal: AdminWithdrawal) => {
     setShowDetailModal(true);
     setDetailData(null);
-    await fetchWithdrawalDetails(withdrawal._id);
+    await fetchWithdrawalDetails(withdrawalRowId(withdrawal));
   };
 
   // Close detail modal
@@ -256,154 +307,198 @@ const PayoutManagement: React.FC<PayoutManagementProps> = () => {
       case 'failed':
         return 'bg-red-100 text-red-800';
       case 'reversed':
+      case 'rejected':
         return 'bg-gray-100 text-gray-800';
       default:
         return 'bg-gray-100 text-gray-800';
     }
   };
 
-  const statusFilters = [
-    { value: 'pending', label: 'Pending', icon: Clock, color: 'text-yellow-600' },
-    { value: 'processing', label: 'Processing', icon: RefreshCw, color: 'text-blue-600' },
-    { value: 'completed', label: 'Completed', icon: CheckCircle, color: 'text-green-600' },
-    { value: 'failed', label: 'Failed', icon: XCircle, color: 'text-red-600' },
-    { value: 'reversed', label: 'Rejected', icon: Ban, color: 'text-gray-600' },
+  const statusFilters: Array<{
+    value: WithdrawalStatusFilter;
+    label: string;
+    icon: React.ElementType;
+    count?: number;
+  }> = [
+    { value: 'pending', label: 'Pending', icon: Clock, count: stats?.pending.count },
+    { value: 'processing', label: 'Processing', icon: RefreshCw, count: stats?.processing.count },
+    { value: 'completed', label: 'Completed', icon: CheckCircle, count: stats?.completed.count },
+    { value: 'failed', label: 'Failed', icon: XCircle, count: stats?.failed.count },
+    { value: 'rejected', label: 'Rejected', icon: Ban, count: stats?.rejected.count },
+    { value: 'all', label: 'All', icon: Filter },
   ];
+
+  const hasQueueActivity =
+    (stats?.pending.count ?? 0) +
+      (stats?.processing.count ?? 0) +
+      (stats?.completed.count ?? 0) +
+      (stats?.failed.count ?? 0) +
+      (stats?.rejected.count ?? 0) >
+    0;
+
+  const headerActions = (
+    <button
+      type="button"
+      onClick={handleRefresh}
+      disabled={isLoading || isLoadingStats}
+      className="inline-flex items-center gap-2 px-4 py-2 rounded-xl glass glass-blur border border-nilin-border/50 text-nilin-charcoal text-sm font-sans hover:bg-nilin-blush/40 disabled:opacity-50"
+    >
+      <RefreshCw className={cn('w-4 h-4', (isLoading || isLoadingStats) && 'animate-spin')} />
+      Refresh
+    </button>
+  );
 
   return (
     <ErrorBoundary>
       <AdminPageShell
+        wideLayout
         title="Payout Management"
-        subtitle="Manage provider withdrawal requests"
+        subtitle="Review provider withdrawal requests · approve or reject with audit trail"
         breadcrumbItems={[
           { label: 'Admin', href: '/admin/dashboard' },
           { label: 'Payouts', current: true },
         ]}
+        headerActions={headerActions}
       >
-      {/* Stats Cards */}
-      <div className="py-2">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          {/* Pending */}
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-gray-600">Pending Withdrawals</p>
-                <p className="text-2xl font-bold text-gray-900 mt-1">
-                  {isLoadingStats ? '-' : stats?.pending.count || 0}
-                </p>
+        {/* KPI strip */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+          {[
+            {
+              key: 'pending' as const,
+              label: 'Pending',
+              count: stats?.pending.count,
+              amount: stats?.pending.totalAmount,
+              icon: Clock,
+              accent: 'from-amber-100/80 to-amber-50 text-amber-800',
+            },
+            {
+              key: 'processing' as const,
+              label: 'Processing',
+              count: stats?.processing.count,
+              amount: stats?.processing.totalAmount,
+              icon: RefreshCw,
+              accent: 'from-blue-100/80 to-blue-50 text-blue-800',
+            },
+            {
+              key: 'completed' as const,
+              label: 'Completed',
+              count: stats?.completed.count,
+              amount: stats?.completed.totalAmount,
+              icon: CheckCircle,
+              accent: 'from-emerald-100/80 to-emerald-50 text-emerald-800',
+            },
+            {
+              key: 'total' as const,
+              label: 'Awaiting payout',
+              count: null,
+              amount: stats?.totalPendingAmount,
+              icon: Wallet,
+              accent: 'from-violet-100/80 to-violet-50 text-violet-800',
+            },
+          ].map((kpi) => (
+            <button
+              key={kpi.key}
+              type="button"
+              onClick={() => kpi.key !== 'total' && handleStatusFilter(kpi.key)}
+              disabled={kpi.key === 'total'}
+              className={cn(
+                'glass glass-blur rounded-2xl border border-nilin-border/50 p-5 text-left transition-all',
+                kpi.key !== 'total' && 'hover:border-nilin-coral/40 hover:shadow-nilin-warm cursor-pointer',
+                kpi.key === 'total' && 'cursor-default',
+                kpi.key !== 'total' && activeStatus === kpi.key && 'ring-2 ring-nilin-coral/50 border-nilin-coral/40'
+              )}
+            >
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <p className="text-xs font-medium uppercase tracking-wide text-nilin-warmGray font-sans">
+                    {kpi.label}
+                  </p>
+                  <p className="text-2xl font-serif text-nilin-charcoal mt-1">
+                    {isLoadingStats ? '—' : kpi.count != null ? kpi.count : formatCurrency(kpi.amount || 0)}
+                  </p>
+                  <p className="text-sm text-nilin-warmGray mt-1 font-sans">
+                    {isLoadingStats
+                      ? '—'
+                      : kpi.count != null
+                        ? formatCurrency(kpi.amount || 0)
+                        : 'Pending + processing'}
+                  </p>
+                </div>
+                <div className={cn('w-11 h-11 rounded-xl bg-gradient-to-br flex items-center justify-center', kpi.accent)}>
+                  <kpi.icon className="w-5 h-5" />
+                </div>
               </div>
-              <div className="w-12 h-12 bg-yellow-100 rounded-lg flex items-center justify-center">
-                <Clock className="w-6 h-6 text-yellow-600" />
-              </div>
-            </div>
-            <p className="text-sm text-gray-500 mt-2">
-              {isLoadingStats ? '-' : formatCurrency(stats?.pending.totalAmount || 0)}
-            </p>
-          </div>
-
-          {/* Processing */}
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-gray-600">Processing</p>
-                <p className="text-2xl font-bold text-gray-900 mt-1">
-                  {isLoadingStats ? '-' : stats?.processing.count || 0}
-                </p>
-              </div>
-              <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
-                <RefreshCw className="w-6 h-6 text-blue-600" />
-              </div>
-            </div>
-            <p className="text-sm text-gray-500 mt-2">
-              {isLoadingStats ? '-' : formatCurrency(stats?.processing.totalAmount || 0)}
-            </p>
-          </div>
-
-          {/* Completed */}
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-gray-600">Completed</p>
-                <p className="text-2xl font-bold text-gray-900 mt-1">
-                  {isLoadingStats ? '-' : stats?.completed.count || 0}
-                </p>
-              </div>
-              <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center">
-                <CheckCircle className="w-6 h-6 text-green-600" />
-              </div>
-            </div>
-            <p className="text-sm text-gray-500 mt-2">
-              {isLoadingStats ? '-' : formatCurrency(stats?.completed.totalAmount || 0)}
-            </p>
-          </div>
-
-          {/* Total Pending Amount */}
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-gray-600">Total Pending</p>
-                <p className="text-2xl font-bold text-gray-900 mt-1">
-                  {isLoadingStats ? '-' : formatCurrency(stats?.totalPendingAmount || 0)}
-                </p>
-              </div>
-              <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center">
-                <Wallet className="w-6 h-6 text-purple-600" />
-              </div>
-            </div>
-            <p className="text-sm text-gray-500 mt-2">
-              Awaiting processing
-            </p>
-          </div>
+            </button>
+          ))}
         </div>
-      </div>
 
-      {/* Filters */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-6">
-          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-            {/* Status Filters */}
+        {!isLoadingStats && !hasQueueActivity && (
+          <div className="mb-6 rounded-2xl border border-sky-200 bg-sky-50/80 px-5 py-4">
+            <p className="text-sm font-medium text-sky-900">No withdrawal requests yet</p>
+            <p className="text-sm text-sky-800 mt-1">
+              When providers request payouts from their wallet, requests appear here for admin approval. Providers
+              submit withdrawals from their earnings dashboard after linking a bank account.
+            </p>
+            <p className="text-xs text-sky-700 mt-2 font-sans">
+              Admin: approve releases funds · reject returns balance to provider wallet
+            </p>
+          </div>
+        )}
+
+        {/* Workspace */}
+        <div className="glass glass-blur rounded-2xl border border-nilin-border/50 overflow-hidden">
+          <div className="p-4 border-b border-nilin-border/40 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
             <div className="flex flex-wrap gap-2">
               {statusFilters.map((filter) => (
                 <button
                   key={filter.value}
+                  type="button"
                   onClick={() => handleStatusFilter(filter.value)}
-                  className={`flex items-center space-x-2 px-4 py-2 rounded-lg border transition-colors ${
-                    filters.status === filter.value
-                      ? 'bg-gray-900 text-white border-gray-900'
-                      : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
-                  }`}
+                  className={cn(
+                    'inline-flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium font-sans transition-all',
+                    activeStatus === filter.value
+                      ? 'bg-gradient-to-r from-nilin-rose to-nilin-coral text-white shadow-nilin-warm'
+                      : 'border border-nilin-border/50 text-nilin-charcoal hover:bg-nilin-blush/40'
+                  )}
                 >
-                  <filter.icon className={`w-4 h-4 ${filters.status === filter.value ? 'text-white' : filter.color}`} />
-                  <span className="text-sm font-medium">{filter.label}</span>
+                  <filter.icon className="w-4 h-4" />
+                  {filter.label}
+                  {filter.count != null && filter.count > 0 && (
+                    <span
+                      className={cn(
+                        'min-w-[1.25rem] h-5 px-1 rounded-full text-xs font-bold flex items-center justify-center',
+                        activeStatus === filter.value ? 'bg-white/25 text-white' : 'bg-nilin-coral/15 text-nilin-coral'
+                      )}
+                    >
+                      {filter.count}
+                    </span>
+                  )}
                 </button>
               ))}
             </div>
 
-            {/* Search */}
-            <form onSubmit={handleSearch} className="flex items-center space-x-2">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+            <form onSubmit={handleSearchSubmit} className="flex items-center gap-2 w-full lg:w-auto">
+              <div className="relative flex-1 lg:w-64">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-nilin-warmGray" />
                 <input
                   type="text"
-                  placeholder="Search provider..."
+                  placeholder="Search provider name or email..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 w-64"
+                  className="w-full pl-10 pr-4 py-2 rounded-xl border border-nilin-border/50 bg-white/60 text-sm font-sans focus:ring-2 focus:ring-nilin-coral/30 focus:border-nilin-coral"
                 />
               </div>
               <button
                 type="submit"
-                className="px-4 py-2 bg-gray-900 text-white rounded-lg hover:bg-gray-800 transition-colors"
+                className="px-4 py-2 rounded-xl bg-nilin-charcoal text-white text-sm font-sans hover:bg-nilin-charcoal/90"
               >
                 Search
               </button>
             </form>
           </div>
-        </div>
 
-        {/* Error Message */}
         {error && (
-          <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
+          <div className="mx-4 mt-4 bg-red-50 border border-red-200 rounded-xl p-4">
             <div className="flex items-center space-x-2">
               <AlertCircle className="w-5 h-5 text-red-600" />
               <p className="text-red-800">{error}</p>
@@ -417,33 +512,31 @@ const PayoutManagement: React.FC<PayoutManagementProps> = () => {
           </div>
         )}
 
-        {/* Withdrawals List */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
+            <table className="min-w-full divide-y divide-nilin-border/40">
+              <thead className="bg-nilin-blush/20">
                 <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-5 py-3 text-left text-xs font-semibold text-nilin-warmGray uppercase tracking-wider font-sans">
                     Provider
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-5 py-3 text-left text-xs font-semibold text-nilin-warmGray uppercase tracking-wider font-sans">
                     Amount
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-5 py-3 text-left text-xs font-semibold text-nilin-warmGray uppercase tracking-wider font-sans">
                     Status
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-5 py-3 text-left text-xs font-semibold text-nilin-warmGray uppercase tracking-wider font-sans">
                     Bank Account
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-5 py-3 text-left text-xs font-semibold text-nilin-warmGray uppercase tracking-wider font-sans">
                     Requested
                   </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-5 py-3 text-right text-xs font-semibold text-nilin-warmGray uppercase tracking-wider font-sans">
                     Actions
                   </th>
                 </tr>
               </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
+              <tbody className="divide-y divide-nilin-border/30">
                 {isLoading ? (
                   <tr>
                     <td colSpan={6} className="px-6 py-12 text-center">
@@ -453,24 +546,40 @@ const PayoutManagement: React.FC<PayoutManagementProps> = () => {
                   </tr>
                 ) : withdrawals.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-6 py-12 text-center">
-                      <Wallet className="w-12 h-12 text-gray-300 mx-auto" />
-                      <p className="text-gray-500 mt-2">No withdrawals found</p>
+                    <td colSpan={6} className="px-6 py-14 text-center">
+                      <Wallet className="w-12 h-12 text-nilin-border mx-auto" />
+                      <p className="text-nilin-charcoal font-medium mt-3 font-sans">
+                        No withdrawals in this queue
+                      </p>
+                      <p className="text-sm text-nilin-warmGray mt-1 max-w-md mx-auto font-sans">
+                        {activeStatus === 'pending'
+                          ? 'No pending requests. Try All or Completed, or wait for providers to request a payout.'
+                          : `No ${activeStatus === 'all' ? '' : activeStatus} withdrawals match your filters.`}
+                      </p>
+                      {activeStatus !== 'all' && (
+                        <button
+                          type="button"
+                          onClick={() => handleStatusFilter('all')}
+                          className="mt-4 text-sm font-medium text-nilin-coral hover:text-nilin-rose"
+                        >
+                          View all withdrawals
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ) : (
                   withdrawals.map((withdrawal) => (
-                    <tr key={withdrawal._id} className="hover:bg-gray-50">
-                      <td className="px-6 py-4 whitespace-nowrap">
+                    <tr key={withdrawalRowId(withdrawal)} className="hover:bg-nilin-blush/20">
+                      <td className="px-5 py-4 whitespace-nowrap">
                         <div className="flex items-center">
-                          <div className="w-10 h-10 bg-gray-100 rounded-full flex items-center justify-center">
-                            <User className="w-5 h-5 text-gray-600" />
+                          <div className="w-10 h-10 bg-nilin-blush/50 rounded-full flex items-center justify-center">
+                            <User className="w-5 h-5 text-nilin-coral" />
                           </div>
-                          <div className="ml-4">
-                            <p className="text-sm font-medium text-gray-900">
-                              {withdrawal.userFirstName} {withdrawal.userLastName}
+                          <div className="ml-3">
+                            <p className="text-sm font-medium text-nilin-charcoal font-sans">
+                              {formatProviderName(withdrawal)}
                             </p>
-                            <p className="text-sm text-gray-500">{withdrawal.userEmail}</p>
+                            <p className="text-xs text-nilin-warmGray font-sans">{withdrawal.userEmail}</p>
                           </div>
                         </div>
                       </td>
@@ -485,7 +594,9 @@ const PayoutManagement: React.FC<PayoutManagementProps> = () => {
                             withdrawal.transaction.status
                           )}`}
                         >
-                          {withdrawal.transaction.status}
+                          {withdrawal.transaction.status === 'reversed'
+                            ? 'rejected'
+                            : withdrawal.transaction.status}
                         </span>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
@@ -541,7 +652,7 @@ const PayoutManagement: React.FC<PayoutManagementProps> = () => {
 
           {/* Pagination */}
           {pagination.pages > 1 && (
-            <div className="px-6 py-4 border-t border-gray-200 flex items-center justify-between">
+            <div className="px-5 py-4 border-t border-nilin-border/40 flex items-center justify-between">
               <div className="text-sm text-gray-500">
                 Showing {(pagination.page - 1) * pagination.limit + 1} to{' '}
                 {Math.min(pagination.page * pagination.limit, pagination.total)} of {pagination.total}
@@ -568,7 +679,6 @@ const PayoutManagement: React.FC<PayoutManagementProps> = () => {
             </div>
           )}
         </div>
-      </div>
 
       {/* Process Modal */}
       {showProcessModal && selectedWithdrawal && (
@@ -595,9 +705,7 @@ const PayoutManagement: React.FC<PayoutManagementProps> = () => {
                     <User className="w-6 h-6 text-gray-600" />
                   </div>
                   <div>
-                    <p className="font-medium text-gray-900">
-                      {selectedWithdrawal.userFirstName} {selectedWithdrawal.userLastName}
-                    </p>
+                    <p className="font-medium text-gray-900">{formatProviderName(selectedWithdrawal)}</p>
                     <p className="text-sm text-gray-500">{selectedWithdrawal.userEmail}</p>
                   </div>
                 </div>

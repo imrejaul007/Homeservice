@@ -3,7 +3,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { useCallback } from 'react';
 import { analytics } from '../product/AnalyticsService';
-import { authAPI } from '../auth.api';
+import authService from '../AuthService';
 
 export interface ReferralCode {
   code: string;
@@ -98,7 +98,7 @@ export const useReferralStore = create<ReferralState>()(
       syncWithBackend: async () => {
         try {
           // Fetch referral code from backend
-          const codeResponse = await authAPI.getReferralCode();
+          const codeResponse = await authService.getReferralCode();
           if (codeResponse.success && codeResponse.data) {
             set({
               referralCode: {
@@ -115,7 +115,7 @@ export const useReferralStore = create<ReferralState>()(
           }
 
           // Fetch referral stats from backend
-          const statsResponse = await authAPI.getReferralStats();
+          const statsResponse = await authService.getReferralStats();
           if (statsResponse.success && statsResponse.data) {
             set({
               metrics: {

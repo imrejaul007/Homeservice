@@ -1,10 +1,12 @@
-import React, { useEffect, lazy, Suspense } from 'react';
+import React, { useEffect, lazy, Suspense, useMemo } from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from './stores/authStore';
 import { useBackButton } from './hooks/useBackButton';
 import { useCapacitor } from './hooks/useCapacitor';
 import { ToastProvider } from './components/common/Toast';
 import { OfflineBanner } from './components/common/OfflineBanner';
+import { MaintenanceGuard } from './components/common/MaintenanceGuard';
+import { PlatformConfigProvider, usePlatformConfig } from './components/common/PlatformConfigProvider';
 import { AppShell } from './components/mobile/AppShell';
 
 // =============================================================================
@@ -103,7 +105,7 @@ const ResetPassword = lazy(() => import('./components/auth/ResetPassword'));
 const EmailVerification = lazy(() => import('./components/auth/EmailVerification'));
 const EmailVerificationRequired = lazy(() => import('./components/auth/EmailVerificationRequired'));
 const ChangePassword = lazy(() => import('./components/auth/ChangePassword'));
-const CustomerDashboard = lazy(() => import('./components/dashboard/CustomerDashboard'));
+const CustomerDashboard = lazy(() => import('./pages/CustomerDashboard'));
 const StatsView = lazy(() => import('./components/dashboard/StatsView'));
 const ProviderDashboard = lazy(() => import('./components/dashboard/ProviderDashboard'));
 const AdminDashboard = lazy(() => import('./pages/admin/AdminDashboard'));
@@ -119,6 +121,7 @@ const MaintenanceMode = lazy(() => import('./pages/admin/MaintenanceMode'));
 const PayoutManagement = lazy(() => import('./pages/admin/PayoutManagement'));
 const ChurnReport = lazy(() => import('./pages/admin/ChurnReport'));
 const ProviderManagement = lazy(() => import('./pages/admin/ProviderManagement'));
+const ChatbotBuilderPage = lazy(() => import('./pages/admin/ChatbotBuilderPage'));
 const HomePage = lazy(() => import('./pages/HomePage'));
 const ExperiencesPage = lazy(() => import('./pages/ExperiencesPage'));
 const SearchPage = lazy(() => import('./pages/SearchPage'));
@@ -132,6 +135,7 @@ const ProviderBookingsPage = lazy(() => import('./pages/booking/ProviderBookings
 const BookingDetailPage = lazy(() => import('./pages/booking/BookingDetailPage'));
 const ProviderAvailabilityPage = lazy(() => import('./pages/booking/ProviderAvailabilityPage'));
 const BookServicePage = lazy(() => import('./pages/booking/BookServicePage'));
+const BookPackagePage = lazy(() => import('./pages/booking/BookPackagePage'));
 const ProviderBookingDetailPage = lazy(() => import('./pages/provider/BookingDetailPage'));
 const TrackBookingPage = lazy(() => import('./pages/booking/TrackBookingPage'));
 const CustomerStatsPage = lazy(() => import('./pages/customer/CustomerStatsPage'));
@@ -166,6 +170,8 @@ const TermsPage = lazy(() => import('./pages/TermsPage'));
 const FAQPage = lazy(() => import('./pages/FAQPage'));
 const ContactPage = lazy(() => import('./pages/ContactPage'));
 const HelpPage = lazy(() => import('./pages/HelpPage'));
+const PackagesPage = lazy(() => import('./pages/PackagesPage'));
+const PackageDetailPage = lazy(() => import('./pages/PackageDetailPage'));
 
 import {
   ProtectedRoute,
@@ -261,10 +267,21 @@ const Unauthorized = () => (
   </div>
 );
 
+const FaqGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const config = usePlatformConfig();
+  if (!config.enableFAQ) {
+    return <Navigate to="/" replace />;
+  }
+  return <>{children}</>;
+};
+
 function App() {
   const { initialize, isInitialized } = useAuthStore();
   const { isCapacitor, isMobile } = useCapacitor();
   useBackButton();
+
+  // FIX: Memoize platform detection to prevent re-computation on every render
+  const isMobilePlatform = useMemo(() => isMobile || isCapacitor, [isMobile, isCapacitor]);
 
   useEffect(() => {
     if (!isInitialized) {
@@ -276,8 +293,10 @@ function App() {
   const appContent = (
     <AppErrorBoundary>
       <ToastProvider>
+        <PlatformConfigProvider>
         {/* CRITICAL FIX: Global offline indicator */}
         <OfflineBanner autoHideDelay={3000} showCloseButton={true} />
+        <MaintenanceGuard>
         <div className="App">
           <ScrollToTop />
           <Suspense fallback={<LoadingSpinner />}>
@@ -352,6 +371,24 @@ function App() {
         <Route
           path="/search"
           element={<SearchPage />}
+        />
+
+        {/* Service Packages Routes */}
+        <Route
+          path="/packages"
+          element={<PackagesPage />}
+        />
+        <Route
+          path="/packages/:id"
+          element={<PackageDetailPage />}
+        />
+        <Route
+          path="/book-package/:packageId"
+          element={<BookPackagePage />}
+        />
+        <Route
+          path="/book-package"
+          element={<BookPackagePage />}
         />
 
         {/* Experiences Route */}
@@ -457,7 +494,7 @@ function App() {
         <Route path="/offer/:offerId" element={<OfferDetailPage />} />
         <Route path="/privacy" element={<PrivacyPage />} />
         <Route path="/terms" element={<TermsPage />} />
-        <Route path="/faq" element={<FAQPage />} />
+        <Route path="/faq" element={<FaqGate><FAQPage /></FaqGate>} />
         <Route path="/contact" element={<ContactPage />} />
         <Route path="/help" element={<HelpPage />} />
 
@@ -466,7 +503,7 @@ function App() {
           path="/customer/dashboard"
           element={
             <CustomerRoute>
-              <CustomerStatsPage />
+              <CustomerDashboard />
             </CustomerRoute>
           }
         />
@@ -689,6 +726,15 @@ function App() {
         />
 
         <Route
+          path="/provider/change-password"
+          element={
+            <ProviderRoute>
+              <ChangePassword />
+            </ProviderRoute>
+          }
+        />
+
+        <Route
           path="/provider/managed-services"
           element={
             <ProviderRoute>
@@ -868,17 +914,30 @@ function App() {
           element={<HomePage />}
         />
 
+        {/* Chatbot Builder */}
+        <Route
+          path="/admin/chatbot-builder"
+          element={
+            <AdminRoute>
+              <ChatbotBuilderPage />
+            </AdminRoute>
+          }
+        />
+
         {/* 404 Route */}
         <Route path="*" element={<NotFound />} />
         </Routes>
         </Suspense>
         </div>
+        </MaintenanceGuard>
+        </PlatformConfigProvider>
       </ToastProvider>
     </AppErrorBoundary>
   );
 
   // Wrap with AppShell on mobile devices (Capacitor or small screens)
-  if (isMobile || isCapacitor) {
+  // FIX: Use memoized value instead of recomputing on every render
+  if (isMobilePlatform) {
     return <AppShell>{appContent}</AppShell>;
   }
 

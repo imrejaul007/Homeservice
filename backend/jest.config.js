@@ -8,7 +8,14 @@ module.exports = {
     '**/*.spec.ts'
   ],
   transform: {
-    '^.+\\.ts$': 'ts-jest',
+    '^.+\\.ts$': [
+      'ts-jest',
+      {
+        tsconfig: {
+          types: ['jest', 'node'],
+        },
+      },
+    ],
   },
   collectCoverageFrom: [
     'src/**/*.ts',

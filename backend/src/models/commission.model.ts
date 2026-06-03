@@ -2,6 +2,7 @@ import mongoose, { Document, Schema, Model } from 'mongoose';
 
 // Commission Tier Interface
 export interface ICommissionTier {
+  name?: string; // Optional name for tier identification (e.g., "Bronze", "Silver", "Gold")
   minAmount: number;
   maxAmount: number;
   rate: number; // Percentage (0-100)
@@ -107,26 +108,49 @@ export interface ICommission extends Document {
 export interface ICommissionHistory extends Document {
   _id: mongoose.Types.ObjectId;
   commissionId: mongoose.Types.ObjectId;
-  // Changes tracking
+  // Status and earnings changes tracking
   fieldChanged: string;
-  previousValue: any;
-  newValue: any;
-  changeReason: string;
+  previousStatus?: ICommission['status'];
+  newStatus?: ICommission['status'];
+  previousEarnings?: number;
+  newEarnings?: number;
+  previousValue?: any;
+  newValue?: any;
+  // Adjustment details
+  adjustment?: {
+    type: 'bonus' | 'penalty' | 'correction' | 'promotion';
+    amount: number;
+    reason: string;
+  };
+  changeReason?: string;
   // Who made the change
-  changedBy: mongoose.Types.ObjectId;
-  changedByRole: 'system' | 'admin' | 'provider';
-  changedAt: Date;
+  adjustedBy: mongoose.Types.ObjectId;
+  adjustedByRole: 'system' | 'admin' | 'provider';
+  adjustedAt: Date;
 }
 
 // Commission Rule Schema
 const commissionTierSchema = new Schema<ICommissionTier>(
   {
+    name: {
+      type: String,
+      trim: true,
+      maxlength: [50, 'Tier name cannot exceed 50 characters'],
+    },
     minAmount: { type: Number, required: true, min: 0 },
     maxAmount: { type: Number, required: true, min: 0 },
     rate: { type: Number, required: true, min: 0, max: 100 },
   },
   { _id: false }
 );
+
+// Pre-save hook to validate tier min/max amounts
+commissionTierSchema.pre('validate', function (next) {
+  if (this.minAmount > this.maxAmount) {
+    this.invalidate('minAmount', `minAmount (${this.minAmount}) cannot be greater than maxAmount (${this.maxAmount})`);
+  }
+  next();
+});
 
 const commissionRuleSchema = new Schema<ICommissionRule>(
   {
@@ -368,24 +392,41 @@ const commissionHistorySchema = new Schema<ICommissionHistory>(
       type: String,
       required: true,
     },
+    previousStatus: {
+      type: String,
+      enum: ['calculated', 'pending', 'approved', 'paid', 'disputed', 'reversed'],
+    },
+    newStatus: {
+      type: String,
+      enum: ['calculated', 'pending', 'approved', 'paid', 'disputed', 'reversed'],
+    },
+    previousEarnings: Number,
+    newEarnings: Number,
     previousValue: mongoose.Schema.Types.Mixed,
     newValue: mongoose.Schema.Types.Mixed,
+    adjustment: {
+      type: {
+        type: String,
+        enum: ['bonus', 'penalty', 'correction', 'promotion'],
+      },
+      amount: Number,
+      reason: String,
+    },
     changeReason: {
       type: String,
-      required: true,
       maxlength: [500, 'Reason cannot exceed 500 characters'],
     },
-    changedBy: {
+    adjustedBy: {
       type: Schema.Types.ObjectId,
       ref: 'User',
       required: true,
     },
-    changedByRole: {
+    adjustedByRole: {
       type: String,
       enum: ['system', 'admin', 'provider'],
       required: true,
     },
-    changedAt: {
+    adjustedAt: {
       type: Date,
       default: Date.now,
     },
@@ -409,10 +450,12 @@ commissionRuleSchema.index({ startDate: 1, endDate: 1 });
 // Commission record indexes
 commissionSchema.index({ providerId: 1, status: 1, calculatedAt: -1 });
 commissionSchema.index({ providerId: 1, 'metadata.bookingDate': -1 });
+commissionSchema.index({ providerId: 1, 'metadata.bookingDate': 1, status: 1 }); // PERFORMANCE: compound index for date-range queries with status
 commissionSchema.index({ bookingId: 1 }, { unique: true });
 commissionSchema.index({ ruleId: 1 });
 commissionSchema.index({ status: 1, calculatedAt: -1 });
 commissionSchema.index({ 'metadata.customerId': 1 });
+commissionSchema.index({ providerId: 1, completedAt: -1 }); // Index for queries filtering by completedAt date range
 
 // Tenant isolation indexes
 commissionSchema.index({ tenantId: 1, providerId: 1 });
@@ -448,7 +491,7 @@ commissionSchema.methods.recalculateEarnings = function (): void {
 commissionSchema.methods.updateStatus = async function (
   newStatus: ICommission['status'],
   changedBy: mongoose.Types.ObjectId,
-  changedByRole: ICommissionHistory['changedByRole'],
+  changedByRole: 'system' | 'admin' | 'provider',
   reason?: string
 ): Promise<void> {
   const CommissionHistory = mongoose.model<ICommissionHistory>('CommissionHistory');
@@ -456,12 +499,12 @@ commissionSchema.methods.updateStatus = async function (
   const historyEntry = new CommissionHistory({
     commissionId: this._id,
     fieldChanged: 'status',
-    previousValue: this.status,
-    newValue: newStatus,
+    previousStatus: this.status,
+    newStatus: newStatus,
     changeReason: reason || `Status changed to ${newStatus}`,
-    changedBy,
-    changedByRole,
-    changedAt: new Date(),
+    adjustedBy: changedBy,
+    adjustedByRole: changedByRole,
+    adjustedAt: new Date(),
   });
 
   this.status = newStatus;

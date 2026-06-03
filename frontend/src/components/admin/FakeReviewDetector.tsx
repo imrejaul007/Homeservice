@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   Star,
   AlertTriangle,
@@ -37,6 +37,7 @@ import {
 } from 'recharts';
 import { cn } from '../../lib/utils';
 import { api } from '../../services/api';
+import { useToastActions } from '../common/Toast';
 
 interface ReviewFlag {
   id: string;
@@ -101,11 +102,14 @@ export const FakeReviewDetector: React.FC<FakeReviewDetectorProps> = ({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [usingMockData, setUsingMockData] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [selectedFlag, setSelectedFlag] = useState<ReviewFlag | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const toast = useToastActions();
+  const isMountedRef = useRef(true);
 
   const fetchData = useCallback(async () => {
     try {
@@ -115,8 +119,10 @@ export const FakeReviewDetector: React.FC<FakeReviewDetectorProps> = ({
       if (response.data?.success) {
         setFlags(response.data.data.flags || []);
         setStats(response.data.data.stats);
+        setUsingMockData(false);
       } else {
         // Mock data
+        setUsingMockData(true);
         setFlags([
           {
             id: 'flag-001',
@@ -233,14 +239,23 @@ export const FakeReviewDetector: React.FC<FakeReviewDetectorProps> = ({
       }
     } catch (err) {
       console.error('Error fetching review flags:', err);
-      setError('Failed to load review detection data');
+      if (isMountedRef.current) {
+        setError('Failed to load review detection data');
+        setUsingMockData(false);
+      }
     } finally {
-      setLoading(false);
+      if (isMountedRef.current) {
+        setLoading(false);
+      }
     }
   }, []);
 
   useEffect(() => {
+    isMountedRef.current = true;
     fetchData();
+    return () => {
+      isMountedRef.current = false;
+    };
   }, [fetchData]);
 
   const handleRefresh = async () => {
@@ -256,21 +271,25 @@ export const FakeReviewDetector: React.FC<FakeReviewDetectorProps> = ({
       setFlags(prev => prev.map(flag =>
         flag.id === flagId ? { ...flag, status: newStatus } : flag
       ));
+      toast.success('Status updated', `Review flag status changed to ${newStatus}`);
     } catch (err) {
       console.error('Error updating flag:', err);
+      toast.error('Update failed', 'Could not update review flag status. Please try again.');
     } finally {
       setActionLoading(null);
     }
   };
 
-  const filteredFlags = flags.filter(flag => {
-    const matchesSearch = flag.authorName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                          flag.providerName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                          flag.text.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesType = typeFilter === 'all' || flag.type === typeFilter;
-    const matchesStatus = statusFilter === 'all' || flag.status === statusFilter;
-    return matchesSearch && matchesType && matchesStatus;
-  });
+  const filteredFlags = useMemo(() => {
+    return flags.filter(flag => {
+      const matchesSearch = flag.authorName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                            flag.providerName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                            flag.text.toLowerCase().includes(searchQuery.toLowerCase());
+      const matchesType = typeFilter === 'all' || flag.type === typeFilter;
+      const matchesStatus = statusFilter === 'all' || flag.status === statusFilter;
+      return matchesSearch && matchesType && matchesStatus;
+    });
+  }, [flags, searchQuery, typeFilter, statusFilter]);
 
   if (loading) {
     return (
@@ -314,7 +333,7 @@ export const FakeReviewDetector: React.FC<FakeReviewDetectorProps> = ({
           </div>
           <div>
             <h2 className="text-2xl font-serif text-nilin-charcoal">Fake Review Detection</h2>
-            <p className="text-sm text-nilin-warmGray mt-1">ML-powered review authenticity analysis</p>
+            <p className="text-sm text-nilin-warmGray mt-1">ML-powered review authenticity analysis{usingMockData && ' (Demo Data)'}</p>
           </div>
         </div>
         <div className="flex items-center gap-2">

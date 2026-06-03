@@ -46,10 +46,173 @@ interface VerificationStep {
   documents?: VerificationDocument[];
 }
 
+// FIX #1: Default verification steps when no backend data available
+const getDefaultVerificationSteps = (): VerificationStep[] => [
+  {
+    id: 'identity',
+    title: 'Identity Verification',
+    description: 'Verify your personal identity with a valid government-issued ID',
+    status: 'pending',
+    documents: [
+      {
+        id: 'emirates_id',
+        type: 'id',
+        name: 'Emirates ID / Passport',
+        status: 'missing',
+      },
+    ],
+  },
+  {
+    id: 'professional',
+    title: 'Professional Credentials',
+    description: 'Upload your professional licenses and certifications',
+    status: 'pending',
+    documents: [
+      {
+        id: 'trade_license',
+        type: 'license',
+        name: 'Trade License (Dubai Economy)',
+        status: 'missing',
+      },
+      {
+        id: 'dha_license',
+        type: 'license',
+        name: 'DHA/DHA Certificate (if applicable)',
+        status: 'missing',
+      },
+    ],
+  },
+  {
+    id: 'background',
+    title: 'Background Check',
+    description: 'Consent to a background check for customer safety',
+    status: 'pending',
+  },
+  {
+    id: 'address',
+    title: 'Address Verification',
+    description: 'Verify your current residential or business address',
+    status: 'pending',
+    documents: [
+      {
+        id: 'utility_bill',
+        type: 'address',
+        name: 'Utility Bill ( Ejari / DEWA)',
+        status: 'missing',
+      },
+    ],
+  },
+];
+
+// Map backend document types to frontend document IDs
+const mapBackendDocTypeToFrontendId = (docType: string): string => {
+  const typeLower = docType.toLowerCase();
+  if (typeLower.includes('emirates_id') || typeLower.includes('id_card') || typeLower.includes('passport')) {
+    return 'emirates_id';
+  }
+  if (typeLower.includes('trade_license') || typeLower.includes('business_license') || typeLower.includes('license')) {
+    return 'trade_license';
+  }
+  if (typeLower.includes('dha') || typeLower.includes('certificate')) {
+    return 'dha_license';
+  }
+  if (typeLower.includes('utility') || typeLower.includes('address') || typeLower.includes('ejari') || typeLower.includes('dewa')) {
+    return 'utility_bill';
+  }
+  return docType;
+};
+
+// Map backend document verification status to frontend status
+const mapBackendStatusToFrontend = (verified: boolean, rejectionReason?: string): VerificationDocument['status'] => {
+  if (verified) return 'approved';
+  if (rejectionReason) return 'rejected';
+  return 'pending';
+};
+
+// FIX #1: Fetch verification status from backend API and sync with frontend state
+const fetchVerificationStatus = async (): Promise<VerificationStep[]> => {
+  try {
+    const response = await api.get('/provider/verification');
+    if (response.data?.success && response.data?.data) {
+      const backendData = response.data.data;
+
+      // Get default steps as base
+      const steps = getDefaultVerificationSteps();
+
+      // Update steps based on backend data
+      if (backendData.documents && Array.isArray(backendData.documents)) {
+        for (const doc of backendData.documents) {
+          const frontendDocId = mapBackendDocTypeToFrontendId(doc.type);
+
+          for (const step of steps) {
+            if (step.documents) {
+              const docIndex = step.documents.findIndex(d => d.id === frontendDocId);
+              if (docIndex >= 0) {
+                step.documents[docIndex] = {
+                  ...step.documents[docIndex],
+                  status: mapBackendStatusToFrontend(doc.verified, doc.rejectionReason),
+                  uploadedAt: doc.uploadedAt ? new Date(doc.uploadedAt) : undefined,
+                  verifiedAt: doc.verifiedAt ? new Date(doc.verifiedAt) : undefined,
+                  rejectionReason: doc.rejectionReason,
+                  fileUrl: doc.url,
+                };
+                step.status = step.documents[docIndex].status === 'approved' ? 'completed' : 'in_progress';
+              }
+            }
+          }
+        }
+      }
+
+      // Update overall status based on backend
+      if (backendData.overallStatus) {
+        if (backendData.overallStatus === 'verified' || backendData.overallStatus === 'approved') {
+          // Mark all pending steps as completed
+          for (const step of steps) {
+            if (step.status !== 'completed') {
+              step.status = 'completed';
+              if (step.documents) {
+                for (const doc of step.documents) {
+                  if (doc.status !== 'approved') {
+                    doc.status = 'approved';
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      return steps;
+    }
+  } catch (error) {
+    console.error('Failed to fetch verification status:', error);
+  }
+
+  return getDefaultVerificationSteps();
+};
+
+// FIX #3: Handle background check consent
+const handleBackgroundCheckConsent = async () => {
+  try {
+    const response = await api.post('/provider/verification/consent');
+    if (response.data?.success) {
+      return true;
+    }
+  } catch (error) {
+    console.error('Failed to submit background check consent:', error);
+  }
+  return false;
+};
+
 const ProviderVerificationPage: React.FC = () => {
   const navigate = useNavigate();
-  const { user, providerProfile } = useAuthStore();
+  const { user, providerProfile, setProviderProfile } = useAuthStore();
   const toast = useToast();
+
+  // FIX #1: State initialized with function to avoid dependency on providerProfile
+  const [verificationSteps, setVerificationSteps] = useState<VerificationStep[]>(getDefaultVerificationSteps);
+  const [isLoading, setIsLoading] = useState(true);
+  const [backgroundCheckConsent, setBackgroundCheckConsent] = useState(false);
 
   // Redirect if not a provider
   useEffect(() => {
@@ -58,63 +221,29 @@ const ProviderVerificationPage: React.FC = () => {
     }
   }, [user, navigate]);
 
-  const [verificationSteps, setVerificationSteps] = useState<VerificationStep[]>([
-    {
-      id: 'identity',
-      title: 'Identity Verification',
-      description: 'Verify your personal identity with a valid government-issued ID',
-      status: providerProfile?.isVerified ? 'completed' : 'pending',
-      documents: [
-        {
-          id: 'emirates_id',
-          type: 'id',
-          name: 'Emirates ID / Passport',
-          status: providerProfile?.isVerified ? 'approved' : 'missing',
-          verifiedAt: providerProfile?.isVerified ? new Date() : undefined,
-        },
-      ],
-    },
-    {
-      id: 'professional',
-      title: 'Professional Credentials',
-      description: 'Upload your professional licenses and certifications',
-      status: 'pending',
-      documents: [
-        {
-          id: 'trade_license',
-          type: 'license',
-          name: 'Trade License (Dubai Economy)',
-          status: 'missing',
-        },
-        {
-          id: 'dha_license',
-          type: 'license',
-          name: 'DHA/DHA Certificate (if applicable)',
-          status: 'missing',
-        },
-      ],
-    },
-    {
-      id: 'background',
-      title: 'Background Check',
-      description: 'Consent to a background check for customer safety',
-      status: 'pending',
-    },
-    {
-      id: 'address',
-      title: 'Address Verification',
-      description: 'Verify your current residential or business address',
-      status: 'pending',
-      documents: [
-        {
-          id: 'utility_bill',
-          type: 'address',
-          name: 'Utility Bill ( Ejari / DEWA)',
-          status: 'missing',
-        },
-      ],
-    },
-  ]);
+  // FIX #1: Fetch verification status from backend on mount
+  useEffect(() => {
+    const loadVerificationStatus = async () => {
+      setIsLoading(true);
+      try {
+        const steps = await fetchVerificationStatus();
+        setVerificationSteps(steps);
+
+        // Update provider profile verification status based on backend
+        const backendVerified = steps.every(step => step.status === 'completed');
+        if (backendVerified && providerProfile && !providerProfile.isVerified) {
+          // Update the auth store with new verification status
+          setProviderProfile?.({ ...providerProfile, isVerified: true });
+        }
+      } catch (error) {
+        console.error('Failed to load verification status:', error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadVerificationStatus();
+  }, [providerProfile, setProviderProfile]);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<Record<string, number>>({});
@@ -123,7 +252,7 @@ const ProviderVerificationPage: React.FC = () => {
   const completedSteps = verificationSteps.filter((s) => s.status === 'completed').length;
   const overallProgress = (completedSteps / verificationSteps.length) * 100;
 
-  // Socket listeners for verification updates
+  // FIX #1 & #4: Socket listeners for verification updates - sync with backend
   useEffect(() => {
     const unsubscribers: (() => void)[] = [];
 
@@ -135,8 +264,12 @@ const ProviderVerificationPage: React.FC = () => {
           description: 'Your provider account has been verified!',
           variant: 'success',
         });
-        // Refresh verification status
-        window.location.reload();
+        // Refresh verification status from backend
+        fetchVerificationStatus().then(setVerificationSteps);
+        // Update provider profile in auth store
+        if (providerProfile && !providerProfile.isVerified) {
+          setProviderProfile?.({ ...providerProfile, isVerified: true });
+        }
       })
     );
 
@@ -162,24 +295,38 @@ const ProviderVerificationPage: React.FC = () => {
       })
     );
 
-    // Listen for document verified
+    // Listen for document verified - FIX: Use correct socket event name
     unsubscribers.push(
       socketService.onDocumentVerified((data) => {
+        // Update the specific document in the state
         setVerificationSteps((steps) =>
-          steps.map((step) => ({
-            ...step,
-            documents: step.documents?.map((doc) =>
-              doc.id === data.documentId
-                ? { ...doc, status: data.status, verifiedAt: new Date() }
-                : doc
-            ),
-          }))
+          steps.map((step) => {
+            if (!step.documents) return step;
+            return {
+              ...step,
+              documents: step.documents.map((doc) => {
+                // Match by document ID or mapped type
+                const docId = mapBackendDocTypeToFrontendId(data.documentId);
+                if (doc.id === docId || doc.id === data.documentId) {
+                  return {
+                    ...doc,
+                    status: data.status,
+                    verifiedAt: new Date(),
+                    rejectionReason: data.notes,
+                  };
+                }
+                return doc;
+              }),
+            };
+          })
         );
         toast.addToast({
-          title: 'Document Verified',
-          description: 'Your document has been verified.',
-          variant: 'success',
+          title: data.status === 'approved' ? 'Document Approved' : 'Document Rejected',
+          description: data.notes || (data.status === 'approved' ? 'Your document has been verified.' : 'Your document requires resubmission.'),
+          variant: data.status === 'approved' ? 'success' : 'error',
         });
+        // Refresh full verification status from backend
+        fetchVerificationStatus().then(setVerificationSteps);
       })
     );
 
@@ -191,7 +338,11 @@ const ProviderVerificationPage: React.FC = () => {
           description: 'You are now a verified provider!',
           variant: 'success',
         });
-        window.location.reload();
+        // Refresh verification status from backend
+        fetchVerificationStatus().then(setVerificationSteps);
+        if (providerProfile && !providerProfile.isVerified) {
+          setProviderProfile?.({ ...providerProfile, isVerified: true });
+        }
       })
     );
 
@@ -199,8 +350,9 @@ const ProviderVerificationPage: React.FC = () => {
     return () => {
       unsubscribers.forEach((unsub) => unsub());
     };
-  }, [toast]);
+  }, [toast, providerProfile, setProviderProfile]);
 
+  // FIX #2: Handle file upload using providerOpsService.uploadKycDocument endpoint
   const handleFileUpload = async (stepId: string, documentId: string, file: File) => {
     // File validation constants
     const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'application/pdf'];
@@ -247,7 +399,7 @@ const ProviderVerificationPage: React.FC = () => {
         throw new Error('Authentication required');
       }
 
-      // Upload to Cloudinary or your file storage
+      // FIX #2: Upload to file storage endpoint
       const uploadResponse = await fetch('/api/upload', {
         method: 'POST',
         body: formData,
@@ -265,40 +417,68 @@ const ProviderVerificationPage: React.FC = () => {
 
       setUploadProgress((prev) => ({ ...prev, [documentId]: 50 }));
 
-      // Save document reference to backend
-      await api.post('/provider/verification/documents', {
-        documentType: documentId,
+      // FIX #2: Map frontend document ID to backend document type
+      const backendDocType = mapFrontendDocIdToBackendType(documentId);
+
+      // Save document reference to backend using providerOpsService endpoint
+      const response = await api.post('/provider/verification/documents', {
+        documentType: backendDocType,
         documentUrl: fileUrl,
+        metadata: {
+          fileName: file.name,
+          fileSize: file.size,
+          mimeType: file.type,
+        },
       });
 
       setUploadProgress((prev) => ({ ...prev, [documentId]: 100 }));
 
-      // Update document status
-      setVerificationSteps((steps) =>
-        steps.map((step) => {
-          if (step.id !== stepId) return step;
-          return {
-            ...step,
-            status: 'in_progress',
-            documents: step.documents?.map((doc) => {
-              if (doc.id !== documentId) return doc;
-              return {
-                ...doc,
-                status: 'pending',
-                uploadedAt: new Date(),
-                fileUrl: fileUrl,
-              };
-            }),
-          };
-        })
-      );
+      if (response.data?.success) {
+        // Update document status optimistically
+        setVerificationSteps((steps) =>
+          steps.map((step) => {
+            if (step.id !== stepId) return step;
+            return {
+              ...step,
+              status: 'in_progress',
+              documents: step.documents?.map((doc) => {
+                if (doc.id !== documentId) return doc;
+                return {
+                  ...doc,
+                  status: 'pending',
+                  uploadedAt: new Date(),
+                  fileUrl: fileUrl,
+                };
+              }),
+            };
+          })
+        );
 
-      toast.addToast({ title: 'Document uploaded successfully', variant: 'success' });
+        toast.addToast({ title: 'Document uploaded successfully', variant: 'success' });
+      } else {
+        throw new Error(response.data?.message || 'Failed to save document');
+      }
 
-    } catch (error) {
+    } catch (error: any) {
       console.error('Upload failed:', error);
       setUploadProgress({});
-      toast.addToast({ title: error instanceof Error ? error.message : 'Failed to upload document', variant: 'error' });
+      toast.addToast({ title: error.response?.data?.message || error.message || 'Failed to upload document', variant: 'error' });
+    }
+  };
+
+  // FIX #2: Map frontend document IDs to backend document types
+  const mapFrontendDocIdToBackendType = (docId: string): string => {
+    switch (docId) {
+      case 'emirates_id':
+        return 'id_card';
+      case 'trade_license':
+        return 'business_license';
+      case 'dha_license':
+        return 'certificate';
+      case 'utility_bill':
+        return 'address_proof';
+      default:
+        return docId;
     }
   };
 
@@ -582,9 +762,43 @@ const ProviderVerificationPage: React.FC = () => {
                 {/* Background Check Consent */}
                 {step.id === 'background' && (
                   <div className="ml-14">
-                    <button className="px-6 py-3 bg-nilin-coral text-white font-medium rounded-nilin hover:bg-nilin-rose transition-colors flex items-center gap-2">
+                    <button
+                      onClick={async () => {
+                        if (backgroundCheckConsent) {
+                          // Already consented - show info
+                          toast.addToast({
+                            title: 'Consent Already Given',
+                            description: 'You have already consented to the background check.',
+                            variant: 'info',
+                          });
+                          return;
+                        }
+                        const success = await handleBackgroundCheckConsent();
+                        if (success) {
+                          setBackgroundCheckConsent(true);
+                          setVerificationSteps((steps) =>
+                            steps.map((s) =>
+                              s.id === 'background'
+                                ? { ...s, status: 'completed' as const }
+                                : s
+                            )
+                          );
+                          toast.addToast({
+                            title: 'Consent Recorded',
+                            description: 'Thank you for consenting to the background check.',
+                            variant: 'success',
+                          });
+                        }
+                      }}
+                      className={`px-6 py-3 font-medium rounded-nilin transition-colors flex items-center gap-2 ${
+                        backgroundCheckConsent
+                          ? 'bg-green-100 text-green-700 border border-green-300'
+                          : 'bg-nilin-coral text-white hover:bg-nilin-rose'
+                      }`}
+                    >
                       <Shield className="h-4 w-4" />
-                      Consent to Background Check
+                      {backgroundCheckConsent ? 'Consent Given' : 'Consent to Background Check'}
+                      {backgroundCheckConsent && <CheckCircle className="h-4 w-4" />}
                     </button>
                     <p className="text-xs text-nilin-warmGray mt-2">
                       By consenting, you authorize NILIN to perform a background check for the safety of our customers.

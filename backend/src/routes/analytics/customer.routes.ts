@@ -7,6 +7,7 @@ const queryString = (value: unknown, fallback = ''): string =>
   typeof value === 'string' ? value : fallback;
 import { ApiError } from '../../utils/ApiError';
 import { customerAnalyticsService, CustomerBookingFrequency, CustomerAOVTrend, CategoryDistribution, SeasonalPattern, CESData } from '../../services/customerAnalytics.service';
+import CESSubmission from '../../models/cesSubmission.model';
 
 const router = Router();
 
@@ -158,7 +159,7 @@ router.get('/seasonal-patterns', authenticate, asyncHandler(async (req: Request,
  */
 router.post('/ces', authenticate, asyncHandler(async (req: Request, res: Response) => {
   const user = req.user as any;
-  const { score, bookingId, feedback } = req.body;
+  const { score, bookingId, serviceId, feedback } = req.body;
 
   if (user.role !== 'customer' && user.role !== 'admin') {
     throw new ApiError(403, 'Only customers can submit CES scores');
@@ -169,21 +170,49 @@ router.post('/ces', authenticate, asyncHandler(async (req: Request, res: Respons
     throw new ApiError(400, 'Score must be between 1 and 7');
   }
 
-  // In a real implementation, this would save to a database
-  // For now, we'll just acknowledge the submission
+  // Validate feedback length
+  if (feedback && feedback.length > 2000) {
+    throw new ApiError(400, 'Feedback cannot exceed 2000 characters');
+  }
+
+  const customerId = user._id;
+
+  // Check for duplicate submission for the same booking
+  if (bookingId) {
+    const existing = await CESSubmission.findOne({
+      userId: customerId,
+      bookingId: bookingId,
+    });
+    if (existing) {
+      throw new ApiError(409, 'CES score already submitted for this booking');
+    }
+  }
+
+  // Persist the CES submission to the database
+  const submission = await CESSubmission.create({
+    userId: customerId,
+    bookingId: bookingId || undefined,
+    serviceId: serviceId || undefined,
+    score,
+    feedback: feedback || undefined,
+    submittedAt: new Date(),
+  });
+
   logger.info('CES score submitted', {
+    submissionId: submission._id.toString(),
     userId: user._id.toString(),
     score,
     bookingId,
     hasFeedback: !!feedback,
   });
 
-  res.json({
+  res.status(201).json({
     success: true,
     message: 'CES score submitted successfully',
     data: {
-      score,
-      submittedAt: new Date().toISOString(),
+      id: submission._id.toString(),
+      score: submission.score,
+      submittedAt: submission.submittedAt.toISOString(),
     },
   });
 }));
@@ -206,22 +235,56 @@ router.get('/ces-history', authenticate, asyncHandler(async (req: Request, res: 
     throw new ApiError(400, 'Customer ID is required');
   }
 
-  // In a real implementation, this would fetch from a database
-  // Mock data for now
+  // Fetch submissions from database
+  const { Types } = require('mongoose');
+  const customerObjectId = new Types.ObjectId(customerId);
+
+  const [submissions, averageScore, distribution] = await Promise.all([
+    CESSubmission.getSubmissionsByCustomer(customerObjectId, { limit: 100 }),
+    CESSubmission.getAverageScore(customerObjectId, 90),
+    CESSubmission.getScoreDistribution(customerObjectId),
+  ]);
+
+  // Calculate trend (compare recent 30 days to previous 30 days)
+  const now = new Date();
+  const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+  const sixtyDaysAgo = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000);
+
+  const recentSubmissions = submissions.filter(s => s.submittedAt >= thirtyDaysAgo);
+  const previousSubmissions = submissions.filter(s => s.submittedAt >= sixtyDaysAgo && s.submittedAt < thirtyDaysAgo);
+
+  const recentAvg = recentSubmissions.length > 0
+    ? recentSubmissions.reduce((sum, s) => sum + s.score, 0) / recentSubmissions.length
+    : 0;
+  const previousAvg = previousSubmissions.length > 0
+    ? previousSubmissions.reduce((sum, s) => sum + s.score, 0) / previousSubmissions.length
+    : 0;
+  const trend = previousAvg > 0 ? recentAvg - previousAvg : 0;
+
+  const totalResponses = Object.values(distribution).reduce((a, b) => a + b, 0);
+
+  // Ensure distribution has all required keys
+  const formattedDistribution = {
+    veryEasy: distribution.veryEasy || 0,
+    easy: distribution.easy || 0,
+    neutral: distribution.neutral || 0,
+    difficult: distribution.difficult || 0,
+    veryDifficult: distribution.veryDifficult || 0,
+  };
+
   const data: CESData = {
     customerId,
-    scores: [],
-    averageScore: 6.0,
-    benchmark: 5.5,
-    trend: 0.4,
-    distribution: {
-      veryEasy: 156,
-      easy: 112,
-      neutral: 48,
-      difficult: 14,
-      veryDifficult: 6,
-    },
-    responseRate: 72,
+    scores: submissions.map(s => ({
+      score: s.score,
+      date: s.submittedAt,
+      serviceId: s.serviceId?.toString(),
+      bookingId: s.bookingId?.toString(),
+    })),
+    averageScore: Math.round(averageScore * 10) / 10,
+    benchmark: 5.5, // Industry standard CES benchmark
+    trend: Math.round(trend * 10) / 10,
+    distribution: formattedDistribution,
+    responseRate: totalResponses > 0 ? Math.round((totalResponses / 10) * 100) / 100 : 0, // Approximate based on submissions
   };
 
   res.json({

@@ -77,6 +77,7 @@ interface TrackingData {
   isGuestBooking: boolean;
   createdAt: string;
   _id?: string;
+  guestEmail?: string;
 }
 
 const statusLabels: Record<string, string> = {
@@ -485,13 +486,19 @@ const TrackBookingPage: React.FC = () => {
                 {!isAuthenticated && (
                   <div className="space-y-3">
                     <p className="text-center text-nilin-warmGray text-sm">
-                      Login to manage this booking or share your experience
+                      Sign in with the same email used for this booking to see it in My Bookings
                     </p>
                     <Link
-                      to={`/login?returnTo=/track/${tracking.bookingNumber}`}
+                      to="/login"
+                      state={{
+                        returnTo: '/customer/bookings',
+                        email: tracking.guestEmail || tracking.customerInfo?.email,
+                        message:
+                          'Use the email from your booking confirmation to link this booking to your account.',
+                      }}
                       className="block w-full text-center px-6 py-3 bg-nilin-charcoal text-white rounded-nilin font-semibold hover:bg-nilin-warmGray transition-colors"
                     >
-                      Login
+                      Sign In
                     </Link>
                   </div>
                 )}

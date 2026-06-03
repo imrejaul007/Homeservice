@@ -106,6 +106,14 @@ export interface IProviderVerification extends Document {
     appealNotes?: string;
   };
 
+  // Admin suspension metadata (distinct from KYC expiresAt)
+  suspension?: {
+    type: 'temporary' | 'permanent';
+    endDate?: Date;
+    reason?: string;
+    previousProfileOverall?: string;
+  };
+
   // Timestamps
   createdAt: Date;
   updatedAt: Date;
@@ -314,6 +322,16 @@ const providerVerificationSchema = new Schema<IProviderVerification>(
         ref: 'User',
       },
       appealNotes: String,
+    },
+
+    suspension: {
+      type: {
+        type: String,
+        enum: ['temporary', 'permanent'],
+      },
+      endDate: Date,
+      reason: String,
+      previousProfileOverall: String,
     },
 
     expiresAt: Date,

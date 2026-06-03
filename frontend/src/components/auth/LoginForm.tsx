@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { Link, useNavigate, useLocation } from 'react-router-dom';
+import { Link, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
 import { Eye, EyeOff, Mail, Lock, AlertCircle, CheckCircle } from 'lucide-react';
 import NavigationHeader from '../layout/NavigationHeader';
@@ -18,6 +18,8 @@ type LoginForm = z.infer<typeof loginSchema>;
 
 interface LocationState {
   from?: string;
+  returnTo?: string;
+  email?: string;
   message?: string;
 }
 
@@ -28,8 +30,15 @@ const LoginFormComponent: React.FC = () => {
   const { login, isLoading, errors, clearErrors, user } = useAuthStore();
   const navigate = useNavigate();
   const location = useLocation();
+  const [searchParams] = useSearchParams();
   const locationState = location.state as LocationState | null;
   const stateMessage = locationState?.message;
+  const prefilledEmail = locationState?.email || searchParams.get('email') || '';
+  const returnTo =
+    searchParams.get('returnTo') ||
+    locationState?.returnTo ||
+    locationState?.from ||
+    '/customer/bookings';
 
   const {
     register,
@@ -37,14 +46,34 @@ const LoginFormComponent: React.FC = () => {
     formState: { errors: formErrors, isSubmitting },
     setError,
     watch,
+    reset,
   } = useForm<LoginForm>({
     resolver: zodResolver(loginSchema),
-    defaultValues: { email: '', password: '', rememberMe: false },
+    defaultValues: { email: prefilledEmail, password: '', rememberMe: false },
   });
 
   const watchedEmail = watch('email');
 
   useEffect(() => { clearErrors(); }, [watchedEmail, clearErrors]);
+
+  useEffect(() => {
+    if (prefilledEmail) {
+      reset({ email: prefilledEmail, password: '', rememberMe: false });
+    }
+  }, [prefilledEmail, reset]);
+
+  useEffect(() => {
+    if (!user || !isSubmitted || isLoading) return;
+    const destination =
+      user.role === 'customer'
+        ? returnTo.startsWith('/') ? returnTo : '/customer/bookings'
+        : user.role === 'provider'
+          ? '/provider/dashboard'
+          : user.role === 'admin'
+            ? '/admin/dashboard'
+            : '/';
+    navigate(destination, { replace: true });
+  }, [user, isSubmitted, isLoading, returnTo, navigate]);
 
   const onSubmit = async (data: LoginForm) => {
     try {
@@ -206,7 +235,14 @@ const LoginFormComponent: React.FC = () => {
 
             {/* Register Buttons */}
             <div className="grid grid-cols-2 gap-3">
-              <Link to="/register/customer" className="py-3 rounded-xl border border-nilin-border text-center text-sm font-medium text-nilin-charcoal hover:bg-nilin-blush/50 transition-colors">
+              <Link
+                to="/register/customer"
+                state={{
+                  email: prefilledEmail || watchedEmail || undefined,
+                  returnTo,
+                }}
+                className="py-3 rounded-xl border border-nilin-border text-center text-sm font-medium text-nilin-charcoal hover:bg-nilin-blush/50 transition-colors"
+              >
                 Join as Customer
               </Link>
               <Link to="/register/provider" className="py-3 rounded-xl bg-gradient-to-r from-nilin-rose to-nilin-coral text-center text-sm font-medium text-white shadow-md hover:shadow-lg transition-shadow">

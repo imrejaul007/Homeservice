@@ -121,7 +121,12 @@ const mapApiInvoiceToInvoiceData = (apiInvoice: InvoiceApiType): InvoiceData => 
     taxRate: apiInvoice.taxRate,
     taxAmount: apiInvoice.taxAmount,
     total: apiInvoice.totalAmount,
-    paymentStatus: apiInvoice.status === 'paid' ? 'paid' : apiInvoice.status === 'pending' || apiInvoice.status === 'sent' ? 'pending' : apiInvoice.status === 'refunded' ? 'refunded' : 'failed',
+    paymentStatus: apiInvoice.status === 'paid' ? 'paid'
+      : apiInvoice.status === 'pending' || apiInvoice.status === 'sent' || apiInvoice.status === 'overdue' ? 'pending'
+      : apiInvoice.status === 'refunded' ? 'refunded'
+      : apiInvoice.status === 'cancelled' ? 'failed'
+      : apiInvoice.status === 'draft' ? 'pending'
+      : 'failed',
     notes: apiInvoice.notes,
     terms: apiInvoice.terms,
   };
@@ -498,13 +503,6 @@ ${invoice.terms ? `\nTERMS:\n${invoice.terms}` : ''}
       handleDownload();
     }
   }, [autoDownload, invoice, isLoading, handleDownload]);
-
-  // Auto-download on mount
-  React.useEffect(() => {
-    if (autoDownload) {
-      handleDownload();
-    }
-  }, [autoDownload]);
 
   // Share invoice via email
   const handleEmail = useCallback(() => {

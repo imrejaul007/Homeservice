@@ -15,6 +15,7 @@ import {
   Shield,
   UserCheck,
   LogOut,
+  Bot,
 } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
 import authService from '../../services/AuthService';
@@ -37,6 +38,7 @@ const NAV_ITEMS: AdminNavItem[] = [
   { to: '/admin/offers', label: 'Offers', description: 'Promotions', icon: Gift },
   { to: '/admin/coupons', label: 'Coupons', description: 'Discount codes', icon: Ticket },
   { to: '/admin/reviews', label: 'Reviews', description: 'Moderation', icon: Star },
+  { to: '/admin/chatbot-builder', label: 'Chatbot Builder', description: 'IA Agents', icon: Bot },
   { to: '/admin/api-keys', label: 'API Keys', description: 'Integrations', icon: Key },
   { to: '/admin/maintenance', label: 'Maintenance', description: 'Platform mode', icon: Wrench },
   { to: '/admin/settings', label: 'Settings', description: 'Configuration', icon: Settings },
@@ -71,8 +73,10 @@ export function AdminNav({ pendingVerifications = 0, className = '' }: AdminNavP
           <Shield className="w-4 h-4 text-white" />
         </div>
         <div className="flex-1">
-          <p className="text-xs font-semibold uppercase tracking-wider text-nilin-coral font-sans">Admin</p>
-          <p className="text-sm font-serif text-nilin-charcoal truncate">{user?.firstName || 'Admin'}</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-nilin-coral font-sans">
+            {user?.role === 'admin' ? 'Admin' : 'Staff'}
+          </p>
+          <p className="text-sm font-serif text-nilin-charcoal truncate">{user?.firstName || 'User'}</p>
         </div>
       </div>
 
@@ -99,7 +103,9 @@ export function AdminNav({ pendingVerifications = 0, className = '' }: AdminNavP
                   <>
                     <item.icon className="w-4 h-4 flex-shrink-0 opacity-90" />
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">{item.label}</p>
+                      <p className="text-sm font-medium leading-tight" title={item.label}>
+                        {item.label}
+                      </p>
                       <p className={`text-xs truncate ${isActive ? 'text-white/80' : 'text-nilin-warmGray'}`}>
                         {item.description}
                       </p>

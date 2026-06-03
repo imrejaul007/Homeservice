@@ -1041,6 +1041,50 @@ export const indexService = async (service: any): Promise<void> => {
 };
 
 /**
+ * Partially update a service document in Meilisearch (or full re-index if needed)
+ */
+export const updateServiceInIndex = async (
+  serviceId: string,
+  partial: Record<string, unknown>
+): Promise<void> => {
+  const client = await getMeiliClient();
+  if (!client) return;
+
+  try {
+    const service = await Service.findById(serviceId).lean();
+    if (!service) {
+      await client.index(INDEXES.SERVICES).deleteDocument(serviceId);
+      return;
+    }
+
+    const merged = {
+      ...service,
+      isActive: partial.isActive ?? service.isActive,
+      status: partial.status ?? service.status,
+      updatedAt: partial.updatedAt ?? service.updatedAt,
+    };
+    await indexService(merged);
+  } catch (error) {
+    logger.error(`Failed to update service ${serviceId} in Meilisearch:`, error);
+  }
+};
+
+/**
+ * Remove a service from the Meilisearch index
+ */
+export const removeServiceFromIndex = async (serviceId: string): Promise<void> => {
+  const client = await getMeiliClient();
+  if (!client) return;
+
+  try {
+    await client.index(INDEXES.SERVICES).deleteDocument(serviceId);
+    logger.debug(`Service ${serviceId} removed from Meilisearch`);
+  } catch (error) {
+    logger.error(`Failed to remove service ${serviceId} from Meilisearch:`, error);
+  }
+};
+
+/**
  * Index a single provider in Meilisearch
  */
 export const indexProvider = async (provider: any): Promise<void> => {
@@ -1827,6 +1871,8 @@ export const getSearchStats = async (): Promise<{
 export default {
   initializeIndexes,
   indexService,
+  updateServiceInIndex,
+  removeServiceFromIndex,
   indexProvider,
   indexCategory,
   searchServices,

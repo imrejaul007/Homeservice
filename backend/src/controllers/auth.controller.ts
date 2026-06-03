@@ -30,16 +30,15 @@ const customerRegistrationSchema = Joi.object({
   dateOfBirth: Joi.string(),
   gender: Joi.string(),
   address: Joi.object({
-    street: Joi.string(),
-    city: Joi.string(),
-    state: Joi.string(),
-    zipCode: Joi.string(),
-    country: Joi.string(),
-    coordinates: Joi.object({
-      lat: Joi.number(),
-      lng: Joi.number(),
-    }),
-  }),
+    street: Joi.string().allow('', null).optional(),
+    city: Joi.string().allow('', null).optional(),
+    state: Joi.string().allow('', null).optional(),
+    zipCode: Joi.string().allow('', null).optional(),
+    country: Joi.string().allow('', null).optional(),
+    // Accept coordinates in ANY format - don't validate structure, just accept what comes
+    // The service layer will normalize it to GeoJSON
+    coordinates: Joi.any().optional(),
+  }).optional(), // Address itself is optional
   communicationPreferences: Joi.object({
     email: Joi.object({
       marketing: Joi.boolean(),
@@ -64,11 +63,7 @@ const customerRegistrationSchema = Joi.object({
     currency: Joi.string(),
   }),
   referralCode: Joi.string(),
-  agreeToTerms: Joi.alternatives().try(
-    Joi.boolean().valid(true),
-    Joi.string().valid('true')
-  ).required(),
-  agreeToPrivacy: Joi.alternatives().try(
+  agreeToTermsAndPrivacy: Joi.alternatives().try(
     Joi.boolean().valid(true),
     Joi.string().valid('true')
   ).required(),
@@ -171,7 +166,9 @@ const getCookieOptions = (maxAge: number) => ({
 // ============================================
 
 export const registerCustomer = asyncHandler(async (req: Request, res: Response) => {
-  const { error, value } = customerRegistrationSchema.validate(req.body);
+  // FIX: Allow unknown fields in request body to be consistent with middleware validation
+  // This prevents errors when frontend sends extra fields or fields at wrong level
+  const { error, value } = customerRegistrationSchema.validate(req.body, { allowUnknown: true });
   if (error) {
     throw new ApiError(400, error.details[0].message);
   }
@@ -218,7 +215,8 @@ export const registerCustomer = asyncHandler(async (req: Request, res: Response)
 // ============================================
 
 export const registerProvider = asyncHandler(async (req: Request, res: Response) => {
-  const { error, value } = providerRegistrationSchema.validate(req.body);
+  // FIX: Allow unknown fields in request body to be consistent with middleware validation
+  const { error, value } = providerRegistrationSchema.validate(req.body, { allowUnknown: true });
   if (error) {
     throw new ApiError(400, error.details[0].message);
   }

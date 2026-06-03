@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   providerInsightsApi,
 } from '../../services/providerInsightsApi';
@@ -19,6 +19,7 @@ import type {
   RevenueOptimizationTip,
 } from '../../services/providerInsightsApi';
 import { useAuthStore } from '../../stores/authStore';
+import { socketService } from '../../services/socket';
 import { CompetitivePosition } from '../../components/analytics/provider/CompetitivePosition';
 import { ServiceProfitability } from '../../components/analytics/provider/ServiceProfitability';
 
@@ -94,9 +95,13 @@ const InsightsDashboard: React.FC = () => {
   const [optimizationTips, setOptimizationTips] = useState<RevenueOptimizationTip[]>([]);
   const [preventionRecommendations, setPreventionRecommendations] = useState<PreventionRecommendation[]>([]);
 
-  const fetchData = async (isRefresh = false) => {
-    if (isRefresh) setRefreshing(true);
-    else setLoading(true);
+  // Polling ref for cleanup
+  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  const fetchData = async (refreshMode: 'loading' | 'refreshing' | 'silent' = 'loading') => {
+    if (refreshMode === 'refreshing') setRefreshing(true);
+    else if (refreshMode === 'loading') setLoading(true);
+    // 'silent' mode: no loading indicators shown
 
     try {
       const [
@@ -130,11 +135,62 @@ const InsightsDashboard: React.FC = () => {
   };
 
   useEffect(() => {
-    fetchData();
-  }, [period]);
+    fetchData('loading');
+
+    // Setup socket listeners for real-time updates
+    const unsubscribers: (() => void)[] = [];
+
+    // Listen for insights:updated events
+    const unsubInsightsUpdated = socketService.onInsightsUpdated((data) => {
+      console.log('Insights update triggered:', data);
+      // Only refresh if the event is for the current provider
+      if (data.providerId === user?._id) {
+        // Silent refresh - don't show loading state
+        fetchData('silent');
+      }
+    });
+    unsubscribers.push(unsubInsightsUpdated);
+
+    // Listen for booking:completed events
+    const unsubBookingCompleted = socketService.onBookingCompleted(() => {
+      console.log('Booking completed event');
+      fetchData('silent');
+    });
+    unsubscribers.push(unsubBookingCompleted);
+
+    // Listen for new review events
+    const unsubReviewReceived = socketService.onReviewReceived(() => {
+      console.log('New review received');
+      fetchData('silent');
+    });
+    unsubscribers.push(unsubReviewReceived);
+
+    // Listen for withdrawal events
+    const unsubWithdrawalApproved = socketService.onWithdrawalApproved(() => {
+      console.log('Withdrawal approved event');
+      fetchData('silent');
+    });
+    unsubscribers.push(unsubWithdrawalApproved);
+
+    // Setup polling as fallback (every 60 seconds)
+    pollingIntervalRef.current = setInterval(() => {
+      console.log('Polling for insights update');
+      fetchData('silent');
+    }, 60000);
+
+    return () => {
+      // Cleanup socket listeners
+      unsubscribers.forEach((unsub) => unsub());
+      // Cleanup polling interval
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+        pollingIntervalRef.current = null;
+      }
+    };
+  }, [period, user?._id]);
 
   const handleRefresh = () => {
-    fetchData(true);
+    fetchData('refreshing');
   };
 
   const formatCurrency = (amount: number) => providerInsightsApi.formatCurrency(amount);

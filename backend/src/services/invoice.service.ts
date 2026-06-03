@@ -316,9 +316,9 @@ export class InvoiceService {
       })),
     ];
 
-    // Calculate tax rate
+    // Calculate tax rate with proper rounding to avoid float precision issues
     const taxRate = booking.pricing.totalAmount > 0
-      ? (booking.pricing.tax / (booking.pricing.totalAmount - booking.pricing.tax)) * 100
+      ? Math.round((booking.pricing.tax / (booking.pricing.totalAmount - booking.pricing.tax)) * 10000) / 100
       : 0;
 
     // Calculate discount

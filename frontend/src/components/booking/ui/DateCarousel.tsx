@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn } from '../../../lib/utils';
 
@@ -14,6 +14,8 @@ const DateCarousel: React.FC<DateCarouselProps> = ({
   maxDays = 14
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [showLeftButton, setShowLeftButton] = useState(false);
+  const [showRightButton, setShowRightButton] = useState(true);
 
   // Generate dates for the next maxDays days
   const dates = Array.from({ length: maxDays }, (_, i) => {
@@ -33,9 +35,30 @@ const DateCarousel: React.FC<DateCarouselProps> = ({
     return date.toISOString().split('T')[0]; // YYYY-MM-DD format
   };
 
+  const checkScrollButtons = () => {
+    if (scrollRef.current) {
+      const { scrollLeft, scrollWidth, clientWidth } = scrollRef.current;
+      setShowLeftButton(scrollLeft > 0);
+      setShowRightButton(scrollLeft < scrollWidth - clientWidth - 10);
+    }
+  };
+
+  useEffect(() => {
+    checkScrollButtons();
+    const scrollEl = scrollRef.current;
+    if (scrollEl) {
+      scrollEl.addEventListener('scroll', checkScrollButtons);
+      window.addEventListener('resize', checkScrollButtons);
+      return () => {
+        scrollEl.removeEventListener('scroll', checkScrollButtons);
+        window.removeEventListener('resize', checkScrollButtons);
+      };
+    }
+  }, []);
+
   const scroll = (direction: 'left' | 'right') => {
     if (scrollRef.current) {
-      const scrollAmount = 200;
+      const scrollAmount = 180;
       scrollRef.current.scrollBy({
         left: direction === 'left' ? -scrollAmount : scrollAmount,
         behavior: 'smooth'
@@ -46,13 +69,15 @@ const DateCarousel: React.FC<DateCarouselProps> = ({
   return (
     <div className="relative">
       {/* Scroll Left Button */}
-      <button
-        onClick={() => scroll('left')}
-        className="absolute left-0 top-1/2 -translate-y-1/2 z-10 glass w-8 h-8 rounded-full flex items-center justify-center shadow-nilin transition-all hover:bg-nilin-blush/30 float-3d"
-        aria-label="Scroll left"
-      >
-        <ChevronLeft className="w-5 h-5 text-nilin-warmGray" />
-      </button>
+      {showLeftButton && (
+        <button
+          onClick={() => scroll('left')}
+          className="absolute left-0 top-1/2 -translate-y-1/2 z-10 w-8 h-8 rounded-full flex items-center justify-center bg-white shadow-md border border-nilin-border/50 transition-all hover:bg-nilin-blush/30"
+          aria-label="Scroll left"
+        >
+          <ChevronLeft className="w-5 h-5 text-nilin-charcoal" />
+        </button>
+      )}
 
       {/* Date Carousel */}
       <div
@@ -70,10 +95,10 @@ const DateCarousel: React.FC<DateCarouselProps> = ({
               key={dateString}
               onClick={() => onDateSelect(dateString)}
               className={cn(
-                "flex-shrink-0 flex flex-col items-center justify-center w-16 h-20 rounded-xl transition-all card-3d",
+                "flex-shrink-0 flex flex-col items-center justify-center min-w-[64px] h-[72px] rounded-xl transition-all duration-200",
                 isSelected
-                  ? 'bg-gradient-to-br from-nilin-rose to-nilin-coral text-white shadow-nilin-warm shimmer'
-                  : 'glass text-nilin-charcoal hover:bg-nilin-blush/30 border border-nilin-border/30 hover:border-glow'
+                  ? 'bg-gradient-to-br from-nilin-coral to-nilin-rose text-white shadow-lg ring-2 ring-nilin-coral/30'
+                  : 'bg-white border-2 border-nilin-border/50 text-nilin-charcoal hover:border-nilin-coral/50 hover:shadow-md'
               )}
             >
               <span className={cn(
@@ -83,7 +108,7 @@ const DateCarousel: React.FC<DateCarouselProps> = ({
                 {dayName}
               </span>
               <span className={cn(
-                "text-xl font-semibold mt-1",
+                "text-xl font-bold mt-0.5",
                 isSelected ? 'text-white' : 'text-nilin-charcoal'
               )}>
                 {dayNumber}
@@ -94,13 +119,15 @@ const DateCarousel: React.FC<DateCarouselProps> = ({
       </div>
 
       {/* Scroll Right Button */}
-      <button
-        onClick={() => scroll('right')}
-        className="absolute right-0 top-1/2 -translate-y-1/2 z-10 glass w-8 h-8 rounded-full flex items-center justify-center shadow-nilin transition-all hover:bg-nilin-blush/30 float-3d"
-        aria-label="Scroll right"
-      >
-        <ChevronRight className="w-5 h-5 text-nilin-warmGray" />
-      </button>
+      {showRightButton && (
+        <button
+          onClick={() => scroll('right')}
+          className="absolute right-0 top-1/2 -translate-y-1/2 z-10 w-8 h-8 rounded-full flex items-center justify-center bg-white shadow-md border border-nilin-border/50 transition-all hover:bg-nilin-blush/30"
+          aria-label="Scroll right"
+        >
+          <ChevronRight className="w-5 h-5 text-nilin-charcoal" />
+        </button>
+      )}
     </div>
   );
 };

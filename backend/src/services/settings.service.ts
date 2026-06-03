@@ -2,9 +2,15 @@ import PlatformSettings, { IPlatformSettings } from '../models/settings.model';
 import { cacheRedis } from '../config/redis';
 import { ApiError, ERROR_CODES } from '../utils/ApiError';
 import logger from '../utils/logger';
+import {
+  mapSettingsToPolicy,
+  refreshPlatformPolicy,
+} from './platformSettingsPolicy.service';
+import { invalidateEmailTransportCache } from './platformEmailTransport.service';
+import { invalidateSmsTransportCache } from './platformSmsTransport.service';
 
 const SETTINGS_CACHE_KEY = 'platform:settings';
-const SETTINGS_CACHE_TTL = 300; // 5 minutes
+const DEFAULT_SETTINGS_CACHE_TTL = 300;
 
 export interface UpdateSettingsDto {
   // General
@@ -12,6 +18,9 @@ export interface UpdateSettingsDto {
   platformLogo?: string;
   supportEmail?: string;
   supportPhone?: string;
+  currency?: string;
+  dateFormat?: string;
+  language?: string;
   maintenanceMode?: boolean;
   maintenanceMessage?: string;
   maintenanceEstimatedDuration?: string;
@@ -21,18 +30,28 @@ export interface UpdateSettingsDto {
   paymentProcessingFee?: number;
   minimumWithdrawalAmount?: number;
   platformFeeType?: 'percentage' | 'fixed' | 'both';
+  taxRate?: number;
+  weekendRates?: number;
+  holidayRates?: number;
 
   // Booking
   defaultBookingBufferMinutes?: number;
   cancellationWindowHours?: number;
   autoAssignmentEnabled?: boolean;
+  autoConfirmEnabled?: boolean;
+  instantBooking?: boolean;
   maxBookingAdvanceDays?: number;
   minBookingAdvanceHours?: number;
+  maxDailyBookings?: number;
 
   // Notifications
   emailNotificationsEnabled?: boolean;
   smsNotificationsEnabled?: boolean;
   pushNotificationsEnabled?: boolean;
+  notificationSounds?: boolean;
+  quietHoursEnabled?: boolean;
+  quietHoursStart?: string;
+  quietHoursEnd?: string;
 
   // Email Config
   emailConfig?: IPlatformSettings['emailConfig'];
@@ -52,6 +71,20 @@ export interface UpdateSettingsDto {
   passwordRequireUppercase?: boolean;
   maxLoginAttempts?: number;
   lockoutDurationMinutes?: number;
+  enableFAQ?: boolean;
+  enableAuditLogs?: boolean;
+  ipAllowlist?: string[];
+
+  // Branding
+  favicon?: string;
+  primaryColor?: string;
+  secondaryColor?: string;
+
+  // Backup
+  backupCloudStorage?: 'none' | 'aws' | 'gcp' | 'azure';
+  backupRetentionDays?: number;
+  backupEnabled?: boolean;
+  backupLastRunAt?: Date;
 
   // System
   cacheTTLSeconds?: number;
@@ -67,7 +100,12 @@ export const getSettings = async (useCache = true): Promise<IPlatformSettings> =
     try {
       const cached = await cacheRedis.get(SETTINGS_CACHE_KEY);
       if (cached) {
-        return JSON.parse(cached);
+        const parsed = JSON.parse(cached) as IPlatformSettings;
+        // Sync in-memory policy without another DB round-trip
+        refreshPlatformPolicy(parsed).catch((error) => {
+          logger.warn('Failed to refresh platform policy from cache', { error });
+        });
+        return parsed;
       }
     } catch (error) {
       logger.warn('Settings cache miss or error', { error });
@@ -75,11 +113,16 @@ export const getSettings = async (useCache = true): Promise<IPlatformSettings> =
   }
 
   const settings = await PlatformSettings.getSettings();
+  const policy = mapSettingsToPolicy(settings);
+  const cacheTtl = policy.cacheTTLSeconds || DEFAULT_SETTINGS_CACHE_TTL;
+
+  // Keep in-memory policy in sync whenever settings are loaded from DB
+  await refreshPlatformPolicy(settings);
 
   // Cache the settings (only if Redis is available)
   if (cacheRedis) {
     try {
-      await cacheRedis.setex(SETTINGS_CACHE_KEY, SETTINGS_CACHE_TTL, JSON.stringify(settings));
+      await cacheRedis.setex(SETTINGS_CACHE_KEY, cacheTtl, JSON.stringify(settings));
     } catch (error) {
       logger.warn('Failed to cache settings', { error });
     }
@@ -88,11 +131,31 @@ export const getSettings = async (useCache = true): Promise<IPlatformSettings> =
   return settings;
 };
 
+function invalidateTransportCaches(updates?: UpdateSettingsDto): void {
+  if (!updates) {
+    invalidateEmailTransportCache();
+    invalidateSmsTransportCache();
+    return;
+  }
+  if (updates.emailConfig !== undefined) {
+    invalidateEmailTransportCache();
+  }
+  if (updates.smsConfig !== undefined) {
+    invalidateSmsTransportCache();
+  }
+}
+
 // Invalidate settings cache
 export const invalidateSettingsCache = async (): Promise<void> => {
-  if (!cacheRedis) return;
+  invalidateEmailTransportCache();
+  invalidateSmsTransportCache();
+  if (!cacheRedis) {
+    await refreshPlatformPolicy();
+    return;
+  }
   try {
     await cacheRedis.del(SETTINGS_CACHE_KEY);
+    await refreshPlatformPolicy();
     logger.info('Settings cache invalidated');
   } catch (error) {
     logger.error('Failed to invalidate settings cache', { error });
@@ -120,7 +183,9 @@ export const updateSettings = async (
   });
 
   await settings.save();
+  invalidateTransportCaches(updates);
   await invalidateSettingsCache();
+  await refreshPlatformPolicy(settings);
 
   return settings;
 };

@@ -204,8 +204,8 @@ router.post(
       throw new ApiError(401, 'Authentication required');
     }
 
-    if (!reason || typeof reason !== 'string' || reason.trim().length < 3) {
-      throw new ApiError(400, 'Cancellation reason must be at least 3 characters');
+    if (!reason || typeof reason !== 'string' || reason.trim().length < 10) {
+      throw new ApiError(400, 'Cancellation reason must be at least 10 characters for audit trail');
     }
 
     // Verify ownership

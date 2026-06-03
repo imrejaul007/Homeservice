@@ -887,10 +887,22 @@ export interface ProviderAnalyticsData {
     conversionRate: number;
     conversionRateTrend: number;
   };
+  // FIX #1 & #2: Net earnings (after deductions) with gross and fee breakdown
   earnings: {
     thisMonth: number;
     lastMonth: number;
     trend: number;
+    // New fields for gross/net breakdown
+    grossEarnings: {
+      thisMonth: number;
+      lastMonth: number;
+    };
+    platformFees: {
+      thisMonth: number;
+      lastMonth: number;
+    };
+    commissionRate: number;
+    platformFeeRate: number;
   };
   bookings: {
     total: number;
@@ -902,11 +914,13 @@ export interface ProviderAnalyticsData {
     name: string;
     bookings: number;
     revenue: number;
+    grossRevenue: number;
   }>;
   weeklyData: Array<{
     day: string;
     bookings: number;
     revenue: number;
+    grossRevenue: number;
   }>;
   ratings: {
     average: number;

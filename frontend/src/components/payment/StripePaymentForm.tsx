@@ -8,7 +8,7 @@ import {
 } from '@stripe/react-stripe-js';
 import { CreditCard, Lock, AlertCircle, CheckCircle } from 'lucide-react';
 import { cn } from '../../lib/utils';
-import PaymentService from '../../services/PaymentService';
+import PaymentService, { type PaymentMethodType } from '../../services/PaymentService';
 
 // Initialize Stripe with publishable key
 const stripePromise = loadStripe(
@@ -429,23 +429,36 @@ export const StripePaymentWrapper: React.FC<{
   bookingId: string;
   amount: number;
   currency?: string;
+  paymentMethod?: PaymentMethodType;
+  couponCode?: string;
   onSuccess: (paymentIntentId: string) => void;
   onError: (error: string) => void;
   onCancel?: () => void;
-}> = ({ bookingId, amount, currency, onSuccess, onError, onCancel }) => {
+}> = ({ bookingId, amount, currency, paymentMethod, couponCode, onSuccess, onError, onCancel }) => {
   const [clientSecret, setClientSecret] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const createPaymentIntent = async () => {
+      // Handle cash payments - no Stripe needed
+      if (paymentMethod === 'cash') {
+        setClientSecret(null);
+        setLoading(false);
+        return;
+      }
+
       try {
         setLoading(true);
         setError(null);
-        const result = await PaymentService.createPaymentIntent(bookingId);
+        const result = await PaymentService.createPaymentIntent(
+          bookingId,
+          paymentMethod,
+          couponCode
+        );
         setClientSecret(result.clientSecret);
-      } catch (err: any) {
-        const message = err.message || 'Failed to initialize payment.';
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : 'Failed to initialize payment.';
         setError(message);
         onError(message);
       } finally {
@@ -454,13 +467,73 @@ export const StripePaymentWrapper: React.FC<{
     };
 
     createPaymentIntent();
-  }, [bookingId]);
+  }, [bookingId, paymentMethod, couponCode, onError]);
 
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center py-12">
         <div className="w-12 h-12 border-4 border-nilin-rose/30 border-t-nilin-rose rounded-full animate-spin mb-4" />
         <p className="text-gray-600">Initializing secure payment...</p>
+      </div>
+    );
+  }
+
+  // Cash payment - show confirmation without Stripe Elements
+  if (paymentMethod === 'cash' && !error) {
+    return (
+      <div className="space-y-6">
+        <div className="text-center py-4">
+          <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+            <CreditCard className="w-8 h-8 text-green-600" />
+          </div>
+          <h3 className="text-xl font-semibold text-gray-900 mb-2">Pay with Cash</h3>
+          <p className="text-gray-600">
+            You have selected to pay {new Intl.NumberFormat('en-AE', {
+              style: 'currency',
+              currency: currency?.toUpperCase() || 'AED',
+            }).format(amount)} in cash after the service.
+          </p>
+        </div>
+
+        <div className="bg-nilin-blush/30 rounded-xl p-4">
+          <div className="flex justify-between items-center">
+            <span className="text-gray-700 font-medium">Total Amount</span>
+            <span className="text-2xl font-bold text-nilin-rose">
+              {new Intl.NumberFormat('en-AE', {
+                style: 'currency',
+                currency: currency?.toUpperCase() || 'AED',
+              }).format(amount)}
+            </span>
+          </div>
+          <p className="text-sm text-gray-500 mt-2">
+            Payment will be collected by the service provider after the service is completed.
+          </p>
+        </div>
+
+        <div className="flex gap-3">
+          {onCancel && (
+            <button
+              type="button"
+              onClick={onCancel}
+              className="flex-1 px-6 py-3 border-2 border-gray-300 rounded-xl font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+            >
+              Cancel
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => onSuccess('cash_payment')}
+            className={cn(
+              "flex-1 px-6 py-3 rounded-xl font-medium text-white transition-all",
+              "bg-gradient-to-r from-nilin-rose to-nilin-coral",
+              "hover:shadow-nilin-warm active:scale-[0.98]",
+              "flex items-center justify-center gap-2"
+            )}
+          >
+            <CheckCircle className="w-4 h-4" />
+            Confirm Cash Payment
+          </button>
+        </div>
       </div>
     );
   }

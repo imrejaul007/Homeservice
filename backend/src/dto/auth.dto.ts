@@ -9,8 +9,11 @@ export interface AddressDTO {
   zipCode?: string;
   country?: string;
   coordinates?: {
-    lat: number;
-    lng: number;
+    // Support both formats: simple {lat, lng} and GeoJSON {type, coordinates}
+    lat?: number;
+    lng?: number;
+    type?: string; // Can be 'Point' or any string
+    coordinates?: [number, number]; // [longitude, latitude]
   };
 }
 
@@ -53,6 +56,7 @@ export interface CustomerRegistrationDTO {
   address?: AddressDTO;
   communicationPreferences?: CommunicationPrefsDTO;
   referralCode?: string;
+  agreeToTermsAndPrivacy: boolean | string;
   // Fraud detection fields (optional, populated by middleware)
   ip?: string;
   userAgent?: string;

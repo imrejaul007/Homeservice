@@ -76,8 +76,9 @@ router.get('/admin/all', authenticate, requireRole('admin'), asyncHandler(async 
 
 // POST /api/offers/admin - Create new offer
 router.post('/admin', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
-  const offer = await offerService.createOffer(req.body);
-  res.status(201).json({ success: true, data: offer });
+  const adminId = (req as any).user?._id?.toString() || (req as any).user?.id;
+  const offer = await offerService.createOffer(req.body, adminId);
+  res.status(201).json({ success: true, data: offer, message: 'Offer created successfully' });
 }));
 
 // PUT /api/offers/admin/:id - Update offer

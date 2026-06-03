@@ -1253,13 +1253,88 @@ export const getPaymentStatus = async (bookingId: string): Promise<{
 };
 
 /**
+ * Validate Stripe webhook secret format
+ * Stripe webhook secrets follow pattern: whsec_ followed by 24+ characters
+ */
+const validateWebhookSecret = (secret: string): { valid: boolean; warning?: string } => {
+  if (!secret) {
+    return { valid: false };
+  }
+
+  // Stripe webhook secrets start with 'whsec_' followed by a secret
+  const STRIPE_WEBHOOK_PREFIX = 'whsec_';
+  const MIN_SECRET_LENGTH = 30; // whsec_ (6) + at least 24 characters of secret
+
+  if (!secret.startsWith(STRIPE_WEBHOOK_PREFIX)) {
+    logger.error('Webhook secret validation failed: incorrect prefix', {
+      providedPrefix: secret.substring(0, 10),
+      expectedPrefix: STRIPE_WEBHOOK_PREFIX,
+      action: 'WEBHOOK_SECRET_INVALID_PREFIX',
+    });
+    return {
+      valid: false,
+      warning: 'Webhook secret does not start with expected prefix. Ensure STRIPE_WEBHOOK_SECRET is correctly configured.',
+    };
+  }
+
+  if (secret.length < MIN_SECRET_LENGTH) {
+    logger.error('Webhook secret validation failed: incorrect length', {
+      providedLength: secret.length,
+      expectedMinLength: MIN_SECRET_LENGTH,
+      action: 'WEBHOOK_SECRET_INVALID_LENGTH',
+    });
+    return {
+      valid: false,
+      warning: `Webhook secret length (${secret.length}) is shorter than expected (${MIN_SECRET_LENGTH}).`,
+    };
+  }
+
+  // Check for obviously fake/test values
+  const suspiciousPatterns = ['test', 'secret', 'key', 'dummy', 'fake', 'your_', 'localhost'];
+  const lowerSecret = secret.toLowerCase();
+  for (const pattern of suspiciousPatterns) {
+    if (lowerSecret.includes(pattern) && !lowerSecret.startsWith('whsec_')) {
+      logger.warn('Webhook secret contains suspicious pattern', {
+        pattern,
+        action: 'WEBHOOK_SECRET_SUSPICIOUS',
+      });
+      return {
+        valid: true,
+        warning: `Webhook secret contains pattern "${pattern}" - verify this is a real Stripe secret.`,
+      };
+    }
+  }
+
+  return { valid: true };
+};
+
+/**
  * Verify Stripe webhook signature
  */
 export const verifyWebhookSignature = (payload: string | Buffer, signature: string): Stripe.Event => {
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
   if (!webhookSecret) {
+    logger.error('Stripe webhook secret not configured', {
+      action: 'WEBHOOK_SECRET_MISSING',
+    });
     throw new ApiError(500, 'Stripe webhook secret not configured');
+  }
+
+  // SECURITY FIX: Validate webhook secret format before using it
+  const validation = validateWebhookSecret(webhookSecret);
+  if (!validation.valid) {
+    logger.error('Webhook secret validation failed', {
+      warning: validation.warning,
+      action: 'WEBHOOK_SECRET_VALIDATION_FAILED',
+    });
+    throw new ApiError(500, `Webhook secret validation failed: ${validation.warning}`);
+  }
+  if (validation.warning) {
+    logger.warn('Webhook secret validation warning', {
+      warning: validation.warning,
+      action: 'WEBHOOK_SECRET_VALIDATION_WARNING',
+    });
   }
 
   try {
@@ -1267,6 +1342,7 @@ export const verifyWebhookSignature = (payload: string | Buffer, signature: stri
   } catch (error: any) {
     logger.error('Webhook signature verification failed', {
       error: error.message,
+      action: 'WEBHOOK_SIGNATURE_VERIFICATION_FAILED',
     });
     throw new ApiError(400, `Webhook signature verification failed: ${error.message}`);
   }

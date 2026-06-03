@@ -11,6 +11,11 @@ export const SUPPORTED_CITIES: SupportedCity[] = [
   { id: 'ajman', name: 'Ajman', coordinates: { latitude: 25.3488, longitude: 55.4209 }, state: 'Ajman', country: 'UAE' },
   { id: 'riyadh', name: 'Riyadh', coordinates: { latitude: 24.7136, longitude: 46.6753 }, state: 'Riyadh', country: 'Saudi Arabia' },
   { id: 'jeddah', name: 'Jeddah', coordinates: { latitude: 21.4858, longitude: 39.1925 }, state: 'Makkah', country: 'Saudi Arabia' },
+  { id: 'mumbai', name: 'Mumbai', coordinates: { latitude: 19.0760, longitude: 72.8777 }, state: 'Maharashtra', country: 'India' },
+  { id: 'delhi', name: 'Delhi', coordinates: { latitude: 28.7041, longitude: 77.1025 }, state: 'Delhi', country: 'India' },
+  { id: 'bangalore', name: 'Bangalore', coordinates: { latitude: 12.9716, longitude: 77.5946 }, state: 'Karnataka', country: 'India' },
+  { id: 'hyderabad', name: 'Hyderabad', coordinates: { latitude: 17.3850, longitude: 78.4867 }, state: 'Telangana', country: 'India' },
+  { id: 'chennai', name: 'Chennai', coordinates: { latitude: 13.0827, longitude: 80.2707 }, state: 'Tamil Nadu', country: 'India' },
 ];
 
 const DEFAULT_CITY = SUPPORTED_CITIES[0];

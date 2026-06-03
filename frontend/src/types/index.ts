@@ -21,3 +21,6 @@ import type { Offer, ClaimedOffer, ClaimResponse, ValidationResult } from './off
 // Search types (exclude Service to avoid conflict)
 import type { SearchFilters, SearchResponse } from './search';
 export type { SearchFilters, SearchResponse };
+
+// Booking types (unified from BookingService.ts and bookingApi.ts)
+export * from './booking.types';

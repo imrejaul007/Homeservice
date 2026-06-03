@@ -264,6 +264,36 @@ export class AuthService {
     }
 
     // Create user data with fraud detection fields
+    // Sanitize address coordinates to ensure valid GeoJSON format
+    let userAddress = data.address;
+    if (userAddress?.coordinates) {
+      const coords = userAddress.coordinates as any;
+      let validCoords: { type: 'Point'; coordinates: [number, number] } | null = null;
+
+      // Check for GeoJSON format: { type: 'Point', coordinates: [lng, lat] }
+      if (coords.type === 'Point' && Array.isArray(coords.coordinates) && coords.coordinates.length >= 2) {
+        validCoords = { type: 'Point' as const, coordinates: [coords.coordinates[0], coords.coordinates[1]] };
+      }
+      // Check for simple format: { lng, lat }
+      else if (typeof coords.lng === 'number' && typeof coords.lat === 'number') {
+        validCoords = { type: 'Point' as const, coordinates: [coords.lng, coords.lat] };
+      }
+      // Check for simple format: { longitude, latitude }
+      else if (typeof coords.longitude === 'number' && typeof coords.latitude === 'number') {
+        validCoords = { type: 'Point' as const, coordinates: [coords.longitude, coords.latitude] };
+      }
+
+      if (validCoords) {
+        userAddress = { ...userAddress, coordinates: validCoords };
+      } else {
+        // No valid coordinates - don't include address
+        userAddress = undefined;
+      }
+    } else if (userAddress && !userAddress.coordinates) {
+      // No coordinates provided - don't include address
+      userAddress = undefined;
+    }
+
     const userData = {
       firstName: data.firstName,
       lastName: data.lastName,
@@ -273,7 +303,7 @@ export class AuthService {
       role: 'customer',
       dateOfBirth: data.dateOfBirth,
       gender: data.gender,
-      address: data.address,
+      address: userAddress,
       socialProfiles: {
         followers: [],
         following: [],
@@ -353,7 +383,7 @@ export class AuthService {
       },
     };
 
-    // Customer profile data
+    // Customer profile data - use sanitized userAddress
     const customerProfileData = {
       userId: undefined as any, // Will be set after user creation
       preferences: {
@@ -364,17 +394,17 @@ export class AuthService {
         preferredTimeSlots: [],
         locationPreference: 'both',
       },
-      addresses: data.address
+      addresses: userAddress
         ? [
             {
               label: 'Home',
               type: 'home',
-              street: data.address.street,
-              city: data.address.city,
-              state: data.address.state,
-              zipCode: data.address.zipCode,
-              country: data.address.country || 'AE',
-              coordinates: data.address.coordinates,
+              street: userAddress.street || '',
+              city: userAddress.city || '',
+              state: userAddress.state || '',
+              zipCode: userAddress.zipCode || '',
+              country: userAddress.country || 'AE',
+              coordinates: userAddress.coordinates,
               isDefault: true,
               createdAt: new Date(),
             },
@@ -467,6 +497,8 @@ export class AuthService {
 
       // Generate tokens
       const tokens = generateTokens(user);
+
+      await this.linkGuestBookingsForCustomer(user);
 
       return {
         user: formatUserResponse(user),
@@ -1610,6 +1642,8 @@ export class AuthService {
     // Determine redirect URL
     const redirectUrl = this.getRedirectUrl(user.role, roleSpecificData);
 
+    await this.linkGuestBookingsForCustomer(user);
+
     return {
       user: formatUserResponse(user),
       tokens,
@@ -1617,6 +1651,20 @@ export class AuthService {
       redirectUrl,
       roleSpecificData,
     };
+  }
+
+  /** Attach prior guest bookings (same email) to this customer account */
+  private async linkGuestBookingsForCustomer(user: { _id: unknown; email: string; role: string }): Promise<void> {
+    if (user.role !== 'customer' || !user.email) return;
+    try {
+      const { bookingService } = await import('./booking.service');
+      await bookingService.linkGuestBookingsToCustomer(String(user._id), user.email);
+    } catch (error) {
+      logger.error('Failed to link guest bookings after auth', {
+        userId: user._id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   private async getRoleSpecificData(user: any): Promise<any> {

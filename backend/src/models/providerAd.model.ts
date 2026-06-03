@@ -78,6 +78,14 @@ export interface IProviderAd extends Document {
     avgPosition?: number;
   };
 
+  // Conversion Attributions (for linking conversions to specific clicks)
+  conversionAttributions: Array<{
+    bookingId: mongoose.Types.ObjectId;
+    clickTimestamp: Date;
+    conversionTimestamp: Date;
+    revenue: number;
+  }>;
+
   // Ad Content
   content: {
     title: string;
@@ -88,7 +96,7 @@ export interface IProviderAd extends Document {
   };
 
   // Approval (for platform moderation)
-  approvalStatus: 'pending' | 'approved' | 'rejected';
+  approvalStatus: 'pending' | 'pending_review' | 'approved' | 'rejected';
   approvalNotes?: string;
   approvedBy?: mongoose.Types.ObjectId;
   approvedAt?: Date;
@@ -314,6 +322,25 @@ const providerAdSchema = new Schema<IProviderAd>(
         min: 0,
       },
     },
+    conversionAttributions: [{
+      bookingId: {
+        type: Schema.Types.ObjectId,
+        required: true,
+      },
+      clickTimestamp: {
+        type: Date,
+        required: true,
+      },
+      conversionTimestamp: {
+        type: Date,
+        required: true,
+      },
+      revenue: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+    }],
     content: {
       title: {
         type: String,
@@ -347,7 +374,7 @@ const providerAdSchema = new Schema<IProviderAd>(
     },
     approvalStatus: {
       type: String,
-      enum: ['pending', 'approved', 'rejected'],
+      enum: ['pending', 'pending_review', 'approved', 'rejected'],
       default: 'pending',
     },
     approvalNotes: {
@@ -432,7 +459,7 @@ providerAdSchema.index({ 'statistics.clicks': -1 });
 providerAdSchema.index({ providerId: 1, createdAt: -1 });
 providerAdSchema.index({ status: 1, approvalStatus: 1, isActive: 1 });
 
-// Pre-save middleware to calculate CTR
+// Pre-save middleware to calculate CTR and maintain dailyStats
 providerAdSchema.pre('save', function(next) {
   // Calculate CTR
   if (this.statistics.views > 0) {
@@ -456,6 +483,18 @@ providerAdSchema.pre('save', function(next) {
 
   // Update remaining budget
   this.budget.remaining = this.budget.total - this.budget.spent;
+
+  // Limit dailyStats to last 365 days to prevent unbounded growth
+  const maxDays = 365;
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - maxDays);
+  cutoffDate.setHours(0, 0, 0, 0);
+
+  if (this.statistics.dailyStats.length > maxDays) {
+    this.statistics.dailyStats = this.statistics.dailyStats.filter(
+      (stat: { date: Date }) => new Date(stat.date) >= cutoffDate
+    );
+  }
 
   next();
 });

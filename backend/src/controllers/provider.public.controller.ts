@@ -129,7 +129,12 @@ export const getProviderById = asyncHandler(async (req: Request, res: Response):
           photos: review.photos,
           isVerified: review.isVerified,
           createdAt: review.createdAt,
-          response: review.response,
+          response: review.response
+            ? {
+                comment: review.response.content,
+                createdAt: review.response.createdAt,
+              }
+            : undefined,
         })),
         responseRate: providerProfile.reviewsData?.responseRate || 0,
       },

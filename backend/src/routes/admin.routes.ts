@@ -47,11 +47,21 @@ import {
   approveWithdrawal,
   rejectWithdrawal,
   // Churn Management
-  getChurnStats
+  getChurnStats,
+  getChurnAtRiskCustomers,
+  getChurnOverview,
+  getChurnSegments,
+  refreshChurnCache,
+  executeChurnRetentionAction,
 } from '../controllers/admin.controller';
 import { disputeService } from '../services/dispute.service';
 import { authenticate, requireRole } from '../middleware/auth.middleware';
 import { adminLimiter } from '../middleware/rateLimiter';
+import {
+  enforceAdminIpAllowlist,
+  enforcePlatformRequire2FA,
+} from '../middleware/platformSettings.middleware';
+import * as settingsService from '../services/settings.service';
 import PlatformSettings from '../models/settings.model';
 import Joi from 'joi';
 import { asyncHandler } from '../utils/asyncHandler';
@@ -175,13 +185,20 @@ const validateBookingStatus = (req: any, res: any, next: any) => {
 // All admin routes require authentication and rate limiting
 router.use(authenticate);
 router.use(requireRole('admin'));
+router.use(enforceAdminIpAllowlist);
+router.use(enforcePlatformRequire2FA);
 router.use(adminLimiter); // Apply rate limiting to all admin routes
 
 // Dashboard Stats
 router.get('/stats', getAdminStats);
 
-// Churn Stats
+// Churn & retention (admin panel)
 router.get('/churn/stats', getChurnStats);
+router.get('/churn/at-risk', getChurnAtRiskCustomers);
+router.get('/churn/overview', getChurnOverview);
+router.get('/churn/segments', getChurnSegments);
+router.post('/churn/refresh', refreshChurnCache);
+router.post('/churn/execute/:userId', executeChurnRetentionAction);
 
 // Provider verification routes
 router.get('/providers/pending', getPendingProviders);
@@ -269,6 +286,15 @@ const maintenanceSchema = Joi.object({
 // GET /api/admin/maintenance - Get current maintenance mode status
 router.get('/maintenance', asyncHandler(async (req: Request, res: Response) => {
   const settings = await PlatformSettings.getSettings();
+  let updatedByName: string | null = null;
+
+  if (settings.maintenanceUpdatedBy) {
+    const User = (await import('../models/user.model')).default;
+    const admin = await User.findById(settings.maintenanceUpdatedBy).select('firstName lastName email');
+    if (admin) {
+      updatedByName = `${admin.firstName || ''} ${admin.lastName || ''}`.trim() || admin.email;
+    }
+  }
 
   res.json({
     success: true,
@@ -278,6 +304,7 @@ router.get('/maintenance', asyncHandler(async (req: Request, res: Response) => {
       estimatedDuration: settings.maintenanceEstimatedDuration || null,
       updatedAt: settings.maintenanceUpdatedAt || null,
       updatedBy: settings.maintenanceUpdatedBy || null,
+      updatedByName,
     },
   });
 }));
@@ -294,21 +321,18 @@ router.put('/maintenance', asyncHandler(async (req: Request, res: Response) => {
     );
   }
 
-  const settings = await PlatformSettings.findOne();
-
-  if (!settings) {
-    throw ApiError.notFound('Settings not found', ERROR_CODES.NOT_FOUND);
-  }
-
   const adminUser = (req as any).user;
 
-  settings.maintenanceMode = value.enabled;
-  settings.maintenanceMessage = value.message || 'The platform is currently under maintenance. Please try again later.';
-  settings.maintenanceEstimatedDuration = value.estimatedDuration || null;
-  settings.maintenanceUpdatedAt = new Date();
-  settings.maintenanceUpdatedBy = adminUser._id;
-
-  await settings.save();
+  const settings = await settingsService.updateSettings(
+    {
+      maintenanceMode: value.enabled,
+      maintenanceMessage:
+        value.message || 'The platform is currently under maintenance. Please try again later.',
+      maintenanceEstimatedDuration: value.estimatedDuration || '',
+    },
+    adminUser._id?.toString(),
+    'Maintenance mode updated via admin console'
+  );
 
   logger.info('Maintenance mode updated', {
     action: 'MAINTENANCE_MODE_UPDATED',

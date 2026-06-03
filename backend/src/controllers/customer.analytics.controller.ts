@@ -1,10 +1,12 @@
 import { Request, Response } from 'express';
 import { asyncHandler } from '../utils/asyncHandler';
+import { ApiError } from '../utils/ApiError';
 import Booking from '../models/booking.model';
 import User from '../models/user.model';
 
 export const getCustomerStats = asyncHandler(async (req: Request, res: Response) => {
   const user = (req as any).user;
+  if (user.role !== 'customer') throw new ApiError(403, 'Only customers can access this data');
   const userId = user._id.toString();
 
   const now = new Date();
@@ -99,6 +101,7 @@ export const getCustomerStats = asyncHandler(async (req: Request, res: Response)
 
 export const getCustomerAnalytics = asyncHandler(async (req: Request, res: Response) => {
   const user = (req as any).user;
+  if (user.role !== 'customer') throw new ApiError(403, 'Only customers can access this data');
   const userId = user._id.toString();
 
   const { period = 'month' } = req.query;

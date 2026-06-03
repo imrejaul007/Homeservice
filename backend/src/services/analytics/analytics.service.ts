@@ -21,6 +21,9 @@ interface BookingAnalytics {
   averageBookingValue: number;
   completionRate: number;
   cancellationRate: number;
+  previousPeriodBookings: number;
+  /** null when both current and previous period have zero bookings */
+  periodChangePercent: number | null;
 }
 
 interface ProviderAnalytics {
@@ -38,6 +41,7 @@ interface ProviderAnalytics {
     approved: number;
     rejected: number;
     suspended: number;
+    in_progress: number;
   };
 }
 
@@ -58,7 +62,8 @@ interface RevenueAnalytics {
   totalRevenue: number;
   revenueThisMonth: number;
   revenueLastMonth: number;
-  monthOverMonthGrowth: number;
+  /** null when both months have zero revenue (avoid misleading -100% in UI) */
+  monthOverMonthGrowth: number | null;
   revenueByDay: Array<{
     date: string;
     revenue: number;
@@ -122,6 +127,25 @@ const getDateRange = (period: 'today' | 'week' | 'month' | 'quarter' | 'year' | 
   return { startDate, endDate };
 };
 
+/** Previous period of equal length immediately before `startDate` */
+const getPreviousPeriodRange = (period: string): DateRange => {
+  const { startDate, endDate } = getDateRange(period as any);
+  const durationMs = endDate.getTime() - startDate.getTime();
+  const prevEnd = new Date(startDate.getTime() - 1);
+  const prevStart = new Date(prevEnd.getTime() - durationMs);
+  return { startDate: prevStart, endDate: prevEnd };
+};
+
+const computePeriodChangePercent = (current: number, previous: number): number | null => {
+  if (previous > 0) {
+    return Math.round(((current - previous) / previous) * 100);
+  }
+  if (current > 0) {
+    return 100;
+  }
+  return null;
+};
+
 // Cache helper
 const getCached = async <T>(key: string, fetchFn: () => Promise<T>, ttl = 300): Promise<T> => {
   try {
@@ -154,17 +178,22 @@ export const getBookingAnalytics = async (period: string = 'month', req?: Reques
 
   return getCached(cacheKey, async () => {
     const { startDate, endDate } = getDateRange(period as any);
+    const { startDate: prevStart, endDate: prevEnd } = getPreviousPeriodRange(period);
 
     const baseMatch: any = {
       createdAt: { $gte: startDate, $lte: endDate },
+    };
+    const prevMatch: any = {
+      createdAt: { $gte: prevStart, $lte: prevEnd },
     };
 
     // Apply tenant filter for non-admin requests
     if (!isAdmin && tenantId) {
       baseMatch.tenantId = tenantId;
+      prevMatch.tenantId = tenantId;
     }
 
-    const [stats, completedStats] = await Promise.all([
+    const [stats, completedStats, previousPeriodBookings] = await Promise.all([
       Booking.aggregate([
         { $match: baseMatch },
         {
@@ -185,6 +214,7 @@ export const getBookingAnalytics = async (period: string = 'month', req?: Reques
           },
         },
       ]),
+      Booking.countDocuments(prevMatch),
     ]);
 
     const [cancelledCount, pendingCount] = await Promise.all([
@@ -205,6 +235,8 @@ export const getBookingAnalytics = async (period: string = 'month', req?: Reques
       averageBookingValue: totalBookings > 0 ? totalRevenue / totalBookings : 0,
       completionRate: totalBookings > 0 ? (completedBookings / totalBookings) * 100 : 0,
       cancellationRate: totalBookings > 0 ? (cancelledCount / totalBookings) * 100 : 0,
+      previousPeriodBookings,
+      periodChangePercent: computePeriodChangePercent(totalBookings, previousPeriodBookings),
     };
   }, ttl);
 };
@@ -250,11 +282,13 @@ export const getProviderAnalytics = async (period: string = 'month', req?: Reque
       },
       {
         $group: {
-          _id: '$profile.verificationStatus',
+          _id: {
+            $ifNull: ['$profile.verificationStatus.overall', 'pending'],
+          },
           count: { $sum: 1 },
           avgRating: { $avg: '$profile.rating.average' },
           newCount: {
-            $sum: { $cond: [{ $gte: ['$createdAt', startOfMonth] }, 1, 0] }
+            $sum: { $cond: [{ $gte: ['$createdAt', startOfMonth] }, 1, 0] },
           },
         },
       },
@@ -265,18 +299,21 @@ export const getProviderAnalytics = async (period: string = 'month', req?: Reque
       approved: 0,
       rejected: 0,
       suspended: 0,
+      in_progress: 0,
     };
 
-    let totalProviders = 0;
+    const totalProviders = await User.countDocuments(userMatch);
     let newProvidersThisMonth = 0;
 
     providerStats.forEach((group: any) => {
-      totalProviders += group.count;
+      const status = String(group._id || 'pending');
       newProvidersThisMonth += group.newCount || 0;
-      if (group._id === 'pending') providersByStatus.pending = group.count;
-      else if (group._id === 'approved') providersByStatus.approved = group.count;
-      else if (group._id === 'rejected') providersByStatus.rejected = group.count;
-      else if (group._id === 'suspended') providersByStatus.suspended = group.count;
+      if (status === 'pending') providersByStatus.pending += group.count;
+      else if (status === 'in_progress') providersByStatus.in_progress += group.count;
+      else if (status === 'approved') providersByStatus.approved += group.count;
+      else if (status === 'rejected') providersByStatus.rejected += group.count;
+      else if (status === 'suspended') providersByStatus.suspended += group.count;
+      else providersByStatus.pending += group.count;
     });
 
     // FIX: Single query for top rated using service aggregation instead of nested queries
@@ -530,7 +567,14 @@ export const getRevenueAnalytics = async (period: string = 'month', req?: Reques
     const totalRev = totalRevenue[0]?.total || 0;
     const thisMonth = revenueThisMonth[0]?.total || 0;
     const lastMonth = revenueLastMonth[0]?.total || 0;
-    const monthOverMonthGrowth = lastMonth > 0 ? ((thisMonth - lastMonth) / lastMonth) * 100 : 0;
+    const monthOverMonthGrowth =
+      lastMonth > 0 || thisMonth > 0
+        ? lastMonth > 0
+          ? ((thisMonth - lastMonth) / lastMonth) * 100
+          : thisMonth > 0
+            ? 100
+            : null
+        : null;
 
     const bookingsThisMonth = await Booking.countDocuments(
       buildBookingMatch({ createdAt: { $gte: startOfMonth, $lte: endDate } })

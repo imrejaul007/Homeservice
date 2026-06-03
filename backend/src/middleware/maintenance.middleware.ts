@@ -1,19 +1,52 @@
 import { Request, Response, NextFunction } from 'express';
+import jwt from 'jsonwebtoken';
 import PlatformSettings from '../models/settings.model';
 import logger from '../utils/logger';
 
+type MaintenanceJwt = { id?: string; role?: string };
+
+const SKIP_PREFIXES = [
+  '/api/health',
+  '/health',
+  '/api/platform/maintenance',
+  '/api/admin',
+  '/api/auth/login',
+  '/api/auth/register',
+  '/api/auth/forgot-password',
+  '/api/auth/reset-password',
+  '/api/auth/refresh-token',
+  '/api/auth/csrf-token',
+  '/api/verify',
+  '/api/webhooks',
+  '/api/integrations',
+];
+
+function shouldSkipPath(path: string): boolean {
+  const normalized = path.toLowerCase();
+  return SKIP_PREFIXES.some((prefix) => normalized.startsWith(prefix.toLowerCase()));
+}
+
+function getAdminRoleFromRequest(req: Request): string | null {
+  const user = (req as Request & { user?: { role?: string } }).user;
+  if (user?.role) return user.role;
+
+  try {
+    const auth = req.headers.authorization;
+    if (!auth?.startsWith('Bearer ')) return null;
+    const token = auth.slice(7);
+    const decoded = jwt.verify(
+      token,
+      process.env.JWT_ACCESS_SECRET as string
+    ) as MaintenanceJwt;
+    return decoded.role || null;
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Maintenance Mode Middleware
- *
- * Checks if the platform is in maintenance mode and blocks non-admin users.
- * Admins can still access the site during maintenance.
- *
- * Excluded paths:
- * - /api/health (health checks)
- * - /api/auth/* (authentication routes)
- * - /api/verify/* (email verification)
- * - Static assets
- * - Admin routes (already protected)
+ * Blocks non-admin API traffic when maintenance mode is enabled.
+ * Admins bypass via JWT role (decoded here because this runs before route auth).
  */
 export const checkMaintenanceMode = async (
   req: Request,
@@ -21,65 +54,48 @@ export const checkMaintenanceMode = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    // Skip maintenance check for certain paths
-    const skipPaths = [
-      '/api/health',
-      '/api/auth/login',
-      '/api/auth/register',
-      '/api/auth/forgot-password',
-      '/api/auth/reset-password',
-      '/api/verify',
-      '/api/analytics', // Admin-only anyway
-      '/api/settings',   // Admin-only anyway
-    ];
-
     const path = req.path.toLowerCase();
 
-    // Skip for excluded paths
-    if (skipPaths.some(p => path.startsWith(p.toLowerCase()))) {
+    if (shouldSkipPath(path)) {
       next();
       return;
     }
 
-    // Skip for static files
     if (path.includes('.') && !path.includes('/api/')) {
       next();
       return;
     }
 
-    // Skip OPTIONS requests (CORS preflight)
     if (req.method === 'OPTIONS') {
       next();
       return;
     }
 
-    // Get settings (with caching)
     const settings = await PlatformSettings.getSettings();
 
-    // Check if maintenance mode is enabled
-    if (settings.maintenanceMode) {
-      // Check if user is admin
-      const user = (req as any).user;
-
-      if (user?.role !== 'admin') {
-        res.status(503).json({
-          success: false,
-          error: 'Service Unavailable',
-          message: settings.maintenanceMessage || 'The platform is currently under maintenance. Please try again later.',
-          maintenanceMode: true,
-          estimatedDuration: settings.maintenanceEstimatedDuration || null,
-          supportEmail: settings.supportEmail || null,
-        });
-        return;
-      }
-
-      // Add maintenance header for admin awareness
-      res.setHeader('X-Maintenance-Mode', 'true');
+    if (!settings.maintenanceMode) {
+      next();
+      return;
     }
 
-    next();
+    const role = getAdminRoleFromRequest(req);
+    if (role === 'admin') {
+      res.setHeader('X-Maintenance-Mode', 'true');
+      next();
+      return;
+    }
+
+    res.status(503).json({
+      success: false,
+      error: 'Service Unavailable',
+      message:
+        settings.maintenanceMessage ||
+        'The platform is currently under maintenance. Please try again later.',
+      maintenanceMode: true,
+      estimatedDuration: settings.maintenanceEstimatedDuration || null,
+      supportEmail: settings.supportEmail || null,
+    });
   } catch (error) {
-    // If settings can't be loaded, allow the request (fail open for non-critical errors)
     logger.error('Maintenance mode check error', {
       context: 'MaintenanceMiddleware',
       action: 'CHECK_ERROR',
@@ -90,10 +106,6 @@ export const checkMaintenanceMode = async (
   }
 };
 
-/**
- * Middleware to force maintenance mode check (for specific routes)
- * Use this when you need to ensure maintenance mode is checked
- */
 export const forceMaintenanceCheck = async (
   req: Request,
   res: Response,
@@ -103,9 +115,8 @@ export const forceMaintenanceCheck = async (
     const settings = await PlatformSettings.getSettings();
 
     if (settings.maintenanceMode) {
-      const user = (req as any).user;
-
-      if (user?.role !== 'admin') {
+      const role = getAdminRoleFromRequest(req);
+      if (role !== 'admin') {
         res.status(503).json({
           success: false,
           error: 'Service Unavailable',

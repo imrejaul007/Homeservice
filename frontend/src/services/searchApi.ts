@@ -54,6 +54,9 @@ export const searchApi = {
       return response.data;
     } catch (error) {
       const err = error as AxiosError;
+      if (axios.isCancel(err)) {
+        throw err;
+      }
       const message = (err.response?.data as { message?: string })?.message || err.message || 'Search failed';
       console.error('[searchApi] searchServices error:', message, err.response?.status);
       throw new SearchApiError(message, err.response?.status, 'SEARCH_FAILED');

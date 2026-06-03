@@ -13,7 +13,12 @@ import {
   addBookingMessage,
   markMessagesAsRead,
   createGuestBooking,
-  trackBooking
+  trackBooking,
+  rateBooking,
+  reportProviderNoShow,
+  applyCouponToBooking,
+  removeCouponFromBooking,
+  getCustomerBookingCount,
 } from '../controllers/booking.controller';
 
 import {
@@ -42,6 +47,7 @@ import {
 } from '../controllers/analytics.controller';
 
 import { authenticate } from '../middleware/auth.middleware';
+import { messageLimiter, perUserRateLimiter } from '../middleware/rateLimiter';
 import {
   validateBookingInput,
   validateGuestBooking,
@@ -53,6 +59,7 @@ import {
   validateDateOverride,
   validateBlockPeriod
 } from '../middleware/validation';
+import { asyncHandler } from '../utils/asyncHandler';
 
 const router = Router();
 
@@ -69,6 +76,7 @@ router.get('/bookings/track/:bookingNumber', trackBooking);
 // Customer Booking Operations
 router.post('/bookings', authenticate, validateBookingInput, createBooking);
 router.get('/bookings/customer', authenticate, getCustomerBookings);
+router.get('/bookings/count', authenticate, getCustomerBookingCount);
 
 // Provider Booking Operations
 router.get('/bookings/provider', authenticate, getProviderBookings);
@@ -82,9 +90,17 @@ router.patch('/bookings/:id/reject', authenticate, validateBookingRejection, rej
 router.patch('/bookings/:id/start', authenticate, validateBookingCompletion, startBooking);
 router.patch('/bookings/:id/complete', authenticate, validateBookingCompletion, completeBooking);
 
-// Booking Communication
-router.post('/bookings/:id/messages', authenticate, addBookingMessage);
+// Booking Communication - Rate limited to prevent message spam
+router.post('/bookings/:id/messages', messageLimiter, authenticate, addBookingMessage);
 router.patch('/bookings/:id/messages/read', authenticate, markMessagesAsRead);
+
+// Customer Actions - Rate limited
+router.patch('/bookings/:id/report-no-show', perUserRateLimiter, authenticate, reportProviderNoShow);
+router.post('/bookings/:id/rate', perUserRateLimiter, authenticate, rateBooking);
+
+// Coupon Operations
+router.post('/bookings/:id/coupon', authenticate, applyCouponToBooking);
+router.delete('/bookings/:id/coupon', authenticate, removeCouponFromBooking);
 
 // ===================================
 // AVAILABILITY ROUTES
@@ -95,13 +111,15 @@ router.get('/availability', authenticate, getProviderAvailability);
 router.put('/availability/schedule', authenticate, validateAvailabilityInput, updateWeeklySchedule);
 router.patch('/availability/settings', authenticate, updateAvailabilitySettings);
 router.post('/availability/override', authenticate, validateDateOverride, addDateOverride);
-router.delete('/availability/override/:date', authenticate, removeDateOverride);
+// FIX: Issue #5 - Support both overrideId (preferred) and date (legacy) for removal
+router.delete('/availability/override', authenticate, removeDateOverride);
 router.post('/availability/block', authenticate, validateBlockPeriod, blockTimePeriod);
 router.delete('/availability/block/:blockId', authenticate, removeBlockedPeriod);
 
 // Public Availability Queries
-router.get('/availability/provider/:providerId/slots', getProviderAvailableSlots);
-router.get('/availability/provider/:providerId/check', checkTimeSlotAvailability);
+// FIX: Issue #2 - Support serviceId parameter for per-service availability
+router.get('/availability/provider/:providerId/slots', asyncHandler(getProviderAvailableSlots));
+router.get('/availability/provider/:providerId/check', asyncHandler(checkTimeSlotAvailability));
 
 // ===================================
 // ANALYTICS ROUTES

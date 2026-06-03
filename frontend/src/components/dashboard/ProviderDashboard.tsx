@@ -1,12 +1,16 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
 import { bookingService } from '../../services/BookingService';
 import { providerAnalyticsApi, type ProviderAnalytics } from '../../services/providerApi';
 import { reviewsApi, type Review } from '../../services/reviewsApi';
+import { walletApi } from '../../services/walletApi';
 import { socketService } from '../../services/socket';
 import NotificationBell from '../common/NotificationBell';
 import { PageErrorBoundary } from '../common/PageErrorBoundary';
+import { useToastActions } from '../common/Toast';
+import { useProviderStatus, useServiceBatchUpdates } from '../../hooks/useSocket';
+import { formatPrice } from '../../lib/utils';
 import {
   Building,
   DollarSign,
@@ -30,7 +34,11 @@ import {
   Award,
   Activity,
   Building2,
-  Shield
+  Shield,
+  PieChart,
+  Layers,
+  List,
+  TrendingUpIcon
 } from 'lucide-react';
 
 interface StatCard {
@@ -75,7 +83,56 @@ interface RecentReview {
   date: string;
 }
 
+// Status counts for booking funnel widget
+interface StatusCounts {
+  pending: number;
+  confirmed: number;
+  in_progress: number;
+  completed: number;
+  cancelled: number;
+}
+
+// Extended category with booking count
+interface CategoryStats {
+  name: string;
+  bookingCount: number;
+}
+
+function normalizeProviderBooking(booking: any): BookingRequest {
+  const populatedCustomer = booking.customer || booking.customerId;
+  const populatedService = booking.service || booking.serviceId;
+  const firstName =
+    populatedCustomer?.firstName ||
+    booking.customerInfo?.firstName ||
+    booking.guestInfo?.name?.split(' ')[0];
+  const lastName =
+    populatedCustomer?.lastName ||
+    booking.customerInfo?.lastName ||
+    booking.guestInfo?.name?.split(' ').slice(1).join(' ');
+  const customerName =
+    firstName || lastName
+      ? `${firstName || ''} ${lastName || ''}`.trim()
+      : booking.isGuestBooking
+        ? 'Guest'
+        : 'Customer';
+
+  return {
+    _id: booking._id,
+    bookingNumber: booking.bookingNumber,
+    customerName,
+    serviceName: populatedService?.name || 'Service',
+    scheduledDate: booking.scheduledDate,
+    scheduledTime: booking.scheduledTime,
+    status: booking.status,
+    totalAmount: booking.pricing?.totalAmount || 0,
+    customer: populatedCustomer,
+    service: populatedService,
+    pricing: booking.pricing,
+  };
+}
+
 const ProviderDashboard: React.FC = () => {
+  const navigate = useNavigate();
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [bookingRequests, setBookingRequests] = useState<BookingRequest[]>([]);
   const [loadingBookings, setLoadingBookings] = useState(true);
@@ -99,7 +156,30 @@ const ProviderDashboard: React.FC = () => {
   // Booking action state
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
-  const { user, providerProfile, logout } = useAuthStore();
+  // Wallet state
+  const [walletBalance, setWalletBalance] = useState<number>(0);
+  const [loadingWallet, setLoadingWallet] = useState(true);
+
+  // Status counts for booking funnel
+  const [statusCounts, setStatusCounts] = useState<StatusCounts>({
+    pending: 0,
+    confirmed: 0,
+    in_progress: 0,
+    completed: 0,
+    cancelled: 0,
+  });
+
+  // Category stats with booking counts
+  const [categoryStats, setCategoryStats] = useState<CategoryStats[]>([]);
+
+  const { user, providerProfile, logout, getCurrentUser, refreshProviderProfile } = useAuthStore();
+  const toast = useToastActions();
+
+  // Subscribe to provider status events (approval, rejection, suspension)
+  const { approved, rejected, suspended } = useProviderStatus();
+
+  // Subscribe to batch service operation events
+  const { batchCompleted } = useServiceBatchUpdates();
 
   // Helper to provide empty analytics state
   const getEmptyAnalytics = (): ProviderAnalytics => ({
@@ -109,6 +189,8 @@ const ProviderDashboard: React.FC = () => {
     bookingStats: { newBookings: 0, pendingRequests: 0, todaySchedule: 0, completedThisMonth: 0 },
     categories: [],
     topServices: [],
+    statusCounts: { pending: 0, confirmed: 0, in_progress: 0, completed: 0, cancelled: 0 },
+    categoryStats: [],
   });
 
   // Retry configuration
@@ -127,27 +209,7 @@ const ProviderDashboard: React.FC = () => {
       });
 
       if (response.success && response.data.bookings) {
-        const transformedBookings = response.data.bookings.map((booking: any) => {
-          // Resolve customer name: try populated customer, then customerInfo snapshot, then guestInfo
-          const firstName = booking.customer?.firstName || booking.customerInfo?.firstName || booking.guestInfo?.name?.split(' ')[0];
-          const lastName = booking.customer?.lastName || booking.customerInfo?.lastName || booking.guestInfo?.name?.split(' ').slice(1).join(' ');
-          const customerName = (firstName || lastName) ? `${firstName || ''} ${lastName || ''}`.trim() : (booking.isGuestBooking ? 'Guest' : 'Customer');
-
-          return {
-            _id: booking._id,
-            bookingNumber: booking.bookingNumber,
-            customerName,
-            serviceName: booking.service?.name || 'Service',
-            scheduledDate: booking.scheduledDate,
-            scheduledTime: booking.scheduledTime,
-            status: booking.status,
-            totalAmount: booking.pricing?.totalAmount || 0,
-            customer: booking.customer,
-            service: booking.service,
-            pricing: booking.pricing
-          };
-        });
-        setBookingRequests(transformedBookings);
+        setBookingRequests(response.data.bookings.map(normalizeProviderBooking));
       }
     } catch {
       setBookingRequests([]);
@@ -163,7 +225,16 @@ const ProviderDashboard: React.FC = () => {
       setAnalyticsError(null);
       const response = await providerAnalyticsApi.getProviderAnalytics();
       if (response.success && response.data.overview) {
-        setAnalytics(response.data.overview);
+        const overview = response.data.overview;
+        setAnalytics(overview);
+        // Extract status counts if available
+        if (overview.statusCounts) {
+          setStatusCounts(overview.statusCounts);
+        }
+        // Extract category stats if available
+        if (overview.categoryStats && Array.isArray(overview.categoryStats)) {
+          setCategoryStats(overview.categoryStats);
+        }
         return;
       }
       // API returned success but no data - this is valid for new providers
@@ -196,13 +267,10 @@ const ProviderDashboard: React.FC = () => {
     try {
       setLoadingReviews(true);
       setReviewsError(null);
-      const providerId = providerProfile?._id || user?.id;
-      if (!providerId) return;
 
-      const response = await reviewsApi.getProviderReviews(providerId);
+      const response = await reviewsApi.getMyReviews({ scope: 'approved', limit: 5 });
       if (response.success && response.data.reviews) {
-        // Transform reviews to RecentReview format
-        const transformedReviews: RecentReview[] = response.data.reviews.slice(0, 5).map((review: Review) => ({
+        const transformedReviews: RecentReview[] = response.data.reviews.map((review: Review) => ({
           id: review.id,
           customerName: review.customer
             ? `${review.customer.firstName} ${review.customer.lastName}`
@@ -210,7 +278,7 @@ const ProviderDashboard: React.FC = () => {
           rating: review.rating,
           comment: review.comment,
           serviceName: review.service?.name || 'Service',
-          date: review.createdAt
+          date: review.createdAt,
         }));
         setRecentReviews(transformedReviews);
       }
@@ -221,13 +289,76 @@ const ProviderDashboard: React.FC = () => {
     } finally {
       setLoadingReviews(false);
     }
-  }, [providerProfile?._id, user?.id]);
+  }, []);
+
+  // Fetch wallet balance
+  const fetchWalletBalance = useCallback(async () => {
+    try {
+      setLoadingWallet(true);
+      const response = await walletApi.getWallet();
+      if (response.success && response.data) {
+        setWalletBalance(response.data.balance || 0);
+      }
+    } catch (error) {
+      console.error('Failed to fetch wallet balance:', error);
+      setWalletBalance(0);
+    } finally {
+      setLoadingWallet(false);
+    }
+  }, []);
+
+  // Initial data fetch
+  useEffect(() => {
+    fetchWalletBalance();
+  }, [fetchWalletBalance]);
+
+  // Handle provider approval in real-time
+  useEffect(() => {
+    if (approved && approved.providerId === user?.id) {
+      toast.success('Congratulations! Your account has been approved. You can now start accepting bookings.');
+      refreshProviderProfile();
+      fetchAnalyticsWithRetry();
+    }
+  }, [approved, user?.id, toast, refreshProviderProfile, fetchAnalyticsWithRetry]);
+
+  // Handle provider rejection in real-time
+  useEffect(() => {
+    if (rejected && rejected.providerId === user?.id) {
+      toast.error(`Your application was rejected: ${rejected.reason}`);
+      if (rejected.canAppeal) {
+        toast('You can submit an appeal from your verification page.');
+      }
+    }
+  }, [rejected, user?.id, toast]);
+
+  // Handle provider suspension in real-time
+  useEffect(() => {
+    if (suspended && suspended.providerId === user?.id) {
+      toast.error(`Your account has been suspended: ${suspended.reason}`);
+      if (suspended.until) {
+        toast(`Suspension will end on ${new Date(suspended.until).toLocaleDateString()}`);
+      }
+      refreshProviderProfile();
+    }
+  }, [suspended, user?.id, toast, refreshProviderProfile]);
+
+  // Handle batch service operations in real-time
+  useEffect(() => {
+    if (batchCompleted && batchCompleted.providerIds.includes(user?.id || '')) {
+      const message = batchCompleted.action === 'approved'
+        ? `${batchCompleted.affectedCount} services have been approved!`
+        : `${batchCompleted.affectedCount} services were rejected.`;
+      toast.success(message);
+      fetchAnalyticsWithRetry();
+    }
+  }, [batchCompleted, user?.id, toast, fetchAnalyticsWithRetry]);
 
   // Initial data fetch
   useEffect(() => {
     // Set mounted flag
     isMountedRef.current = true;
 
+    getCurrentUser();
     fetchBookingRequests();
     fetchAnalyticsWithRetry();
     fetchReviews();
@@ -236,7 +367,7 @@ const ProviderDashboard: React.FC = () => {
     return () => {
       isMountedRef.current = false;
     };
-  }, [fetchBookingRequests, fetchAnalyticsWithRetry, fetchReviews]);
+  }, [fetchBookingRequests, fetchAnalyticsWithRetry, fetchReviews, getCurrentUser]);
 
   // Socket listeners for real-time updates
   useEffect(() => {
@@ -284,6 +415,8 @@ const ProviderDashboard: React.FC = () => {
         if (isMountedRef.current) {
           // Refresh analytics to update service stats
           fetchAnalyticsWithRetry();
+          // Show toast notification when service is approved (issue #11)
+          toast.success('Your service has been approved and is now live!');
           console.log('Service approved:', data.serviceId);
         }
       });
@@ -291,9 +424,17 @@ const ProviderDashboard: React.FC = () => {
       // Listen for service rejected events
       const unsubServiceRejected = socketService.onServiceRejected((data) => {
         if (isMountedRef.current) {
-          // Refresh analytics to update service stats
           fetchAnalyticsWithRetry();
+          // Show toast notification when service is rejected (issue #12)
+          toast.error(`Service rejected: ${data.reason || 'Please review the feedback'}`);
           console.log('Service rejected:', data.serviceId);
+        }
+      });
+
+      const unsubReviewModerated = socketService.onReviewModerated(() => {
+        if (isMountedRef.current) {
+          fetchReviews();
+          refreshProviderProfile();
         }
       });
 
@@ -309,6 +450,7 @@ const ProviderDashboard: React.FC = () => {
         unsubBookingConfirmed,
         unsubServiceApproved,
         unsubServiceRejected,
+        unsubReviewModerated,
         unsubNotification
       ];
     };
@@ -332,7 +474,7 @@ const ProviderDashboard: React.FC = () => {
       // The socket service manages reconnection, so we don't want to disconnect
       // on every unmount if other components are using it
     };
-  }, [fetchBookingRequests, fetchAnalyticsWithRetry, fetchReviews]);
+  }, [fetchBookingRequests, fetchAnalyticsWithRetry, fetchReviews, refreshProviderProfile]);
 
   // Handle booking accept
   const handleAcceptBooking = async (bookingId: string) => {
@@ -349,27 +491,11 @@ const ProviderDashboard: React.FC = () => {
         sortOrder: 'desc'
       });
       if (response.success && response.data.bookings && isMountedRef.current) {
-        const transformedBookings = response.data.bookings.map((booking: any) => ({
-          _id: booking._id,
-          bookingNumber: booking.bookingNumber,
-          customerName: booking.customer?.firstName
-            ? `${booking.customer.firstName} ${booking.customer.lastName}`
-            : booking.isGuestBooking
-              ? 'Guest'
-              : 'Customer',
-          serviceName: booking.service?.name || 'Service',
-          scheduledDate: booking.scheduledDate,
-          scheduledTime: booking.scheduledTime,
-          status: booking.status,
-          totalAmount: booking.pricing?.totalAmount || 0,
-          customer: booking.customer,
-          service: booking.service,
-          pricing: booking.pricing
-        }));
-        setBookingRequests(transformedBookings);
+        setBookingRequests(response.data.bookings.map(normalizeProviderBooking));
       }
     } catch (error) {
       console.error('Failed to accept booking:', error);
+      toast.error('Failed to accept booking', 'Please try again.');
     } finally {
       if (isMountedRef.current) {
         setActionLoading(null);
@@ -392,27 +518,11 @@ const ProviderDashboard: React.FC = () => {
         sortOrder: 'desc'
       });
       if (response.success && response.data.bookings && isMountedRef.current) {
-        const transformedBookings = response.data.bookings.map((booking: any) => ({
-          _id: booking._id,
-          bookingNumber: booking.bookingNumber,
-          customerName: booking.customer?.firstName
-            ? `${booking.customer.firstName} ${booking.customer.lastName}`
-            : booking.isGuestBooking
-              ? 'Guest'
-              : 'Customer',
-          serviceName: booking.service?.name || 'Service',
-          scheduledDate: booking.scheduledDate,
-          scheduledTime: booking.scheduledTime,
-          status: booking.status,
-          totalAmount: booking.pricing?.totalAmount || 0,
-          customer: booking.customer,
-          service: booking.service,
-          pricing: booking.pricing
-        }));
-        setBookingRequests(transformedBookings);
+        setBookingRequests(response.data.bookings.map(normalizeProviderBooking));
       }
     } catch (error) {
       console.error('Failed to decline booking:', error);
+      toast.error('Failed to decline booking', 'Please try again.');
     } finally {
       if (isMountedRef.current) {
         setActionLoading(null);
@@ -444,72 +554,66 @@ const ProviderDashboard: React.FC = () => {
     providerProfile?.analytics?.previousViews
   );
 
-  // Derive stats from analytics data
-  const stats: StatCard[] = (analytics ? [
+  // Normalized values — single source of truth for stats cards
+  const monthlyNetEarnings =
+    analytics?.revenueStats?.monthlyNetEarnings ??
+    providerProfile?.earnings?.thisMonth ??
+    0;
+  const repeatCustomers =
+    analytics?.customerMetrics?.repeatCustomers ??
+    providerProfile?.analytics?.customerMetrics?.repeatCustomers ??
+    0;
+  const totalViews =
+    analytics?.performanceStats?.totalViews ??
+    providerProfile?.analytics?.profileViews ??
+    0;
+  const completedBookings =
+    analytics?.bookingStats?.completedThisMonth ??
+    providerProfile?.analytics?.bookingStats?.completedBookings ??
+    0;
+  const averageRating =
+    providerProfile?.ratings?.average ??
+    analytics?.ratingStats?.averageRating ??
+    0;
+  const reviewCount =
+    providerProfile?.ratings?.count ??
+    analytics?.ratingStats?.totalReviews ??
+    0;
+
+  // Derive stats cards from normalized values (single source of truth)
+  const stats: StatCard[] = [
     {
       title: 'Monthly Earnings',
-      value: providerProfile?.earnings?.totalEarned || 0,
-      subtitle: 'This month',
+      value: monthlyNetEarnings,
+      subtitle: 'Net this month',
       icon: DollarSign,
       trend: earningsTrend,
       color: 'bg-nilin-rose'
     },
     {
       title: 'Total Bookings',
-      value: analytics.bookingStats.completedThisMonth,
-      subtitle: 'This month',
+      value: completedBookings,
+      subtitle: 'Completed this month',
       icon: Calendar,
       trend: bookingsTrend,
       color: 'bg-nilin-coral'
     },
     {
       title: 'Average Rating',
-      value: analytics.ratingStats.averageRating || providerProfile?.ratings?.average || 0,
-      subtitle: `${analytics.ratingStats.totalReviews || providerProfile?.ratings?.count || 0} reviews`,
+      value: averageRating,
+      subtitle: `${reviewCount} reviews`,
       icon: Star,
       color: 'bg-nilin-rose'
     },
     {
-      title: 'Profile Views',
-      value: analytics.performanceStats.totalViews || providerProfile?.analytics?.profileViews || 0,
-      subtitle: 'This week',
+      title: 'Service Impressions',
+      value: totalViews,
+      subtitle: 'All time',
       icon: Eye,
       trend: viewsTrend,
       color: 'bg-nilin-coral'
     }
-  ] : [
-    {
-      title: 'Monthly Earnings',
-      value: providerProfile?.earnings?.totalEarned || 0,
-      subtitle: 'This month',
-      icon: DollarSign,
-      trend: earningsTrend,
-      color: 'bg-nilin-rose'
-    },
-    {
-      title: 'Total Bookings',
-      value: providerProfile?.analytics?.totalBookings || 0,
-      subtitle: 'This month',
-      icon: Calendar,
-      trend: bookingsTrend,
-      color: 'bg-nilin-coral'
-    },
-    {
-      title: 'Average Rating',
-      value: providerProfile?.ratings?.average || 0,
-      subtitle: `${providerProfile?.ratings?.count || 0} reviews`,
-      icon: Star,
-      color: 'bg-nilin-rose'
-    },
-    {
-      title: 'Profile Views',
-      value: providerProfile?.analytics?.profileViews || 0,
-      subtitle: 'This week',
-      icon: Eye,
-      trend: viewsTrend,
-      color: 'bg-nilin-coral'
-    }
-  ]) as StatCard[];
+  ];
 
   const handleLogout = () => {
     logout();
@@ -615,7 +719,7 @@ const ProviderDashboard: React.FC = () => {
 
             <div className="flex items-center space-x-4">
               {/* Notifications */}
-              <NotificationBell userId={user?._id} userRole="provider" />
+              <NotificationBell userId={user?.id || user?._id} userRole="provider" />
 
               {/* User Menu */}
               <div className="relative">
@@ -664,7 +768,7 @@ const ProviderDashboard: React.FC = () => {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Welcome Section */}
         <div className="mb-8">
-          <div className="bg-gradient-to-r from-nilin-rose to-nilin-coral rounded-2xl p-6 text-white shadow-nilin-lg gradient-3d neu-light">
+          <div className="bg-gradient-to-r from-nilin-rose to-nilin-coral rounded-2xl p-6 text-white shadow-nilin-lg">
             <div className="flex items-center justify-between">
               <div className="flex-1">
                 <h2 className="text-2xl font-serif font-light mb-2">
@@ -676,7 +780,7 @@ const ProviderDashboard: React.FC = () => {
                 <div className="flex items-center space-x-6 text-sm font-sans">
                   <div className="flex items-center">
                     <DollarSign className="h-4 w-4 mr-1" />
-                    <span>AED {providerProfile?.earnings?.availableBalance || 0} available</span>
+                    <span>{formatPrice(walletBalance)} available</span>
                   </div>
                   <div className="flex items-center">
                     <Star className="h-4 w-4 mr-1" />
@@ -684,7 +788,7 @@ const ProviderDashboard: React.FC = () => {
                   </div>
                   <div className="flex items-center">
                     <Users className="h-4 w-4 mr-1" />
-                    <span>{providerProfile?.analytics?.repeatCustomers || 0} repeat customers</span>
+                    <span>{repeatCustomers} repeat customers</span>
                   </div>
                 </div>
               </div>
@@ -717,13 +821,12 @@ const ProviderDashboard: React.FC = () => {
           </div>
         )}
 
-	        {/* Quick Actions - Compact Grid */}
+	        {/* Quick Actions */}
 	        <div className="mb-8">
 	          <div className="flex items-center justify-between mb-4">
 	            <h3 className="text-lg font-semibold text-nilin-charcoal">Quick Actions</h3>
 	          </div>
-	          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8 gap-2">
-	            {/* Add Service - Primary */}
+	          <div className="grid grid-cols-4 sm:grid-cols-4 md:grid-cols-8 gap-2">
 	            <Link
 	              to="/provider/services"
 	              className="flex flex-col items-center justify-center p-3 bg-gradient-to-br from-nilin-coral to-nilin-rose rounded-xl text-white hover:shadow-lg transition-all duration-300"
@@ -731,8 +834,6 @@ const ProviderDashboard: React.FC = () => {
 	              <Plus className="h-5 w-5 mb-1" />
 	              <span className="text-xs font-medium text-center">Add Service</span>
 	            </Link>
-
-	            {/* Bookings */}
 	            <Link
 	              to="/provider/bookings"
 	              className="flex flex-col items-center justify-center p-3 bg-white/60 backdrop-blur rounded-xl border border-nilin-border/30 hover:border-nilin-coral/50 hover:shadow-md transition-all duration-300"
@@ -740,8 +841,6 @@ const ProviderDashboard: React.FC = () => {
 	              <Calendar className="h-5 w-5 text-nilin-coral mb-1" />
 	              <span className="text-xs font-medium text-nilin-charcoal text-center">Bookings</span>
 	            </Link>
-
-	            {/* Services */}
 	            <Link
 	              to="/provider/services"
 	              className="flex flex-col items-center justify-center p-3 bg-white/60 backdrop-blur rounded-xl border border-nilin-border/30 hover:border-nilin-coral/50 hover:shadow-md transition-all duration-300"
@@ -749,8 +848,6 @@ const ProviderDashboard: React.FC = () => {
 	              <Settings className="h-5 w-5 text-nilin-rose mb-1" />
 	              <span className="text-xs font-medium text-nilin-charcoal text-center">Services</span>
 	            </Link>
-
-	            {/* Analytics */}
 	            <Link
 	              to="/provider/analytics"
 	              className="flex flex-col items-center justify-center p-3 bg-white/60 backdrop-blur rounded-xl border border-nilin-border/30 hover:border-nilin-coral/50 hover:shadow-md transition-all duration-300"
@@ -758,8 +855,6 @@ const ProviderDashboard: React.FC = () => {
 	              <BarChart className="h-5 w-5 text-nilin-rose mb-1" />
 	              <span className="text-xs font-medium text-nilin-charcoal text-center">Analytics</span>
 	            </Link>
-
-	            {/* Earnings */}
 	            <Link
 	              to="/provider/earnings"
 	              className="flex flex-col items-center justify-center p-3 bg-white/60 backdrop-blur rounded-xl border border-nilin-border/30 hover:border-nilin-coral/50 hover:shadow-md transition-all duration-300"
@@ -767,17 +862,6 @@ const ProviderDashboard: React.FC = () => {
 	              <DollarSign className="h-5 w-5 text-green-600 mb-1" />
 	              <span className="text-xs font-medium text-nilin-charcoal text-center">Earnings</span>
 	            </Link>
-
-	            {/* Ads */}
-	            <Link
-	              to="/provider/ads"
-	              className="flex flex-col items-center justify-center p-3 bg-white/60 backdrop-blur rounded-xl border border-nilin-border/30 hover:border-nilin-coral/50 hover:shadow-md transition-all duration-300"
-	            >
-	              <Activity className="h-5 w-5 text-nilin-coral mb-1" />
-	              <span className="text-xs font-medium text-nilin-charcoal text-center">Ads</span>
-	            </Link>
-
-	            {/* Reviews */}
 	            <Link
 	              to="/provider/reviews"
 	              className="flex flex-col items-center justify-center p-3 bg-white/60 backdrop-blur rounded-xl border border-nilin-border/30 hover:border-nilin-coral/50 hover:shadow-md transition-all duration-300"
@@ -785,8 +869,6 @@ const ProviderDashboard: React.FC = () => {
 	              <Star className="h-5 w-5 text-yellow-500 mb-1" />
 	              <span className="text-xs font-medium text-nilin-charcoal text-center">Reviews</span>
 	            </Link>
-
-	            {/* Availability */}
 	            <Link
 	              to="/provider/availability"
 	              className="flex flex-col items-center justify-center p-3 bg-white/60 backdrop-blur rounded-xl border border-nilin-border/30 hover:border-nilin-coral/50 hover:shadow-md transition-all duration-300"
@@ -794,26 +876,6 @@ const ProviderDashboard: React.FC = () => {
 	              <Clock className="h-5 w-5 text-nilin-rose mb-1" />
 	              <span className="text-xs font-medium text-nilin-charcoal text-center">Availability</span>
 	            </Link>
-
-	            {/* Profile */}
-	            <Link
-	              to="/provider/profile"
-	              className="flex flex-col items-center justify-center p-3 bg-white/60 backdrop-blur rounded-xl border border-nilin-border/30 hover:border-nilin-coral/50 hover:shadow-md transition-all duration-300"
-	            >
-	              <Award className="h-5 w-5 text-nilin-coral mb-1" />
-	              <span className="text-xs font-medium text-nilin-charcoal text-center">Profile</span>
-	            </Link>
-
-	            {/* Portfolio */}
-	            <Link
-	              to="/provider/portfolio"
-	              className="flex flex-col items-center justify-center p-3 bg-white/60 backdrop-blur rounded-xl border border-nilin-border/30 hover:border-nilin-coral/50 hover:shadow-md transition-all duration-300"
-	            >
-	              <Camera className="h-5 w-5 text-nilin-rose mb-1" />
-	              <span className="text-xs font-medium text-nilin-charcoal text-center">Portfolio</span>
-	            </Link>
-
-	            {/* Settings */}
 	            <Link
 	              to="/provider/settings"
 	              className="flex flex-col items-center justify-center p-3 bg-white/60 backdrop-blur rounded-xl border border-nilin-border/30 hover:border-nilin-coral/50 hover:shadow-md transition-all duration-300"
@@ -821,15 +883,12 @@ const ProviderDashboard: React.FC = () => {
 	              <Shield className="h-5 w-5 text-nilin-warmGray mb-1" />
 	              <span className="text-xs font-medium text-nilin-charcoal text-center">Settings</span>
 	            </Link>
-
-	            {/* Managed Services */}
-	            <Link
-	              to="/provider/managed-services"
-	              className="flex flex-col items-center justify-center p-3 bg-white/60 backdrop-blur rounded-xl border border-nilin-border/30 hover:border-nilin-coral/50 hover:shadow-md transition-all duration-300"
-	            >
-	              <Building2 className="h-5 w-5 text-nilin-coral mb-1" />
-	              <span className="text-xs font-medium text-nilin-charcoal text-center">Managed</span>
-	            </Link>
+	          </div>
+	          <div className="mt-3 flex flex-wrap gap-2">
+	            <Link to="/provider/profile" className="text-xs px-3 py-1.5 rounded-full border border-nilin-border/50 text-nilin-charcoal hover:bg-nilin-blush/50">Profile</Link>
+	            <Link to="/provider/portfolio" className="text-xs px-3 py-1.5 rounded-full border border-nilin-border/50 text-nilin-charcoal hover:bg-nilin-blush/50">Portfolio</Link>
+	            <Link to="/provider/ads" className="text-xs px-3 py-1.5 rounded-full border border-nilin-border/50 text-nilin-charcoal hover:bg-nilin-blush/50">Ads</Link>
+	            <Link to="/provider/managed-services" className="text-xs px-3 py-1.5 rounded-full border border-nilin-border/50 text-nilin-charcoal hover:bg-nilin-blush/50">Managed</Link>
 	          </div>
 	        </div>
 
@@ -1010,48 +1069,6 @@ const ProviderDashboard: React.FC = () => {
           </div>
         </div>
 
-        {/* Quick Actions */}
-        <div className="mt-8 glass rounded-2xl border border-nilin-border/50 p-6 inner-glow">
-          <h3 className="text-lg font-serif font-light text-nilin-charcoal mb-4">Quick Actions</h3>
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-            <Link
-              to="/provider/services"
-              className="flex flex-col items-center p-4 text-center border border-nilin-border/50 rounded-xl hover:shadow-nilin transition-shadow font-sans glass-btn"
-            >
-              <Plus className="h-8 w-8 text-nilin-coral mb-2" />
-              <span className="text-sm font-medium text-nilin-charcoal">Add Service</span>
-            </Link>
-            <Link
-              to="/provider/availability"
-              className="flex flex-col items-center p-4 text-center border border-nilin-border/50 rounded-xl hover:shadow-nilin transition-shadow font-sans glass-btn"
-            >
-              <Calendar className="h-8 w-8 text-nilin-rose mb-2" />
-              <span className="text-sm font-medium text-nilin-charcoal">Manage Availability</span>
-            </Link>
-            <Link
-              to="/provider/portfolio"
-              className="flex flex-col items-center p-4 text-center border border-nilin-border/50 rounded-xl hover:shadow-nilin transition-shadow font-sans glass-btn"
-            >
-              <Camera className="h-8 w-8 text-nilin-coral mb-2" />
-              <span className="text-sm font-medium text-nilin-charcoal">Update Portfolio</span>
-            </Link>
-            <Link
-              to="/provider/analytics"
-              className="flex flex-col items-center p-4 text-center border border-nilin-border/50 rounded-xl hover:shadow-nilin transition-shadow font-sans glass-btn"
-            >
-              <BarChart className="h-8 w-8 text-nilin-rose mb-2" />
-              <span className="text-sm font-medium text-nilin-charcoal">View Analytics</span>
-            </Link>
-            <Link
-              to="/provider/profile"
-              className="flex flex-col items-center p-4 text-center border border-nilin-border/50 rounded-xl hover:shadow-nilin transition-shadow font-sans glass-btn"
-            >
-              <Settings className="h-8 w-8 text-nilin-warmGray mb-2" />
-              <span className="text-sm font-medium text-nilin-charcoal">Settings</span>
-            </Link>
-          </div>
-        </div>
-
         {/* Business Performance Overview */}
         <div className="mt-8 grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="glass glass-blur rounded-2xl border border-nilin-border/50 p-6 card-3d">
@@ -1178,6 +1195,256 @@ const ProviderDashboard: React.FC = () => {
                 </span>
               </div>
             </div>
+          </div>
+        </div>
+
+        {/* Analytics Widgets Section */}
+        <div className="mt-8 grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Service Stats Widget */}
+          <div className="glass glass-blur rounded-2xl border border-nilin-border/50 p-6 card-3d">
+            <div className="flex items-center justify-between mb-4">
+              <h4 className="text-sm font-medium text-nilin-charcoal font-sans">Service Stats</h4>
+              <div className="w-10 h-10 rounded-xl bg-nilin-coral/20 flex items-center justify-center shimmer">
+                <Layers className="h-5 w-5 text-nilin-coral" />
+              </div>
+            </div>
+            {loadingAnalytics ? (
+              <div className="space-y-3">
+                {[1, 2, 3, 4].map((i) => (
+                  <div key={i} className="flex justify-between items-center">
+                    <div className="h-4 w-20 bg-nilin-blush animate-pulse rounded"></div>
+                    <div className="h-4 w-8 bg-nilin-blush animate-pulse rounded"></div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="flex justify-between items-center py-2 border-b border-nilin-border/30">
+                  <span className="text-sm text-nilin-warmGray font-sans">Total Services</span>
+                  <span className="text-sm font-medium text-nilin-charcoal font-sans">
+                    {analytics?.serviceStats?.total ?? 0}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center py-2 border-b border-nilin-border/30">
+                  <span className="text-sm text-nilin-warmGray font-sans">Active</span>
+                  <span className="text-sm font-medium text-green-600 font-sans">
+                    {analytics?.serviceStats?.active ?? 0}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center py-2 border-b border-nilin-border/30">
+                  <span className="text-sm text-nilin-warmGray font-sans">Draft</span>
+                  <span className="text-sm font-medium text-amber-600 font-sans">
+                    {analytics?.serviceStats?.draft ?? 0}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center py-2 border-b border-nilin-border/30">
+                  <span className="text-sm text-nilin-warmGray font-sans">Inactive</span>
+                  <span className="text-sm font-medium text-nilin-warmGray font-sans">
+                    {analytics?.serviceStats?.inactive ?? 0}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center py-2">
+                  <span className="text-sm text-nilin-warmGray font-sans">Pending Review</span>
+                  <span className="text-sm font-medium text-blue-600 font-sans">
+                    {analytics?.serviceStats?.pending_review ?? 0}
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Booking Status Funnel Widget */}
+          <div className="glass glass-blur rounded-2xl border border-nilin-border/50 p-6 card-3d">
+            <div className="flex items-center justify-between mb-4">
+              <h4 className="text-sm font-medium text-nilin-charcoal font-sans">Booking Status Funnel</h4>
+              <div className="w-10 h-10 rounded-xl bg-blue-500/20 flex items-center justify-center shimmer">
+                <TrendingUpIcon className="h-5 w-5 text-blue-500" />
+              </div>
+            </div>
+            {loadingAnalytics ? (
+              <div className="space-y-3">
+                {[1, 2, 3, 4, 5].map((i) => (
+                  <div key={i} className="flex justify-between items-center">
+                    <div className="h-4 w-24 bg-nilin-blush animate-pulse rounded"></div>
+                    <div className="h-4 w-8 bg-nilin-blush animate-pulse rounded"></div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="flex justify-between items-center py-2 border-b border-nilin-border/30">
+                  <span className="text-sm text-nilin-warmGray font-sans">Pending</span>
+                  <span className="text-sm font-medium text-amber-600 font-sans">
+                    {statusCounts.pending}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center py-2 border-b border-nilin-border/30">
+                  <span className="text-sm text-nilin-warmGray font-sans">Confirmed</span>
+                  <span className="text-sm font-medium text-blue-600 font-sans">
+                    {statusCounts.confirmed}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center py-2 border-b border-nilin-border/30">
+                  <span className="text-sm text-nilin-warmGray font-sans">In Progress</span>
+                  <span className="text-sm font-medium text-purple-600 font-sans">
+                    {statusCounts.in_progress}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center py-2 border-b border-nilin-border/30">
+                  <span className="text-sm text-nilin-warmGray font-sans">Completed</span>
+                  <span className="text-sm font-medium text-green-600 font-sans">
+                    {statusCounts.completed}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center py-2">
+                  <span className="text-sm text-nilin-warmGray font-sans">Cancelled</span>
+                  <span className="text-sm font-medium text-red-600 font-sans">
+                    {statusCounts.cancelled}
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Top Services Widget */}
+        <div className="mt-6 glass glass-blur rounded-2xl border border-nilin-border/50 p-6 card-3d">
+          <div className="flex items-center justify-between mb-4">
+            <h4 className="text-sm font-medium text-nilin-charcoal font-sans">Top Services</h4>
+            <div className="w-10 h-10 rounded-xl bg-amber-500/20 flex items-center justify-center shimmer">
+              <Award className="h-5 w-5 text-amber-500" />
+            </div>
+          </div>
+          {loadingAnalytics ? (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="h-16 bg-nilin-blush animate-pulse rounded-xl"></div>
+              ))}
+            </div>
+          ) : analytics?.topServices && analytics.topServices.length > 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {analytics.topServices.slice(0, 3).map((service, index) => (
+                <div key={service.id || index} className="bg-nilin-blush/30 rounded-xl p-4 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-lg bg-nilin-coral/20 flex items-center justify-center">
+                      <span className="text-sm font-bold text-nilin-coral">#{index + 1}</span>
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-nilin-charcoal font-sans">{service.name}</p>
+                      <p className="text-xs text-nilin-warmGray">{service.bookings} bookings</p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-sm font-medium text-green-600 font-sans">
+                      AED {(service.revenue || 0).toLocaleString()}
+                    </p>
+                    <p className="text-xs text-nilin-warmGray">revenue</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-center py-6">
+              <List className="mx-auto h-10 w-10 text-nilin-warmGray mb-2" />
+              <p className="text-sm text-nilin-warmGray font-sans">No services data available</p>
+            </div>
+          )}
+        </div>
+
+        {/* Categories Overview + Total Customers Widgets */}
+        <div className="mt-6 grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Categories Overview */}
+          <div className="glass glass-blur rounded-2xl border border-nilin-border/50 p-6 card-3d">
+            <div className="flex items-center justify-between mb-4">
+              <h4 className="text-sm font-medium text-nilin-charcoal font-sans">Categories Overview</h4>
+              <div className="w-10 h-10 rounded-xl bg-purple-500/20 flex items-center justify-center shimmer">
+                <PieChart className="h-5 w-5 text-purple-500" />
+              </div>
+            </div>
+            {loadingAnalytics ? (
+              <div className="space-y-3">
+                {[1, 2, 3, 4].map((i) => (
+                  <div key={i} className="h-10 bg-nilin-blush animate-pulse rounded-lg"></div>
+                ))}
+              </div>
+            ) : categoryStats.length > 0 ? (
+              <div className="space-y-3">
+                {categoryStats.slice(0, 5).map((category, index) => {
+                  const totalBookings = categoryStats.reduce((sum, c) => sum + c.bookingCount, 0);
+                  const percentage = totalBookings > 0 ? (category.bookingCount / totalBookings) * 100 : 0;
+                  return (
+                    <div key={index} className="flex items-center gap-3">
+                      <div className="flex-1">
+                        <div className="flex justify-between mb-1">
+                          <span className="text-sm text-nilin-charcoal font-sans">{category.name}</span>
+                          <span className="text-sm text-nilin-warmGray font-sans">{category.bookingCount}</span>
+                        </div>
+                        <div className="h-2 bg-nilin-blush rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-gradient-to-r from-nilin-coral to-nilin-rose rounded-full transition-all"
+                            style={{ width: `${Math.max(percentage, 2)}%` }}
+                          ></div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="text-center py-6">
+                <PieChart className="mx-auto h-10 w-10 text-nilin-warmGray mb-2" />
+                <p className="text-sm text-nilin-warmGray font-sans">No category data available</p>
+              </div>
+            )}
+          </div>
+
+          {/* Total Customers Widget */}
+          <div className="glass glass-blur rounded-2xl border border-nilin-border/50 p-6 card-3d">
+            <div className="flex items-center justify-between mb-4">
+              <h4 className="text-sm font-medium text-nilin-charcoal font-sans">Customer Metrics</h4>
+              <div className="w-10 h-10 rounded-xl bg-green-500/20 flex items-center justify-center shimmer">
+                <Users className="h-5 w-5 text-green-500" />
+              </div>
+            </div>
+            {loadingAnalytics ? (
+              <div className="space-y-4">
+                <div className="h-16 bg-nilin-blush animate-pulse rounded-xl"></div>
+                <div className="h-16 bg-nilin-blush animate-pulse rounded-xl"></div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="bg-gradient-to-br from-green-50 to-emerald-50 rounded-xl p-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-lg bg-green-500/20 flex items-center justify-center">
+                        <Users className="h-5 w-5 text-green-600" />
+                      </div>
+                      <div>
+                        <p className="text-xs text-green-600 font-medium font-sans">Total Customers</p>
+                        <p className="text-2xl font-bold text-green-700">
+                          {analytics?.customerMetrics?.totalCustomers ?? repeatCustomers ?? 0}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl p-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-lg bg-blue-500/20 flex items-center justify-center">
+                        <Star className="h-5 w-5 text-blue-600" />
+                      </div>
+                      <div>
+                        <p className="text-xs text-blue-600 font-medium font-sans">Repeat Customers</p>
+                        <p className="text-2xl font-bold text-blue-700">
+                          {repeatCustomers}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>

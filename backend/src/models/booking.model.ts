@@ -577,6 +577,14 @@ bookingSchema.index({ customerId: 1, status: 1 });
 bookingSchema.index({ providerId: 1, scheduledDate: 1 });
 bookingSchema.index({ status: 1, scheduledDate: 1 });
 
+// FIX: Add compound index for customer dashboard queries with status filter and creation date
+// Supports queries like: find all bookings for customer X with status Y, newest first
+bookingSchema.index({ customerId: 1, status: 1, createdAt: -1 });
+
+// FIX: Add unique compound index for tenant-scoped booking number lookups
+// Ensures booking numbers are unique within each tenant
+bookingSchema.index({ tenantId: 1, bookingNumber: 1 }, { unique: true });
+
 // ===================================
 // ANTI-DOUBLE-BOOKING INDEX
 // ===================================
@@ -673,6 +681,13 @@ bookingSchema.index({ tenantId: 1, providerId: 1, status: 1 });
 bookingSchema.index({ tenantId: 1, createdAt: -1 });
 bookingSchema.index({ tenantId: 1, status: 1, createdAt: -1 });
 bookingSchema.index({ tenantId: 1, scheduledDate: 1, status: 1 });
+
+// ===================================
+// DASHBOARD & REPORTING INDEXES
+// ===================================
+// Compound index for customer dashboard AOV calculations and revenue queries
+// Supports efficient filtering by customer, status, and sorting by date with pricing projection
+bookingSchema.index({ customerId: 1, status: 1, 'pricing.totalAmount': 1, createdAt: -1 });
 
 // ===================================
 // VIRTUAL PROPERTIES
@@ -967,7 +982,8 @@ bookingSchema.statics.getAnalytics = function(startDate: Date, endDate: Date) {
   return this.aggregate([
     {
       $match: {
-        createdAt: { $gte: startDate, $lte: endDate }
+        createdAt: { $gte: startDate, $lte: endDate },
+        deletedAt: { $exists: false }
       }
     },
     {

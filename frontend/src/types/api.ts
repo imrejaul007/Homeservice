@@ -30,7 +30,7 @@ export interface RequestConfig {
   skipAuth?: boolean;
 }
 
-// Export User Data Types
+// Export User Data Types - expanded to match backend
 export interface ExportUserData {
   user: {
     id: string;
@@ -40,14 +40,40 @@ export interface ExportUserData {
     role: string;
     accountStatus: string;
     isEmailVerified: boolean;
+    createdAt: string;
+    updatedAt: string;
   };
-  customerProfile?: Record<string, unknown>;
+  customerProfile?: {
+    addresses?: Array<Record<string, unknown>>;
+    paymentMethods?: Array<Record<string, unknown>>;
+    preferences?: Record<string, unknown>;
+    loyaltySystem?: {
+      totalCoins: number;
+      tier: string;
+      pointsHistory?: Array<Record<string, unknown>>;
+    };
+    communicationPreferences?: {
+      email: boolean;
+      sms: boolean;
+      push: boolean;
+      telegram?: boolean;
+      whatsapp?: boolean;
+    };
+    quietHours?: {
+      enabled: boolean;
+      start?: string;
+      end?: string;
+    };
+    language?: string;
+    timezone?: string;
+    currency?: string;
+  };
   providerProfile?: Record<string, unknown>;
   bookings?: Array<Record<string, unknown>>;
   services?: Array<Record<string, unknown>>;
 }
 
-// Notification Preferences
+// Notification Preferences - expanded to include all channels
 export interface NotificationPreferences {
   email: {
     bookingConfirmed: boolean;
@@ -68,6 +94,24 @@ export interface NotificationPreferences {
     bookingUpdates: boolean;
     reminders: boolean;
   };
+  telegram?: {
+    enabled: boolean;
+    bookingUpdates: boolean;
+    promotions: boolean;
+  };
+  whatsapp?: {
+    enabled: boolean;
+    bookingUpdates: boolean;
+    promotions: boolean;
+  };
+  quietHours?: {
+    enabled: boolean;
+    start: string;
+    end: string;
+  };
+  language?: string;
+  timezone?: string;
+  currency?: string;
 }
 
 // Referral Types

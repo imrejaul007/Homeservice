@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
 import { bookingService } from '../../services/BookingService';
@@ -27,6 +27,7 @@ interface StatCard {
     isPositive: boolean;
   };
   color: string;
+  loading?: boolean;
 }
 
 interface RecentBooking {
@@ -67,67 +68,68 @@ const StatsView: React.FC = () => {
   const navigate = useNavigate();
   const [recentBookings, setRecentBookings] = useState<RecentBooking[]>([]);
   const [loadingBookings, setLoadingBookings] = useState(true);
+  const [loadingStats, setLoadingStats] = useState(true);
+  const [stats, setStats] = useState<StatCard[]>([]);
   const { user, customerProfile } = useAuthStore();
 
-  const [stats] = useState<StatCard[]>([
-    {
-      title: 'Total Bookings',
-      value: customerProfile?.bookingStats?.totalBookings || 12,
-      subtitle: 'All time',
-      icon: Calendar,
-      trend: { value: 2, isPositive: true },
-      color: 'bg-nilin-coral'
-    },
-    {
-      title: 'Loyalty Coins',
-      value: user?.loyaltySystem?.totalCoins || 1250,
-      subtitle: `${user?.loyaltySystem?.tier || 'Bronze'} tier`,
-      icon: Coins,
-      trend: { value: 150, isPositive: true },
-      color: 'bg-nilin-gold'
-    },
-    {
-      title: 'Saved Providers',
-      value: customerProfile?.favoriteProviders?.length || 5,
-      subtitle: 'In favorites',
-      icon: Heart,
-      color: 'bg-nilin-rose'
-    },
-    {
-      title: 'Avg Rating Given',
-      value: '4.8',
-      subtitle: 'Your reviews',
-      icon: Star,
-      color: 'bg-nilin-sage'
-    }
-  ]);
+  // Date range state for filtering
+  const [dateRange, setDateRange] = useState<'week' | 'month' | 'year' | 'all'>('month');
+  const [refreshKey, setRefreshKey] = useState(0);
 
-  const [favoriteProviders] = useState<FavoriteProvider[]>([
-    {
-      id: '1',
-      name: 'Sarah\'s Cleaning Co',
-      category: 'Home Services',
-      rating: 4.9,
-      reviewCount: 127,
-      isOnline: true
-    },
-    {
-      id: '2',
-      name: 'Bella Beauty Salon',
-      category: 'Beauty & Personal Care',
-      rating: 4.8,
-      reviewCount: 203,
-      isOnline: false
-    },
-    {
-      id: '3',
-      name: 'FitLife Gym',
-      category: 'Fitness & Training',
-      rating: 4.7,
-      reviewCount: 89,
-      isOnline: true
-    }
-  ]);
+  // Refresh handler
+  const handleRefresh = useCallback(() => {
+    setRefreshKey(k => k + 1);
+  }, []);
+
+  useEffect(() => {
+    // Build stats from real data sources
+    const totalBookings = customerProfile?.bookingStats?.totalBookings ?? 0;
+    const loyaltyCoins = user?.loyaltySystem?.totalCoins ?? 0;
+    const loyaltyTier = user?.loyaltySystem?.tier ?? 'Bronze';
+    const favoriteProviders = customerProfile?.favoriteProviders?.length ?? 0;
+    const avgRatingGiven = customerProfile?.ratings?.averageRatingGiven ?? 0;
+
+    setStats([
+      {
+        title: 'Total Bookings',
+        value: totalBookings,
+        subtitle: 'All time',
+        icon: Calendar,
+        trend: undefined,
+        color: 'bg-nilin-coral',
+        loading: false
+      },
+      {
+        title: 'Loyalty Coins',
+        value: loyaltyCoins,
+        subtitle: `${loyaltyTier} tier`,
+        icon: Coins,
+        trend: undefined,
+        color: 'bg-nilin-gold',
+        loading: false
+      },
+      {
+        title: 'Saved Providers',
+        value: favoriteProviders,
+        subtitle: 'In favorites',
+        icon: Heart,
+        color: 'bg-nilin-rose',
+        loading: false
+      },
+      {
+        title: 'Avg Rating Given',
+        value: avgRatingGiven,
+        subtitle: 'Your reviews',
+        icon: Star,
+        color: 'bg-nilin-sage',
+        loading: false
+      }
+    ]);
+    setLoadingStats(false);
+  }, [customerProfile, user, refreshKey]);
+
+  const [favoriteProviders, setFavoriteProviders] = useState<FavoriteProvider[]>([]);
+  const [loadingFavorites, setLoadingFavorites] = useState(true);
 
   useEffect(() => {
     const fetchRecentBookings = async () => {
@@ -165,6 +167,23 @@ const StatsView: React.FC = () => {
 
     fetchRecentBookings();
   }, []);
+
+  // Fetch favorite providers from customer profile
+  useEffect(() => {
+    const favorites = customerProfile?.favoriteProviders ?? [];
+    if (favorites.length > 0) {
+      setFavoriteProviders(favorites.slice(0, 3).map((p: any) => ({
+        id: p.id ?? p.providerId ?? String(Math.random()),
+        name: p.businessInfo?.businessName ?? p.name ?? 'Provider',
+        category: p.category ?? p.serviceCategory ?? 'Home Services',
+        rating: p.rating ?? 0,
+        reviewCount: p.reviewCount ?? 0,
+        imageUrl: p.imageUrl,
+        isOnline: p.isOnline ?? false
+      })));
+    }
+    setLoadingFavorites(false);
+  }, [customerProfile]);
 
   const getGreeting = () => {
     const hour = new Date().getHours();
@@ -261,34 +280,79 @@ const StatsView: React.FC = () => {
 
         {/* Statistics Cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-          {stats.map((stat, index) => {
-            const IconComponent = stat.icon;
-            return (
-              <div key={index} className="bg-white rounded-lg p-6 shadow-sm border border-gray-200">
-                <div className="flex items-center">
-                  <div className={`p-2 rounded-lg ${stat.color}`}>
-                    <IconComponent className="h-6 w-6 text-white" />
-                  </div>
-                  <div className="ml-4 flex-1">
-                    <p className="text-sm font-medium text-gray-600">{stat.title}</p>
-                    <div className="flex items-baseline">
-                      <p className="text-2xl font-semibold text-gray-900">{stat.value}</p>
-                      {stat.trend && (
-                        <span className={`ml-2 text-sm font-medium ${
-                          stat.trend.isPositive ? 'text-green-600' : 'text-red-600'
-                        }`}>
-                          {stat.trend.isPositive ? '+' : '-'}{stat.trend.value}
-                        </span>
-                      )}
+          {loadingStats ? (
+            // Loading skeletons
+            <>
+              {[1, 2, 3, 4].map(i => (
+                <div key={i} className="bg-white rounded-lg p-6 shadow-sm border border-gray-200">
+                  <div className="flex items-center">
+                    <div className="w-10 h-10 bg-gray-200 rounded-lg animate-pulse" />
+                    <div className="ml-4 flex-1 space-y-2">
+                      <div className="h-4 bg-gray-200 rounded w-20 animate-pulse" />
+                      <div className="h-8 bg-gray-200 rounded w-16 animate-pulse" />
+                      <div className="h-3 bg-gray-200 rounded w-12 animate-pulse" />
                     </div>
-                    {stat.subtitle && (
-                      <p className="text-sm text-gray-500">{stat.subtitle}</p>
-                    )}
                   </div>
                 </div>
-              </div>
-            );
-          })}
+              ))}
+            </>
+          ) : (
+            stats.map((stat, index) => {
+              const IconComponent = stat.icon;
+              return (
+                <div key={index} className="bg-white rounded-lg p-6 shadow-sm border border-gray-200">
+                  <div className="flex items-center">
+                    <div className={`p-2 rounded-lg ${stat.color}`}>
+                      <IconComponent className="h-6 w-6 text-white" />
+                    </div>
+                    <div className="ml-4 flex-1">
+                      <p className="text-sm font-medium text-gray-600">{stat.title}</p>
+                      <div className="flex items-baseline">
+                        <p className="text-2xl font-semibold text-gray-900">{stat.value}</p>
+                        {stat.trend && (
+                          <span className={`ml-2 text-sm font-medium ${
+                            stat.trend.isPositive ? 'text-green-600' : 'text-red-600'
+                          }`}>
+                            {stat.trend.isPositive ? '+' : '-'}{stat.trend.value}
+                          </span>
+                        )}
+                      </div>
+                      {stat.subtitle && (
+                        <p className="text-sm text-gray-500">{stat.subtitle}</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* Date Range Filter & Refresh */}
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium text-gray-700">Date Range:</span>
+            {(['week', 'month', 'year', 'all'] as const).map(range => (
+              <button
+                key={range}
+                onClick={() => setDateRange(range)}
+                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                  dateRange === range
+                    ? 'bg-nilin-coral text-white'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+              >
+                {range.charAt(0).toUpperCase() + range.slice(1)}
+              </button>
+            ))}
+          </div>
+          <button
+            onClick={handleRefresh}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium text-nilin-coral border border-nilin-coral hover:bg-nilin-blush/50 transition-colors"
+          >
+            <TrendingUp className="h-4 w-4" />
+            Refresh
+          </button>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
@@ -375,7 +439,19 @@ const StatsView: React.FC = () => {
               </div>
             </div>
             <div className="p-6">
-              {favoriteProviders.length > 0 ? (
+              {loadingFavorites ? (
+                <div className="space-y-4">
+                  {[1, 2, 3].map(i => (
+                    <div key={i} className="flex items-center space-x-3 p-4 border border-gray-200 rounded-lg">
+                      <div className="h-10 w-10 bg-gray-200 rounded-full animate-pulse" />
+                      <div className="flex-1 space-y-2">
+                        <div className="h-4 bg-gray-200 rounded w-32 animate-pulse" />
+                        <div className="h-3 bg-gray-200 rounded w-20 animate-pulse" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : favoriteProviders.length > 0 ? (
                 <div className="space-y-4">
                   {favoriteProviders.map((provider) => (
                     <div key={provider.id} className="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:shadow-md transition-shadow">

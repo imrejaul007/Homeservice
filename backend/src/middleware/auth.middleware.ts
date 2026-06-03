@@ -552,28 +552,61 @@ export const strictRateLimit = createRateLimit(
 );
 
 // IP-based security middleware
-export const checkSuspiciousActivity = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+export const checkSuspiciousActivity = asyncHandler(async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   const clientIP = req.ip || req.connection.remoteAddress || 'unknown';
   const userAgent = req.get('User-Agent') || 'unknown';
 
-  // Log suspicious patterns (implement your logic here)
-  const suspiciousPatterns = [
-    /bot/i,
-    /crawler/i,
-    /spider/i,
-    /scraper/i
+  // Issue #16: Add blocking mechanism for confirmed suspicious patterns
+  // Patterns that indicate automated/suspicious access attempts
+  const blockingPatterns: Array<{pattern: RegExp; severity: string}> = [
+    { pattern: /^(python-requests|axios|node-fetch|curl|wget|okhttp|java|go-http|libwww|apache-httpclient)/i, severity: 'HIGH' },
+    { pattern: /^(bot|crawler|spider|scraper|slurp|mediapartners|googlebot|bingbot|yandex|duckduckbot)/i, severity: 'HIGH' },
   ];
 
-  const isSuspicious = suspiciousPatterns.some(pattern => pattern.test(userAgent));
+  // Patterns that indicate suspicious but may be legitimate (flag for review)
+  const flagPatterns: RegExp[] = [
+    /^(python|java|go|curl|wget|ruby|perl|php)/i,
+    /proxy/i,
+    /tor-exit/i,
+  ];
 
-  if (isSuspicious) {
-    logger.warn('Suspicious activity detected', {
-      action: 'SUSPICIOUS_ACTIVITY',
+  // Check for blocking patterns first (immediate block)
+  const blockedPattern = blockingPatterns.find(({pattern}) => pattern.test(userAgent));
+  if (blockedPattern) {
+    logger.warn('Blocked suspicious request', {
+      action: 'SUSPICIOUS_ACTIVITY_BLOCKED',
+      severity: 'HIGH',
       ip: clientIP,
       userAgent: userAgent,
-      path: req.path
+      path: req.path,
+      method: req.method,
+      timestamp: new Date().toISOString(),
     });
-    // You could implement additional logging, blocking, or CAPTCHA here
+
+    // Return 403 Forbidden for confirmed suspicious patterns
+    res.status(403).json({
+      success: false,
+      message: 'Access denied',
+      code: 'SUSPICIOUS_ACTIVITY_BLOCKED',
+    });
+    return;
+  }
+
+  // Check for flag patterns (log and continue, but add to request for downstream use)
+  const isFlagged = flagPatterns.some(pattern => pattern.test(userAgent));
+  if (isFlagged) {
+    logger.warn('Suspicious activity detected', {
+      action: 'SUSPICIOUS_ACTIVITY_FLAGGED',
+      severity: 'MEDIUM',
+      ip: clientIP,
+      userAgent: userAgent,
+      path: req.path,
+      method: req.method,
+      timestamp: new Date().toISOString(),
+    });
+
+    // Add header to flag request for downstream processing
+    req.headers['x-suspicious-flag'] = 'true';
   }
 
   // Add security headers

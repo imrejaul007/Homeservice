@@ -1,5 +1,12 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useNavigate, Link } from 'react-router-dom';
+
+// Refs for step input elements to enable focus management
+const stepRefs: { [key: number]: React.RefObject<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null> } = {
+  1: React.createRef<HTMLInputElement>(),
+  2: React.createRef<HTMLInputElement>(),
+  3: React.createRef<HTMLInputElement>(),
+};
 import {
   Calendar,
   Clock,
@@ -8,7 +15,13 @@ import {
   ArrowLeft,
   ArrowRight,
   Check,
-  Home
+  Home,
+  User,
+  Mail,
+  Phone,
+  Briefcase,
+  LogIn,
+  UserPlus
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import NavigationHeader from '../layout/NavigationHeader';
@@ -31,7 +44,7 @@ interface PendingRequest {
 
 // In-memory store for deduplication (survives component re-renders)
 const pendingRequests: Map<string, PendingRequest> = new Map();
-const REQUEST_DEDUP_WINDOW_MS = 5000; // 5 second deduplication window
+const REQUEST_DEDUP_WINDOW_MS = 10000; // 10 second deduplication window
 
 /**
  * Check if a request is a duplicate and mark it as pending
@@ -61,9 +74,67 @@ const isDuplicateRequest = (requestKey: string): boolean => {
   return false;
 };
 
+const clearPendingRequest = (requestKey: string): void => {
+  pendingRequests.delete(requestKey);
+};
+
+const BOOKING_SESSION_STORAGE_KEY = 'booking_checkout_session_id';
+
+const getOrCreateBookingSessionId = (): string => {
+  const existing = sessionStorage.getItem(BOOKING_SESSION_STORAGE_KEY);
+  if (existing) return existing;
+  const id = crypto.randomUUID();
+  sessionStorage.setItem(BOOKING_SESSION_STORAGE_KEY, id);
+  return id;
+};
+
 /**
  * Generate a unique request key for deduplication
  */
+interface ConfirmedBookingSnapshot {
+  bookingNumber: string;
+  serviceName: string;
+  scheduledDate: string;
+  scheduledTime: string;
+  duration: number;
+  locationType: 'at_home' | 'hotel';
+  addressLine?: string;
+  guestName?: string;
+  guestEmail?: string;
+  guestPhone?: string;
+  pricing: {
+    basePrice?: number;
+    subtotal: number;
+    tax: number;
+    totalAmount: number;
+    currency: string;
+  };
+  status?: string;
+}
+
+const formatBookingDisplayDate = (dateInput: string): string => {
+  const dateStr = dateInput.includes('T') ? dateInput.split('T')[0] : dateInput;
+  const [year, month, day] = dateStr.split('-').map(Number);
+  if (!year || !month || !day) return dateInput;
+  const local = new Date(year, month - 1, day);
+  return local.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+};
+
+const formatBookingDisplayTime = (timeStr: string): string => {
+  if (!timeStr) return '';
+  const [hours, minutes] = timeStr.split(':').map(Number);
+  const period = hours >= 12 ? 'PM' : 'AM';
+  const displayHours = hours % 12 || 12;
+  return `${displayHours}:${String(minutes ?? 0).padStart(2, '0')} ${period}`;
+};
+
+const formatAddressLine = (address: FormData['address']): string | undefined => {
+  if (!address.street?.trim()) return undefined;
+  return [address.street, address.city, address.state, address.zipCode, address.country]
+    .filter(Boolean)
+    .join(', ');
+};
+
 const generateRequestKey = (
   serviceId: string,
   providerId: string,
@@ -175,19 +246,73 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
   const [bookingConfirmed, setBookingConfirmed] = useState(false);
   const [confirmedBookingId, setConfirmedBookingId] = useState<string | null>(null);
   const [confirmedBookingNumber, setConfirmedBookingNumber] = useState<string | null>(null);
+  const [confirmedSnapshot, setConfirmedSnapshot] = useState<ConfirmedBookingSnapshot | null>(null);
   const [guestSubmitting, setGuestSubmitting] = useState(false);
   const [claimedOffers, setClaimedOffers] = useState<ClaimedOffer[]>([]);
   const [selectedOffer, setSelectedOffer] = useState<ClaimedOffer | null>(null);
   const [loadingOffers, setLoadingOffers] = useState(false);
 
-  // Get duration options from service or create default
-  const durationOptions = service.durationOptions && service.durationOptions.length > 0
-    ? service.durationOptions
-    : [{ duration: service.duration, price: typeof service.price === 'number' ? service.price : service.price?.amount || 0, label: `${service.duration} min` }];
+  const parseDuration = (durationStr: string | number): number => {
+    if (typeof durationStr === 'number') return durationStr;
+    const match = String(durationStr).match(/(\d+)/);
+    return match ? parseInt(match[1], 10) : 60;
+  };
+
+  // Normalize subcategory variant(s): single object or array
+  const normalizedVariants = useMemo(() => {
+    const variantDetails = (service as any).variantDetails;
+    if (!variantDetails) return null;
+    return Array.isArray(variantDetails) ? variantDetails : [variantDetails];
+  }, [service]);
+
+  const selectedVariantMeta = useMemo(() => {
+    if (!normalizedVariants?.length) return null;
+    const idx = (service as any).selectedVariant ?? 0;
+    const v = normalizedVariants[idx] ?? normalizedVariants[0];
+    if (!v) return null;
+    const price = typeof v.price === 'number' ? v.price : (v.price as { amount?: number })?.amount;
+    return {
+      variantDuration: parseDuration(v.duration),
+      variantPrice: price,
+      selectedVariantIndex: idx,
+    };
+  }, [normalizedVariants, service]);
+
+  // Get duration options from service - prioritize variant details if passed
+  const durationOptions = useMemo(() => {
+    if (normalizedVariants && normalizedVariants.length > 0) {
+      return normalizedVariants.map((v: { duration: string | number; price?: number; name?: string }) => ({
+        duration: parseDuration(v.duration),
+        price: typeof v.price === 'number' ? v.price : 0,
+        label: v.name || `${v.duration} min`,
+      }));
+    }
+
+    // Otherwise use service's durationOptions if available
+    if (service.durationOptions && service.durationOptions.length > 0) {
+      return service.durationOptions;
+    }
+
+    // Fallback to default
+    return [{ duration: service.duration, price: typeof service.price === 'number' ? service.price : service.price?.amount || 0, label: `${service.duration} min` }];
+  }, [service, normalizedVariants]);
 
   const [formData, setFormData] = useState<FormData>(
-    createInitialFormData(durationOptions[0]?.duration || service.duration)
+    createInitialFormData(
+      selectedVariantMeta?.variantDuration ??
+        parseDuration(durationOptions[0]?.duration || service.duration)
+    )
   );
+
+  // Keep duration aligned when user arrives from subcategory variant selection
+  useEffect(() => {
+    if (!selectedVariantMeta?.variantDuration) return;
+    setFormData((prev) =>
+      prev.selectedDuration === selectedVariantMeta.variantDuration
+        ? prev
+        : { ...prev, selectedDuration: selectedVariantMeta.variantDuration }
+    );
+  }, [selectedVariantMeta?.variantDuration]);
 
   // New step order as per mockups
   const steps = [
@@ -197,11 +322,68 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
     { number: 4, title: 'Confirmation' }
   ];
 
-  // Get current price based on selected duration
+  const getDisplayServiceName = useCallback(() => {
+    const idx = (service as { selectedVariant?: number }).selectedVariant ?? 0;
+    const variant = normalizedVariants?.[idx] as { name?: string; label?: string } | undefined;
+    if (variant?.name || variant?.label) return variant.name || variant.label;
+    const variantDetails = (service as { variantDetails?: { name?: string } }).variantDetails;
+    if (variantDetails && !Array.isArray(variantDetails) && variantDetails.name) {
+      return variantDetails.name;
+    }
+    return service.name;
+  }, [service, normalizedVariants]);
+
+  const getEffectiveDuration = () =>
+    selectedVariantMeta?.variantDuration ?? formData.selectedDuration ?? service.duration;
+
+  // Get current price based on selected duration / variant
   const getCurrentPrice = () => {
-    const selectedOption = durationOptions.find(opt => opt.duration === formData.selectedDuration);
+    if (selectedVariantMeta?.variantPrice) return selectedVariantMeta.variantPrice;
+    const selectedOption = durationOptions.find(opt => opt.duration === getEffectiveDuration());
     return selectedOption?.price || (typeof service.price === 'number' ? service.price : service.price?.amount || 0);
   };
+
+  const buildConfirmedSnapshot = useCallback(
+    (bookingResponse: Record<string, unknown>, form: FormData): ConfirmedBookingSnapshot => {
+      const pricing = (bookingResponse.pricing || {}) as ConfirmedBookingSnapshot['pricing'];
+      const guestInfo = bookingResponse.guestInfo as
+        | { name?: string; email?: string; phone?: string }
+        | undefined;
+      const scheduledRaw = bookingResponse.scheduledDate ?? form.scheduledDate;
+      const dateStr =
+        typeof scheduledRaw === 'string'
+          ? scheduledRaw.split('T')[0]
+          : scheduledRaw instanceof Date
+            ? scheduledRaw.toISOString().split('T')[0]
+            : String(form.scheduledDate).split('T')[0];
+
+      return {
+        bookingNumber: String(bookingResponse.bookingNumber || ''),
+        serviceName: getDisplayServiceName(),
+        scheduledDate: dateStr,
+        scheduledTime: String(bookingResponse.scheduledTime || form.scheduledTime),
+        duration: Number(
+          bookingResponse.duration ??
+            selectedVariantMeta?.variantDuration ??
+            form.selectedDuration
+        ),
+        locationType: form.locationType,
+        addressLine: formatAddressLine(form.address),
+        guestName: guestInfo?.name || form.guestName,
+        guestEmail: guestInfo?.email || form.guestEmail,
+        guestPhone: guestInfo?.phone || form.guestPhone,
+        pricing: {
+          basePrice: pricing.basePrice,
+          subtotal: pricing.subtotal ?? pricing.totalAmount ?? 0,
+          tax: pricing.tax ?? 0,
+          totalAmount: pricing.totalAmount ?? pricing.subtotal ?? 0,
+          currency: pricing.currency || 'AED',
+        },
+        status: bookingResponse.status as string | undefined,
+      };
+    },
+    [getDisplayServiceName, selectedVariantMeta]
+  );
 
   // Load available slots when date changes
   useEffect(() => {
@@ -291,9 +473,47 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
       }
     }
 
+    // Validation for Step 2: Address validation for at_home location type
+    if (currentStep === 2) {
+      if (formData.locationType === 'at_home') {
+        if (!formData.address.street?.trim()) {
+          toast.error('Please enter your street address for home service');
+          return;
+        }
+        if (!formData.address.city?.trim()) {
+          toast.error('Please enter your city for home service');
+          return;
+        }
+      }
+    }
+
     if (currentStep < 4) {
-      setCurrentStep(currentStep + 1);
+      const nextStep = currentStep + 1;
+      setCurrentStep(nextStep);
       window.scrollTo({ top: 0, behavior: 'smooth' });
+
+      // ACCESSIBILITY FIX: Move focus to first field of new step after render
+      setTimeout(() => {
+        const firstFieldId = `step-${nextStep}-field`;
+        const firstField = document.getElementById(firstFieldId);
+        if (firstField) {
+          // If it's a custom component, focus the first interactive element inside
+          const focusable = firstField.querySelector<HTMLElement>(
+            'input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled]), [tabindex]:not([tabindex="-1"])'
+          );
+          if (focusable) {
+            focusable.focus();
+          }
+        } else {
+          // Fallback: focus first input on page
+          const firstInput = document.querySelector<HTMLInputElement>(
+            '.form-container input:not([disabled]), .form-container select:not([disabled]), .form-container textarea:not([disabled])'
+          );
+          if (firstInput) {
+            firstInput.focus();
+          }
+        }
+      }, 100);
     }
   };
 
@@ -306,6 +526,8 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
 
   // FIX: Track if we're currently submitting to prevent double-submission
   const submitInProgressRef = useRef(false);
+  // FIX: Use ref for guestSubmitting to avoid dependency array issues
+  const guestSubmittingRef = useRef(false);
 
   const handleSubmit = useCallback(async () => {
     // FIX: Prevent duplicate submissions using in-memory deduplication
@@ -318,6 +540,11 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
       formData.guestEmail
     );
 
+    if (isSubmitting || guestSubmitting || submitInProgressRef.current) {
+      toast.error('Please wait — your booking is still processing.');
+      return;
+    }
+
     if (isDuplicateRequest(requestKey)) {
       toast.error('Your booking request is being processed. Please wait.');
       return;
@@ -325,24 +552,52 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
 
     // FIX: Also prevent if submission is already in progress (ref-based as backup)
     if (submitInProgressRef.current) {
+      toast.error('Please wait — your booking is still processing.');
       return;
     }
     submitInProgressRef.current = true;
 
+    const finishSubmit = () => {
+      setGuestSubmitting(false);
+      guestSubmittingRef.current = false;
+      submitInProgressRef.current = false;
+    };
+
+    const handleBookingConflict = async (message: string) => {
+      toast.error(message);
+      clearPendingRequest(requestKey);
+      finishSubmit();
+      if (providerId && formData.scheduledDate) {
+        setIsFetchingSlots(true);
+        try {
+          await getAvailableSlots(providerId, {
+            date: formData.scheduledDate,
+            duration: formData.selectedDuration || service.duration,
+            serviceId: service._id,
+          });
+        } finally {
+          setIsFetchingSlots(false);
+        }
+      }
+    };
+
     // Guest mode validation
     if (guestMode) {
       if (!formData.guestName.trim()) {
-        submitInProgressRef.current = false;
+        clearPendingRequest(requestKey);
+        finishSubmit();
         toast.error('Please enter your name');
         return;
       }
       if (!formData.guestEmail.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.guestEmail)) {
-        submitInProgressRef.current = false;
+        clearPendingRequest(requestKey);
+        finishSubmit();
         toast.error('Please enter a valid email address');
         return;
       }
       if (!formData.guestPhone.trim()) {
-        submitInProgressRef.current = false;
+        clearPendingRequest(requestKey);
+        finishSubmit();
         toast.error('Please enter your phone number');
         return;
       }
@@ -351,12 +606,14 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
     // Location validation for at_home bookings - require address
     if (formData.locationType === 'at_home') {
       if (!formData.address.street.trim()) {
-        submitInProgressRef.current = false;
+        clearPendingRequest(requestKey);
+        finishSubmit();
         toast.error('Please enter your street address for at-home service');
         return;
       }
       if (!formData.address.city.trim()) {
-        submitInProgressRef.current = false;
+        clearPendingRequest(requestKey);
+        finishSubmit();
         toast.error('Please enter your city for at-home service');
         return;
       }
@@ -372,62 +629,127 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
     if (guestMode) {
       // Guest booking - call guest API directly
       setGuestSubmitting(true);
+      guestSubmittingRef.current = true;
+      submitInProgressRef.current = true;
+
       try {
+        // FIX: Generate a FRESH idempotency key for each booking attempt
+        const timestamp = Date.now().toString(36) + Math.random().toString(36).substring(2, 6);
+        const randomPart = crypto.randomUUID().replace(/-/g, '').substring(0, 12);
+        const guestIdempotencyKey = `${timestamp}-${randomPart}`;
+
+        // Ensure scheduledTime is in HH:MM format (24-hour)
+        const timeParts = formData.scheduledTime.split(':');
+        const formattedTime = `${timeParts[0].padStart(2, '0')}:${timeParts[1]?.padStart(2, '0') || '00'}`;
+
+        // Get providerId from service
+        const serviceProviderId = (service as any).providerId
+          || (service as any).provider?._id
+          || (service as any).provider?.id
+          || providerId;
+
+        console.log('[GuestBooking] Service data:', {
+          _id: service._id,
+          providerId: serviceProviderId
+        });
+
+        if (!serviceProviderId) {
+          toast.error('Unable to determine provider. Please try again.');
+          clearPendingRequest(requestKey);
+          finishSubmit();
+          return;
+        }
+
+        const guestSessionId = getOrCreateBookingSessionId();
+
         const guestBookingData = {
           serviceId: service._id,
-          providerId,
+          providerId: serviceProviderId,
           scheduledDate: formatDateString(formData.scheduledDate),
-          scheduledTime: formData.scheduledTime,
+          scheduledTime: formattedTime,
           guestInfo: {
             name: formData.guestName,
             email: formData.guestEmail,
             phone: formData.guestPhone
           },
           location: {
-            type: formData.locationType === 'at_home' ? 'customer_address' : 'provider_location',
-            address: formData.address.street ? {
-              street: formData.address.street,
-              city: formData.address.city,
-              state: formData.address.state,
-              zipCode: formData.address.zipCode,
-              country: formData.address.country || 'AE'
-            } : undefined,
-            notes: formData.customerInfo.accessInstructions || formData.specialRequests || undefined
+            type: formData.locationType === 'at_home' ? 'customer_address' : 'hotel',
+            address: formData.address.street?.trim()
+              ? {
+                  street: formData.address.street,
+                  city: formData.address.city,
+                  state: formData.address.state,
+                  zipCode: formData.address.zipCode,
+                  country: formData.address.country || 'AE'
+                }
+              : undefined,
+            notes: formData.specialRequests || undefined
           },
-          notes: formData.specialRequests || undefined,
-          locationType: formData.locationType,
-          selectedDuration: formData.selectedDuration,
-          professionalPreference: formData.professionalPreference,
-          experiencePreference: formData.experiencePreference,
-          paymentMethod: formData.paymentMethod,
-          couponCode: selectedOffer ? (getClaimOffer(selectedOffer)?.code ?? selectedOffer.couponCode) : undefined
+          locationType: formData.locationType === 'at_home' ? 'at_home' : 'hotel',
+          selectedDuration: selectedVariantMeta?.variantDuration ?? formData.selectedDuration,
+          metadata: {
+            bookingSource: 'search',
+            deviceType: 'desktop',
+            sessionId: guestSessionId,
+            idempotencyKey: guestIdempotencyKey,
+            ...(selectedVariantMeta && {
+              variantDuration: selectedVariantMeta.variantDuration,
+              variantPrice: selectedVariantMeta.variantPrice,
+              selectedVariantIndex: selectedVariantMeta.selectedVariantIndex,
+            }),
+          }
         };
+
+        console.log('[GuestBooking] Sending request...');
+
+        // Add timeout to prevent infinite hangs
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 30000);
 
         const response = await fetch(`${API_BASE_URL}/bookings/guest`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(guestBookingData)
+          body: JSON.stringify(guestBookingData),
+          signal: controller.signal
         });
 
-        const result = await response.json();
+        clearTimeout(timeoutId);
 
-        if (response.ok && result.data) {
-          // Guest booking response: bookingNumber, status, scheduledDate, etc. (no _id for guest)
-          const bookingData = result.data.booking || result.data;
-          setBookingConfirmed(true);
-          setConfirmedBookingId(null); // Guest bookings don't have _id linked to user
-          setConfirmedBookingNumber(bookingData.bookingNumber || null);
-          setCurrentStep(4);
-          // Clear form data after successful booking
-          setFormData(createInitialFormData(durationOptions[0]?.duration || service.duration));
-        } else {
-          toast.error(result.message || 'Failed to create booking. Please try again.');
+        const result = await response.json();
+        console.log('[GuestBooking] Response:', result);
+
+        if (response.status === 409) {
+          await handleBookingConflict(
+            result.message || 'This time slot is being booked. Please select a different time.'
+          );
+          return;
         }
-      } catch {
-        toast.error('Failed to create booking. Please try again.');
+
+        if (response.ok && result.success) {
+          const bookingData = result.data?.booking || result.data;
+          clearPendingRequest(requestKey);
+          sessionStorage.removeItem(`booking_idempotency_${service._id}`);
+          setConfirmedSnapshot(buildConfirmedSnapshot(bookingData, formData));
+          setBookingConfirmed(true);
+          setConfirmedBookingId(null);
+          setConfirmedBookingNumber(bookingData?.bookingNumber || null);
+          setCurrentStep(4);
+        } else {
+          const errorMsg = result.message || result.errors?.[0]?.message || 'Failed to create booking.';
+          toast.error(errorMsg);
+          clearPendingRequest(requestKey);
+        }
+      } catch (err: any) {
+        clearPendingRequest(requestKey);
+        if (err.name === 'AbortError') {
+          console.error('[GuestBooking] Request timed out');
+          toast.error('Request timed out. Please try again.');
+        } else {
+          console.error('[GuestBooking] Error:', err);
+          toast.error('Failed to create booking. Please try again.');
+        }
       } finally {
-        setGuestSubmitting(false);
-        submitInProgressRef.current = false;
+        finishSubmit();
       }
     } else {
       // Authenticated booking - use store
@@ -455,13 +777,21 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
         addOns: formData.addOns,
         notes: formData.specialRequests || undefined,
         locationType: formData.locationType,
-        selectedDuration: formData.selectedDuration,
+        selectedDuration: selectedVariantMeta?.variantDuration ?? formData.selectedDuration,
         professionalPreference: formData.professionalPreference,
         experiencePreference: formData.experiencePreference,
         paymentMethod: formData.paymentMethod,
         couponCode: selectedOffer ? (getClaimOffer(selectedOffer)?.code ?? selectedOffer.couponCode) : undefined,
         metadata: {
-          idempotencyKey: idempotencyKey
+          idempotencyKey: idempotencyKey,
+          sessionId: getOrCreateBookingSessionId(),
+          bookingSource: 'search',
+          deviceType: 'desktop',
+          ...(selectedVariantMeta && {
+            variantDuration: selectedVariantMeta.variantDuration,
+            variantPrice: selectedVariantMeta.variantPrice,
+            selectedVariantIndex: selectedVariantMeta.selectedVariantIndex,
+          }),
         }
       } as CreateBookingData;
 
@@ -469,22 +799,49 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
         const booking = await createBooking(bookingData);
 
         if (booking && booking._id) {
+          clearPendingRequest(requestKey);
+          sessionStorage.removeItem(`booking_idempotency_${service._id}`);
+          setConfirmedSnapshot(
+            buildConfirmedSnapshot(
+              {
+                bookingNumber: booking.bookingNumber,
+                scheduledDate: booking.scheduledDate,
+                scheduledTime: booking.scheduledTime,
+                duration: booking.duration,
+                pricing: booking.pricing,
+                status: booking.status,
+              },
+              formData
+            )
+          );
           setBookingConfirmed(true);
           setConfirmedBookingId(booking._id);
           setConfirmedBookingNumber(booking.bookingNumber || null);
           setCurrentStep(4);
-          // Clear form data after successful booking
-          setFormData(createInitialFormData(durationOptions[0]?.duration || service.duration));
+        } else {
+          clearPendingRequest(requestKey);
+          toast.error('Failed to create booking. Please try again.');
         }
       } catch (error) {
-        const err = error as { response?: { data?: { message?: string } }; message?: string };
-        const errorMessage = err?.response?.data?.message || err?.message || 'Failed to create booking. Please try again.';
-        toast.error(errorMessage);
+        const err = error as { message?: string };
+        const errorMessage = err?.message || 'Failed to create booking. Please try again.';
+        const isSlotConflict =
+          /time slot|slot is|being booked|already booked/i.test(errorMessage);
+
+        clearPendingRequest(requestKey);
+
+        if (isSlotConflict) {
+          await handleBookingConflict(errorMessage);
+        } else {
+          toast.error(errorMessage);
+          finishSubmit();
+        }
+        return;
       } finally {
-        submitInProgressRef.current = false;
+        finishSubmit();
       }
     }
-  }, [service, providerId, formData, guestMode, user, createBooking, idempotencyKey, selectedOffer, durationOptions, guestSubmitting]);
+  }, [service, providerId, formData, guestMode, user, createBooking, idempotencyKey, selectedOffer, durationOptions, selectedVariantMeta, getAvailableSlots, isSubmitting, guestSubmitting]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -505,12 +862,23 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
 
       <div className="flex-1">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-6 md:py-8">
-          {/* Header */}
+          {/* Back Button & Header */}
           {!bookingConfirmed && (
-            <div className="text-center mb-8">
-              <h1 className="text-2xl md:text-3xl font-bold text-nilin-charcoal mb-1 font-serif">Book Your Service</h1>
-              <p className="text-sm text-nilin-warmGray">Complete your booking in a few simple steps</p>
-            </div>
+            <>
+              <button
+                onClick={onCancel || (() => navigate(-1))}
+                className="flex items-center gap-2 text-nilin-warmGray hover:text-nilin-coral transition-colors mb-6 group"
+              >
+                <svg className="w-5 h-5 group-hover:-translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                </svg>
+                <span className="text-sm font-medium">Back</span>
+              </button>
+              <div className="text-center mb-8">
+                <h1 className="text-2xl md:text-3xl font-bold text-nilin-charcoal mb-1 font-serif">Book Your Service</h1>
+                <p className="text-sm text-nilin-warmGray">Complete your booking in a few simple steps</p>
+              </div>
+            </>
           )}
 
           {/* Progress Indicator */}
@@ -555,7 +923,7 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
           <div className="card-nilin rounded-2xl p-6 md:p-8 transition-all duration-300 hover:shadow-nilin-warm">
             {/* Step 1: Date & Time */}
             {currentStep === 1 && !bookingConfirmed && (
-              <div>
+              <div id="step-1-field" className="form-container">
                 <h2 className="text-2xl font-bold text-nilin-charcoal mb-2 font-serif">
                   When would you like your {service.name}?
                 </h2>
@@ -592,7 +960,7 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
 
             {/* Step 2: Service Details */}
             {currentStep === 2 && !bookingConfirmed && (
-              <div>
+              <div id="step-2-field" className="form-container">
                 <h2 className="text-2xl font-bold text-nilin-charcoal mb-2 font-serif">Service Details</h2>
                 <p className="text-nilin-warmGray mb-6">Help us prepare the right professional for you</p>
 
@@ -777,7 +1145,7 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
 
             {/* Step 3: Payment */}
             {currentStep === 3 && !bookingConfirmed && (
-              <div>
+              <div id="step-3-field" className="form-container">
                 <h2 className="text-2xl font-bold text-nilin-charcoal mb-2 font-serif">Payment Authorization</h2>
                 <p className="text-nilin-warmGray mb-6">Select your preferred payment method</p>
 
@@ -935,13 +1303,17 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
                 <h2 className="text-2xl font-bold text-nilin-charcoal mb-2 font-serif">
                   Your Booking is Confirmed!
                 </h2>
-                <p className="text-nilin-warmGray mb-2">
-                  {guestMode
-                    ? `We've sent a confirmation to ${formData.guestEmail}`
+                <p className="text-nilin-warmGray mb-6">
+                  {confirmedSnapshot?.guestEmail
+                    ? (
+                      <>
+                        We&apos;ve sent a confirmation to{' '}
+                        <span className="font-medium text-nilin-charcoal">{confirmedSnapshot.guestEmail}</span>
+                      </>
+                    )
                     : "We've sent a confirmation to your email and phone."}
                 </p>
 
-                {/* Show booking number for all users */}
                 {confirmedBookingNumber && (
                   <div className="card-nilin p-6 rounded-xl mb-6 inline-block bg-gradient-to-br from-nilin-blush/30 to-nilin-peach/20 transition-all duration-300 hover:shadow-nilin-warm">
                     <p className="text-sm text-nilin-warmGray mb-1">Your Booking Number</p>
@@ -950,31 +1322,151 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
                   </div>
                 )}
 
-                {/* Booking Details */}
-                <div className="card-nilin rounded-xl p-6 mb-8 text-left max-w-md mx-auto transition-all duration-300 hover:shadow-nilin-warm">
-                  <h3 className="font-semibold text-nilin-charcoal mb-4">Booking Details</h3>
-                  <div className="space-y-3">
-                    <div className="flex items-center gap-3 text-nilin-charcoal">
-                      <Calendar className="w-5 h-5 text-nilin-rose" />
-                      <span>{new Date(formData.scheduledDate).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</span>
+                {confirmedSnapshot && (
+                  <div className="card-nilin rounded-xl p-6 mb-6 text-left max-w-lg mx-auto space-y-5 transition-all duration-300 hover:shadow-nilin-warm">
+                    <div className="flex items-start gap-3 pb-4 border-b border-nilin-border/30">
+                      <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-nilin-blush/40 to-nilin-peach/30 flex items-center justify-center shrink-0">
+                        <Briefcase className="w-5 h-5 text-nilin-rose" />
+                      </div>
+                      <div>
+                        <h3 className="font-semibold text-nilin-charcoal text-lg">{confirmedSnapshot.serviceName}</h3>
+                        <p className="text-sm text-nilin-warmGray mt-0.5">
+                          {confirmedSnapshot.duration} min ·{' '}
+                          {confirmedSnapshot.status === 'confirmed' ? 'Confirmed' : 'Pending provider approval'}
+                        </p>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-3 text-nilin-charcoal">
-                      <Clock className="w-5 h-5 text-nilin-rose" />
-                      <span>{formData.scheduledTime}</span>
-                    </div>
-                    <div className="flex items-center gap-3 text-nilin-charcoal">
-                      <MapPin className="w-5 h-5 text-nilin-rose" />
-                      <span>{formData.locationType === 'at_home' ? 'At Home' : 'Hotel'}</span>
-                    </div>
-                  </div>
 
-                  <div className="border-t border-nilin-border/30 mt-4 pt-4">
-                    <div className="flex justify-between items-center">
-                      <span className="font-medium text-nilin-charcoal">{service.name}</span>
-                      <span className="font-bold text-nilin-coral">AED {getCurrentPrice().toLocaleString('en-AE')}</span>
+                    <div>
+                      <h4 className="text-xs font-semibold uppercase tracking-wide text-nilin-warmGray mb-3">
+                        Appointment
+                      </h4>
+                      <div className="space-y-2.5">
+                        <div className="flex items-center gap-3 text-nilin-charcoal">
+                          <Calendar className="w-4 h-4 text-nilin-rose shrink-0" />
+                          <span>{formatBookingDisplayDate(confirmedSnapshot.scheduledDate)}</span>
+                        </div>
+                        <div className="flex items-center gap-3 text-nilin-charcoal">
+                          <Clock className="w-4 h-4 text-nilin-rose shrink-0" />
+                          <span>{formatBookingDisplayTime(confirmedSnapshot.scheduledTime)}</span>
+                        </div>
+                        <div className="flex items-start gap-3 text-nilin-charcoal">
+                          <MapPin className="w-4 h-4 text-nilin-rose shrink-0 mt-0.5" />
+                          <span>
+                            {confirmedSnapshot.locationType === 'at_home' ? 'At your home' : 'At hotel'}
+                            {confirmedSnapshot.addressLine && (
+                              <span className="block text-sm text-nilin-warmGray mt-0.5">
+                                {confirmedSnapshot.addressLine}
+                              </span>
+                            )}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {guestMode && (confirmedSnapshot.guestName || confirmedSnapshot.guestPhone) && (
+                      <div>
+                        <h4 className="text-xs font-semibold uppercase tracking-wide text-nilin-warmGray mb-3">
+                          Guest contact
+                        </h4>
+                        <div className="space-y-2.5">
+                          {confirmedSnapshot.guestName && (
+                            <div className="flex items-center gap-3 text-nilin-charcoal">
+                              <User className="w-4 h-4 text-nilin-rose shrink-0" />
+                              <span>{confirmedSnapshot.guestName}</span>
+                            </div>
+                          )}
+                          {confirmedSnapshot.guestEmail && (
+                            <div className="flex items-center gap-3 text-nilin-charcoal">
+                              <Mail className="w-4 h-4 text-nilin-rose shrink-0" />
+                              <span className="break-all">{confirmedSnapshot.guestEmail}</span>
+                            </div>
+                          )}
+                          {confirmedSnapshot.guestPhone && (
+                            <div className="flex items-center gap-3 text-nilin-charcoal">
+                              <Phone className="w-4 h-4 text-nilin-rose shrink-0" />
+                              <span>{confirmedSnapshot.guestPhone}</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="border-t border-nilin-border/30 pt-4">
+                      <h4 className="text-xs font-semibold uppercase tracking-wide text-nilin-warmGray mb-3">
+                        Price summary
+                      </h4>
+                      <div className="space-y-2 text-sm">
+                        <div className="flex justify-between text-nilin-charcoal">
+                          <span>Service</span>
+                          <span>
+                            {confirmedSnapshot.pricing.currency}{' '}
+                            {(confirmedSnapshot.pricing.basePrice ?? confirmedSnapshot.pricing.subtotal).toLocaleString('en-AE')}
+                          </span>
+                        </div>
+                        {confirmedSnapshot.pricing.tax > 0 && (
+                          <div className="flex justify-between text-nilin-warmGray">
+                            <span>Tax</span>
+                            <span>
+                              {confirmedSnapshot.pricing.currency}{' '}
+                              {confirmedSnapshot.pricing.tax.toLocaleString('en-AE')}
+                            </span>
+                          </div>
+                        )}
+                        <div className="flex justify-between items-center pt-2 border-t border-nilin-border/20 font-semibold text-nilin-charcoal">
+                          <span>Total</span>
+                          <span className="text-lg text-nilin-coral">
+                            {confirmedSnapshot.pricing.currency}{' '}
+                            {confirmedSnapshot.pricing.totalAmount.toLocaleString('en-AE')}
+                          </span>
+                        </div>
+                      </div>
                     </div>
                   </div>
-                </div>
+                )}
+
+                {guestMode && confirmedSnapshot?.guestEmail && (
+                  <div className="card-nilin rounded-xl p-5 mb-6 max-w-lg mx-auto text-left border border-nilin-coral/20 bg-gradient-to-br from-nilin-blush/20 to-white">
+                    <h4 className="font-semibold text-nilin-charcoal mb-1">Save this booking to your account</h4>
+                    <p className="text-sm text-nilin-warmGray mb-4">
+                      Sign in or create an account with{' '}
+                      <span className="font-medium text-nilin-charcoal break-all">
+                        {confirmedSnapshot.guestEmail}
+                      </span>{' '}
+                      and this booking will appear in My Bookings.
+                    </p>
+                    <div className="flex flex-col sm:flex-row gap-3">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          navigate('/login', {
+                            state: {
+                              email: confirmedSnapshot.guestEmail,
+                              returnTo: '/customer/bookings',
+                              message:
+                                'Sign in with the same email you used for this booking to see it in My Bookings.',
+                            },
+                          })
+                        }
+                        className="btn-nilin flex-1 flex items-center justify-center gap-2 px-5 py-3 rounded-full font-semibold"
+                      >
+                        <LogIn className="w-4 h-4" />
+                        Sign In
+                      </button>
+                      <Link
+                        to="/register/customer"
+                        state={{
+                          email: confirmedSnapshot.guestEmail,
+                          returnTo: '/customer/bookings',
+                        }}
+                        className="card-nilin flex-1 flex items-center justify-center gap-2 px-5 py-3 rounded-full font-semibold hover:bg-nilin-blush/30 transition-colors"
+                      >
+                        <UserPlus className="w-4 h-4" />
+                        Create Account
+                      </Link>
+                    </div>
+                  </div>
+                )}
 
                 {/* Action Buttons */}
                 <div className="flex flex-col sm:flex-row gap-3 justify-center">

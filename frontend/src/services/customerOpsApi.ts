@@ -1,4 +1,5 @@
 import { api } from './api';
+import { handleApiError, ServiceError } from './errors';
 
 // ============================================
 // Type Definitions
@@ -241,16 +242,6 @@ export interface ActionResult {
 }
 
 // ============================================
-// API Response Types
-// ============================================
-
-interface ApiResponse<T> {
-  success: boolean;
-  data?: T;
-  message?: string;
-}
-
-// ============================================
 // CustomerOpsApiService Class
 // ============================================
 
@@ -284,56 +275,48 @@ class CustomerOpsApiService {
     if (filters.dateFrom) queryParams.append('dateFrom', filters.dateFrom);
     if (filters.dateTo) queryParams.append('dateTo', filters.dateTo);
 
-    const response = await api.get(`/admin/customers?${queryParams.toString()}`);
-    const result = response.data as ApiResponse<CustomerListResponse>;
-
-    if (!result.success) {
-      throw new Error(result.message || 'Failed to fetch customer list');
+    try {
+      const response = await api.get(`/admin/customers?${queryParams.toString()}`);
+      return response.data.data;
+    } catch (error) {
+      throw handleApiError(error, 'fetch customer list');
     }
-
-    return result.data!;
   }
 
   /**
    * Get detailed information about a customer
    */
   async getCustomerDetail(customerId: string): Promise<CustomerDetailResponse> {
-    const response = await api.get(`/admin/customers/${customerId}`);
-    const result = response.data as ApiResponse<CustomerDetailResponse>;
-
-    if (!result.success) {
-      throw new Error(result.message || 'Failed to fetch customer details');
+    try {
+      const response = await api.get(`/admin/customers/${customerId}`);
+      return response.data.data;
+    } catch (error) {
+      throw handleApiError(error, 'fetch customer details');
     }
-
-    return result.data!;
   }
 
   /**
    * Get trust score breakdown for a customer
    */
   async getTrustScoreBreakdown(customerId: string): Promise<TrustScoreBreakdown> {
-    const response = await api.get(`/admin/customers/${customerId}/trust-score`);
-    const result = response.data as ApiResponse<TrustScoreBreakdown>;
-
-    if (!result.success) {
-      throw new Error(result.message || 'Failed to fetch trust score breakdown');
+    try {
+      const response = await api.get(`/admin/customers/${customerId}/trust-score`);
+      return response.data.data;
+    } catch (error) {
+      throw handleApiError(error, 'fetch trust score breakdown');
     }
-
-    return result.data!;
   }
 
   /**
    * Refresh trust score for a customer
    */
   async refreshTrustScore(customerId: string): Promise<TrustScoreBreakdown> {
-    const response = await api.post(`/admin/customers/${customerId}/refresh-trust-score`);
-    const result = response.data as ApiResponse<TrustScoreBreakdown>;
-
-    if (!result.success) {
-      throw new Error(result.message || 'Failed to refresh trust score');
+    try {
+      const response = await api.post(`/admin/customers/${customerId}/refresh-trust-score`);
+      return response.data.data;
+    } catch (error) {
+      throw handleApiError(error, 'refresh trust score');
     }
-
-    return result.data!;
   }
 
   /**
@@ -344,11 +327,15 @@ class CustomerOpsApiService {
     flagType: AbuseFlagType,
     reason: string
   ): Promise<ActionResult> {
-    const response = await api.post(`/admin/customers/${customerId}/flags`, {
-      type: flagType,
-      reason,
-    });
-    return response.data as ActionResult;
+    try {
+      const response = await api.post(`/admin/customers/${customerId}/flags`, {
+        type: flagType,
+        reason,
+      });
+      return response.data;
+    } catch (error) {
+      throw handleApiError(error, 'add abuse flag');
+    }
   }
 
   /**
@@ -359,26 +346,38 @@ class CustomerOpsApiService {
     flagIndex: number,
     resolutionNotes: string
   ): Promise<ActionResult> {
-    const response = await api.patch(`/admin/customers/${customerId}/flags/${flagIndex}/resolve`, {
-      resolutionNotes,
-    });
-    return response.data as ActionResult;
+    try {
+      const response = await api.patch(`/admin/customers/${customerId}/flags/${flagIndex}/resolve`, {
+        resolutionNotes,
+      });
+      return response.data;
+    } catch (error) {
+      throw handleApiError(error, 'resolve abuse flag');
+    }
   }
 
   /**
    * Block a customer
    */
   async blockCustomer(customerId: string, reason: string): Promise<ActionResult> {
-    const response = await api.post(`/admin/customers/${customerId}/block`, { reason });
-    return response.data as ActionResult;
+    try {
+      const response = await api.post(`/admin/customers/${customerId}/block`, { reason });
+      return response.data;
+    } catch (error) {
+      throw handleApiError(error, 'block customer');
+    }
   }
 
   /**
    * Unblock a customer
    */
   async unblockCustomer(customerId: string): Promise<ActionResult> {
-    const response = await api.post(`/admin/customers/${customerId}/unblock`);
-    return response.data as ActionResult;
+    try {
+      const response = await api.post(`/admin/customers/${customerId}/unblock`);
+      return response.data;
+    } catch (error) {
+      throw handleApiError(error, 'unblock customer');
+    }
   }
 
   /**
@@ -389,11 +388,15 @@ class CustomerOpsApiService {
     newTier: CustomerTier,
     reason: string
   ): Promise<ActionResult> {
-    const response = await api.patch(`/admin/customers/${customerId}/tier`, {
-      tier: newTier,
-      reason,
-    });
-    return response.data as ActionResult;
+    try {
+      const response = await api.patch(`/admin/customers/${customerId}/tier`, {
+        tier: newTier,
+        reason,
+      });
+      return response.data;
+    } catch (error) {
+      throw handleApiError(error, 'adjust customer tier');
+    }
   }
 
   /**
@@ -403,42 +406,37 @@ class CustomerOpsApiService {
     scanResult: AbuseScanResult;
     metrics: CustomerMetrics;
   }> {
-    const response = await api.post(`/admin/customers/${customerId}/abuse-scan`);
-    const result = response.data as ApiResponse<{
-      scanResult: AbuseScanResult;
-      metrics: CustomerMetrics;
-    }>;
-
-    if (!result.success) {
-      throw new Error(result.message || 'Failed to run abuse scan');
+    try {
+      const response = await api.post(`/admin/customers/${customerId}/abuse-scan`);
+      return response.data.data;
+    } catch (error) {
+      throw handleApiError(error, 'run abuse scan');
     }
-
-    return result.data!;
   }
 
   /**
    * Get dashboard statistics
    */
   async getDashboardStats(): Promise<DashboardStats> {
-    const response = await api.get('/admin/customers/stats');
-    const result = response.data as ApiResponse<DashboardStats>;
-
-    if (!result.success) {
-      throw new Error(result.message || 'Failed to fetch dashboard stats');
+    try {
+      const response = await api.get('/admin/customers/stats');
+      return response.data.data;
+    } catch (error) {
+      throw handleApiError(error, 'fetch dashboard stats');
     }
-
-    return result.data!;
   }
 
   /**
    * Sync metrics for a customer from booking data
    */
   async syncMetrics(customerId: string): Promise<void> {
-    const response = await api.post(`/admin/customers/${customerId}/sync-metrics`);
-    const result = response.data as ApiResponse<void>;
-
-    if (!result.success) {
-      throw new Error(result.message || 'Failed to sync metrics');
+    try {
+      const response = await api.post(`/admin/customers/${customerId}/sync-metrics`);
+      if (!response.data.success) {
+        throw new ServiceError(response.data.message || 'Failed to sync metrics');
+      }
+    } catch (error) {
+      throw handleApiError(error, 'sync customer metrics');
     }
   }
 

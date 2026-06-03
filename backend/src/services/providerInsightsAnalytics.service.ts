@@ -4,8 +4,18 @@ import Service from '../models/service.model';
 import ProviderProfile from '../models/providerProfile.model';
 import Review from '../models/review.model';
 import type { ProviderAnalyticsData } from './analytics.service';
+import {
+  DEFAULT_COMMISSION_CONFIG,
+  DEFAULT_PLATFORM_FEE_CONFIG,
+} from './settlement.service';
 
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
+
+// Commission and platform fee rates for net earnings calculation
+const COMMISSION_RATE = DEFAULT_COMMISSION_CONFIG.defaultRate;
+const PLATFORM_FEE_RATE = DEFAULT_PLATFORM_FEE_CONFIG.type === 'percentage'
+  ? DEFAULT_PLATFORM_FEE_CONFIG.value
+  : 0;
 
 function calcTrend(current: number, previous: number): number {
   if (previous === 0) {
@@ -95,6 +105,10 @@ export async function getProviderInsightsAnalytics(
     createdAt: { $gte: previousStartDate, $lt: startDate },
   };
 
+  // FIX #1 & #2: Calculate earnings with commission and platform fee deductions
+  // netEarnings = gross - commission - platformFee
+  const totalDeductionRate = COMMISSION_RATE + PLATFORM_FEE_RATE;
+
   const [
     statusBreakdown,
     bookingRequestsCurrent,
@@ -112,6 +126,7 @@ export async function getProviderInsightsAnalytics(
     ]),
     Booking.countDocuments(bookingMatchCurrent),
     Booking.countDocuments(bookingMatchPrevious),
+    // FIX #1: Calculate NET earnings (gross minus commission minus platform fee)
     Booking.aggregate([
       {
         $match: {
@@ -122,7 +137,7 @@ export async function getProviderInsightsAnalytics(
       {
         $group: {
           _id: null,
-          total: { $sum: '$pricing.totalAmount' },
+          grossTotal: { $sum: '$pricing.totalAmount' },
         },
       },
     ]),
@@ -136,10 +151,11 @@ export async function getProviderInsightsAnalytics(
       {
         $group: {
           _id: null,
-          total: { $sum: '$pricing.totalAmount' },
+          grossTotal: { $sum: '$pricing.totalAmount' },
         },
       },
     ]),
+    // FIX #2: Calculate NET earnings for top services
     Booking.aggregate([
       {
         $match: {
@@ -162,10 +178,10 @@ export async function getProviderInsightsAnalytics(
           _id: '$serviceId',
           name: { $first: '$service.name' },
           bookings: { $sum: 1 },
-          revenue: { $sum: '$pricing.totalAmount' },
+          grossRevenue: { $sum: '$pricing.totalAmount' },
         },
       },
-      { $sort: { revenue: -1 } },
+      { $sort: { grossRevenue: -1 } },
       { $limit: 5 },
     ]),
     Booking.aggregate([
@@ -180,7 +196,7 @@ export async function getProviderInsightsAnalytics(
         $group: {
           _id: { $dayOfWeek: '$createdAt' },
           bookings: { $sum: 1 },
-          revenue: { $sum: '$pricing.totalAmount' },
+          grossRevenue: { $sum: '$pricing.totalAmount' },
         },
       },
     ]),
@@ -201,7 +217,7 @@ export async function getProviderInsightsAnalytics(
             $dateToString: { format: '%Y-%m-%d', date: '$createdAt' },
           },
           bookings: { $sum: 1 },
-          revenue: { $sum: '$pricing.totalAmount' },
+          grossRevenue: { $sum: '$pricing.totalAmount' },
         },
       },
       { $sort: { _id: 1 } },
@@ -219,8 +235,23 @@ export async function getProviderInsightsAnalytics(
   const cancelled = statusMap.get('cancelled') || 0;
   const total = Array.from(statusMap.values()).reduce((a, b) => a + b, 0);
 
-  const periodEarnings = earningsCurrent[0]?.total || 0;
-  const previousPeriodEarnings = earningsPrevious[0]?.total || 0;
+  // FIX #1: Calculate NET earnings (gross minus commission minus platform fee)
+  const grossPeriodEarnings = earningsCurrent[0]?.grossTotal || 0;
+  const grossPreviousPeriodEarnings = earningsPrevious[0]?.grossTotal || 0;
+  const periodEarnings = Math.round(grossPeriodEarnings * (1 - totalDeductionRate) * 100) / 100;
+  const previousPeriodEarnings = Math.round(grossPreviousPeriodEarnings * (1 - totalDeductionRate) * 100) / 100;
+
+  // Calculate gross earnings for response
+  const grossEarnings = {
+    thisMonth: Math.round(grossPeriodEarnings),
+    lastMonth: Math.round(grossPreviousPeriodEarnings),
+  };
+
+  // Calculate platform fees for the period
+  const platformFees = {
+    thisMonth: Math.round(grossPeriodEarnings * PLATFORM_FEE_RATE * 100) / 100,
+    lastMonth: Math.round(grossPreviousPeriodEarnings * PLATFORM_FEE_RATE * 100) / 100,
+  };
 
   const bookingRate =
     serviceClicks > 0
@@ -231,43 +262,47 @@ export async function getProviderInsightsAnalytics(
       ? Math.round((bookingRequestsPrevious / serviceClicks) * 10000) / 100
       : 0;
 
-  let weeklyData: Array<{ day: string; bookings: number; revenue: number }>;
+  let weeklyData: Array<{ day: string; bookings: number; revenue: number; grossRevenue: number }>;
 
   if (period === '7d') {
-    const dayMap = new Map<string, { bookings: number; revenue: number }>();
+    const dayMap = new Map<string, { bookings: number; grossRevenue: number }>();
     for (let i = 6; i >= 0; i--) {
       const d = new Date(now);
       d.setDate(d.getDate() - i);
       const key = d.toISOString().slice(0, 10);
-      dayMap.set(key, { bookings: 0, revenue: 0 });
+      dayMap.set(key, { bookings: 0, grossRevenue: 0 });
     }
-    dailyLast7.forEach((row: { _id: string; bookings: number; revenue: number }) => {
+    dailyLast7.forEach((row: { _id: string; bookings: number; grossRevenue: number }) => {
       if (dayMap.has(row._id)) {
-        dayMap.set(row._id, { bookings: row.bookings, revenue: row.revenue });
+        dayMap.set(row._id, { bookings: row.bookings, grossRevenue: row.grossRevenue });
       }
     });
+    // FIX #1: Calculate NET revenue for weekly data (gross minus commission minus platform fee)
     weeklyData = Array.from(dayMap.entries()).map(([dateKey, data]) => {
       const d = new Date(`${dateKey}T12:00:00`);
       return {
         day: DAY_NAMES[d.getDay()],
         bookings: data.bookings,
-        revenue: Math.round(data.revenue),
+        revenue: Math.round(data.grossRevenue * (1 - totalDeductionRate)),
+        grossRevenue: Math.round(data.grossRevenue),
       };
     });
   } else {
-    const weeklyMap = new Map<number, { bookings: number; revenue: number }>();
+    const weeklyMap = new Map<number, { bookings: number; grossRevenue: number }>();
     weeklyByDayOfWeek.forEach(
-      (row: { _id: number; bookings: number; revenue: number }) => {
-        weeklyMap.set(row._id, { bookings: row.bookings, revenue: row.revenue });
+      (row: { _id: number; bookings: number; grossRevenue: number }) => {
+        weeklyMap.set(row._id, { bookings: row.bookings, grossRevenue: row.grossRevenue });
       },
     );
     weeklyData = DAY_NAMES.map((day, index) => {
       const dayNum = index + 1;
-      const data = weeklyMap.get(dayNum) || { bookings: 0, revenue: 0 };
+      const data = weeklyMap.get(dayNum) || { bookings: 0, grossRevenue: 0 };
       return {
         day,
         bookings: data.bookings,
-        revenue: Math.round(data.revenue),
+        // FIX #1: Calculate NET revenue (after deductions)
+        revenue: Math.round(data.grossRevenue * (1 - totalDeductionRate)),
+        grossRevenue: Math.round(data.grossRevenue),
       };
     });
   }
@@ -294,10 +329,15 @@ export async function getProviderInsightsAnalytics(
       conversionRate: bookingRate,
       conversionRateTrend: calcTrend(bookingRate, prevBookingRate),
     },
+    // FIX #1 & #2: Include gross earnings, net earnings, and platform fees in response
     earnings: {
       thisMonth: Math.round(periodEarnings),
       lastMonth: Math.round(previousPeriodEarnings),
       trend: calcTrend(periodEarnings, previousPeriodEarnings),
+      grossEarnings: grossEarnings,
+      platformFees: platformFees,
+      commissionRate: COMMISSION_RATE,
+      platformFeeRate: PLATFORM_FEE_RATE,
     },
     bookings: {
       total,
@@ -306,10 +346,11 @@ export async function getProviderInsightsAnalytics(
       cancelled,
     },
     topServices: topServicesData.map(
-      (s: { name?: string; bookings: number; revenue: number }) => ({
+      (s: { name?: string; bookings: number; grossRevenue: number }) => ({
         name: s.name || 'Unknown Service',
         bookings: s.bookings,
-        revenue: Math.round(s.revenue),
+        revenue: Math.round(s.grossRevenue * (1 - totalDeductionRate)),
+        grossRevenue: Math.round(s.grossRevenue),
       }),
     ),
     weeklyData,

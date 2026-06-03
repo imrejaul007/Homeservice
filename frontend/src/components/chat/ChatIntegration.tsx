@@ -1,8 +1,8 @@
-import React, { useState, useCallback, useEffect, useMemo } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { cn } from '../../lib/utils';
 import { ChatWidget, ChatWidgetProps } from './ChatWidget';
 import { chatApi, ChatMessage, ChatRoomListItem, ChatRoom as ChatRoomType } from '../../services/chatApi';
-import { socketService } from '../../services/SocketService';
+import { socketService } from '../../services/socket';
 
 // =============================================================================
 // Types
@@ -539,6 +539,8 @@ export function BookingChat({
   const [message, setMessage] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
+  const [chatRoomId, setChatRoomId] = useState<string | null>(null);
+  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Get the other participant info
   const otherParticipant = useMemo(() => {
@@ -548,13 +550,60 @@ export function BookingChat({
     return { id: customerId, name: customerName, avatar: customerAvatar };
   }, [currentUserRole, customerId, customerName, customerAvatar, providerId, providerName, providerAvatar]);
 
+  // Initialize chat room on mount
+  useEffect(() => {
+    const initChatRoom = async () => {
+      try {
+        const result = await chatApi.getOrCreateBookingChat({
+          bookingId,
+          customerId,
+          providerId,
+        });
+        if (result.chatRoom) {
+          const roomId = result.chatRoom._id || (result.chatRoom as unknown as { id: string }).id;
+          setChatRoomId(roomId);
+        }
+      } catch (error) {
+        console.error('Error initializing booking chat room:', error);
+      }
+    };
+
+    initChatRoom();
+  }, [bookingId, customerId, providerId]);
+
   // Handle message send
   const handleSend = useCallback(async () => {
     if (!message.trim()) return;
 
+    // Ensure we have a valid chat room ID
+    if (!chatRoomId) {
+      // Try to get/create the chat room first
+      try {
+        const result = await chatApi.getOrCreateBookingChat({
+          bookingId,
+          customerId,
+          providerId,
+        });
+        if (!result.chatRoom) return;
+        const roomId = result.chatRoom._id || (result.chatRoom as unknown as { id: string }).id;
+        setChatRoomId(roomId);
+
+        await chatApi.sendMessage(roomId, {
+          receiverId: otherParticipant.id,
+          content: message.trim(),
+          type: 'text',
+        });
+        setMessage('');
+        onMessageSent?.();
+      } catch (error) {
+        console.error('Error sending message:', error);
+      }
+      return;
+    }
+
     setIsSending(true);
     try {
-      await chatApi.sendMessage(bookingId, {
+      await chatApi.sendMessage(chatRoomId, {
         receiverId: otherParticipant.id,
         content: message.trim(),
         type: 'text',
@@ -566,23 +615,42 @@ export function BookingChat({
     } finally {
       setIsSending(false);
     }
-  }, [message, bookingId, onMessageSent]);
+  }, [message, bookingId, customerId, providerId, chatRoomId, otherParticipant.id, onMessageSent]);
 
   // Handle typing indicator
   const handleTyping = useCallback(() => {
-    if (!isTyping) {
+    if (!isTyping && chatRoomId) {
       setIsTyping(true);
-      socketService.startTyping(bookingId);
+      socketService.startTyping(chatRoomId);
+    }
+
+    // Clear existing timeout and set new one
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
     }
 
     // Auto-stop typing after 3 seconds of no input
-    const timeout = setTimeout(() => {
+    typingTimeoutRef.current = setTimeout(() => {
       setIsTyping(false);
-      socketService.stopTyping(bookingId);
+      if (chatRoomId) {
+        socketService.stopTyping(chatRoomId);
+      }
     }, 3000);
+  }, [chatRoomId, isTyping]);
 
-    return () => clearTimeout(timeout);
-  }, [bookingId, isTyping]);
+  // Cleanup typing timeout on chatRoomId change
+  useEffect(() => {
+    return () => {
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+        typingTimeoutRef.current = null;
+      }
+      // Stop typing when switching rooms
+      if (isTyping && chatRoomId) {
+        socketService.stopTyping(chatRoomId);
+      }
+    };
+  }, [chatRoomId, isTyping]);
 
   // Subscribe to typing events
   useEffect(() => {

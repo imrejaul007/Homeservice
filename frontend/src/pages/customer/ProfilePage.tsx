@@ -30,10 +30,20 @@ import { api } from '../../services/api';
 const ProfilePage: React.FC = () => {
   const { user, customerProfile, updateProfile } = useAuthStore();
   const { customerBookings, getCustomerBookings, isLoading: isLoadingBookings } = useBookingStore();
+  const [bookingError, setBookingError] = useState<string | null>(null);
 
-  // Fetch bookings on mount
+  // Fetch bookings on mount with error handling
   useEffect(() => {
-    getCustomerBookings({ limit: 100 });
+    const fetchBookings = async () => {
+      try {
+        setBookingError(null);
+        await getCustomerBookings({ limit: 100 });
+      } catch (error) {
+        console.error('Failed to fetch bookings:', error);
+        setBookingError('Failed to load booking history. Please try again.');
+      }
+    };
+    fetchBookings();
   }, [getCustomerBookings]);
 
   // Calculate real stats from booking data

@@ -333,6 +333,7 @@ payoutSchema.index({ status: 1, nextRetryDate: 1 });
 
 // Provider payout history
 payoutSchema.index({ providerId: 1, processedDate: -1 });
+payoutSchema.index({ providerId: 1, status: 1, processedDate: -1 }); // PERFORMANCE: compound index for payout aggregation queries
 
 // Tenant isolation indexes
 payoutSchema.index({ tenantId: 1, providerId: 1 });

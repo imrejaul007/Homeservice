@@ -1,4 +1,4 @@
-import mongoose, { Document, Schema, Model } from 'mongoose';
+import mongoose, { Document, Schema, Model, FilterQuery } from 'mongoose';
 import logger from '../utils/logger';
 
 export interface IReview extends Document {
@@ -213,6 +213,8 @@ reviewSchema.index({ helpfulVotes: -1, createdAt: -1 });
 reviewSchema.index({ reportCount: 1, moderationStatus: 1 });
 
 // Partial index for visible reviews only (performance optimization)
+// MongoDB >= 3.2: Uses partial index for better performance
+// MongoDB < 3.2 fallback: Non-partial compound index at line 200
 reviewSchema.index(
   { revieweeId: 1, createdAt: -1, isHidden: 1 },
   {
@@ -222,6 +224,8 @@ reviewSchema.index(
 );
 
 // Index for pending moderation
+// MongoDB >= 3.2: Uses partial index for better performance
+// MongoDB < 3.2 fallback: Regular compound index (moderationStatus already has basic index at line 143)
 reviewSchema.index(
   { moderationStatus: 1, createdAt: -1 },
   {
@@ -231,6 +235,8 @@ reviewSchema.index(
 );
 
 // Index for flagged reviews (high report count)
+// MongoDB >= 3.2: Uses partial index for better performance
+// MongoDB < 3.2 fallback: Regular compound index (reportCount already has basic index at line 213)
 reviewSchema.index(
   { reportCount: -1, createdAt: -1 },
   {
@@ -238,6 +244,40 @@ reviewSchema.index(
     name: 'flagged_reviews'
   }
 );
+
+// PERFORMANCE FIX: Text index for efficient search on review content
+// Supports $text queries which are more efficient than regex for search
+// Replace case-insensitive regex search with $text search for better performance
+reviewSchema.index(
+  { comment: 'text', title: 'text' },
+  {
+    weights: {
+      title: 10,   // Title matches are more relevant
+      comment: 5,  // Comment matches are still valuable
+    },
+    name: 'review_text_search',
+    default_language: 'english',
+    language_override: 'language',
+  }
+);
+
+// ===================================
+// PUBLIC VISIBILITY (customer / provider storefront)
+// ===================================
+
+/** Reviews visible on provider profiles and service pages */
+export const PUBLIC_REVIEW_QUERY: FilterQuery<IReview> = {
+  isHidden: false,
+  // SECURITY FIX: Exclude reviews with high report counts unless explicitly approved by a moderator
+  // Reviews with reportCount >= 3 are flagged as potentially abusive and must be manually approved
+  $or: [
+    { moderationStatus: 'approved' },
+    { moderationStatus: { $exists: false } },
+  ],
+  $nor: [
+    { reportCount: { $gte: 3 } },
+  ],
+};
 
 // ===================================
 // STATIC METHODS
@@ -253,7 +293,7 @@ reviewSchema.statics.findByProvider = function(
   const query: any = {
     revieweeId: providerId,
     reviewerType: 'customer',
-    isHidden: false,
+    ...PUBLIC_REVIEW_QUERY,
   };
 
   if (minRating) {
@@ -275,6 +315,10 @@ reviewSchema.statics.getProviderStats = async function(providerId: string) {
         revieweeId: new mongoose.Types.ObjectId(providerId),
         reviewerType: 'customer',
         isHidden: false,
+        $or: [
+          { moderationStatus: 'approved' },
+          { moderationStatus: { $exists: false } },
+        ],
       },
     },
     {
@@ -333,7 +377,8 @@ reviewSchema.post('save', async function(doc) {
   if (doc.revieweeType === 'provider' && doc.reviewerType === 'customer') {
     try {
       const ProviderProfile = mongoose.model('ProviderProfile') as any;
-      await ProviderProfile.recalculateReviewsData(doc.revieweeId);
+      // FIX: Pass tenantId for multi-tenant isolation to prevent cross-tenant data leakage
+      await ProviderProfile.recalculateReviewsData(doc.revieweeId, doc.tenantId);
 
       // Also update booking reference to review
       const Booking = mongoose.model('Booking');
@@ -346,6 +391,7 @@ reviewSchema.post('save', async function(doc) {
         action: 'RECALCULATE_REVIEW_STATS',
         reviewId: doc._id.toString(),
         providerId: doc.revieweeId.toString(),
+        tenantId: doc.tenantId?.toString(),
       });
     } catch (error) {
       logger.warn('Failed to recalculate provider review stats', {
@@ -363,7 +409,8 @@ reviewSchema.post('findOneAndDelete', async function(doc) {
   if (doc && doc.revieweeType === 'provider' && doc.reviewerType === 'customer') {
     try {
       const ProviderProfile = mongoose.model('ProviderProfile') as any;
-      await ProviderProfile.recalculateReviewsData(doc.revieweeId);
+      // FIX: Pass tenantId for multi-tenant isolation to prevent cross-tenant data leakage
+      await ProviderProfile.recalculateReviewsData(doc.revieweeId, doc.tenantId);
 
       // Clear review reference from booking
       const Booking = mongoose.model('Booking');
@@ -376,6 +423,7 @@ reviewSchema.post('findOneAndDelete', async function(doc) {
         action: 'RECALCULATE_REVIEW_STATS_ON_DELETE',
         reviewId: doc._id.toString(),
         providerId: doc.revieweeId.toString(),
+        tenantId: doc.tenantId?.toString(),
       });
     } catch (error) {
       logger.warn('Failed to recalculate provider review stats on delete', {

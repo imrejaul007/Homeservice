@@ -193,9 +193,10 @@ router.get('/export-data',
   authController.exportUserData
 );
 
-// Delete Account
+// Delete Account - SECURITY: Requires 2FA for this critical operation
 router.delete('/account',
   authMiddleware.authenticate,
+  authMiddleware.require2FA,
   authController.deleteAccount
 );
 

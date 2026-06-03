@@ -35,6 +35,11 @@ export interface BookingMetadataDTO {
   deviceType?: string;
   sessionId?: string;
   idempotencyKey?: string;
+  /** Subcategory variant duration (minutes) — validated with variantPrice server-side */
+  variantDuration?: number;
+  /** Subcategory variant price — must match variantDuration; capped vs base service price */
+  variantPrice?: number;
+  selectedVariantIndex?: number;
 }
 
 // ============================================
@@ -43,7 +48,8 @@ export interface BookingMetadataDTO {
 
 export interface BookingInputDTO {
   serviceId: string;
-  providerId: string;
+  /** Required unless platform auto-assignment is enabled */
+  providerId?: string;
   scheduledDate: string | Date;
   scheduledTime: string;
   location: LocationDTO;
@@ -86,6 +92,8 @@ export interface BookingFiltersDTO {
   sortOrder?: 'asc' | 'desc';
   // Search
   search?: string;
+  // Category filter - filter by service category
+  category?: string;
 }
 
 export interface PaginationDTO {

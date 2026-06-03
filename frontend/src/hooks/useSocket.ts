@@ -66,15 +66,21 @@ export function useSocketEvent<K extends SocketEventName>(
 
     let unsubscribe: (() => void) | undefined;
 
+    // Create a stable wrapper callback to enable proper cleanup for once mode
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const wrappedCallback = ((...args: unknown[]) => {
+      callbackRef.current(...args);
+    }) as ServerToClientEvents[K];
+
     if (once) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      socketService.once(event, ((...args: unknown[]) => {
-        callbackRef.current(...args);
-      }) as ServerToClientEvents[K]);
+      socketService.once(event, wrappedCallback);
+      // FIX: Register cleanup for once mode to remove listener if unmount happens before event fires
+      // This prevents memory leaks and stale closures when component unmounts prematurely
+      unsubscribe = () => {
+        socketService.off(event, wrappedCallback);
+      };
     } else {
-      unsubscribe = socketService.on(event, ((...args: unknown[]) => {
-        callbackRef.current(...args);
-      }) as ServerToClientEvents[K]);
+      unsubscribe = socketService.on(event, wrappedCallback);
     }
 
     // Cleanup on unmount or when dependencies change
@@ -252,6 +258,8 @@ export function useSocketConnection(): {
   isConnected: boolean;
 } {
   const [isConnected, setIsConnected] = useState(socketService.isConnected());
+  // FIX: Track if auto-connect was performed so we only disconnect what we connected
+  const autoConnectedRef = useRef(false);
 
   useEffect(() => {
     const handleConnect = () => setIsConnected(true);
@@ -262,14 +270,22 @@ export function useSocketConnection(): {
 
     // Auto-connect if not connected
     if (!socketService.isConnected()) {
+      autoConnectedRef.current = true;
       socketService.connect().catch((error) => {
         console.error('[useSocketConnection] Auto-connect failed:', error);
       });
     }
 
+    // FIX: Cleanup function disconnects the socket on unmount
+    // This prevents memory leaks and stale connections
     return () => {
       unsubscribeConnect();
       unsubscribeDisconnect();
+      // Only disconnect if we auto-connected
+      if (autoConnectedRef.current) {
+        socketService.disconnect();
+        autoConnectedRef.current = false;
+      }
     };
   }, []);
 
@@ -408,6 +424,143 @@ export function useDisputeEvents() {
   }, []);
 
   return { newDispute, resolvedDispute };
+}
+
+/**
+ * Custom hook to subscribe to user account status events (for customers and providers)
+ */
+export function useUserStatus() {
+  const [statusChanged, setStatusChanged] = useState<{
+    userId: string;
+    status: 'active' | 'suspended' | 'banned';
+    reason?: string;
+    timestamp: Date;
+  } | null>(null);
+
+  const [accountLocked, setAccountLocked] = useState<{
+    userId: string;
+    reason: string;
+    until?: Date;
+    timestamp: Date;
+  } | null>(null);
+
+  useEffect(() => {
+    const unsubStatusChanged = socketService.onUserStatusChanged((data) => {
+      setStatusChanged(data);
+    });
+
+    const unsubAccountLocked = socketService.onUserAccountLocked((data) => {
+      setAccountLocked(data);
+    });
+
+    return () => {
+      unsubStatusChanged();
+      unsubAccountLocked();
+    };
+  }, []);
+
+  return { statusChanged, accountLocked };
+}
+
+/**
+ * Issue #7 fix: Custom hook to subscribe to booking admin update events (for customers)
+ *
+ * Integration guide for customer booking pages:
+ * ```tsx
+ * import { useBookingAdminUpdates } from '@/hooks/useSocket';
+ *
+ * function CustomerBookingPage() {
+ *   const { bookingUpdated } = useBookingAdminUpdates();
+ *
+ *   useEffect(() => {
+ *     if (bookingUpdated && bookingUpdated.bookingId === currentBookingId) {
+ *       // Refresh booking data or show notification
+ *       refetchBooking();
+ *       toast.success(`Booking updated by admin: ${bookingUpdated.status}`);
+ *     }
+ *   }, [bookingUpdated]);
+ *
+ *   // ...
+ * }
+ * ```
+ *
+ * This hook enables real-time admin update notifications in customer-facing booking components.
+ * Use this in:
+ * - CustomerBookingsPage.tsx
+ * - CustomerBookingDetailPage.tsx
+ * - BookingStatusPage.tsx
+ */
+export function useBookingAdminUpdates() {
+  const [bookingUpdated, setBookingUpdated] = useState<{
+    bookingId: string;
+    bookingNumber: string;
+    status: string;
+    updatedBy: 'admin';
+    reason?: string;
+    timestamp: Date;
+  } | null>(null);
+
+  useEffect(() => {
+    const unsubBookingUpdated = socketService.onBookingAdminUpdated((data) => {
+      setBookingUpdated(data);
+    });
+
+    return () => {
+      unsubBookingUpdated();
+    };
+  }, []);
+
+  return { bookingUpdated };
+}
+
+/**
+ * Custom hook to subscribe to batch service operation events (for providers)
+ */
+export function useServiceBatchUpdates() {
+  const [batchCompleted, setBatchCompleted] = useState<{
+    providerIds: string[];
+    affectedCount: number;
+    action: 'approved' | 'rejected';
+    timestamp: Date;
+  } | null>(null);
+
+  useEffect(() => {
+    const unsubBatchCompleted = socketService.onServicesBatchCompleted((data) => {
+      setBatchCompleted(data);
+    });
+
+    return () => {
+      unsubBatchCompleted();
+    };
+  }, []);
+
+  return { batchCompleted };
+}
+
+/**
+ * Custom hook to subscribe to review visibility events (for customers and providers)
+ */
+export function useReviewVisibility() {
+  const [reviewVisible, setReviewVisible] = useState<{
+    reviewId: string;
+    customerId: string;
+    providerId?: string;
+    rating: number;
+    visible: boolean;
+    timestamp: Date;
+  } | null>(null);
+
+  useEffect(() => {
+    const unsubReviewVisible = socketService.onReviewVisible((data) => {
+      setReviewVisible(data);
+    });
+
+    return () => {
+      unsubReviewVisible();
+    };
+  }, []);
+
+  return { reviewVisible };
 }
 
 export default useSocketEvent;

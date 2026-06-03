@@ -366,6 +366,21 @@ export class ProviderOpsService {
 
     await verification.save();
 
+    // Emit socket event to notify provider in real-time
+    try {
+      const { getSocketServer } = require('../socket');
+      const socketServer = getSocketServer();
+      if (socketServer) {
+        socketServer.emitDocumentVerified(providerId, documentId, verified ? 'approved' : 'rejected', notes);
+      }
+    } catch (socketError) {
+      logger.warn('Failed to emit document verified socket event', {
+        providerId,
+        documentId,
+        error: socketError instanceof Error ? socketError.message : String(socketError),
+      });
+    }
+
     logger.info('PROVIDER_OPS: KYC document verified', {
       providerId,
       documentId,
@@ -663,6 +678,35 @@ export class ProviderOpsService {
       { $set: { isActive: false, status: 'suspended' } }
     );
 
+    // Emit socket event to notify provider in real-time
+    try {
+      const { getSocketServer } = require('../socket');
+      const socketServer = getSocketServer();
+      if (socketServer) {
+        socketServer.emitProviderSuspended(providerId, reason, type === 'temporary' ? endDate : undefined);
+      }
+    } catch (socketError) {
+      logger.warn('Failed to emit provider suspended socket event', {
+        providerId,
+        error: socketError instanceof Error ? socketError.message : String(socketError),
+      });
+    }
+
+    // FIX: Deactivate all provider's services when suspending to prevent new bookings
+    await Service.updateMany(
+      { providerId: new mongoose.Types.ObjectId(providerId) },
+      {
+        isActive: false,
+        status: 'inactive'
+      }
+    );
+
+    logger.info('PROVIDER_OPS: Provider services deactivated due to suspension', {
+      providerId,
+      adminId,
+      timestamp: new Date().toISOString()
+    });
+
     logger.info('PROVIDER_OPS: Provider suspended', {
       providerId,
       adminId,
@@ -744,6 +788,21 @@ export class ProviderOpsService {
       { providerId, status: 'suspended' },
       { $set: { isActive: true, status: 'active' } }
     );
+
+    // Emit socket event to notify provider in real-time - provider is reactivated
+    try {
+      const { getSocketServer } = require('../socket');
+      const socketServer = getSocketServer();
+      if (socketServer) {
+        // Emit reactivated status - reusing approved event since there's no separate reactivated event
+        socketServer.emitProviderApproved(providerId);
+      }
+    } catch (socketError) {
+      logger.warn('Failed to emit provider reactivated socket event', {
+        providerId,
+        error: socketError instanceof Error ? socketError.message : String(socketError),
+      });
+    }
 
     logger.info('PROVIDER_OPS: Provider reactivated', {
       providerId,
@@ -1394,6 +1453,20 @@ export class ProviderOpsService {
       logger.error('Failed to send provider rejection notification', {
         providerId,
         error: notificationError instanceof Error ? notificationError.message : String(notificationError),
+      });
+    }
+
+    // Emit socket event to notify provider in real-time
+    try {
+      const { getSocketServer } = require('../socket');
+      const socketServer = getSocketServer();
+      if (socketServer) {
+        socketServer.emitProviderRejected(providerId, reason, true); // canAppeal = true
+      }
+    } catch (socketError) {
+      logger.warn('Failed to emit provider rejection socket event', {
+        providerId,
+        error: socketError instanceof Error ? socketError.message : String(socketError),
       });
     }
 

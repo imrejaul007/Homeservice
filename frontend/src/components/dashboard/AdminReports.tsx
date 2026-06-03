@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
+import { toast } from 'react-hot-toast';
 import { useAuthStore } from '../../stores/authStore';
 import authService from '../../services/AuthService';
 import PageLayout from '../layout/PageLayout';
@@ -41,6 +42,24 @@ import {
 type PeriodType = 'today' | 'week' | 'month' | 'quarter' | 'year' | 'all';
 type TabType = 'overview' | 'revenue' | 'bookings' | 'users';
 
+const VALID_TABS = new Set<TabType>(['overview', 'revenue', 'bookings', 'users']);
+const VALID_PERIODS = new Set<PeriodType>(['today', 'week', 'month', 'quarter', 'year', 'all']);
+
+const PERIOD_LABELS: Record<PeriodType, string> = {
+  today: 'Today',
+  week: 'This week',
+  month: 'This month',
+  quarter: 'This quarter',
+  year: 'This year',
+  all: 'All time',
+};
+
+function formatPercentChange(value: number | null | undefined): string | null {
+  if (value === null || value === undefined) return null;
+  const rounded = Math.round(value);
+  return `${rounded >= 0 ? '+' : ''}${rounded}%`;
+}
+
 interface AnalyticsOverview {
   bookings: {
     totalBookings: number;
@@ -48,6 +67,8 @@ interface AnalyticsOverview {
     cancelledBookings: number;
     pendingBookings: number;
     completionRate: number;
+    previousPeriodBookings?: number;
+    periodChangePercent?: number | null;
   };
   providers: {
     totalProviders: number;
@@ -63,7 +84,7 @@ interface AnalyticsOverview {
     totalRevenue: number;
     revenueThisMonth: number;
     revenueLastMonth: number;
-    monthOverMonthGrowth: number;
+    monthOverMonthGrowth: number | null;
     averageOrderValue: number;
   };
 }
@@ -100,7 +121,9 @@ const CHART_COLORS = ['#E8B4A8', '#C9A87C', '#8B7355', '#6B5344', '#4A3728'];
 interface StatCardProps {
   title: string;
   value: string | number;
-  change?: number;
+  change?: number | null;
+  changeLabel?: string;
+  changeSuffix?: string;
   icon: React.ReactNode;
   iconBgColor: string;
   iconTextColor: string;
@@ -111,10 +134,11 @@ const StatCard: React.FC<StatCardProps> = ({
   title,
   value,
   change,
+  changeLabel = 'vs last period',
+  changeSuffix = '%',
   icon,
   iconBgColor,
-  iconTextColor,
-  isLoading = false
+  isLoading = false,
 }) => {
   if (isLoading) {
     return (
@@ -148,17 +172,28 @@ const StatCard: React.FC<StatCardProps> = ({
             </dl>
           </div>
         </div>
-        {change !== undefined && (
-          <div className="mt-3 flex items-center">
-            {change >= 0 ? (
-              <ArrowUpRight className="h-4 w-4 text-green-500 mr-1" />
-            ) : (
-              <ArrowDownRight className="h-4 w-4 text-red-500 mr-1" />
-            )}
-            <span className={`text-sm font-medium ${change >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-              {change >= 0 ? '+' : ''}{change}%
+        {change !== undefined && change !== null && (
+          <div className="mt-3 flex items-center flex-wrap gap-x-2">
+            {changeSuffix === '%' ? (
+              change >= 0 ? (
+                <ArrowUpRight className="h-4 w-4 text-green-500" />
+              ) : (
+                <ArrowDownRight className="h-4 w-4 text-red-500" />
+              )
+            ) : null}
+            <span
+              className={`text-sm font-medium ${
+                changeSuffix === '%'
+                  ? change >= 0
+                    ? 'text-green-500'
+                    : 'text-red-500'
+                  : 'text-nilin-charcoal'
+              }`}
+            >
+              {changeSuffix === '%' ? formatPercentChange(change) : `${change >= 0 ? '+' : ''}${change}`}
+              {changeSuffix !== '%' ? ` ${changeSuffix}` : ''}
             </span>
-            <span className="text-xs text-nilin-warmGray ml-2 font-sans">vs last period</span>
+            <span className="text-xs text-nilin-warmGray font-sans">{changeLabel}</span>
           </div>
         )}
       </div>
@@ -243,15 +278,30 @@ const TabNav: React.FC<TabNavProps> = ({ activeTab, onChange, isLoading }) => {
 interface EmptyStateProps {
   title: string;
   description: string;
+  actions?: Array<{ label: string; to: string }>;
 }
 
-const EmptyState: React.FC<EmptyStateProps> = ({ title, description }) => (
+const EmptyState: React.FC<EmptyStateProps> = ({ title, description, actions }) => (
   <div className="flex flex-col items-center justify-center py-12 px-4">
     <div className="w-16 h-16 rounded-full bg-nilin-blush/50 flex items-center justify-center mb-4">
       <BarChart3 className="h-8 w-8 text-nilin-coral" />
     </div>
     <h3 className="text-lg font-serif text-nilin-charcoal mb-2">{title}</h3>
     <p className="text-sm text-nilin-warmGray text-center max-w-md">{description}</p>
+    {actions && actions.length > 0 && (
+      <div className="mt-5 flex flex-wrap justify-center gap-2">
+        {actions.map((action) => (
+          <Link
+            key={action.to}
+            to={action.to}
+            className="inline-flex items-center gap-1 px-4 py-2 rounded-xl text-sm font-medium bg-gradient-to-r from-nilin-rose to-nilin-coral text-white shadow-nilin-warm"
+          >
+            {action.label}
+            <ChevronRight className="h-4 w-4" />
+          </Link>
+        ))}
+      </div>
+    )}
   </div>
 );
 
@@ -325,11 +375,27 @@ const PieTooltip: React.FC<PieTooltipProps> = ({ active, payload }) => {
 // Main AdminReports Component
 const AdminReports: React.FC = () => {
   const { user } = useAuthStore();
-  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const getInitialTab = (): TabType => {
+    const tabParam = searchParams.get('tab');
+    if (tabParam && VALID_TABS.has(tabParam as TabType)) {
+      return tabParam as TabType;
+    }
+    return 'overview';
+  };
+
+  const getInitialPeriod = (): PeriodType => {
+    const periodParam = searchParams.get('period');
+    if (periodParam && VALID_PERIODS.has(periodParam as PeriodType)) {
+      return periodParam as PeriodType;
+    }
+    return 'month';
+  };
 
   // State
-  const [period, setPeriod] = useState<PeriodType>('month');
-  const [activeTab, setActiveTab] = useState<TabType>('overview');
+  const [period, setPeriod] = useState<PeriodType>(getInitialPeriod);
+  const [activeTab, setActiveTab] = useState<TabType>(getInitialTab());
   const [isLoading, setIsLoading] = useState(true);
   const [isExporting, setIsExporting] = useState(false);
 
@@ -342,6 +408,29 @@ const AdminReports: React.FC = () => {
 
   // Error State
   const [error, setError] = useState<string | null>(null);
+
+  const syncUrlParams = useCallback(
+    (tab: TabType, nextPeriod: PeriodType) => {
+      setSearchParams({ tab, period: nextPeriod });
+    },
+    [setSearchParams]
+  );
+
+  const handleTabChange = useCallback(
+    (tab: TabType) => {
+      setActiveTab(tab);
+      syncUrlParams(tab, period);
+    },
+    [period, syncUrlParams]
+  );
+
+  const handlePeriodChange = useCallback(
+    (nextPeriod: PeriodType) => {
+      setPeriod(nextPeriod);
+      syncUrlParams(activeTab, nextPeriod);
+    },
+    [activeTab, syncUrlParams]
+  );
 
   // Fetch Analytics Data
   const fetchAnalytics = useCallback(async () => {
@@ -387,10 +476,10 @@ const AdminReports: React.FC = () => {
         setRevenueByDay(revenueResponse.data.revenueByDay || []);
         setCategoryRevenue(revenueResponse.data.revenueByCategory || []);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Error fetching analytics:', err);
-      // Don't show error for missing data - just log it
-      // This allows the page to render with partial data
+      setError('Could not load analytics. Check your connection and try refresh.');
+      toast.error('Failed to load analytics');
     } finally {
       setIsLoading(false);
     }
@@ -402,9 +491,37 @@ const AdminReports: React.FC = () => {
   }, [fetchAnalytics]);
 
   // Handle refresh
-  const handleRefresh = () => {
-    fetchAnalytics();
+  const handleRefresh = async () => {
+    try {
+      await authService.post('/analytics/refresh');
+    } catch {
+      // Non-blocking if cache clear fails
+    }
+    await fetchAnalytics();
+    toast.success('Analytics refreshed');
   };
+
+  const hasPlatformActivity =
+    (overview?.bookings.totalBookings ?? 0) > 0 ||
+    (overview?.revenue.totalRevenue ?? 0) > 0 ||
+    (overview?.providers.totalProviders ?? 0) > 0 ||
+    (overview?.customers.totalCustomers ?? 0) > 0;
+
+  const emptyStateActions = [
+    { label: 'Review providers', to: '/admin/providers' },
+    { label: 'Operations dashboard', to: '/admin/dashboard' },
+  ];
+
+  const revenueMoM =
+    overview?.revenue.revenueLastMonth || overview?.revenue.revenueThisMonth
+      ? overview?.revenue.monthOverMonthGrowth ?? null
+      : null;
+
+  const bookingsPeriodChange = overview?.bookings.periodChangePercent ?? null;
+  const completionDisplay =
+    (overview?.bookings.totalBookings ?? 0) > 0
+      ? `${Math.round(overview?.bookings.completionRate || 0)}%`
+      : 'N/A';
 
   // Handle export
   const handleExport = async (type: 'pdf' | 'csv' | 'json') => {
@@ -438,7 +555,7 @@ const AdminReports: React.FC = () => {
           const csvResponse = await httpClient.get(`/analytics/export/csv?period=${period}&format=bookings`, {
             responseType: 'blob',
           });
-          const blob = new Blob([csvResponse.data], { type: 'text/csv' });
+          const blob = new Blob(['\uFEFF', csvResponse.data], { type: 'text/csv;charset=utf-8;' });
           const url = URL.createObjectURL(blob);
           const link = document.createElement('a');
           link.href = url;
@@ -449,9 +566,10 @@ const AdminReports: React.FC = () => {
           URL.revokeObjectURL(url);
         }
       }
+      toast.success(`Exported ${type.toUpperCase()} for ${PERIOD_LABELS[period]}`);
     } catch (err) {
       console.error('Error exporting data:', err);
-      alert('Failed to export data. Please try again.');
+      toast.error('Export failed. Please try again.');
     } finally {
       setIsExporting(false);
     }
@@ -465,7 +583,8 @@ const AdminReports: React.FC = () => {
         <StatCard
           title="Total Revenue"
           value={`AED ${(overview?.revenue.totalRevenue || 0).toLocaleString()}`}
-          change={overview?.revenue.monthOverMonthGrowth}
+          change={revenueMoM}
+          changeLabel="vs last calendar month"
           icon={<DollarSign className="h-6 w-6 text-nilin-coral" />}
           iconBgColor="bg-nilin-coral/20"
           iconTextColor="text-nilin-coral"
@@ -474,16 +593,23 @@ const AdminReports: React.FC = () => {
         <StatCard
           title="Total Bookings"
           value={overview?.bookings.totalBookings || 0}
-          change={Math.round(((overview?.bookings.totalBookings || 0) / Math.max(overview?.bookings.totalBookings || 1, 1) - 1) * 100)}
+          change={bookingsPeriodChange}
+          changeLabel={`vs prior ${PERIOD_LABELS[period].toLowerCase()}`}
           icon={<Calendar className="h-6 w-6 text-nilin-rose" />}
           iconBgColor="bg-nilin-rose/20"
           iconTextColor="text-nilin-rose"
           isLoading={isLoading}
         />
         <StatCard
-          title="Active Providers"
+          title="Approved Providers"
           value={overview?.providers.activeProviders || 0}
-          change={overview?.providers.newProvidersThisMonth}
+          change={
+            (overview?.providers.newProvidersThisMonth ?? 0) > 0
+              ? overview?.providers.newProvidersThisMonth
+              : null
+          }
+          changeSuffix="new"
+          changeLabel={`in ${PERIOD_LABELS[period].toLowerCase()}`}
           icon={<Users className="h-6 w-6 text-green-500" />}
           iconBgColor="bg-green-500/20"
           iconTextColor="text-green-500"
@@ -491,7 +617,7 @@ const AdminReports: React.FC = () => {
         />
         <StatCard
           title="Completion Rate"
-          value={`${Math.round(overview?.bookings.completionRate || 0)}%`}
+          value={completionDisplay}
           icon={<CheckCircle className="h-6 w-6 text-green-500" />}
           iconBgColor="bg-green-500/20"
           iconTextColor="text-green-500"
@@ -538,7 +664,8 @@ const AdminReports: React.FC = () => {
           ) : (
             <EmptyState
               title="No revenue data"
-              description="Revenue data will appear here once bookings are completed."
+              description="Revenue charts populate when customers complete paid bookings in the selected period."
+              actions={emptyStateActions}
             />
           )}
         </div>
@@ -584,7 +711,8 @@ const AdminReports: React.FC = () => {
           ) : (
             <EmptyState
               title="No booking data"
-              description="Booking trends will appear here once bookings are made."
+              description="Booking trends appear once customers create bookings in this period."
+              actions={emptyStateActions}
             />
           )}
         </div>
@@ -642,7 +770,8 @@ const AdminReports: React.FC = () => {
         ) : (
           <EmptyState
             title="No category data"
-            description="Category breakdown will appear here once you have revenue data."
+            description="Category breakdown requires completed bookings with categorized services."
+            actions={emptyStateActions}
           />
         )}
       </div>
@@ -673,7 +802,8 @@ const AdminReports: React.FC = () => {
         <StatCard
           title="Average Order Value"
           value={`AED ${(overview?.revenue.averageOrderValue || 0).toLocaleString()}`}
-          change={overview?.revenue.monthOverMonthGrowth}
+          change={revenueMoM}
+          changeLabel="revenue vs last calendar month"
           icon={<TrendingUp className="h-6 w-6 text-green-500" />}
           iconBgColor="bg-green-500/20"
           iconTextColor="text-green-500"
@@ -718,7 +848,8 @@ const AdminReports: React.FC = () => {
         ) : (
           <EmptyState
             title="No revenue data"
-            description="Revenue data will appear here once bookings generate revenue."
+            description="Revenue data will appear here once bookings generate revenue in this period."
+            actions={emptyStateActions}
           />
         )}
       </div>
@@ -756,7 +887,8 @@ const AdminReports: React.FC = () => {
         ) : (
           <EmptyState
             title="No category data"
-            description="Category breakdown will appear here once you have revenue data."
+            description="Category breakdown requires completed bookings with categorized services."
+            actions={emptyStateActions}
           />
         )}
       </div>
@@ -794,7 +926,7 @@ const AdminReports: React.FC = () => {
         />
         <StatCard
           title="Completion Rate"
-          value={`${Math.round(overview?.bookings.completionRate || 0)}%`}
+          value={completionDisplay}
           icon={<TrendingUp className="h-6 w-6 text-nilin-rose" />}
           iconBgColor="bg-nilin-rose/20"
           iconTextColor="text-nilin-rose"
@@ -828,7 +960,8 @@ const AdminReports: React.FC = () => {
         ) : (
           <EmptyState
             title="No booking data"
-            description="Booking volume will appear here once bookings are made."
+            description="Booking volume will appear here once bookings are made in this period."
+            actions={emptyStateActions}
           />
         )}
       </div>
@@ -882,7 +1015,8 @@ const AdminReports: React.FC = () => {
         ) : (
           <EmptyState
             title="No trend data"
-            description="Trend data will appear here as bookings are made and completed."
+            description="Trend data will appear here as bookings are made and completed in this period."
+            actions={emptyStateActions}
           />
         )}
       </div>
@@ -959,12 +1093,12 @@ const AdminReports: React.FC = () => {
         </div>
       </div>
 
-      {/* Pie Chart for Distribution */}
+      {/* User role distribution */}
       <div className="glass glass-blur rounded-2xl border border-nilin-border/50 inner-glow p-6">
-        <h3 className="text-lg font-serif text-nilin-charcoal mb-4">Service Category Distribution</h3>
+        <h3 className="text-lg font-serif text-nilin-charcoal mb-4">Customers vs providers</h3>
         {isLoading ? (
           <div className="h-64 animate-pulse bg-nilin-blush/20 rounded-xl"></div>
-        ) : categoryRevenue && categoryRevenue.length > 0 ? (
+        ) : (overview?.customers.totalCustomers ?? 0) + (overview?.providers.totalProviders ?? 0) > 0 ? (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <ResponsiveContainer width="100%" height={280}>
               <RechartsPieChart>
@@ -1025,8 +1159,9 @@ const AdminReports: React.FC = () => {
           </div>
         ) : (
           <EmptyState
-            title="No distribution data"
-            description="User distribution data will appear here once users join the platform."
+            title="No users on platform"
+            description="Customer and provider accounts will appear here once users register."
+            actions={[{ label: 'Review providers', to: '/admin/providers' }]}
           />
         )}
       </div>
@@ -1035,8 +1170,9 @@ const AdminReports: React.FC = () => {
 
   return (
     <AdminPageShell
+      wideLayout
       title="Admin Reports & Analytics"
-      subtitle={`Analytics for ${user?.firstName || 'Admin'}`}
+      subtitle={`Platform analytics · ${PERIOD_LABELS[period]} · ${user?.firstName || 'Admin'}`}
       breadcrumbItems={[
         { label: 'Admin', href: '/admin/dashboard' },
         { label: 'Reports', current: true },
@@ -1105,16 +1241,41 @@ const AdminReports: React.FC = () => {
         </div>
       )}
 
+      {!isLoading && overview && !hasPlatformActivity && (
+        <div className="mb-6 rounded-2xl border border-sky-200 bg-sky-50/80 px-5 py-4">
+          <p className="text-sm font-medium text-sky-900">No platform activity in this period</p>
+          <p className="text-sm text-sky-800 mt-1">
+            KPIs show zeros because there are no bookings or revenue yet. Provider and customer counts still reflect
+            registered users. Approve providers and drive bookings to populate charts.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Link
+              to="/admin/providers"
+              className="text-sm font-medium text-sky-700 hover:text-sky-900 inline-flex items-center gap-1"
+            >
+              Go to provider management <ChevronRight className="h-4 w-4" />
+            </Link>
+            <span className="text-sky-400">·</span>
+            <Link
+              to="/admin/dashboard"
+              className="text-sm font-medium text-sky-700 hover:text-sky-900 inline-flex items-center gap-1"
+            >
+              Operations overview <ChevronRight className="h-4 w-4" />
+            </Link>
+          </div>
+        </div>
+      )}
+
       {/* Period Selector */}
       <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <PeriodSelector
           selected={period}
-          onChange={setPeriod}
+          onChange={handlePeriodChange}
           isLoading={isLoading}
         />
         <TabNav
           activeTab={activeTab}
-          onChange={setActiveTab}
+          onChange={handleTabChange}
           isLoading={isLoading}
         />
       </div>

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft,
   TrendingUp,
@@ -68,16 +68,41 @@ const ProviderAnalyticsPage: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuthStore();
   const toast = useToastActions();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [analytics, setAnalytics] = useState<ProviderInsightsAnalytics>(EMPTY_ANALYTICS);
   const [timeRange, setTimeRange] = useState<'7d' | '30d' | '90d'>('30d');
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // URL param helpers
+  const getInitialTimeRange = (): '7d' | '30d' | '90d' => {
+    const range = searchParams.get('range');
+    if (range && ['7d', '30d', '90d'].includes(range)) {
+      return range as '7d' | '30d' | '90d';
+    }
+    return '30d';
+  };
 
   useEffect(() => {
     if (user?.role !== 'provider') {
       navigate('/provider/dashboard'); // FIX: Was '/dashboard'
     }
   }, [user, navigate]);
+
+  // Initialize time range from URL
+  useEffect(() => {
+    const initialRange = getInitialTimeRange();
+    if (initialRange !== timeRange) {
+      setTimeRange(initialRange);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Tab change handler for URL params (for future extensibility)
+  const handleTimeRangeChange = (range: '7d' | '30d' | '90d') => {
+    setTimeRange(range);
+    setSearchParams({ range });
+  };
 
   const loadAnalytics = useCallback(async () => {
     setIsLoading(true);
@@ -190,7 +215,7 @@ const ProviderAnalyticsPage: React.FC = () => {
                   <button
                     key={range}
                     type="button"
-                    onClick={() => setTimeRange(range)}
+                    onClick={() => handleTimeRangeChange(range)}
                     disabled={isLoading}
                     className={cn(
                       'px-4 py-2 rounded-nilin text-sm font-medium transition-colors',

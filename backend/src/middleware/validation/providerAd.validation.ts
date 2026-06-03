@@ -61,6 +61,18 @@ export const validateCreateProviderAd = (req: any, res: any, next: any) => {
   next();
 };
 
+// Query parameter schema for getMyAds
+export const getMyAdsQuerySchema = Joi.object({
+  status: Joi.string().valid('draft', 'active', 'paused', 'completed', 'cancelled').optional(),
+  page: Joi.number().integer().min(1).default(1),
+  limit: Joi.number().integer().min(1).max(100).default(20),
+  sortBy: Joi.string().valid('createdAt', 'updatedAt', 'name', 'budget', 'status').default('createdAt'),
+  order: Joi.string().valid('asc', 'desc').default('desc'),
+  search: Joi.string().trim().max(100).optional(),
+  startDate: Joi.date().iso().optional(),
+  endDate: Joi.date().iso().min(Joi.ref('startDate')).optional(),
+});
+
 export const validateUpdateProviderAd = (req: any, res: any, next: any) => {
   const { error, value } = updateProviderAdSchema.validate(req.body, {
     abortEarly: false,
@@ -73,5 +85,20 @@ export const validateUpdateProviderAd = (req: any, res: any, next: any) => {
     });
   }
   req.body = value;
+  next();
+};
+
+export const validateGetMyAdsQuery = (req: any, res: any, next: any) => {
+  const { error, value } = getMyAdsQuerySchema.validate(req.query, {
+    abortEarly: false,
+    stripUnknown: true,
+  });
+  if (error) {
+    return res.status(400).json({
+      success: false,
+      message: error.details.map((d) => d.message).join(', '),
+    });
+  }
+  req.query = value;
   next();
 };

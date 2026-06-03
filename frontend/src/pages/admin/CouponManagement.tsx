@@ -1,54 +1,33 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import {
+  Ticket,
+  Plus,
+  Edit3,
+  Trash2,
+  Search,
+  X,
+  Save,
+  Percent,
+  DollarSign,
+  RefreshCw,
+  Loader2,
+  Info,
+  Link2,
+  ToggleLeft,
+  ToggleRight,
+} from 'lucide-react';
 import { toast } from 'react-hot-toast';
-import { api } from '../../services/api';
-import { formatPrice } from '../../utils/currency';
 import { ErrorBoundary } from '../../components/common/ErrorBoundary';
 import { AdminPageShell } from '../../components/admin/AdminPageShell';
-
-interface Coupon {
-  _id: string;
-  code: string;
-  type: 'percentage' | 'fixed' | 'free_service';
-  value: number;
-  maxDiscount?: number;
-  minOrderValue: number;
-  maxUses: number;
-  currentUses: number;
-  validFrom: string;
-  validUntil: string;
-  isActive: boolean;
-  title: string;
-  description?: string;
-  featured?: boolean;
-  createdAt: string;
-}
-
-interface CouponStats {
-  total: number;
-  active: number;
-  inactive: number;
-  totalUses: number;
-  byType: {
-    percentage: number;
-    fixed: number;
-    free_service: number;
-  };
-  featured: number;
-}
-
-interface CouponFormData {
-  code: string;
-  type: 'percentage' | 'fixed' | 'free_service';
-  value: number;
-  maxDiscount: number;
-  minOrderAmount: number;
-  usageLimit: number;
-  validFrom: string;
-  validUntil: string;
-  title: string;
-  description: string;
-  featured: boolean;
-}
+import { formatPrice } from '../../utils/currency';
+import { cn } from '../../lib/utils';
+import {
+  adminCouponApi,
+  type AdminCoupon,
+  type CouponFormPayload,
+  type CouponStats,
+} from '../../services/adminCouponApi';
+import { getOfferValidityLabel } from '../../utils/offerDisplay';
 
 interface ValidationErrors {
   code?: string;
@@ -58,177 +37,174 @@ interface ValidationErrors {
   usageLimit?: string;
   validFrom?: string;
   validUntil?: string;
-  general?: string;
 }
 
-const validateCoupon = (data: CouponFormData, isEditing: boolean): ValidationErrors => {
+const emptyForm = (): CouponFormPayload => ({
+  code: '',
+  type: 'percentage',
+  value: 10,
+  maxDiscount: 0,
+  minOrderAmount: 0,
+  usageLimit: 1000,
+  validFrom: new Date().toISOString().split('T')[0],
+  validUntil: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+  title: '',
+  description: '',
+  featured: false,
+});
+
+const validateCoupon = (data: CouponFormPayload, isEditing: boolean): ValidationErrors => {
   const errors: ValidationErrors = {};
 
-  // Code validation (not editable, so only check if creating)
   if (!isEditing) {
-    if (!data.code || data.code.trim().length === 0) {
+    if (!data.code?.trim()) {
       errors.code = 'Coupon code is required';
     } else if (data.code.trim().length < 3) {
       errors.code = 'Code must be at least 3 characters';
     } else if (!/^[A-Za-z0-9]+$/.test(data.code)) {
-      errors.code = 'Code must be alphanumeric (letters and numbers only)';
+      errors.code = 'Code must be alphanumeric';
     }
   }
 
-  // Title validation
-  if (!data.title || data.title.trim().length === 0) {
+  if (!data.title?.trim()) {
     errors.title = 'Title is required';
-  } else if (data.title.trim().length < 2) {
-    errors.title = 'Title must be at least 2 characters';
   }
 
-  // Value validation
   if (data.value < 0) {
     errors.value = 'Value cannot be negative';
   } else if (data.type === 'percentage' && data.value > 100) {
-    errors.value = 'Percentage discount cannot exceed 100%';
+    errors.value = 'Percentage cannot exceed 100%';
   }
 
-  // Min order amount validation
-  if (data.minOrderAmount < 0) {
-    errors.minOrderAmount = 'Minimum order amount cannot be negative';
-  }
+  if (data.minOrderAmount < 0) errors.minOrderAmount = 'Cannot be negative';
+  if (data.usageLimit < 1) errors.usageLimit = 'Usage limit must be at least 1';
 
-  // Usage limit validation
-  if (data.usageLimit < 1) {
-    errors.usageLimit = 'Usage limit must be at least 1';
-  }
-
-  // Date validations
-  if (!data.validFrom) {
-    errors.validFrom = 'Valid from date is required';
-  }
-
+  if (!data.validFrom) errors.validFrom = 'Start date is required';
   if (!data.validUntil) {
-    errors.validUntil = 'Expiration date is required';
-  } else {
-    const validUntilDate = new Date(data.validUntil);
-    const now = new Date();
-    now.setHours(0, 0, 0, 0);
-
-    if (validUntilDate < now) {
-      errors.validUntil = 'Expiration date must be in the future';
-    }
-
-    if (data.validFrom && new Date(data.validFrom) >= validUntilDate) {
-      errors.validUntil = 'Expiration must be after start date';
+    errors.validUntil = 'End date is required';
+  } else if (data.validFrom && new Date(data.validFrom) >= new Date(data.validUntil)) {
+    errors.validUntil = 'End date must be after start date';
+  } else if (!isEditing) {
+    const end = new Date(`${data.validUntil}T23:59:59`);
+    if (end < new Date()) {
+      errors.validUntil = 'End date must be in the future for new coupons';
     }
   }
 
   return errors;
 };
 
+function extractError(err: unknown): string | undefined {
+  if (err && typeof err === 'object' && 'response' in err) {
+    return (err as { response?: { data?: { message?: string } } }).response?.data?.message;
+  }
+  return undefined;
+}
+
+const typeBadgeClass = (type: string) => {
+  switch (type) {
+    case 'percentage':
+      return 'bg-sky-100 text-sky-800';
+    case 'fixed':
+      return 'bg-emerald-100 text-emerald-800';
+    case 'free_service':
+      return 'bg-violet-100 text-violet-800';
+    default:
+      return 'bg-gray-100 text-gray-800';
+  }
+};
+
+const validityToneClass = (tone: string) => {
+  switch (tone) {
+    case 'danger':
+      return 'text-red-600';
+    case 'warning':
+      return 'text-amber-700';
+    case 'success':
+      return 'text-emerald-700';
+    default:
+      return 'text-nilin-warmGray';
+  }
+};
+
 const CouponManagement: React.FC = () => {
-  const [coupons, setCoupons] = useState<Coupon[]>([]);
+  const [coupons, setCoupons] = useState<AdminCoupon[]>([]);
   const [stats, setStats] = useState<CouponStats | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
-  const [filterType, setFilterType] = useState<string>('');
-  const [filterActive, setFilterActive] = useState<string>('');
+  const [filterType, setFilterType] = useState('all');
+  const [filterStatus, setFilterStatus] = useState<
+    'all' | 'live' | 'active' | 'inactive' | 'expired' | 'scheduled'
+  >('all');
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [showModal, setShowModal] = useState(false);
-  const [editingCoupon, setEditingCoupon] = useState<Coupon | null>(null);
+  const [editingCoupon, setEditingCoupon] = useState<AdminCoupon | null>(null);
   const [saving, setSaving] = useState(false);
+  const [togglingId, setTogglingId] = useState<string | null>(null);
   const [validationErrors, setValidationErrors] = useState<ValidationErrors>({});
-  const [formData, setFormData] = useState({
-    code: '',
-    type: 'percentage' as 'percentage' | 'fixed' | 'free_service',
-    value: 10,
-    maxDiscount: 0,
-    minOrderAmount: 0,
-    usageLimit: 100,
-    validFrom: '',
-    validUntil: '',
-    title: '',
-    description: '',
-    featured: false,
-  });
-
-  const fetchCoupons = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const params = new URLSearchParams({
-        page: currentPage.toString(),
-        limit: '20',
-      });
-      if (search) params.append('search', search);
-      if (filterType) params.append('type', filterType);
-      if (filterActive) params.append('isActive', filterActive);
-
-      const response = await api.get(`/admin/coupons?${params}`);
-      const data = response.data?.data;
-      setCoupons(data?.coupons ?? []);
-      setTotalPages(data?.pagination?.pages ?? 1);
-    } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to load coupons');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchStats = async () => {
-    try {
-      const response = await api.get('/admin/coupons/stats');
-      setStats(response.data?.data?.stats ?? null);
-    } catch (err) {
-      console.error('Failed to load stats:', err);
-    }
-  };
+  const [formData, setFormData] = useState<CouponFormPayload>(emptyForm());
 
   useEffect(() => {
-    fetchCoupons();
-    fetchStats();
-  }, [currentPage, search, filterType, filterActive]);
+    const t = setTimeout(() => {
+      setSearch(searchInput.trim());
+      setCurrentPage(1);
+    }, 350);
+    return () => clearTimeout(t);
+  }, [searchInput]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const listParams = useCallback(() => {
+    const params: Parameters<typeof adminCouponApi.list>[0] = {
+      page: currentPage,
+      limit: 20,
+      search: search || undefined,
+      type: filterType === 'all' ? undefined : filterType,
+    };
+    if (filterStatus === 'inactive') params.isActive = 'false';
+    else if (filterStatus === 'active') params.isActive = 'true';
+    else if (filterStatus === 'live') params.status = 'live';
+    else if (filterStatus === 'expired') params.status = 'expired';
+    else if (filterStatus === 'scheduled') params.status = 'scheduled';
+    return params;
+  }, [currentPage, search, filterType, filterStatus]);
 
-    // Validate form data
-    const errors = validateCoupon(formData, !!editingCoupon);
-    setValidationErrors(errors);
-
-    if (Object.keys(errors).length > 0) {
-      return;
-    }
-
-    setSaving(true);
-    try {
-      const payload = {
-        ...formData,
-        usageLimit: formData.usageLimit,
-        minOrderAmount: formData.minOrderAmount,
-        validFrom: new Date(formData.validFrom).toISOString(),
-        validUntil: new Date(formData.validUntil).toISOString(),
-      };
-
-      if (editingCoupon) {
-        await api.put(`/admin/coupons/${editingCoupon._id}`, payload);
-      } else {
-        await api.post('/admin/coupons', payload);
+  const loadData = useCallback(
+    async (isRefresh = false) => {
+      if (isRefresh) setRefreshing(true);
+      else setLoading(true);
+      try {
+        const [listRes, statsRes] = await Promise.all([
+          adminCouponApi.list(listParams()),
+          adminCouponApi.stats(),
+        ]);
+        setCoupons(listRes.coupons);
+        setTotalPages(listRes.pagination.pages || 1);
+        setStats(statsRes);
+        if (isRefresh) toast.success('Coupons refreshed');
+      } catch (err) {
+        toast.error(extractError(err) || 'Failed to load coupons');
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
       }
+    },
+    [listParams]
+  );
 
-      setShowModal(false);
-      setEditingCoupon(null);
-      setValidationErrors({});
-      resetForm();
-      fetchCoupons();
-      fetchStats();
-    } catch (err: any) {
-      toast.error(err.response?.data?.message || 'Failed to save coupon');
-    } finally {
-      setSaving(false);
-    }
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  const openCreate = () => {
+    setEditingCoupon(null);
+    setFormData(emptyForm());
+    setValidationErrors({});
+    setShowModal(true);
   };
 
-  const handleEdit = (coupon: Coupon) => {
+  const openEdit = (coupon: AdminCoupon) => {
     setEditingCoupon(coupon);
     setValidationErrors({});
     setFormData({
@@ -247,449 +223,567 @@ const CouponManagement: React.FC = () => {
     setShowModal(true);
   };
 
-  const handleDeactivate = async (id: string) => {
-    if (!confirm('Are you sure you want to deactivate this coupon?')) return;
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const errors = validateCoupon(formData, !!editingCoupon);
+    setValidationErrors(errors);
+    if (Object.keys(errors).length > 0) return;
+
+    setSaving(true);
     try {
-      await api.post(`/admin/coupons/${id}/deactivate`);
-      toast.success('Coupon deactivated successfully');
-      fetchCoupons();
-      fetchStats();
-    } catch (err: any) {
-      toast.error(err.response?.data?.message || 'Failed to deactivate coupon');
+      if (editingCoupon) {
+        const { code: _code, ...updateFields } = formData;
+        await adminCouponApi.update(editingCoupon._id, updateFields);
+        toast.success('Coupon updated');
+      } else {
+        await adminCouponApi.create(formData);
+        toast.success('Coupon created — customers can apply the code at checkout');
+      }
+      setShowModal(false);
+      setEditingCoupon(null);
+      await loadData();
+    } catch (err) {
+      toast.error(extractError(err) || 'Failed to save coupon');
+    } finally {
+      setSaving(false);
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this coupon?')) return;
+  const handleDeactivate = async (coupon: AdminCoupon) => {
+    if (!confirm(`Deactivate "${coupon.code}"? It will no longer work at checkout.`)) return;
     try {
-      await api.delete(`/admin/coupons/${id}`);
-      toast.success('Coupon deleted successfully');
-      fetchCoupons();
-      fetchStats();
-    } catch (err: any) {
-      toast.error(err.response?.data?.message || 'Failed to delete coupon');
+      await adminCouponApi.deactivate(coupon._id);
+      toast.success('Coupon deactivated');
+      await loadData();
+    } catch (err) {
+      toast.error(extractError(err) || 'Failed to deactivate');
     }
   };
 
-  const resetForm = () => {
-    setFormData({
-      code: '',
-      type: 'percentage',
-      value: 10,
-      maxDiscount: 0,
-      minOrderAmount: 0,
-      usageLimit: 100,
-      validFrom: '',
-      validUntil: '',
-      title: '',
-      description: '',
-      featured: false,
-    });
-    setValidationErrors({});
+  const handleToggleActive = async (coupon: AdminCoupon) => {
+    setTogglingId(coupon._id);
+    try {
+      await adminCouponApi.setActive(coupon._id, !coupon.isActive);
+      toast.success(coupon.isActive ? 'Coupon disabled' : 'Coupon reactivated');
+      await loadData();
+    } catch (err) {
+      toast.error(extractError(err) || 'Failed to update status');
+    } finally {
+      setTogglingId(null);
+    }
   };
 
-  const getTypeBadgeColor = (type: string) => {
-    switch (type) {
-      case 'percentage': return 'bg-blue-100 text-blue-800';
-      case 'fixed': return 'bg-green-100 text-green-800';
-      case 'free_service': return 'bg-purple-100 text-purple-800';
-      default: return 'bg-gray-100 text-gray-800';
+  const handleDelete = async (coupon: AdminCoupon) => {
+    if (!confirm(`Permanently delete "${coupon.code}"? This cannot be undone.`)) return;
+    try {
+      await adminCouponApi.delete(coupon._id);
+      toast.success('Coupon deleted');
+      await loadData();
+    } catch (err) {
+      toast.error(extractError(err) || 'Failed to delete coupon');
     }
+  };
+
+  const formatCouponValue = (coupon: AdminCoupon) => {
+    if (coupon.type === 'percentage') {
+      const cap = coupon.maxDiscount ? ` (max ${formatPrice(coupon.maxDiscount)})` : '';
+      return `${coupon.value}%${cap}`;
+    }
+    if (coupon.type === 'free_service') return 'Free service';
+    return formatPrice(coupon.value);
   };
 
   return (
     <ErrorBoundary>
       <AdminPageShell
+        wideLayout
         title="Coupon Management"
-        subtitle="Create and manage discount codes"
+        subtitle="Discount codes for booking checkout — separate from homepage offer cards"
         breadcrumbItems={[
           { label: 'Admin', href: '/admin/dashboard' },
           { label: 'Coupons', current: true },
         ]}
         headerActions={
-          <button
-            type="button"
-            onClick={() => { resetForm(); setEditingCoupon(null); setShowModal(true); }}
-            className="px-4 py-2 rounded-xl bg-gradient-to-r from-nilin-rose to-nilin-coral text-white text-sm font-medium font-sans"
-          >
-            Create Coupon
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => loadData(true)}
+              disabled={refreshing}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl glass glass-blur border border-nilin-border/50 text-sm font-sans hover:bg-nilin-blush/40 disabled:opacity-50"
+            >
+              <RefreshCw className={cn('w-4 h-4', refreshing && 'animate-spin')} />
+              Refresh
+            </button>
+            <button type="button" onClick={openCreate} className="btn-nilin flex items-center gap-2">
+              <Plus className="w-5 h-5" />
+              Create coupon
+            </button>
+          </div>
         }
       >
-      <div className="space-y-6">
-
-        {/* Stats Cards */}
-        {stats && (
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-            <div className="bg-white rounded-lg shadow p-4">
-              <p className="text-sm text-gray-500">Total Coupons</p>
-              <p className="text-2xl font-bold text-gray-900">{stats.total}</p>
-            </div>
-            <div className="bg-white rounded-lg shadow p-4">
-              <p className="text-sm text-gray-500">Active</p>
-              <p className="text-2xl font-bold text-green-600">{stats.active}</p>
-            </div>
-            <div className="bg-white rounded-lg shadow p-4">
-              <p className="text-sm text-gray-500">Total Uses</p>
-              <p className="text-2xl font-bold text-blue-600">{stats.totalUses}</p>
-            </div>
-            <div className="bg-white rounded-lg shadow p-4">
-              <p className="text-sm text-gray-500">Featured</p>
-              <p className="text-2xl font-bold text-purple-600">{stats.featured}</p>
+        <div className="space-y-6">
+          <div className="rounded-2xl border border-amber-200/80 bg-amber-50/70 px-5 py-4 flex gap-3">
+            <Info className="w-5 h-5 text-amber-800 flex-shrink-0 mt-0.5" />
+            <div className="text-sm text-amber-950 font-sans space-y-1">
+              <p className="font-medium flex items-center gap-2">
+                <Link2 className="w-4 h-4" />
+                End-to-end flow
+              </p>
+              <p>
+                Coupons share the same database as <strong>Offers</strong> but are managed here as
+                checkout codes. Customers enter the code in <strong>booking checkout</strong> (or claim
+                via offers). Providers see discounted bookings on their linked services when limits apply.
+              </p>
             </div>
           </div>
-        )}
 
-        {/* Filters */}
-        <div className="bg-white rounded-lg shadow p-4 mb-6">
-          <div className="flex flex-wrap gap-4">
-            <input
-              type="text"
-              placeholder="Search coupons..."
-              value={search}
-              onChange={(e) => { setSearch(e.target.value); setCurrentPage(1); }}
-              className="flex-1 min-w-[200px] px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-            />
-            <select
-              value={filterType}
-              onChange={(e) => { setFilterType(e.target.value); setCurrentPage(1); }}
-              className="px-3 py-2 border rounded-lg"
-            >
-              <option value="">All Types</option>
-              <option value="percentage">Percentage</option>
-              <option value="fixed">Fixed</option>
-              <option value="free_service">Free Service</option>
-            </select>
-            <select
-              value={filterActive}
-              onChange={(e) => { setFilterActive(e.target.value); setCurrentPage(1); }}
-              className="px-3 py-2 border rounded-lg"
-            >
-              <option value="">All Status</option>
-              <option value="true">Active</option>
-              <option value="false">Inactive</option>
-            </select>
+          {stats && (
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              {[
+                { label: 'Total coupons', value: stats.total },
+                { label: 'Active flag', value: stats.active, accent: 'text-emerald-700' },
+                { label: 'Total uses', value: stats.totalUses, accent: 'text-sky-700' },
+                { label: 'Featured', value: stats.featured, accent: 'text-violet-700' },
+              ].map((kpi) => (
+                <div
+                  key={kpi.label}
+                  className="glass glass-blur rounded-2xl border border-nilin-border/50 p-5"
+                >
+                  <p className="text-xs uppercase tracking-wide text-nilin-warmGray font-sans">
+                    {kpi.label}
+                  </p>
+                  <p className={cn('text-2xl font-serif mt-1', kpi.accent || 'text-nilin-charcoal')}>
+                    {kpi.value}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="glass glass-blur rounded-2xl border border-nilin-border/50 p-4">
+            <div className="flex flex-col lg:flex-row gap-3">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-nilin-warmGray" />
+                <input
+                  type="search"
+                  placeholder="Search code or title…"
+                  value={searchInput}
+                  onChange={(e) => setSearchInput(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-nilin-border/60 bg-white/80 font-sans text-sm focus:ring-2 focus:ring-nilin-rose/30"
+                />
+              </div>
+              <select
+                value={filterType}
+                onChange={(e) => {
+                  setFilterType(e.target.value);
+                  setCurrentPage(1);
+                }}
+                className="px-4 py-2.5 rounded-xl border border-nilin-border/60 bg-white/80 text-sm font-sans"
+              >
+                <option value="all">All types</option>
+                <option value="percentage">Percentage</option>
+                <option value="fixed">Fixed amount</option>
+                <option value="free_service">Free service</option>
+              </select>
+              <select
+                value={filterStatus}
+                onChange={(e) => {
+                  setFilterStatus(e.target.value as typeof filterStatus);
+                  setCurrentPage(1);
+                }}
+                className="px-4 py-2.5 rounded-xl border border-nilin-border/60 bg-white/80 text-sm font-sans"
+              >
+                <option value="all">All status</option>
+                <option value="live">Live now</option>
+                <option value="active">Active flag</option>
+                <option value="inactive">Inactive</option>
+                <option value="expired">Expired</option>
+                <option value="scheduled">Scheduled</option>
+              </select>
+            </div>
           </div>
-        </div>
 
-        {/* Error Message */}
-        {error && (
-          <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
-            {error}
+          <div className="glass glass-blur rounded-2xl border border-nilin-border/50 overflow-hidden">
+            {loading ? (
+              <div className="flex items-center justify-center gap-2 py-16 text-nilin-warmGray">
+                <Loader2 className="w-5 h-5 animate-spin" />
+                Loading coupons…
+              </div>
+            ) : coupons.length === 0 ? (
+              <div className="py-16 text-center text-nilin-warmGray font-sans">
+                <Ticket className="w-10 h-10 mx-auto mb-3 opacity-40" />
+                No coupons match your filters
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm font-sans">
+                  <thead>
+                    <tr className="border-b border-nilin-border/50 bg-nilin-blush/20">
+                      <th className="px-5 py-3 text-left text-xs font-semibold uppercase text-nilin-warmGray">
+                        Code
+                      </th>
+                      <th className="px-5 py-3 text-left text-xs font-semibold uppercase text-nilin-warmGray">
+                        Type
+                      </th>
+                      <th className="px-5 py-3 text-left text-xs font-semibold uppercase text-nilin-warmGray">
+                        Value
+                      </th>
+                      <th className="px-5 py-3 text-left text-xs font-semibold uppercase text-nilin-warmGray">
+                        Usage
+                      </th>
+                      <th className="px-5 py-3 text-left text-xs font-semibold uppercase text-nilin-warmGray">
+                        Validity
+                      </th>
+                      <th className="px-5 py-3 text-left text-xs font-semibold uppercase text-nilin-warmGray">
+                        Status
+                      </th>
+                      <th className="px-5 py-3 text-right text-xs font-semibold uppercase text-nilin-warmGray">
+                        Actions
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-nilin-border/40">
+                    {coupons.map((coupon) => {
+                      const validity = getOfferValidityLabel(
+                        coupon.validFrom,
+                        coupon.validUntil,
+                        coupon.isActive
+                      );
+                      return (
+                        <tr key={coupon._id} className="hover:bg-nilin-blush/10 transition-colors">
+                          <td className="px-5 py-4">
+                            <div className="font-mono font-semibold text-nilin-charcoal">{coupon.code}</div>
+                            <div className="text-nilin-warmGray text-xs mt-0.5">{coupon.title}</div>
+                          </td>
+                          <td className="px-5 py-4">
+                            <span
+                              className={cn(
+                                'inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium capitalize',
+                                typeBadgeClass(coupon.type)
+                              )}
+                            >
+                              {coupon.type === 'percentage' ? (
+                                <Percent className="w-3 h-3" />
+                              ) : coupon.type === 'fixed' ? (
+                                <DollarSign className="w-3 h-3" />
+                              ) : (
+                                <Ticket className="w-3 h-3" />
+                              )}
+                              {coupon.type.replace('_', ' ')}
+                            </span>
+                          </td>
+                          <td className="px-5 py-4 text-nilin-charcoal">{formatCouponValue(coupon)}</td>
+                          <td className="px-5 py-4 text-nilin-charcoal">
+                            {coupon.currentUses} / {coupon.maxUses}
+                          </td>
+                          <td className="px-5 py-4">
+                            <div className={cn('font-medium', validityToneClass(validity.tone))}>
+                              {validity.text}
+                            </div>
+                            <div className="text-xs text-nilin-warmGray mt-0.5">
+                              until{' '}
+                              {new Date(coupon.validUntil).toLocaleDateString('en-AE', {
+                                day: 'numeric',
+                                month: 'short',
+                                year: 'numeric',
+                              })}
+                            </div>
+                          </td>
+                          <td className="px-5 py-4">
+                            <div className="flex flex-wrap gap-1.5">
+                              <span
+                                className={cn(
+                                  'px-2 py-0.5 rounded-full text-xs font-medium',
+                                  coupon.isActive
+                                    ? 'bg-emerald-100 text-emerald-800'
+                                    : 'bg-gray-100 text-gray-600'
+                                )}
+                              >
+                                {coupon.isActive ? 'Active' : 'Inactive'}
+                              </span>
+                              {coupon.featured && (
+                                <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800">
+                                  Featured
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-5 py-4">
+                            <div className="flex items-center justify-end gap-1">
+                              <button
+                                type="button"
+                                onClick={() => openEdit(coupon)}
+                                className="p-2 rounded-lg text-nilin-charcoal hover:bg-nilin-blush/50"
+                                title="Edit"
+                              >
+                                <Edit3 className="w-4 h-4" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleToggleActive(coupon)}
+                                disabled={togglingId === coupon._id}
+                                className="p-2 rounded-lg text-nilin-charcoal hover:bg-nilin-blush/50 disabled:opacity-50"
+                                title={coupon.isActive ? 'Deactivate' : 'Reactivate'}
+                              >
+                                {togglingId === coupon._id ? (
+                                  <Loader2 className="w-4 h-4 animate-spin" />
+                                ) : coupon.isActive ? (
+                                  <ToggleRight className="w-4 h-4 text-emerald-600" />
+                                ) : (
+                                  <ToggleLeft className="w-4 h-4 text-gray-400" />
+                                )}
+                              </button>
+                              {coupon.isActive && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeactivate(coupon)}
+                                  className="px-2 py-1 text-xs text-amber-700 hover:bg-amber-50 rounded-lg"
+                                >
+                                  Off
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => handleDelete(coupon)}
+                                className="p-2 rounded-lg text-red-600 hover:bg-red-50"
+                                title="Delete"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
-        )}
 
-        {/* Coupons Table */}
-        <div className="bg-white rounded-lg shadow overflow-hidden">
-          {loading ? (
-            <div className="p-8 text-center text-gray-500">Loading...</div>
-          ) : coupons.length === 0 ? (
-            <div className="p-8 text-center text-gray-500">No coupons found</div>
-          ) : (
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Code</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Value</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Usage</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Valid Until</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200">
-                {coupons.map((coupon) => (
-                  <tr key={coupon._id}>
-                    <td className="px-6 py-4">
-                      <div className="font-medium text-gray-900">{coupon.code}</div>
-                      <div className="text-sm text-gray-500">{coupon.title}</div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${getTypeBadgeColor(coupon.type)}`}>
-                        {coupon.type.replace('_', ' ')}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 text-gray-900">
-                      {coupon.type === 'percentage'
-                        ? `${coupon.value}%${coupon.maxDiscount ? ` (max ${formatPrice(coupon.maxDiscount)})` : ''}`
-                        : formatPrice(coupon.value)}
-                    </td>
-                    <td className="px-6 py-4 text-gray-900">
-                      {coupon.currentUses} / {coupon.maxUses}
-                    </td>
-                    <td className="px-6 py-4 text-gray-900">
-                      {new Date(coupon.validUntil).toLocaleDateString()}
-                    </td>
-                    <td className="px-6 py-4">
-                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                        coupon.isActive ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
-                      }`}>
-                        {coupon.isActive ? 'Active' : 'Inactive'}
-                      </span>
-                      {coupon.featured && (
-                        <span className="ml-2 px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
-                          Featured
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => handleEdit(coupon)}
-                          className="text-blue-600 hover:text-blue-800 text-sm"
-                        >
-                          Edit
-                        </button>
-                        {coupon.isActive ? (
-                          <button
-                            onClick={() => handleDeactivate(coupon._id)}
-                            className="text-yellow-600 hover:text-yellow-800 text-sm"
-                          >
-                            Deactivate
-                          </button>
-                        ) : null}
-                        <button
-                          onClick={() => handleDelete(coupon._id)}
-                          className="text-red-600 hover:text-red-800 text-sm"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          {totalPages > 1 && (
+            <div className="flex justify-center items-center gap-3 font-sans text-sm">
+              <button
+                type="button"
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+                className="px-4 py-2 rounded-xl border border-nilin-border/50 disabled:opacity-40"
+              >
+                Previous
+              </button>
+              <span className="text-nilin-warmGray">
+                Page {currentPage} of {totalPages}
+              </span>
+              <button
+                type="button"
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+                className="px-4 py-2 rounded-xl border border-nilin-border/50 disabled:opacity-40"
+              >
+                Next
+              </button>
+            </div>
           )}
         </div>
 
-        {/* Pagination */}
-        {totalPages > 1 && (
-          <div className="flex justify-center gap-2 mt-4">
-            <button
-              onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-              disabled={currentPage === 1}
-              className="px-3 py-1 border rounded disabled:opacity-50"
-            >
-              Previous
-            </button>
-            <span className="px-3 py-1">
-              Page {currentPage} of {totalPages}
-            </span>
-            <button
-              onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-              disabled={currentPage === totalPages}
-              className="px-3 py-1 border rounded disabled:opacity-50"
-            >
-              Next
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* Modal */}
-      {showModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
-            <h2 className="text-xl font-bold mb-4">
-              {editingCoupon ? 'Edit Coupon' : 'Create Coupon'}
-            </h2>
-            <form onSubmit={handleSubmit} className="space-y-4">
-              {validationErrors.general && (
-                <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-2 rounded">
-                  {validationErrors.general}
-                </div>
-              )}
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Coupon Code</label>
-                <input
-                  type="text"
-                  value={formData.code}
-                  onChange={(e) => {
-                    setFormData({ ...formData, code: e.target.value.toUpperCase() });
-                    setValidationErrors(prev => ({ ...prev, code: undefined }));
-                  }}
-                  className={`mt-1 w-full px-3 py-2 border rounded-lg ${validationErrors.code ? 'border-red-500' : ''}`}
-                  required
-                  disabled={!!editingCoupon}
-                  placeholder="e.g., SAVE20"
-                />
-                {validationErrors.code && (
-                  <p className="mt-1 text-sm text-red-600">{validationErrors.code}</p>
-                )}
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Title</label>
-                <input
-                  type="text"
-                  value={formData.title}
-                  onChange={(e) => {
-                    setFormData({ ...formData, title: e.target.value });
-                    setValidationErrors(prev => ({ ...prev, title: undefined }));
-                  }}
-                  className={`mt-1 w-full px-3 py-2 border rounded-lg ${validationErrors.title ? 'border-red-500' : ''}`}
-                  required
-                  placeholder="e.g., Summer Sale 20% Off"
-                />
-                {validationErrors.title && (
-                  <p className="mt-1 text-sm text-red-600">{validationErrors.title}</p>
-                )}
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">Type</label>
-                  <select
-                    value={formData.type}
-                    onChange={(e) => setFormData({ ...formData, type: e.target.value as 'percentage' | 'fixed' | 'free_service' })}
-                    className="mt-1 w-full px-3 py-2 border rounded-lg"
-                  >
-                    <option value="percentage">Percentage</option>
-                    <option value="fixed">Fixed Amount</option>
-                    <option value="free_service">Free Service</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">
-                    {formData.type === 'percentage' ? 'Percentage (%)' : 'Amount'}
-                  </label>
-                  <input
-                    type="number"
-                    value={formData.value}
-                    onChange={(e) => {
-                      setFormData({ ...formData, value: Number(e.target.value) });
-                      setValidationErrors(prev => ({ ...prev, value: undefined }));
-                    }}
-                    className={`mt-1 w-full px-3 py-2 border rounded-lg ${validationErrors.value ? 'border-red-500' : ''}`}
-                    required
-                    min="0"
-                  />
-                  {validationErrors.value && (
-                    <p className="mt-1 text-sm text-red-600">{validationErrors.value}</p>
-                  )}
-                </div>
-              </div>
-              {formData.type === 'percentage' && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">Max Discount</label>
-                  <input
-                    type="number"
-                    value={formData.maxDiscount}
-                    onChange={(e) => setFormData({ ...formData, maxDiscount: Number(e.target.value) })}
-                    className="mt-1 w-full px-3 py-2 border rounded-lg"
-                    min="0"
-                  />
-                </div>
-              )}
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">Min Order Amount</label>
-                  <input
-                    type="number"
-                    value={formData.minOrderAmount}
-                    onChange={(e) => {
-                      setFormData({ ...formData, minOrderAmount: Number(e.target.value) });
-                      setValidationErrors(prev => ({ ...prev, minOrderAmount: undefined }));
-                    }}
-                    className={`mt-1 w-full px-3 py-2 border rounded-lg ${validationErrors.minOrderAmount ? 'border-red-500' : ''}`}
-                    min="0"
-                  />
-                  {validationErrors.minOrderAmount && (
-                    <p className="mt-1 text-sm text-red-600">{validationErrors.minOrderAmount}</p>
-                  )}
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">Usage Limit</label>
-                  <input
-                    type="number"
-                    value={formData.usageLimit}
-                    onChange={(e) => {
-                      setFormData({ ...formData, usageLimit: Number(e.target.value) });
-                      setValidationErrors(prev => ({ ...prev, usageLimit: undefined }));
-                    }}
-                    className={`mt-1 w-full px-3 py-2 border rounded-lg ${validationErrors.usageLimit ? 'border-red-500' : ''}`}
-                    min="1"
-                  />
-                  {validationErrors.usageLimit && (
-                    <p className="mt-1 text-sm text-red-600">{validationErrors.usageLimit}</p>
-                  )}
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">Valid From</label>
-                  <input
-                    type="date"
-                    value={formData.validFrom}
-                    onChange={(e) => {
-                      setFormData({ ...formData, validFrom: e.target.value });
-                      setValidationErrors(prev => ({ ...prev, validFrom: undefined }));
-                    }}
-                    className={`mt-1 w-full px-3 py-2 border rounded-lg ${validationErrors.validFrom ? 'border-red-500' : ''}`}
-                    required
-                  />
-                  {validationErrors.validFrom && (
-                    <p className="mt-1 text-sm text-red-600">{validationErrors.validFrom}</p>
-                  )}
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">Valid Until</label>
-                  <input
-                    type="date"
-                    value={formData.validUntil}
-                    onChange={(e) => {
-                      setFormData({ ...formData, validUntil: e.target.value });
-                      setValidationErrors(prev => ({ ...prev, validUntil: undefined }));
-                    }}
-                    className={`mt-1 w-full px-3 py-2 border rounded-lg ${validationErrors.validUntil ? 'border-red-500' : ''}`}
-                    required
-                  />
-                  {validationErrors.validUntil && (
-                    <p className="mt-1 text-sm text-red-600">{validationErrors.validUntil}</p>
-                  )}
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Description</label>
-                <textarea
-                  value={formData.description}
-                  onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                  className="mt-1 w-full px-3 py-2 border rounded-lg"
-                  rows={3}
-                />
-              </div>
-              <div className="flex items-center">
-                <input
-                  type="checkbox"
-                  id="featured"
-                  checked={formData.featured}
-                  onChange={(e) => setFormData({ ...formData, featured: e.target.checked })}
-                  className="h-4 w-4 text-blue-600 border-gray-300 rounded"
-                />
-                <label htmlFor="featured" className="ml-2 text-sm text-gray-700">
-                  Featured on Homepage
-                </label>
-              </div>
-              <div className="flex justify-end gap-3 pt-4">
+        {showModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+            <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto border border-nilin-border/50">
+              <div className="flex items-center justify-between px-6 py-4 border-b border-nilin-border/40">
+                <h2 className="text-lg font-serif text-nilin-charcoal">
+                  {editingCoupon ? 'Edit coupon' : 'Create coupon'}
+                </h2>
                 <button
                   type="button"
                   onClick={() => setShowModal(false)}
-                  className="px-4 py-2 border rounded-lg hover:bg-gray-50"
+                  className="p-2 rounded-lg hover:bg-nilin-blush/40"
                 >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
-                >
-                  {saving ? 'Saving...' : (editingCoupon ? 'Update' : 'Create')}
+                  <X className="w-5 h-5" />
                 </button>
               </div>
-            </form>
+              <form onSubmit={handleSubmit} className="p-6 space-y-4 font-sans">
+                <div>
+                  <label className="block text-sm font-medium text-nilin-charcoal mb-1">
+                    Coupon code
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.code}
+                    onChange={(e) =>
+                      setFormData({ ...formData, code: e.target.value.toUpperCase() })
+                    }
+                    disabled={!!editingCoupon}
+                    placeholder="SUMMER15"
+                    className={cn(
+                      'w-full px-3 py-2 rounded-xl border font-mono',
+                      validationErrors.code ? 'border-red-400' : 'border-nilin-border/60'
+                    )}
+                  />
+                  {validationErrors.code && (
+                    <p className="text-xs text-red-600 mt-1">{validationErrors.code}</p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-nilin-charcoal mb-1">Title</label>
+                  <input
+                    type="text"
+                    value={formData.title}
+                    onChange={(e) => setFormData({ ...formData, title: e.target.value })}
+                    className={cn(
+                      'w-full px-3 py-2 rounded-xl border',
+                      validationErrors.title ? 'border-red-400' : 'border-nilin-border/60'
+                    )}
+                  />
+                  {validationErrors.title && (
+                    <p className="text-xs text-red-600 mt-1">{validationErrors.title}</p>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Type</label>
+                    <select
+                      value={formData.type}
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          type: e.target.value as CouponFormPayload['type'],
+                        })
+                      }
+                      className="w-full px-3 py-2 rounded-xl border border-nilin-border/60"
+                    >
+                      <option value="percentage">Percentage</option>
+                      <option value="fixed">Fixed (AED)</option>
+                      <option value="free_service">Free service</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">
+                      {formData.type === 'percentage' ? 'Percent' : 'Amount'}
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={formData.value}
+                      onChange={(e) =>
+                        setFormData({ ...formData, value: Number(e.target.value) })
+                      }
+                      className="w-full px-3 py-2 rounded-xl border border-nilin-border/60"
+                    />
+                  </div>
+                </div>
+                {formData.type === 'percentage' && (
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Max discount (AED)</label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={formData.maxDiscount}
+                      onChange={(e) =>
+                        setFormData({ ...formData, maxDiscount: Number(e.target.value) })
+                      }
+                      className="w-full px-3 py-2 rounded-xl border border-nilin-border/60"
+                    />
+                  </div>
+                )}
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Min order (AED)</label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={formData.minOrderAmount}
+                      onChange={(e) =>
+                        setFormData({ ...formData, minOrderAmount: Number(e.target.value) })
+                      }
+                      className="w-full px-3 py-2 rounded-xl border border-nilin-border/60"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Usage limit</label>
+                    <input
+                      type="number"
+                      min={1}
+                      value={formData.usageLimit}
+                      onChange={(e) =>
+                        setFormData({ ...formData, usageLimit: Number(e.target.value) })
+                      }
+                      className="w-full px-3 py-2 rounded-xl border border-nilin-border/60"
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Valid from</label>
+                    <input
+                      type="date"
+                      value={formData.validFrom}
+                      onChange={(e) =>
+                        setFormData({ ...formData, validFrom: e.target.value })
+                      }
+                      className="w-full px-3 py-2 rounded-xl border border-nilin-border/60"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Valid until</label>
+                    <input
+                      type="date"
+                      value={formData.validUntil}
+                      onChange={(e) =>
+                        setFormData({ ...formData, validUntil: e.target.value })
+                      }
+                      className={cn(
+                        'w-full px-3 py-2 rounded-xl border',
+                        validationErrors.validUntil ? 'border-red-400' : 'border-nilin-border/60'
+                      )}
+                    />
+                    {validationErrors.validUntil && (
+                      <p className="text-xs text-red-600 mt-1">{validationErrors.validUntil}</p>
+                    )}
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Description</label>
+                  <textarea
+                    value={formData.description}
+                    onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                    rows={2}
+                    className="w-full px-3 py-2 rounded-xl border border-nilin-border/60"
+                  />
+                </div>
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={formData.featured}
+                    onChange={(e) => setFormData({ ...formData, featured: e.target.checked })}
+                    className="rounded border-nilin-border"
+                  />
+                  Featured on homepage
+                </label>
+                <div className="flex justify-end gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowModal(false)}
+                    className="px-4 py-2 rounded-xl border border-nilin-border/60 text-sm"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={saving}
+                    className="btn-nilin inline-flex items-center gap-2 disabled:opacity-50"
+                  >
+                    {saving ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Save className="w-4 h-4" />
+                    )}
+                    {editingCoupon ? 'Save changes' : 'Create coupon'}
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
-        </div>
-      )}
+        )}
       </AdminPageShell>
     </ErrorBoundary>
   );

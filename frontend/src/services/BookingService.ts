@@ -3,371 +3,34 @@ import authService from './AuthService';
 // ==========================================
 // BOOKING TYPES & INTERFACES
 // ==========================================
-
-export interface BookingLocation {
-  type?: 'customer_address' | 'provider_location' | 'online';
-  address?: {
-    street?: string;
-    city?: string;
-    state?: string;
-    zipCode?: string;
-    country?: string;
-    coordinates?: {
-      lat: number;
-      lng: number;
-    };
-  };
-  notes?: string;
-}
-
-export interface BookingCustomerInfo {
-  firstName?: string;
-  lastName?: string;
-  email?: string;
-  phone?: string;
-  specialRequests?: string;
-  accessInstructions?: string;
-}
-
-export interface BookingAddOn {
-  name: string;
-  price: number;
-  description?: string;
-}
-
-export interface CreateBookingData {
-  serviceId: string;
-  providerId: string;
-  scheduledDate: string; // YYYY-MM-DD format
-  scheduledTime: string; // HH:MM format
-  location?: BookingLocation;
-  customerInfo?: BookingCustomerInfo;
-  addOns?: BookingAddOn[];
-  notes?: string;
-
-  // New booking flow fields
-  locationType?: 'at_home' | 'hotel';
-  selectedDuration?: number;
-  genderPreference?: 'male' | 'female' | 'no_preference';
-  experiencePreference?: 'no_preference' | 'specific' | 'any_experience';
-  paymentMethod?: 'apple_pay' | 'credit_card' | 'cash';
-
-  // Coupon/Promo
-  couponCode?: string;
-
-  // Metadata for tracking and idempotency
-  metadata?: {
-    idempotencyKey?: string;
-    bookingSource?: string;
-    deviceType?: string;
-    sessionId?: string;
-  };
-}
-
-export interface Booking {
-  _id: string;
-  bookingNumber: string;
-  customerId: string;
-  providerId: string;
-  serviceId: string;
-
-  // Scheduling
-  scheduledDate: string;
-  scheduledTime: string;
-  estimatedDuration: number;
-  actualDuration?: number;
-
-  // Status
-  status: 'pending' | 'confirmed' | 'in_progress' | 'completed' | 'cancelled' | 'no_show';
-  statusHistory: Array<{
-    status: string;
-    timestamp: string;
-    updatedBy: string;
-    notes?: string;
-  }>;
-
-  // Status timestamps
-  confirmedAt?: string;
-  startedAt?: string;
-  completedAt?: string;
-  cancelledAt?: string;
-  cancellationReason?: string;
-
-  // Address field for backward compatibility
-  address?: {
-    street?: string;
-    city?: string;
-    state?: string;
-    zipCode?: string;
-    country?: string;
-  };
-
-  // Location & Details
-  location: BookingLocation;
-  customerInfo: BookingCustomerInfo;
-
-  // Pricing
-  pricing: {
-    basePrice: number;
-    addOns: BookingAddOn[];
-    subtotal: number;
-    tax: number; // FIX: Backend uses 'tax' not 'taxes'
-    taxes?: number; // Legacy - some code uses this
-    totalAmount: number;
-    total?: number; // Legacy - some code uses this
-    currency: string;
-  };
-
-  // Service Info (populated)
-  service?: {
-    _id: string;
-    name: string;
-    description: string;
-    category: string;
-    subcategory?: string;
-    duration: number;
-    price: {
-      amount: number;
-      currency: string;
-      type: string;
-    };
-  };
-
-  // Provider Info (populated)
-  provider?: {
-    _id: string;
-    firstName: string;
-    lastName: string;
-    email: string;
-    phone?: string;
-    avatar?: string;
-    businessInfo?: {
-      businessName: string;
-      businessType: string;
-    };
-  };
-
-  // Customer Info (populated)
-  customer?: {
-    _id: string;
-    firstName: string;
-    lastName: string;
-    email: string;
-    phone?: string;
-    avatar?: string;
-  };
-
-  // Communication
-  messages: Array<{
-    _id: string;
-    senderId: string;
-    senderType: 'customer' | 'provider';
-    message: string;
-    timestamp: string;
-    readBy: Array<{
-      userId: string;
-      readAt: string;
-    }>;
-  }>;
-
-  // Payment
-  paymentStatus: 'pending' | 'paid' | 'refunded' | 'failed';
-  paymentMethod?: string;
-
-  // New booking flow fields
-  locationType?: 'at_home' | 'hotel';
-  selectedDuration?: number;
-  professionalPreference?: 'male' | 'female' | 'no_preference';
-
-  // Reviews & Ratings
-  customerRating?: {
-    rating: number;
-    review?: string;
-    ratedAt: string;
-  };
-  providerRating?: {
-    rating: number;
-    review?: string;
-    ratedAt: string;
-  };
-
-  // Provider Response
-  providerResponse?: {
-    status: 'pending' | 'accepted' | 'rejected';
-    message?: string;
-    estimatedArrival?: string;
-    notes?: string;
-    respondedAt?: string;
-    completedAt?: string;
-    arrivalTime?: string;
-  };
-
-  // Timestamps
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface BookingMessage {
-  message: string;
-}
-
-export interface BookingAcceptData {
-  notes?: string;
-  estimatedArrival?: string; // ISO string
-}
-
-export interface BookingCompleteData {
-  notes?: string;
-  actualDuration?: number; // in minutes
-}
-
-export interface BookingCancelData {
-  reason: string;
-  notes?: string;
-}
-
-export interface ProviderAvailability {
-  _id: string;
-  providerId: string;
-  weeklySchedule: {
-    [key: string]: {
-      isAvailable: boolean;
-      timeSlots: Array<{
-        start: string;
-        end: string;
-        isActive: boolean;
-      }>;
-    };
-  };
-  dateOverrides: Array<{
-    date: string;
-    isAvailable: boolean;
-    reason?: string;
-    timeSlots?: Array<{
-      start: string;
-      end: string;
-      isActive: boolean;
-    }>;
-    notes?: string;
-  }>;
-  timezone: string;
-  bufferTime: number;
-  autoAcceptBookings: boolean;
-  maxAdvanceBookingDays: number;
-  minNoticeTime?: number;
-}
-
-export interface AvailabilitySettingsUpdate {
-  bufferTime?: number;
-  maxAdvanceBookingDays?: number;
-  autoAcceptBookings?: boolean;
-  minNoticeTime?: number;
-  timezone?: string;
-}
-
-export interface AvailableSlot {
-  date: string;
-  time: string;
-  duration: number;
-  isAvailable: boolean;
-  conflictingBookings?: string[];
-}
-
-export interface ProviderBookingsStats {
-  pending: number;
-  confirmed: number;
-  in_progress: number;
-  completed: number;
-  cancelled: number;
-  no_show: number;
-  total: number;
-}
-
-export interface BookingFilters {
-  status?: string;
-  dateFrom?: string;
-  dateTo?: string;
-  page?: number;
-  limit?: number;
-  sortBy?: string;
-  sortOrder?: 'asc' | 'desc';
-  search?: string;
-}
-
-export interface RescheduleBookingData {
-  scheduledDate: string; // YYYY-MM-DD format
-  scheduledTime: string; // HH:MM format
-  reason?: string;
-}
-
-export interface GuestInfo {
-  name: string;
-  email: string;
-  phone: string;
-}
-
-export interface CreateGuestBookingData {
-  serviceId: string;
-  providerId: string;
-  scheduledDate: string; // YYYY-MM-DD format
-  scheduledTime: string; // HH:MM format
-  location?: BookingLocation;
-  guestInfo: GuestInfo;
-  addOns?: BookingAddOn[];
-  notes?: string;
-
-  // New booking flow fields
-  locationType?: 'at_home' | 'at_provider' | 'at_hotel';
-  selectedDuration?: number;
-  genderPreference?: 'male' | 'female' | 'no_preference';
-  experiencePreference?: 'no_preference' | 'specific' | 'any_experience';
-  paymentMethod?: 'apple_pay' | 'credit_card' | 'cash';
-}
-
-export interface BookingTrackingData {
-  bookingNumber: string;
-  status: string;
-  serviceName?: string;
-  providerName?: string;
-  scheduledDate?: string;
-  scheduledTime?: string;
-  location?: {
-    address?: string;
-  };
-  pricing?: {
-    totalAmount?: number;
-    currency?: string;
-  };
-}
-
-export interface BlockTimePeriodData {
-  startDate: string; // YYYY-MM-DD format
-  endDate: string; // YYYY-MM-DD format
-  reason?: string;
-}
-
-export interface BookingResponse<T = any> {
-  success: boolean;
-  data: T;
-  message?: string;
-  pagination?: {
-    page: number;
-    limit: number;
-    total: number;
-    pages: number;
-    hasMore?: boolean;
-    nextCursor?: string;
-  };
-  stats?: {
-    pending: number;
-    confirmed: number;
-    completed: number;
-    cancelled: number;
-    in_progress?: number;
-    no_show?: number;
-    total?: number;
-  };
-}
+// Types imported from shared types file to ensure consistency across services
+export type {
+  Booking,
+  BookingLocation,
+  BookingCustomerInfo,
+  BookingAddOn,
+  CreateBookingData,
+  CreateGuestBookingData,
+  GuestInfo,
+  BookingMessage,
+  BookingAcceptData,
+  BookingCompleteData,
+  BookingCancelData,
+  BookingFilters,
+  BookingResponse,
+  BookingTrackingData,
+  ProviderAvailability,
+  AvailabilitySettingsUpdate,
+  AvailableSlot,
+  BlockTimePeriodData,
+  ProviderBookingsStats,
+  RescheduleBookingData,
+  BookingStatus,
+  PaymentStatus,
+  BookingPricing,
+  UpdateBookingData,
+  GetBookingsOptions,
+} from '../types/booking.types';
 
 /**
  * Booking Service - Complete booking lifecycle management
@@ -384,8 +47,12 @@ class BookingService {
    */
   async createBooking(data: CreateBookingData): Promise<BookingResponse<{ booking: Booking }>> {
     try {
-      const response = await authService.post<BookingResponse<{ booking: Booking }>>('/bookings', data);
-      return response;
+      const response = await authService.post<any>('/bookings', data);
+      // Transform the booking if it exists
+      if (response?.data?.booking) {
+        response.data.booking = this.transformBooking(response.data.booking);
+      }
+      return response as BookingResponse<{ booking: Booking }>;
     } catch (error) {
       throw new Error(error instanceof Error ? error.message : 'Failed to create booking');
     }
@@ -396,8 +63,12 @@ class BookingService {
    */
   async createGuestBooking(data: CreateGuestBookingData): Promise<BookingResponse<{ booking: Booking }>> {
     try {
-      const response = await authService.post<BookingResponse<{ booking: Booking }>>('/bookings/guest', data);
-      return response;
+      const response = await authService.post<any>('/bookings/guest', data);
+      // Transform the booking if it exists
+      if (response?.data?.booking) {
+        response.data.booking = this.transformBooking(response.data.booking);
+      }
+      return response as BookingResponse<{ booking: Booking }>;
     } catch (error) {
       throw new Error(error instanceof Error ? error.message : 'Failed to create guest booking');
     }
@@ -408,8 +79,12 @@ class BookingService {
    */
   async getBooking(bookingId: string): Promise<BookingResponse<{ booking: Booking }>> {
     try {
-      const response = await authService.get<BookingResponse<{ booking: Booking }>>(`/bookings/${bookingId}`);
-      return response;
+      const response = await authService.get<any>(`/bookings/${bookingId}`);
+      // Transform the booking if it exists
+      if (response?.data?.booking) {
+        response.data.booking = this.transformBooking(response.data.booking);
+      }
+      return response as BookingResponse<{ booking: Booking }>;
     } catch (error) {
       throw new Error(error instanceof Error ? error.message : 'Failed to get booking');
     }
@@ -483,6 +158,209 @@ class BookingService {
   }
 
   /**
+   * Transform a single booking from backend format to frontend format
+   * Handles field name mismatches, type conversions, and missing fields
+   */
+  private transformBooking(booking: any): Booking {
+    if (!booking) return booking;
+
+    // Helper to convert Date or string to ISO string
+    const toIsoString = (value: any): string | undefined => {
+      if (!value) return undefined;
+      if (value instanceof Date) return value.toISOString();
+      if (typeof value === 'string') return value;
+      return String(value);
+    };
+
+    // Helper to convert ObjectId or string to string
+    const toStringId = (value: any): string => {
+      if (!value) return '';
+      if (typeof value === 'object' && value._bsontype === 'ObjectId') return value.toString();
+      if (typeof value === 'object' && value.$oid) return value.$oid;
+      return String(value);
+    };
+
+    // Helper to transform coordinates from GeoJSON { type: 'Point', coordinates: [lng, lat] }
+    // to frontend format { lat, lng }
+    const transformCoordinates = (coords: any): { lat: number; lng: number } | undefined => {
+      if (!coords) return undefined;
+      // Already in frontend format { lat, lng }
+      if (typeof coords.lat === 'number' && typeof coords.lng === 'number') {
+        return { lat: coords.lat, lng: coords.lng };
+      }
+      // GeoJSON format { type: 'Point', coordinates: [lng, lat] }
+      if (coords.type === 'Point' && Array.isArray(coords.coordinates)) {
+        return { lng: coords.coordinates[0], lat: coords.coordinates[1] };
+      }
+      return undefined;
+    };
+
+    // Extract payment status from nested structure (payment.status) or use flat field
+    const paymentStatus = booking.payment?.status || booking.paymentStatus || 'pending';
+
+    // Build address from location.address for backward compatibility
+    const addressFromLocation = booking.location?.address;
+
+    // Transform the booking object
+    const transformed: Booking = {
+      _id: toStringId(booking._id),
+      bookingNumber: booking.bookingNumber || '',
+
+      // Issue #4: Convert ObjectIds to strings
+      customerId: toStringId(booking.customerId),
+      providerId: toStringId(booking.providerId),
+      serviceId: toStringId(booking.serviceId),
+
+      // Issue #1: Map backend 'duration' to frontend 'estimatedDuration'
+      // Issue #2: Convert scheduledDate from Date to string (ISO)
+      scheduledDate: toIsoString(booking.scheduledDate) || booking.scheduledDate,
+      scheduledTime: booking.scheduledTime || '',
+      estimatedDuration: booking.duration || booking.estimatedDuration || 0,
+      actualDuration: booking.actualDuration,
+
+      // Status
+      status: booking.status || 'pending',
+      statusHistory: (booking.statusHistory || []).map((h: any) => ({
+        status: h.status,
+        timestamp: toIsoString(h.timestamp) || h.timestamp,
+        updatedBy: toStringId(h.updatedBy),
+        notes: h.notes,
+      })),
+
+      // Status timestamps - Issue #2: Handle Date conversion
+      confirmedAt: toIsoString(booking.confirmedAt),
+      startedAt: toIsoString(booking.startedAt),
+      completedAt: toIsoString(booking.completedAt),
+      cancelledAt: toIsoString(booking.cancelledAt),
+      cancellationReason: booking.cancellationReason,
+
+      // Issue #6: Build address field for backward compatibility from location.address
+      address: booking.address || (addressFromLocation ? {
+        street: addressFromLocation.street,
+        city: addressFromLocation.city,
+        state: addressFromLocation.state,
+        zipCode: addressFromLocation.zipCode,
+        country: addressFromLocation.country,
+      } : undefined),
+
+      // Location & Details - transform coordinates from GeoJSON format if needed
+      location: booking.location ? {
+        ...booking.location,
+        address: booking.location.address ? {
+          ...booking.location.address,
+          coordinates: transformCoordinates(booking.location.address.coordinates),
+        } : undefined,
+      } : {},
+      customerInfo: booking.customerInfo || {},
+
+      // Pricing - Normalize legacy fields and ensure consistency
+      // Legacy 'taxes' -> primary 'tax', Legacy 'total' -> primary 'totalAmount'
+      pricing: {
+        basePrice: booking.pricing?.basePrice ?? 0,
+        addOns: booking.pricing?.addOns,
+        discounts: booking.pricing?.discounts,
+        subtotal: booking.pricing?.subtotal ?? 0,
+        tax: booking.pricing?.tax ?? booking.pricing?.taxes ?? 0,
+        taxes: booking.pricing?.tax ?? booking.pricing?.taxes ?? 0, // @deprecated Use 'tax' instead
+        totalAmount: booking.pricing?.totalAmount ?? booking.pricing?.total ?? 0,
+        total: booking.pricing?.totalAmount ?? booking.pricing?.total ?? 0, // @deprecated Use 'totalAmount' instead
+        currency: booking.pricing?.currency ?? 'AED',
+        couponDiscount: booking.pricing?.couponDiscount,
+      },
+
+      // Service Info (populated)
+      service: booking.service ? {
+        _id: toStringId(booking.service._id),
+        name: booking.service.name,
+        description: booking.service.description,
+        category: booking.service.category,
+        subcategory: booking.service.subcategory,
+        duration: booking.service.duration,
+        price: booking.service.price,
+      } : undefined,
+
+      // Provider Info (populated)
+      provider: booking.provider ? {
+        _id: toStringId(booking.provider._id),
+        firstName: booking.provider.firstName,
+        lastName: booking.provider.lastName,
+        email: booking.provider.email,
+        phone: booking.provider.phone,
+        avatar: booking.provider.avatar,
+        businessInfo: booking.provider.businessInfo,
+      } : undefined,
+
+      // Customer Info (populated)
+      customer: booking.customer ? {
+        _id: toStringId(booking.customer._id),
+        firstName: booking.customer.firstName,
+        lastName: booking.customer.lastName,
+        email: booking.customer.email,
+        phone: booking.customer.phone,
+        avatar: booking.customer.avatar,
+      } : undefined,
+
+      // Communication - handle both frontend format (senderId/senderType) and backend format (from)
+      messages: (booking.messages || []).map((m: any) => ({
+        _id: toStringId(m._id),
+        // Handle backend 'from' field (ObjectId) or frontend 'senderId'
+        senderId: m.from ? toStringId(m.from) : toStringId(m.senderId),
+        // Handle backend populated 'from' with senderType or direct senderType
+        senderType: m.from?.senderType || m.senderType,
+        message: m.message,
+        timestamp: toIsoString(m.timestamp) || m.timestamp,
+        readBy: (m.readBy || []).map((r: any) => ({
+          userId: toStringId(r.userId),
+          readAt: toIsoString(r.readAt) || r.readAt,
+        })),
+      })),
+
+      // Issue #5: Extract paymentStatus from payment.status or use flat field
+      paymentStatus: paymentStatus,
+      paymentMethod: booking.paymentMethod || booking.payment?.method,
+
+      // New booking flow fields
+      locationType: booking.locationType,
+      selectedDuration: booking.selectedDuration,
+      professionalPreference: booking.professionalPreference,
+      duration: booking.duration,
+      isGuestBooking: booking.isGuestBooking,
+      guestInfo: booking.guestInfo,
+
+      // Reviews & Ratings - Issue #3: Handle Date conversion
+      customerRating: booking.customerRating ? {
+        rating: booking.customerRating.rating,
+        review: booking.customerRating.review,
+        ratedAt: toIsoString(booking.customerRating.ratedAt) || booking.customerRating.ratedAt,
+      } : undefined,
+      providerRating: booking.providerRating ? {
+        rating: booking.providerRating.rating,
+        review: booking.providerRating.review,
+        ratedAt: toIsoString(booking.providerRating.ratedAt) || booking.providerRating.ratedAt,
+      } : undefined,
+
+      // Provider Response - Handle Date conversion and missing timestamps
+      providerResponse: booking.providerResponse ? {
+        status: booking.providerResponse.status,
+        message: booking.providerResponse.message,
+        estimatedArrival: booking.providerResponse.estimatedArrival,
+        notes: booking.providerResponse.notes,
+        respondedAt: toIsoString(booking.providerResponse.respondedAt),
+        acceptedAt: toIsoString(booking.providerResponse.acceptedAt),
+        rejectedAt: toIsoString(booking.providerResponse.rejectedAt),
+        completedAt: toIsoString(booking.providerResponse.completedAt),
+        arrivalTime: booking.providerResponse.arrivalTime,
+      } : undefined,
+
+      // Issue #3: Convert createdAt/updatedAt from Date to string (ISO)
+      createdAt: toIsoString(booking.createdAt) || booking.createdAt,
+      updatedAt: toIsoString(booking.updatedAt) || booking.updatedAt,
+    };
+
+    return transformed;
+  }
+
+  /**
    * Transform backend response to frontend format
    * Backend returns: { success, data: { bookings: [], pagination: { hasMore, nextCursor, limit } } }
    * Frontend expects: { success, data: { bookings: [] }, pagination: { page, pages, total, limit } }
@@ -491,7 +369,9 @@ class BookingService {
     stats?: ProviderBookingsStats;
   } {
     const { success, data, message } = response;
-    const bookings = (data?.bookings || []) as Booking[];
+    // Apply field transformations to each booking
+    const rawBookings = data?.bookings || [];
+    const bookings = rawBookings.map((b: any) => this.transformBooking(b));
     const pagination = data?.pagination;
     const stats = data?.stats as ProviderBookingsStats | undefined;
 
@@ -564,11 +444,12 @@ class BookingService {
    */
   async acceptBooking(bookingId: string, data?: BookingAcceptData): Promise<BookingResponse<{ booking: Booking }>> {
     try {
-      const response = await authService.patch<BookingResponse<{ booking: Booking }>>(
-        `/bookings/${bookingId}/accept`,
-        data || {}
-      );
-      return response;
+      const response = await authService.patch<any>(`/bookings/${bookingId}/accept`, data || {});
+      // Transform the booking if it exists
+      if (response?.data?.booking) {
+        response.data.booking = this.transformBooking(response.data.booking);
+      }
+      return response as BookingResponse<{ booking: Booking }>;
     } catch (error) {
       throw new Error(error instanceof Error ? error.message : 'Failed to accept booking');
     }
@@ -576,14 +457,16 @@ class BookingService {
 
   /**
    * Provider rejects a booking
+   * Backend uses POST /bookings/:id/decline
    */
   async rejectBooking(bookingId: string, data: BookingCancelData): Promise<BookingResponse<{ booking: Booking }>> {
     try {
-      const response = await authService.patch<BookingResponse<{ booking: Booking }>>(
-        `/bookings/${bookingId}/reject`,
-        data
-      );
-      return response;
+      const response = await authService.post<any>(`/bookings/${bookingId}/decline`, data);
+      // Transform the booking if it exists
+      if (response?.data?.booking) {
+        response.data.booking = this.transformBooking(response.data.booking);
+      }
+      return response as BookingResponse<{ booking: Booking }>;
     } catch (error) {
       throw new Error(error instanceof Error ? error.message : 'Failed to reject booking');
     }
@@ -594,11 +477,12 @@ class BookingService {
    */
   async startBooking(bookingId: string, notes?: string): Promise<BookingResponse<{ booking: Booking }>> {
     try {
-      const response = await authService.patch<BookingResponse<{ booking: Booking }>>(
-        `/bookings/${bookingId}/start`,
-        { notes }
-      );
-      return response;
+      const response = await authService.patch<any>(`/bookings/${bookingId}/start`, { notes });
+      // Transform the booking if it exists
+      if (response?.data?.booking) {
+        response.data.booking = this.transformBooking(response.data.booking);
+      }
+      return response as BookingResponse<{ booking: Booking }>;
     } catch (error) {
       throw new Error(error instanceof Error ? error.message : 'Failed to start booking');
     }
@@ -609,11 +493,12 @@ class BookingService {
    */
   async completeBooking(bookingId: string, data?: BookingCompleteData): Promise<BookingResponse<{ booking: Booking }>> {
     try {
-      const response = await authService.patch<BookingResponse<{ booking: Booking }>>(
-        `/bookings/${bookingId}/complete`,
-        data || {}
-      );
-      return response;
+      const response = await authService.patch<any>(`/bookings/${bookingId}/complete`, data || {});
+      // Transform the booking if it exists
+      if (response?.data?.booking) {
+        response.data.booking = this.transformBooking(response.data.booking);
+      }
+      return response as BookingResponse<{ booking: Booking }>;
     } catch (error) {
       throw new Error(error instanceof Error ? error.message : 'Failed to complete booking');
     }
@@ -624,11 +509,12 @@ class BookingService {
    */
   async cancelBooking(bookingId: string, data: BookingCancelData): Promise<BookingResponse<{ booking: Booking }>> {
     try {
-      const response = await authService.patch<BookingResponse<{ booking: Booking }>>(
-        `/bookings/${bookingId}/cancel`,
-        data
-      );
-      return response;
+      const response = await authService.patch<any>(`/bookings/${bookingId}/cancel`, data);
+      // Transform the booking if it exists
+      if (response?.data?.booking) {
+        response.data.booking = this.transformBooking(response.data.booking);
+      }
+      return response as BookingResponse<{ booking: Booking }>;
     } catch (error) {
       throw new Error(error instanceof Error ? error.message : 'Failed to cancel booking');
     }
@@ -639,11 +525,12 @@ class BookingService {
    */
   async rescheduleBooking(bookingId: string, data: RescheduleBookingData): Promise<BookingResponse<{ booking: Booking }>> {
     try {
-      const response = await authService.patch<BookingResponse<{ booking: Booking }>>(
-        `/bookings/${bookingId}/reschedule`,
-        data
-      );
-      return response;
+      const response = await authService.patch<any>(`/bookings/${bookingId}/reschedule`, data);
+      // Transform the booking if it exists
+      if (response?.data?.booking) {
+        response.data.booking = this.transformBooking(response.data.booking);
+      }
+      return response as BookingResponse<{ booking: Booking }>;
     } catch (error) {
       throw new Error(error instanceof Error ? error.message : 'Failed to reschedule booking');
     }
@@ -658,11 +545,12 @@ class BookingService {
    */
   async addBookingMessage(bookingId: string, data: BookingMessage): Promise<BookingResponse<{ booking: Booking }>> {
     try {
-      const response = await authService.post<BookingResponse<{ booking: Booking }>>(
-        `/bookings/${bookingId}/messages`,
-        data
-      );
-      return response;
+      const response = await authService.post<any>(`/bookings/${bookingId}/messages`, data);
+      // Transform the booking if it exists
+      if (response?.data?.booking) {
+        response.data.booking = this.transformBooking(response.data.booking);
+      }
+      return response as BookingResponse<{ booking: Booking }>;
     } catch (error) {
       throw new Error(error instanceof Error ? error.message : 'Failed to add message');
     }
@@ -673,11 +561,12 @@ class BookingService {
    */
   async markMessagesRead(bookingId: string): Promise<BookingResponse<{ booking: Booking }>> {
     try {
-      const response = await authService.patch<BookingResponse<{ booking: Booking }>>(
-        `/bookings/${bookingId}/messages/read`,
-        {}
-      );
-      return response;
+      const response = await authService.patch<any>(`/bookings/${bookingId}/messages/read`, {});
+      // Transform the booking if it exists
+      if (response?.data?.booking) {
+        response.data.booking = this.transformBooking(response.data.booking);
+      }
+      return response as BookingResponse<{ booking: Booking }>;
     } catch (error) {
       throw new Error(error instanceof Error ? error.message : 'Failed to mark messages as read');
     }
@@ -739,13 +628,26 @@ class BookingService {
 
   /**
    * Remove date override
+   * FIX: Issue #5 - Support both overrideId (preferred) and date (legacy fallback)
    */
-  async removeDateOverride(date: string): Promise<BookingResponse<{ availability: ProviderAvailability }>> {
+  async removeDateOverride(overrideIdOrDate: string): Promise<BookingResponse<{ availability: ProviderAvailability }>> {
     try {
-      const response = await authService.delete<BookingResponse<{ availability: ProviderAvailability }>>(
-        `/availability/override/${date}`
-      );
-      return response;
+      // Check if this looks like a MongoDB ObjectId (24 hex chars) or a date string
+      const isObjectId = /^[0-9a-fA-F]{24}$/.test(overrideIdOrDate);
+
+      if (isObjectId) {
+        // Use overrideId query parameter (preferred method)
+        const response = await authService.delete<BookingResponse<{ availability: ProviderAvailability }>>(
+          `/availability/override?overrideId=${overrideIdOrDate}`
+        );
+        return response;
+      } else {
+        // Legacy fallback: use date parameter
+        const response = await authService.delete<BookingResponse<{ availability: ProviderAvailability }>>(
+          `/availability/override?date=${overrideIdOrDate}`
+        );
+        return response;
+      }
     } catch (error) {
       throw new Error(error instanceof Error ? error.message : 'Failed to remove date override');
     }
@@ -797,6 +699,7 @@ class BookingService {
 
   /**
    * Get available time slots for a provider
+   * FIX: Issue #2 - Support serviceId parameter for per-service availability
    */
   async getAvailableSlots(
     providerId: string,
@@ -804,12 +707,15 @@ class BookingService {
       date: string;
       duration: number;
       days?: number;
+      serviceId?: string; // Optional service ID for per-service availability
     }
   ): Promise<BookingResponse<{ slots: AvailableSlot[] }>> {
     try {
       const searchParams = new URLSearchParams();
       Object.entries(params).forEach(([key, value]) => {
-        searchParams.append(key, String(value));
+        if (value !== undefined && value !== null) {
+          searchParams.append(key, String(value));
+        }
       });
 
       const response = await authService.get<BookingResponse<{ slots: string[] }>>(
@@ -1009,6 +915,18 @@ class BookingService {
     const hoursUntilBooking = (bookingDateTime.getTime() - now.getTime()) / (1000 * 60 * 60);
 
     // Can cancel if status allows and it's more than 24 hours before booking
+    return ['pending', 'confirmed'].includes(booking.status) && hoursUntilBooking > 24;
+  }
+
+  /**
+   * Check if booking can be rescheduled
+   */
+  canRescheduleBooking(booking: Booking): boolean {
+    const now = new Date();
+    const bookingDateTime = new Date(`${booking.scheduledDate}T${booking.scheduledTime}`);
+    const hoursUntilBooking = (bookingDateTime.getTime() - now.getTime()) / (1000 * 60 * 60);
+
+    // Can reschedule if status allows and it's more than 24 hours before booking
     return ['pending', 'confirmed'].includes(booking.status) && hoursUntilBooking > 24;
   }
 

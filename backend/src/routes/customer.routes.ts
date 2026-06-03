@@ -4,6 +4,7 @@ import customerAnalyticsController from '../controllers/customer.analytics.contr
 import authMiddleware from '../middleware/auth.middleware';
 import Joi from 'joi';
 import { validate } from '../middleware/validation.middleware';
+import { perUserRateLimiter } from '../middleware/rateLimiter';
 
 const router = Router();
 
@@ -25,18 +26,21 @@ const addressSchema = Joi.object({
   isDefault: Joi.boolean(),
 });
 
+// SECURITY FIX: Field-level validation for updateAddress to prevent mass assignment
 const updateAddressSchema = Joi.object({
-  label: Joi.string(),
-  street: Joi.string(),
-  city: Joi.string(),
-  state: Joi.string().allow(''),
-  country: Joi.string(),
-  zipCode: Joi.string().allow(''),
+  label: Joi.string().min(1).max(100),
+  street: Joi.string().min(1).max(500),
+  city: Joi.string().min(1).max(100),
+  state: Joi.string().allow('').max(100),
+  country: Joi.string().max(100),
+  zipCode: Joi.string().allow('').max(20),
   coordinates: Joi.object({
-    lat: Joi.number(),
-    lng: Joi.number(),
+    lat: Joi.number().min(-90).max(90),
+    lng: Joi.number().min(-180).max(180),
   }),
   isDefault: Joi.boolean(),
+}).min(1).messages({
+  'object.min': 'At least one field must be provided for update',
 });
 
 const paymentMethodSchema = Joi.object({
@@ -54,25 +58,29 @@ const updatePaymentMethodSchema = Joi.object({
 // Routes (All Protected)
 // ============================================
 
-// Addresses
+// Addresses - All address operations protected with rate limiting
 router.get('/addresses',
+  perUserRateLimiter,
   authMiddleware.authenticate,
   customerController.getAddresses
 );
 
 router.post('/addresses',
+  perUserRateLimiter,
   authMiddleware.authenticate,
   validate(addressSchema),
   customerController.addAddress
 );
 
 router.patch('/addresses/:addressId',
+  perUserRateLimiter,
   authMiddleware.authenticate,
   validate(updateAddressSchema),
   customerController.updateAddress
 );
 
 router.delete('/addresses/:addressId',
+  perUserRateLimiter,
   authMiddleware.authenticate,
   customerController.deleteAddress
 );

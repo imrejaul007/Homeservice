@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, useSearchParams, Link } from 'react-router-dom';
+import { useParams, useSearchParams, Link, useNavigate } from 'react-router-dom';
+import DOMPurify from 'dompurify';
 import {
   Calendar,
   Clock,
@@ -26,6 +27,7 @@ import { cn, formatPrice } from '../../lib/utils';
 import ExperienceSubmissionForm from '../experience/ExperienceSubmissionForm';
 import { experienceApi } from '../../services/experienceApi';
 import { useToastActions } from '../common/Toast';
+import { CANCELLATION_REASONS } from '../../constants/booking';
 
 interface BookingDetailProps {
   userType: 'customer' | 'provider';
@@ -36,7 +38,11 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
   const { bookingId } = useParams<{ bookingId: string }>();
   const [searchParams] = useSearchParams();
   const activeTab = searchParams.get('tab') || 'details';
+  const navigate = useNavigate();
   const toast = useToastActions();
+
+  // Use browser locale for date/time formatting with fallback
+  const locale = typeof navigator !== 'undefined' ? navigator.language : 'en-US';
 
   const { user } = useAuthStore();
   const {
@@ -55,7 +61,6 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
   } = useBookingStore();
 
   const [newMessage, setNewMessage] = useState('');
-  const [showActionMenu, setShowActionMenu] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [showExperienceForm, setShowExperienceForm] = useState(false);
   const [hasExperience, setHasExperience] = useState(false);
@@ -138,14 +143,18 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
           break;
         case 'cancel':
           await cancelBooking(currentBooking._id, {
-            reason: 'customer_request',
+            reason: CANCELLATION_REASONS.CUSTOMER_REQUEST,
             notes: 'Cancelled by customer'
           });
           break;
+        case 'reschedule':
+          // Navigate to reschedule page using React Router for proper SPA navigation
+          navigate(`/${userType}/bookings/${currentBooking._id}/reschedule`);
+          break;
       }
-      setShowActionMenu(false);
     } catch (error) {
       console.error(`Failed to ${action} booking:`, error);
+      toast.error(`Failed to ${action} booking. Please try again.`);
     } finally {
       setActionLoading(null);
     }
@@ -163,21 +172,43 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
         return <CheckCircle className="h-5 w-5" />;
       case 'cancelled':
         return <XCircle className="h-5 w-5" />;
+      case 'no_show':
+        return <XCircle className="h-5 w-5" />;
       default:
         return <AlertCircle className="h-5 w-5" />;
+    }
+  };
+
+  // Action icons mapping - fixed type mismatch at line 298
+  const getActionIcon = (action: string) => {
+    switch (action) {
+      case 'accept':
+        return <CheckCircle className="h-4 w-4" />;
+      case 'reject':
+        return <XCircle className="h-4 w-4" />;
+      case 'start':
+        return <AlertCircle className="h-4 w-4" />;
+      case 'complete':
+        return <CheckCircle className="h-4 w-4" />;
+      case 'cancel':
+        return <XCircle className="h-4 w-4" />;
+      case 'reschedule':
+        return <Clock className="h-4 w-4" />;
+      default:
+        return <MoreHorizontal className="h-4 w-4" />;
     }
   };
 
   const formatDateTime = (date: string, time: string) => {
     const bookingDate = new Date(`${date}T${time}`);
     return {
-      date: bookingDate.toLocaleDateString('en-US', {
+      date: bookingDate.toLocaleDateString(locale, {
         weekday: 'long',
         year: 'numeric',
         month: 'long',
         day: 'numeric'
       }),
-      time: bookingDate.toLocaleTimeString('en-US', {
+      time: bookingDate.toLocaleTimeString(locale, {
         hour: '2-digit',
         minute: '2-digit'
       })
@@ -205,6 +236,10 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
       // Customer actions
       if (bookingService.canCancelBooking(currentBooking)) {
         actions.push('cancel');
+      }
+      // Add reschedule action for customers with pending/confirmed bookings
+      if (bookingService.canRescheduleBooking(currentBooking)) {
+        actions.push('reschedule');
       }
     }
 
@@ -256,14 +291,14 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
                 {bookingService.getStatusLabel(currentBooking.status)}
               </div>
               <span className="text-sm text-nilin-warmGray">
-                Created {new Date(currentBooking.createdAt).toLocaleDateString()}
+                Created {new Date(currentBooking.createdAt).toLocaleDateString(locale)}
               </span>
             </div>
           </div>
 
           {/* Action Buttons */}
           {availableActions.length > 0 && (
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               {availableActions.map((action) => {
                 const getActionColor = (actionType: string) => {
                   switch (actionType) {
@@ -276,6 +311,8 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
                     case 'reject':
                     case 'cancel':
                       return 'bg-nilin-error hover:bg-nilin-error/90 text-white';
+                    case 'reschedule':
+                      return 'bg-blue-500 hover:bg-blue-600 text-white';
                     default:
                       return 'bg-nilin-warmGray hover:bg-nilin-charcoal text-white';
                   }
@@ -286,6 +323,7 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
                     key={action}
                     onClick={() => handleBookingAction(action)}
                     disabled={actionLoading === action}
+                    aria-label={`${action.charAt(0).toUpperCase() + action.slice(1)} booking`}
                     className={cn(
                       "btn-3d flex items-center gap-2 px-4 py-2 rounded-xl transition-all text-sm font-medium",
                       getActionColor(action),
@@ -295,7 +333,7 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
                     {actionLoading === action ? (
                       <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
                     ) : (
-                      getStatusIcon(action as any)
+                      getActionIcon(action)
                     )}
                     {action.charAt(0).toUpperCase() + action.slice(1)}
                     {action === 'complete' && ' Service'}
@@ -549,15 +587,15 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
                   <div className="space-y-2 text-sm">
                     <div className="flex justify-between">
                       <span className="text-nilin-warmGray">Base Service:</span>
-                      <span className="text-nilin-charcoal">{formatPrice(currentBooking.pricing.basePrice || currentBooking.service?.price.amount || 0, currentBooking.pricing.currency)}</span>
+                      <span className="text-nilin-charcoal">{new Intl.NumberFormat(locale, { style: 'currency', currency: currentBooking.pricing.currency }).format(currentBooking.pricing.basePrice || currentBooking.service?.price.amount || 0)}</span>
                     </div>
 
-                    {currentBooking.pricing.addOns.length > 0 && (
+                    {currentBooking.pricing.addOns?.length > 0 && (
                       <>
                         {currentBooking.pricing.addOns.map((addon, index) => (
                           <div key={index} className="flex justify-between text-nilin-warmGray">
                             <span>{addon.name}:</span>
-                            <span className="text-nilin-charcoal">{formatPrice(addon.price, currentBooking.pricing.currency)}</span>
+                            <span className="text-nilin-charcoal">{new Intl.NumberFormat(locale, { style: 'currency', currency: currentBooking.pricing.currency }).format(addon.price)}</span>
                           </div>
                         ))}
                       </>
@@ -565,17 +603,17 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
 
                     <div className="flex justify-between border-t border-nilin-border/30 pt-2">
                       <span className="text-nilin-warmGray">Subtotal:</span>
-                      <span className="text-nilin-charcoal">{formatPrice(currentBooking.pricing.subtotal, currentBooking.pricing.currency)}</span>
+                      <span className="text-nilin-charcoal">{new Intl.NumberFormat(locale, { style: 'currency', currency: currentBooking.pricing.currency }).format(currentBooking.pricing.subtotal)}</span>
                     </div>
 
                     <div className="flex justify-between">
                       <span className="text-nilin-warmGray">Taxes:</span>
-                      <span className="text-nilin-charcoal">{formatPrice(currentBooking.pricing.tax, currentBooking.pricing.currency)}</span>
+                      <span className="text-nilin-charcoal">{new Intl.NumberFormat(locale, { style: 'currency', currency: currentBooking.pricing.currency }).format(currentBooking.pricing.tax)}</span>
                     </div>
 
                     <div className="flex justify-between border-t border-nilin-border/30 pt-2 font-semibold text-lg">
                       <span className="text-nilin-charcoal">Total:</span>
-                      <span className="text-nilin-coral">{formatPrice(currentBooking.pricing.totalAmount, currentBooking.pricing.currency)}</span>
+                      <span className="text-nilin-coral">{new Intl.NumberFormat(locale, { style: 'currency', currency: currentBooking.pricing.currency }).format(currentBooking.pricing.totalAmount)}</span>
                     </div>
                   </div>
                 </div>
@@ -619,31 +657,45 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
           </div>
 
           {/* Status History */}
-          {currentBooking.statusHistory.length > 0 && (
+          {currentBooking.statusHistory?.length > 0 && (
             <div className="glass glass-blur rounded-xl p-6 gradient-3d card-3d">
               <h2 className="text-lg font-semibold text-nilin-charcoal mb-4 font-serif">Status History</h2>
               <div className="space-y-3">
-                {currentBooking.statusHistory.map((status, index) => (
-                  <div key={index} className="flex items-center gap-3 p-3 neu-light rounded-xl">
-                    <div className={cn(
-                      "w-3 h-3 rounded-full",
-                      status.status === 'completed' ? "bg-nilin-success" :
-                      status.status === 'cancelled' ? "bg-nilin-error" :
-                      "bg-nilin-coral"
-                    )} />
-                    <div className="flex-1">
-                      <p className="font-medium text-nilin-charcoal capitalize">
-                        {status.status.replace('_', ' ')}
-                      </p>
-                      <p className="text-sm text-nilin-warmGray">
-                        {new Date(status.timestamp).toLocaleString()}
-                      </p>
-                      {status.notes && (
-                        <p className="text-sm text-nilin-warmGray mt-1">{status.notes}</p>
-                      )}
+                {currentBooking.statusHistory.map((status, index) => {
+                  // Try to get user name from booking participants
+                  const isProvider = currentBooking.provider?._id === status.updatedBy;
+                  const isCustomer = currentBooking.customer?._id === status.updatedBy;
+                  const updatedByName = isProvider
+                    ? `${currentBooking.provider.firstName} ${currentBooking.provider.lastName}`
+                    : isCustomer
+                      ? `${currentBooking.customer.firstName} ${currentBooking.customer.lastName}`
+                      : status.updatedBy;
+
+                  return (
+                    <div key={index} className="flex items-center gap-3 p-3 neu-light rounded-xl">
+                      <div className={cn(
+                        "w-3 h-3 rounded-full",
+                        status.status === 'completed' ? "bg-nilin-success" :
+                        status.status === 'cancelled' ? "bg-nilin-error" :
+                        "bg-nilin-coral"
+                      )} />
+                      <div className="flex-1">
+                        <p className="font-medium text-nilin-charcoal capitalize">
+                          {status.status.replace('_', ' ')}
+                        </p>
+                        <p className="text-sm text-nilin-warmGray">
+                          {new Date(status.timestamp).toLocaleString(locale)}
+                        </p>
+                        {status.notes && (
+                          <p className="text-sm text-nilin-warmGray mt-1">{status.notes}</p>
+                        )}
+                        {updatedByName !== status.updatedBy && (
+                          <p className="text-xs text-nilin-warmGray mt-1">by {updatedByName}</p>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
@@ -673,7 +725,10 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
                           ? "bg-gradient-to-r from-nilin-rose to-nilin-coral text-white"
                           : "glass text-nilin-charcoal"
                       )}>
-                        <p className="text-sm">{message.message}</p>
+                        <p
+                          className="text-sm"
+                          dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(message.message) }}
+                        />
                         <p className={cn(
                           "text-xs mt-1",
                           isOwnMessage ? "text-white/80" : "text-nilin-warmGray"

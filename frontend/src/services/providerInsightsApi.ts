@@ -267,7 +267,8 @@ class ProviderInsightsApiService {
     const response = await api.get(`${this.baseUrl}/insights`, {
       params: { period },
     });
-    return response.data.data.insights;
+    // FIX: Backend returns ProviderInsightsData directly in response.data.data
+    return response.data.data;
   }
 
   async getPerformance(period: Period = 'month'): Promise<PerformanceMetrics> {

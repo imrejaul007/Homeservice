@@ -8,6 +8,8 @@ export interface CommissionTier {
 }
 
 export interface Commission {
+  // NOTE: Backend uses mongoose.Types.ObjectId but JSON serialization converts it to string
+  // This is intentional - the API returns ObjectId as a hex string
   _id: string;
   bookingId: string;
   bookingNumber: string;
@@ -237,6 +239,30 @@ interface ApiResponse<T> {
   error?: string;
 }
 
+// Custom error class for API errors
+export class EarningsApiError extends Error {
+  constructor(
+    message: string,
+    public statusCode?: number,
+    public response?: unknown
+  ) {
+    super(message);
+    this.name = 'EarningsApiError';
+  }
+}
+
+// Helper function to extract error message from API error
+function getErrorMessage(error: unknown, fallback: string): string {
+  if (error && typeof error === 'object' && 'response' in error) {
+    const err = error as { response?: { data?: { message?: string; error?: string } } };
+    return err.response?.data?.message || err.response?.data?.error || fallback;
+  }
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return fallback;
+}
+
 // Earnings API Service
 export const earningsApi = {
   // Commission endpoints
@@ -252,16 +278,32 @@ export const earningsApi = {
     status?: Commission['status'];
     categoryId?: string;
   }): Promise<PaginatedResponse<Commission>> => {
-    const response = await api.get('/earnings/commissions', { params });
-    return response.data.data;
+    try {
+      const response = await api.get('/earnings/commissions', { params });
+      return response.data.data;
+    } catch (error) {
+      throw new EarningsApiError(
+        getErrorMessage(error, 'Failed to fetch commissions'),
+        (error as { response?: { status?: number } })?.response?.status,
+        error
+      );
+    }
   },
 
   /**
    * Get a single commission by ID
    */
   getCommissionById: async (commissionId: string): Promise<Commission> => {
-    const response = await api.get(`/earnings/commissions/${commissionId}`);
-    return response.data.data.commission;
+    try {
+      const response = await api.get(`/earnings/commissions/${commissionId}`);
+      return response.data.data.commission;
+    } catch (error) {
+      throw new EarningsApiError(
+        getErrorMessage(error, 'Failed to fetch commission'),
+        (error as { response?: { status?: number } })?.response?.status,
+        error
+      );
+    }
   },
 
   /**
@@ -286,10 +328,18 @@ export const earningsApi = {
       commission: number;
     }>;
   }> => {
-    const response = await api.get('/earnings/commissions/summary', {
-      params: { startDate, endDate },
-    });
-    return response.data.data;
+    try {
+      const response = await api.get('/earnings/commissions/summary', {
+        params: { startDate, endDate },
+      });
+      return response.data.data;
+    } catch (error) {
+      throw new EarningsApiError(
+        getErrorMessage(error, 'Failed to fetch commission summary'),
+        (error as { response?: { status?: number } })?.response?.status,
+        error
+      );
+    }
   },
 
   /**
@@ -299,8 +349,16 @@ export const earningsApi = {
     commissionId: string,
     adjustment: CommissionAdjustment
   ): Promise<{ success: boolean; commission?: Commission; error?: string }> => {
-    const response = await api.post(`/earnings/commissions/${commissionId}/adjust`, adjustment);
-    return response.data;
+    try {
+      const response = await api.post(`/earnings/commissions/${commissionId}/adjust`, adjustment);
+      return response.data;
+    } catch (error) {
+      throw new EarningsApiError(
+        getErrorMessage(error, 'Failed to adjust commission'),
+        (error as { response?: { status?: number } })?.response?.status,
+        error
+      );
+    }
   },
 
   /**
@@ -311,11 +369,19 @@ export const earningsApi = {
     status: Commission['status'],
     reason?: string
   ): Promise<{ success: boolean; commission?: Commission }> => {
-    const response = await api.patch(`/earnings/commissions/${commissionId}/status`, {
-      status,
-      reason,
-    });
-    return response.data;
+    try {
+      const response = await api.patch(`/earnings/commissions/${commissionId}/status`, {
+        status,
+        reason,
+      });
+      return response.data;
+    } catch (error) {
+      throw new EarningsApiError(
+        getErrorMessage(error, 'Failed to update commission status'),
+        (error as { response?: { status?: number } })?.response?.status,
+        error
+      );
+    }
   },
 
   // Tax document endpoints
@@ -330,16 +396,32 @@ export const earningsApi = {
     year?: number;
     status?: TaxDocument['status'];
   }): Promise<PaginatedResponse<TaxDocument>> => {
-    const response = await api.get('/earnings/tax-documents', { params });
-    return response.data.data;
+    try {
+      const response = await api.get('/earnings/tax-documents', { params });
+      return response.data.data;
+    } catch (error) {
+      throw new EarningsApiError(
+        getErrorMessage(error, 'Failed to fetch tax documents'),
+        (error as { response?: { status?: number } })?.response?.status,
+        error
+      );
+    }
   },
 
   /**
    * Get a tax document by ID
    */
   getTaxDocumentById: async (documentId: string): Promise<TaxDocument> => {
-    const response = await api.get(`/earnings/tax-documents/${documentId}`);
-    return response.data.data.document;
+    try {
+      const response = await api.get(`/earnings/tax-documents/${documentId}`);
+      return response.data.data.document;
+    } catch (error) {
+      throw new EarningsApiError(
+        getErrorMessage(error, 'Failed to fetch tax document'),
+        (error as { response?: { status?: number } })?.response?.status,
+        error
+      );
+    }
   },
 
   /**
@@ -357,22 +439,38 @@ export const earningsApi = {
       };
     }
   ): Promise<TaxDocument> => {
-    const response = await api.post('/earnings/tax-documents/generate', {
-      startDate,
-      endDate,
-      ...options,
-    });
-    return response.data.data.document;
+    try {
+      const response = await api.post('/earnings/tax-documents/generate', {
+        startDate,
+        endDate,
+        ...options,
+      });
+      return response.data.data.document;
+    } catch (error) {
+      throw new EarningsApiError(
+        getErrorMessage(error, 'Failed to generate invoice'),
+        (error as { response?: { status?: number } })?.response?.status,
+        error
+      );
+    }
   },
 
   /**
    * Download tax document as PDF
    */
   downloadTaxDocument: async (documentId: string): Promise<Blob> => {
-    const response = await api.get(`/earnings/tax-documents/${documentId}/download`, {
-      responseType: 'blob',
-    });
-    return response.data;
+    try {
+      const response = await api.get(`/earnings/tax-documents/${documentId}/download`, {
+        responseType: 'blob',
+      });
+      return response.data;
+    } catch (error) {
+      throw new EarningsApiError(
+        getErrorMessage(error, 'Failed to download tax document'),
+        (error as { response?: { status?: number } })?.response?.status,
+        error
+      );
+    }
   },
 
   // Earnings report endpoints
@@ -386,16 +484,32 @@ export const earningsApi = {
     year?: number;
     status?: EarningsReport['status'];
   }): Promise<PaginatedResponse<EarningsReport>> => {
-    const response = await api.get('/earnings/reports', { params });
-    return response.data.data;
+    try {
+      const response = await api.get('/earnings/reports', { params });
+      return response.data.data;
+    } catch (error) {
+      throw new EarningsApiError(
+        getErrorMessage(error, 'Failed to fetch earnings reports'),
+        (error as { response?: { status?: number } })?.response?.status,
+        error
+      );
+    }
   },
 
   /**
    * Get an earnings report by ID
    */
   getEarningsReportById: async (reportId: string): Promise<EarningsReport> => {
-    const response = await api.get(`/earnings/reports/${reportId}`);
-    return response.data.data.report;
+    try {
+      const response = await api.get(`/earnings/reports/${reportId}`);
+      return response.data.data.report;
+    } catch (error) {
+      throw new EarningsApiError(
+        getErrorMessage(error, 'Failed to fetch earnings report'),
+        (error as { response?: { status?: number } })?.response?.status,
+        error
+      );
+    }
   },
 
   /**
@@ -409,12 +523,20 @@ export const earningsApi = {
       region?: string;
     }
   ): Promise<EarningsReport> => {
-    const response = await api.post('/earnings/reports/generate', {
-      startDate,
-      endDate,
-      ...options,
-    });
-    return response.data.data.report;
+    try {
+      const response = await api.post('/earnings/reports/generate', {
+        startDate,
+        endDate,
+        ...options,
+      });
+      return response.data.data.report;
+    } catch (error) {
+      throw new EarningsApiError(
+        getErrorMessage(error, 'Failed to generate earnings report'),
+        (error as { response?: { status?: number } })?.response?.status,
+        error
+      );
+    }
   },
 
   /**
@@ -423,10 +545,18 @@ export const earningsApi = {
   getDashboardSummary: async (
     period: 'week' | 'month' | 'quarter' | 'year' = 'month'
   ): Promise<EarningsDashboardSummary> => {
-    const response = await api.get('/earnings/dashboard', {
-      params: { period },
-    });
-    return response.data.data;
+    try {
+      const response = await api.get('/earnings/dashboard', {
+        params: { period },
+      });
+      return response.data.data;
+    } catch (error) {
+      throw new EarningsApiError(
+        getErrorMessage(error, 'Failed to fetch dashboard summary'),
+        (error as { response?: { status?: number } })?.response?.status,
+        error
+      );
+    }
   },
 
   /**
@@ -445,8 +575,16 @@ export const earningsApi = {
     }>;
     taxDocument: TaxDocument | null;
   }> => {
-    const response = await api.get(`/earnings/annual-statement/${year}`);
-    return response.data.data;
+    try {
+      const response = await api.get(`/earnings/annual-statement/${year}`);
+      return response.data.data;
+    } catch (error) {
+      throw new EarningsApiError(
+        getErrorMessage(error, 'Failed to fetch annual statement'),
+        (error as { response?: { status?: number } })?.response?.status,
+        error
+      );
+    }
   },
 
   // Export endpoints
@@ -459,41 +597,56 @@ export const earningsApi = {
     endDate: string,
     format: 'csv' | 'json' = 'json'
   ): Promise<Blob> => {
-    const response = await api.get('/earnings/export', {
-      params: { startDate, endDate, format },
-      responseType: 'blob',
-    });
-    return response.data;
+    try {
+      const response = await api.get('/earnings/export', {
+        params: { startDate, endDate, format },
+        responseType: 'blob',
+      });
+      return response.data;
+    } catch (error) {
+      throw new EarningsApiError(
+        getErrorMessage(error, 'Failed to export earnings data'),
+        (error as { response?: { status?: number } })?.response?.status,
+        error
+      );
+    }
   },
 
   /**
    * Download export file
+   * @returns Promise<boolean> - true if download succeeded, false if it failed
    */
   downloadExport: async (
     startDate: string,
     endDate: string,
     format: 'csv' | 'json' = 'json'
-  ): Promise<void> => {
-    const response = await api.get('/earnings/export', {
-      params: { startDate, endDate, format },
-      responseType: 'blob',
-    });
+  ): Promise<boolean> => {
+    try {
+      const response = await api.get('/earnings/export', {
+        params: { startDate, endDate, format },
+        responseType: 'blob',
+      });
 
-    // Create download link
-    const blob = new Blob([response.data], {
-      type: format === 'csv' ? 'text/csv' : 'application/json',
-    });
-    const url = window.URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
+      // Create download link
+      const blob = new Blob([response.data], {
+        type: format === 'csv' ? 'text/csv' : 'application/json',
+      });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
 
-    const filename = `earnings_${startDate.split('T')[0]}_${endDate.split('T')[0]}.${format}`;
-    link.download = filename;
+      const filename = `earnings_${startDate.split('T')[0]}_${endDate.split('T')[0]}.${format}`;
+      link.download = filename;
 
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    window.URL.revokeObjectURL(url);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+
+      return true;
+    } catch {
+      return false;
+    }
   },
 
   // Commission rule endpoints (admin)
@@ -514,8 +667,16 @@ export const earningsApi = {
     isActive: boolean;
     priority: number;
   }>> => {
-    const response = await api.get('/admin/commission-rules');
-    return response.data.data.rules;
+    try {
+      const response = await api.get('/admin/commission-rules');
+      return response.data.data.rules;
+    } catch (error) {
+      throw new EarningsApiError(
+        getErrorMessage(error, 'Failed to fetch commission rules'),
+        (error as { response?: { status?: number } })?.response?.status,
+        error
+      );
+    }
   },
 
   /**
@@ -535,8 +696,16 @@ export const earningsApi = {
     startDate?: string;
     endDate?: string;
   }): Promise<any> => {
-    const response = await api.post('/admin/commission-rules', rule);
-    return response.data.data.rule;
+    try {
+      const response = await api.post('/admin/commission-rules', rule);
+      return response.data.data.rule;
+    } catch (error) {
+      throw new EarningsApiError(
+        getErrorMessage(error, 'Failed to create commission rule'),
+        (error as { response?: { status?: number } })?.response?.status,
+        error
+      );
+    }
   },
 
   /**
@@ -555,8 +724,16 @@ export const earningsApi = {
       endDate?: string;
     }>
   ): Promise<any> => {
-    const response = await api.patch(`/admin/commission-rules/${ruleId}`, updates);
-    return response.data.data.rule;
+    try {
+      const response = await api.patch(`/admin/commission-rules/${ruleId}`, updates);
+      return response.data.data.rule;
+    } catch (error) {
+      throw new EarningsApiError(
+        getErrorMessage(error, 'Failed to update commission rule'),
+        (error as { response?: { status?: number } })?.response?.status,
+        error
+      );
+    }
   },
 
   // Tax config endpoints (admin)
@@ -574,8 +751,16 @@ export const earningsApi = {
     applicableTo: 'booking' | 'commission' | 'payout' | 'all';
     isActive: boolean;
   }>> => {
-    const response = await api.get('/admin/tax-configs');
-    return response.data.data.configs;
+    try {
+      const response = await api.get('/admin/tax-configs');
+      return response.data.data.configs;
+    } catch (error) {
+      throw new EarningsApiError(
+        getErrorMessage(error, 'Failed to fetch tax configurations'),
+        (error as { response?: { status?: number } })?.response?.status,
+        error
+      );
+    }
   },
 
   /**
@@ -592,8 +777,16 @@ export const earningsApi = {
       isActive: boolean;
     }>
   ): Promise<any> => {
-    const response = await api.patch(`/admin/tax-configs/${region}`, updates);
-    return response.data.data.config;
+    try {
+      const response = await api.patch(`/admin/tax-configs/${region}`, updates);
+      return response.data.data.config;
+    } catch (error) {
+      throw new EarningsApiError(
+        getErrorMessage(error, 'Failed to update tax configuration'),
+        (error as { response?: { status?: number } })?.response?.status,
+        error
+      );
+    }
   },
 };
 

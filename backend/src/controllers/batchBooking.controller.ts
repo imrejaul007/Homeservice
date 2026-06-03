@@ -18,10 +18,15 @@ export const batchAccept = async (
 ): Promise<void> => {
   try {
     const userId = req.user?.id;
+    const userRole = req.user?.role;
     const { bookingIds } = req.body;
 
     if (!userId) {
       throw new ApiError(401, 'Authentication required');
+    }
+
+    if (userRole !== 'provider') {
+      throw new ApiError(403, 'Only providers can perform batch accept operations');
     }
 
     if (!Array.isArray(bookingIds) || bookingIds.length === 0) {
@@ -69,10 +74,15 @@ export const batchDecline = async (
 ): Promise<void> => {
   try {
     const userId = req.user?.id;
+    const userRole = req.user?.role;
     const { bookingIds, reason } = req.body;
 
     if (!userId) {
       throw new ApiError(401, 'Authentication required');
+    }
+
+    if (userRole !== 'provider') {
+      throw new ApiError(403, 'Only providers can perform batch decline operations');
     }
 
     if (!Array.isArray(bookingIds) || bookingIds.length === 0) {
@@ -130,10 +140,15 @@ export const batchComplete = async (
 ): Promise<void> => {
   try {
     const userId = req.user?.id;
+    const userRole = req.user?.role;
     const { bookingIds } = req.body;
 
     if (!userId) {
       throw new ApiError(401, 'Authentication required');
+    }
+
+    if (userRole !== 'provider') {
+      throw new ApiError(403, 'Only providers can perform batch complete operations');
     }
 
     if (!Array.isArray(bookingIds) || bookingIds.length === 0) {
@@ -181,11 +196,15 @@ export const batchCancel = async (
 ): Promise<void> => {
   try {
     const userId = req.user?.id;
-    const userRole = req.user?.role || 'provider';
+    const userRole = req.user?.role;
     const { bookingIds, reason, cancelledBy } = req.body;
 
     if (!userId) {
       throw new ApiError(401, 'Authentication required');
+    }
+
+    if (userRole !== 'provider') {
+      throw new ApiError(403, 'Only providers can perform batch cancel operations');
     }
 
     if (!Array.isArray(bookingIds) || bookingIds.length === 0) {
@@ -208,7 +227,7 @@ export const batchCancel = async (
       ? reason.replace(/<[^>]*>/g, '').trim().substring(0, 500)
       : undefined;
 
-    // Determine who is cancelling
+    // Determine who is cancelling (userRole is guaranteed to be 'provider' at this point)
     const effectiveCancelledBy = cancelledBy || userRole;
 
     const result = await batchBookingService.batchCancelWithTransaction(
@@ -249,10 +268,15 @@ export const getBatchPreview = async (
 ): Promise<void> => {
   try {
     const userId = req.user?.id;
+    const userRole = req.user?.role;
     const { bookingIds } = req.body;
 
     if (!userId) {
       throw new ApiError(401, 'Authentication required');
+    }
+
+    if (userRole !== 'provider') {
+      throw new ApiError(403, 'Only providers can view batch previews');
     }
 
     if (!Array.isArray(bookingIds) || bookingIds.length === 0) {

@@ -243,6 +243,9 @@ chatRoomSchema.index({ bookingId: 1, type: 1 });
 // Active rooms for user
 chatRoomSchema.index({ 'participants.userId': 1, status: 1, isDeleted: 1 });
 
+// Compound index for complex participant queries (issue #7)
+chatRoomSchema.index({ 'participants.userId': 1, status: 1, type: 1, isDeleted: 1 });
+
 // Tenant isolation
 chatRoomSchema.index({ tenantId: 1, 'participants.userId': 1 });
 

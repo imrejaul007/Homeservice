@@ -345,7 +345,7 @@ export const searchCategories = asyncHandler(async (req: Request, res: Response)
  */
 export const updateSubcategory = asyncHandler(async (req: Request, res: Response) => {
   const { slug, subSlug } = req.params;
-  const { name, description, icon, color, imageUrl, isActive, sortOrder } = req.body;
+  const { name, slug: bodySlug, description, icon, color, imageUrl, isActive, sortOrder } = req.body;
 
   const category = await ServiceCategory.findOne({ slug });
 
@@ -359,36 +359,43 @@ export const updateSubcategory = asyncHandler(async (req: Request, res: Response
     throw new ApiError(404, 'Subcategory not found');
   }
 
-  // Update fields if provided
+  const sub = category.subcategories[subcategoryIndex];
+
   if (name !== undefined) {
-    category.subcategories[subcategoryIndex].name = name;
-    // Regenerate slug if name changed
-    if (name !== category.subcategories[subcategoryIndex].name) {
-      category.subcategories[subcategoryIndex].slug = name
-        .toLowerCase()
-        .trim()
-        .replace(/[^a-z0-9\s-]/g, '')
-        .replace(/\s+/g, '-')
-        .replace(/-+/g, '-');
-    }
+    sub.name = name;
+  }
+  if (typeof bodySlug === 'string' && bodySlug.trim()) {
+    sub.slug = bodySlug
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9-]/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '');
+  } else if (name !== undefined) {
+    sub.slug = name
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9\s-]/g, '')
+      .replace(/\s+/g, '-')
+      .replace(/-+/g, '-');
   }
   if (description !== undefined) {
-    category.subcategories[subcategoryIndex].description = description;
+    sub.description = description;
   }
   if (icon !== undefined) {
-    category.subcategories[subcategoryIndex].icon = icon;
+    sub.icon = icon;
   }
   if (color !== undefined) {
-    category.subcategories[subcategoryIndex].color = color;
+    sub.color = color;
   }
   if (imageUrl !== undefined) {
-    category.subcategories[subcategoryIndex].imageUrl = imageUrl;
+    sub.imageUrl = imageUrl;
   }
   if (isActive !== undefined) {
-    category.subcategories[subcategoryIndex].isActive = isActive;
+    sub.isActive = isActive;
   }
   if (sortOrder !== undefined) {
-    category.subcategories[subcategoryIndex].sortOrder = sortOrder;
+    sub.sortOrder = sortOrder;
   }
 
   await category.save();

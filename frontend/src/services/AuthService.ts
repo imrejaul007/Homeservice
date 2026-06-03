@@ -1,7 +1,41 @@
-import axios from 'axios';
+import axios, { AxiosError } from 'axios';
 // Use simplified types to avoid bundling issues
 import { useAuthStore } from '../stores/authStore';
 import type { CustomerProfile, ProviderProfile } from '../stores/authStore';
+
+/**
+ * Custom error class that preserves Axios response structure
+ * This ensures the frontend can access error.response.status and error.response.data
+ */
+export class ApiError extends Error {
+  status?: number;
+  data?: any;
+  code?: string;
+
+  constructor(message: string, status?: number, data?: any, code?: string) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.data = data;
+    this.code = code;
+  }
+
+  static fromAxios(error: unknown): ApiError {
+    if (axios.isAxiosError(error)) {
+      const axiosError = error as AxiosError<any>;
+      return new ApiError(
+        axiosError.response?.data?.message || 'Request failed',
+        axiosError.response?.status,
+        axiosError.response?.data,
+        axiosError.response?.data?.code
+      );
+    }
+    if (error instanceof Error) {
+      return new ApiError(error.message);
+    }
+    return new ApiError('Unknown error occurred');
+  }
+}
 
 // Authentication Types
 export interface AuthTokens {
@@ -47,11 +81,23 @@ export interface RegisterData {
   lastName: string;
   email: string;
   password: string;
-  confirmPassword: string;
+  confirmPassword?: string;
   phone?: string;
   role: 'customer' | 'provider';
-  agreeToTerms: boolean;
-  agreeToPrivacy: boolean;
+  agreeToTermsAndPrivacy: boolean | string;
+  address?: {
+    street?: string;
+    city?: string;
+    state?: string;
+    zipCode?: string;
+    country?: string;
+    coordinates?: {
+      type?: 'Point';
+      coordinates?: [number, number];
+      lat?: number;
+      lng?: number;
+    };
+  };
   [key: string]: unknown; // For additional role-specific fields
 }
 
@@ -542,10 +588,7 @@ class AuthService {
       );
       return response.data;
     } catch (error) {
-      if (axios.isAxiosError(error) && error.response) {
-        throw new Error(error.response.data?.message || 'Registration failed');
-      }
-      throw error;
+      throw ApiError.fromAxios(error);
     }
   }
 
@@ -739,6 +782,56 @@ class AuthService {
     } catch (error) {
       if (axios.isAxiosError(error) && error.response) {
         throw new Error(error.response.data?.message || 'Failed to resend verification');
+      }
+      throw error;
+    }
+  }
+
+  // ==========================================
+  // REFERRAL METHODS
+  // ==========================================
+
+  /**
+   * Get user's referral code
+   */
+  async getReferralCode(): Promise<AuthResponse<{
+    code: string;
+    createdAt: string;
+    totalUses?: number;
+  }>> {
+    try {
+      const response = await this.httpClient.get<AuthResponse<{
+        code: string;
+        createdAt: string;
+        totalUses?: number;
+      }>>('/referrals/my-code');
+      return response.data;
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(error.response.data?.message || 'Failed to get referral code');
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Get referral statistics
+   */
+  async getReferralStats(): Promise<AuthResponse<{
+    totalReferrals: number;
+    successfulReferrals: number;
+    totalEarned: number;
+  }>> {
+    try {
+      const response = await this.httpClient.get<AuthResponse<{
+        totalReferrals: number;
+        successfulReferrals: number;
+        totalEarned: number;
+      }>>('/referrals/stats');
+      return response.data;
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(error.response.data?.message || 'Failed to get referral stats');
       }
       throw error;
     }

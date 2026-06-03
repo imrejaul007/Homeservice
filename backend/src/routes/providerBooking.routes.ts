@@ -7,6 +7,7 @@ import {
   completeBooking,
   addBookingMessage,
   markMessagesAsRead,
+  getProviderBookingCount,
 } from '../controllers/booking.controller';
 import { authenticate, requireRole } from '../middleware/auth.middleware';
 import { ApiError } from '../utils/ApiError';
@@ -109,6 +110,15 @@ const verifyCustomerRelationship = async (req: Request, _res: Response, next: Ne
  * @access  Private (Provider only)
  */
 router.get('/', verifyProviderRole, getProviderBookings);
+
+/**
+ * @route   GET /api/v1/provider-bookings/count
+ * @desc    Get booking count for the authenticated provider
+ * @access  Private (Provider only)
+ * @query   status - Optional status filter (pending, confirmed, in_progress, completed, cancelled, no_show, active)
+ * @query   includeBreakdown - Include status breakdown counts
+ */
+router.get('/count', verifyProviderRole, getProviderBookingCount);
 
 /**
  * @route   POST /api/v1/provider-bookings/:id/accept

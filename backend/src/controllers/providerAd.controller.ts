@@ -5,6 +5,7 @@ import { asyncHandler } from '../utils/asyncHandler';
 import { formatProviderAd } from '../utils/formatProviderAd';
 import logger from '../utils/logger';
 import { IUser } from '../models/user.model';
+import mongoose from 'mongoose';
 
 /**
  * Create a new ad campaign
@@ -48,30 +49,81 @@ export const createAd = asyncHandler(async (req: Request, res: Response) => {
 /**
  * Get all ads for the provider
  * GET /api/provider/ads
+ * Validates and sanitizes query parameters to prevent injection and invalid data
  */
 export const getMyAds = asyncHandler(async (req: Request, res: Response) => {
   const providerId = (req.user as IUser)._id.toString();
 
-  const {
+  // Parse and validate query parameters with strict type coercion
+  const page = parseInt(req.query.page as string, 10) || 1;
+  const limit = parseInt(req.query.limit as string, 10) || 20;
+  const sortBy = (req.query.sortBy as string) || 'createdAt';
+  const order = (req.query.order as string) || 'desc';
+  const search = req.query.search as string | undefined;
+
+  // Validate enum values
+  const validSortFields = ['createdAt', 'updatedAt', 'name', 'budget', 'status'];
+  const validOrderValues = ['asc', 'desc'];
+  const validStatuses = ['draft', 'active', 'paused', 'completed', 'cancelled'];
+
+  if (!validSortFields.includes(sortBy)) {
+    throw new ApiError(400, 'Invalid sortBy field');
+  }
+  if (!validOrderValues.includes(order)) {
+    throw new ApiError(400, 'Invalid order value');
+  }
+
+  // Validate pagination bounds
+  if (page < 1) {
+    throw new ApiError(400, 'Page must be at least 1');
+  }
+  if (limit < 1 || limit > 100) {
+    throw new ApiError(400, 'Limit must be between 1 and 100');
+  }
+
+  // Validate status if provided
+  const status = req.query.status as string | undefined;
+  if (status && !validStatuses.includes(status)) {
+    throw new ApiError(400, 'Invalid status value');
+  }
+
+  // Parse and validate dates
+  let startDate: Date | undefined;
+  let endDate: Date | undefined;
+
+  if (req.query.startDate) {
+    startDate = new Date(req.query.startDate as string);
+    if (isNaN(startDate.getTime())) {
+      throw new ApiError(400, 'Invalid startDate format. Use ISO 8601 format.');
+    }
+  }
+
+  if (req.query.endDate) {
+    endDate = new Date(req.query.endDate as string);
+    if (isNaN(endDate.getTime())) {
+      throw new ApiError(400, 'Invalid endDate format. Use ISO 8601 format.');
+    }
+  }
+
+  // Validate date range
+  if (startDate && endDate && endDate < startDate) {
+    throw new ApiError(400, 'endDate must be after startDate');
+  }
+
+  // Validate search term
+  if (search && search.length > 100) {
+    throw new ApiError(400, 'Search term must be 100 characters or less');
+  }
+
+  const filters = {
     status,
-    page = '1',
-    limit = '20',
-    sortBy = 'createdAt',
-    order = 'desc',
+    page,
+    limit,
+    sortBy,
+    order: order as 'asc' | 'desc',
     search,
     startDate,
     endDate,
-  } = req.query;
-
-  const filters = {
-    status: status as string | undefined,
-    page: parseInt(page as string, 10),
-    limit: parseInt(limit as string, 10),
-    sortBy: sortBy as string,
-    order: order as 'asc' | 'desc',
-    search: search as string | undefined,
-    startDate: startDate ? new Date(startDate as string) : undefined,
-    endDate: endDate ? new Date(endDate as string) : undefined,
   };
 
   const result = await providerAdService.getAdsByProvider(providerId, filters);

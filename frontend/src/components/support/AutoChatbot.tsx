@@ -261,16 +261,25 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
 
         {/* Quick Actions */}
         {isBot && message.actions && !message.isTyping && (
-          <div className="mt-2 space-y-2">
+          <div className="mt-2 space-y-2" role="group" aria-label="Quick action buttons">
             {message.actions.map(action => (
               <button
                 key={action.id}
                 onClick={() => onAction?.(action)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onAction?.(action);
+                  }
+                }}
                 className={cn(
                   'flex items-center gap-2 w-full px-4 py-2 rounded-xl text-sm font-medium transition-all',
                   'bg-white border border-nilin-border hover:border-nilin-coral/50 hover:shadow-sm',
-                  'text-nilin-charcoal hover:text-nilin-coral'
+                  'text-nilin-charcoal hover:text-nilin-coral',
+                  'focus:outline-none focus:ring-2 focus:ring-nilin-coral/50 focus:ring-offset-2'
                 )}
+                role="button"
+                tabIndex={0}
               >
                 {action.icon && (
                   <span className="text-nilin-coral">{action.icon}</span>
@@ -286,7 +295,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
 
         {/* Suggested Replies */}
         {isBot && message.suggestedReplies && !message.isTyping && (
-          <div className="mt-2 flex flex-wrap gap-2">
+          <div className="mt-2 flex flex-wrap gap-2" role="group" aria-label="Suggested replies">
             {message.suggestedReplies.map((suggestion, index) => (
               <button
                 key={index}
@@ -294,8 +303,11 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                 className={cn(
                   'px-3 py-1.5 rounded-full text-sm font-medium transition-all',
                   'bg-white border border-nilin-coral/30 text-nilin-coral',
-                  'hover:bg-nilin-coral/10'
+                  'hover:bg-nilin-coral/10',
+                  'focus:outline-none focus:ring-2 focus:ring-nilin-coral/50 focus:ring-offset-2'
                 )}
+                role="button"
+                tabIndex={0}
               >
                 {suggestion}
               </button>
@@ -333,10 +345,14 @@ const AutoChatbot: React.FC<AutoChatbotProps> = ({
   const [lastBotMessageId, setLastBotMessageId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const followUpTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const supportTransferTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Initialize with welcome message
+  // Initialize with welcome message - use separate initialized flag to avoid infinite loop
+  const [isInitialized, setIsInitialized] = useState(false);
+
   useEffect(() => {
-    if (isOpen && messages.length === 0) {
+    if (isOpen && !isInitialized) {
       setMessages([
         {
           id: 'welcome',
@@ -346,8 +362,16 @@ const AutoChatbot: React.FC<AutoChatbotProps> = ({
           suggestedReplies: ['Book a service', 'Track my booking', 'Payment help', 'Contact support'],
         },
       ]);
+      setIsInitialized(true);
     }
-  }, [isOpen, messages.length, welcomeMessage]);
+  }, [isOpen, isInitialized, welcomeMessage]);
+
+  // Reset initialization when chat is closed
+  useEffect(() => {
+    if (!isOpen) {
+      setIsInitialized(false);
+    }
+  }, [isOpen]);
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -367,7 +391,9 @@ const AutoChatbot: React.FC<AutoChatbotProps> = ({
     if (onMessage) {
       try {
         return await onMessage(userMessage);
-      } catch {
+      } catch (error) {
+        // Log the error for debugging
+        console.error('Custom message handler failed:', error);
         // Fall through to default processing
       }
     }
@@ -415,13 +441,14 @@ const AutoChatbot: React.FC<AutoChatbotProps> = ({
       setMessages(prev => [...prev, botMessage]);
       setLastBotMessageId(botMessage.id);
 
-      // If follow-up needed
+      // If follow-up needed - store timeout ref for cleanup
       if (response.followUp) {
-        setTimeout(() => {
+        const followUpContent = response.followUp;
+        followUpTimeoutRef.current = setTimeout(() => {
           setMessages(prev => [...prev, {
             id: `followup-${Date.now()}`,
             type: 'bot',
-            content: response.followUp!,
+            content: followUpContent,
             timestamp: new Date(),
           }]);
         }, 2000);
@@ -482,9 +509,9 @@ const AutoChatbot: React.FC<AutoChatbotProps> = ({
         timestamp: new Date(),
       }]);
 
-      // If requesting support transfer
+      // If requesting support transfer - store timeout ref for cleanup
       if (action.value === 'support') {
-        setTimeout(() => {
+        supportTransferTimeoutRef.current = setTimeout(() => {
           onHumanTransfer?.();
         }, 1500);
       }
@@ -509,10 +536,31 @@ const AutoChatbot: React.FC<AutoChatbotProps> = ({
 
   // Clear chat
   const clearChat = () => {
+    // Clear any pending timeouts
+    if (followUpTimeoutRef.current) {
+      clearTimeout(followUpTimeoutRef.current);
+      followUpTimeoutRef.current = null;
+    }
+    if (supportTransferTimeoutRef.current) {
+      clearTimeout(supportTransferTimeoutRef.current);
+      supportTransferTimeoutRef.current = null;
+    }
     setMessages([]);
     setLastBotMessageId(null);
     setShowFeedback(false);
   };
+
+  // Cleanup timeouts on unmount
+  useEffect(() => {
+    return () => {
+      if (followUpTimeoutRef.current) {
+        clearTimeout(followUpTimeoutRef.current);
+      }
+      if (supportTransferTimeoutRef.current) {
+        clearTimeout(supportTransferTimeoutRef.current);
+      }
+    };
+  }, []);
 
   return (
     <div
@@ -647,6 +695,7 @@ const AutoChatbot: React.FC<AutoChatbotProps> = ({
                   <div className="flex-1 relative">
                     <textarea
                       ref={inputRef}
+                      aria-label="Type your message"
                       value={inputValue}
                       onChange={e => setInputValue(e.target.value)}
                       onKeyDown={handleKeyPress}

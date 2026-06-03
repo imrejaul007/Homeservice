@@ -37,6 +37,7 @@ import {
   UpdateAdInput,
 } from '../../services/providerAdApi';
 import { useToastActions } from '../../components/common/Toast';
+import { socketService } from '../../services/socket';
 
 interface AdFormData {
   name: string;
@@ -180,6 +181,51 @@ const AdsPage: React.FC = () => {
     }
   }, [fetchAds, fetchStats, user?.role]);
 
+  // FIX: Socket event listeners for real-time ad updates
+  useEffect(() => {
+    if (user?.role !== 'provider') return;
+
+    // Listen for ad status changes
+    const unsubAdStatusChanged = socketService.onAdStatusChanged((data) => {
+      if (data.providerId === user._id.toString()) {
+        toast.info(`Ad "${data.adName}" status changed to ${data.newStatus}`);
+        void fetchAds(true);
+        void fetchStats();
+      }
+    });
+
+    // Listen for budget exhaustion
+    const unsubBudgetExhausted = socketService.onAdBudgetExhausted((data) => {
+      if (data.providerId === user._id.toString()) {
+        const reasonText = data.reason === 'daily' ? 'Daily budget' : data.reason === 'monthly' ? 'Monthly budget' : 'Total budget';
+        toast.warning(`Ad "${data.adName}" - ${reasonText} exhausted`);
+        void fetchAds(true);
+        void fetchStats();
+      }
+    });
+
+    // Listen for approval status changes
+    const unsubApprovalStatusChanged = socketService.onAdApprovalStatusChanged((data) => {
+      if (data.providerId === user._id.toString()) {
+        if (data.newStatus === 'approved') {
+          toast.success(`Ad "${data.adName}" has been approved and is now live`);
+        } else if (data.newStatus === 'rejected') {
+          toast.error(`Ad "${data.adName}" was rejected: ${data.notes || 'No reason provided'}`);
+        } else {
+          toast.info(`Ad "${data.adName}" status: ${data.newStatus}`);
+        }
+        void fetchAds(true);
+        void fetchStats();
+      }
+    });
+
+    return () => {
+      unsubAdStatusChanged();
+      unsubBudgetExhausted();
+      unsubApprovalStatusChanged();
+    };
+  }, [user?._id, fetchAds, fetchStats]);
+
   // Handle pause ad
   const handlePauseAd = async (adId: string) => {
     try {
@@ -212,7 +258,7 @@ const AdsPage: React.FC = () => {
   const handleLaunchAd = async (adId: string) => {
     try {
       await providerAdApi.launchAd(adId);
-      toast.success('Ad deployed and is now live');
+      toast.success('Ad submitted for review — you will be notified when approved');
       await fetchAds(true);
       await fetchStats();
     } catch (err: any) {

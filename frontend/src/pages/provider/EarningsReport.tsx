@@ -1,6 +1,6 @@
 
-import React, { useState, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft,
   DollarSign,
@@ -34,6 +34,7 @@ import { earningsApi, type EarningsReport, type EarningsDashboardSummary, type T
 // Time period type
 type Period = 'week' | 'month' | 'quarter' | 'year';
 type TabType = 'overview' | 'commissions' | 'tax-documents' | 'reports';
+const VALID_TABS: TabType[] = ['overview', 'commissions', 'tax-documents', 'reports'];
 
 // Format currency
 const formatCurrency = (amount: number, currency: string = 'AED'): string => {
@@ -63,13 +64,36 @@ const formatPercentage = (value: number): string => {
 const EarningsReport: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuthStore();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // Memoized initial tab from URL params - only computed once
+  const initialTab = useMemo<TabType>(() => {
+    const tab = searchParams.get('tab');
+    if (tab && VALID_TABS.includes(tab as TabType)) {
+      return tab as TabType;
+    }
+    return 'overview';
+  }, [searchParams]);
 
   // State
-  const [activeTab, setActiveTab] = useState<TabType>('overview');
+  const [activeTab, setActiveTab] = useState<TabType>(initialTab);
   const [period, setPeriod] = useState<Period>('month');
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Individual fetch status tracking for partial failure handling
+  const [fetchStatus, setFetchStatus] = useState<{
+    dashboard: 'idle' | 'loading' | 'success' | 'error';
+    commissions: 'idle' | 'loading' | 'success' | 'error';
+    taxDocuments: 'idle' | 'loading' | 'success' | 'error';
+    reports: 'idle' | 'loading' | 'success' | 'error';
+  }>({
+    dashboard: 'idle',
+    commissions: 'idle',
+    taxDocuments: 'idle',
+    reports: 'idle',
+  });
 
   // Data state
   const [dashboardSummary, setDashboardSummary] = useState<EarningsDashboardSummary | null>(null);
@@ -115,17 +139,21 @@ const EarningsReport: React.FC = () => {
 
   // Fetch dashboard summary
   const fetchDashboardSummary = useCallback(async () => {
+    setFetchStatus((prev) => ({ ...prev, dashboard: 'loading' }));
     try {
       const data = await earningsApi.getDashboardSummary(period);
       setDashboardSummary(data);
+      setFetchStatus((prev) => ({ ...prev, dashboard: 'success' }));
     } catch (err) {
       console.error('Error fetching dashboard summary:', err);
-      setError('Failed to load earnings summary');
+      setFetchStatus((prev) => ({ ...prev, dashboard: 'error' }));
+      // Don't set global error - handled by Promise.allSettled
     }
   }, [period]);
 
   // Fetch commissions
   const fetchCommissions = useCallback(async (page: number = 1) => {
+    setFetchStatus((prev) => ({ ...prev, commissions: 'loading' }));
     try {
       setIsLoading(true);
       const params: any = { page, limit: 10 };
@@ -143,9 +171,13 @@ const EarningsReport: React.FC = () => {
       setCommissions(response.items);
       setCommissionPage(response.page);
       setCommissionTotalPages(response.totalPages);
+      setFetchStatus((prev) => ({ ...prev, commissions: 'success' }));
     } catch (err) {
       console.error('Error fetching commissions:', err);
-      setError('Failed to load commissions');
+      setFetchStatus((prev) => ({ ...prev, commissions: 'error' }));
+      // Preserve original error message from API
+      const errorMessage = err instanceof Error ? err.message : 'Failed to load commissions';
+      setError(`Failed to load commissions: ${errorMessage}`);
     } finally {
       setIsLoading(false);
     }
@@ -208,6 +240,12 @@ const EarningsReport: React.FC = () => {
     loadData();
   }, [fetchDashboardSummary, fetchCommissions, fetchTaxDocuments, fetchEarningsReports]);
 
+  // Tab change handler
+  const handleTabChange = (tab: TabType) => {
+    setActiveTab(tab);
+    setSearchParams({ tab });
+  };
+
   // Refresh handler
   const handleRefresh = async () => {
     setIsRefreshing(true);
@@ -266,6 +304,48 @@ const EarningsReport: React.FC = () => {
   const openTaxDocumentModal = (doc: TaxDocument) => {
     setSelectedTaxDocument(doc);
     setShowTaxDocModal(true);
+  };
+
+  // Download tax document using API (bypasses auth interceptor properly)
+  const handleDownloadTaxDocument = async (documentId: string) => {
+    try {
+      const blob = await earningsApi.downloadTaxDocument(documentId);
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `tax_document_${documentId}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Error downloading tax document:', err);
+      setError('Failed to download tax document');
+    }
+  };
+
+  // View report details using API (bypasses auth interceptor properly)
+  const handleViewReportDetails = async (reportId: string) => {
+    try {
+      const report = await earningsApi.getEarningsReportById(reportId);
+      // Open a new window with report details as JSON or use a modal
+      const reportWindow = window.open('', '_blank');
+      if (reportWindow) {
+        reportWindow.document.write(`
+          <html>
+            <head><title>Earnings Report</title></head>
+            <body style="font-family: Arial, sans-serif; padding: 20px;">
+              <h1>Earnings Report</h1>
+              <pre>${JSON.stringify(report, null, 2)}</pre>
+            </body>
+          </html>
+        `);
+        reportWindow.document.close();
+      }
+    } catch (err) {
+      console.error('Error viewing report:', err);
+      setError('Failed to load report details');
+    }
   };
 
   // Tab content rendering
@@ -519,10 +599,14 @@ const EarningsReport: React.FC = () => {
                 type="date"
                 value={dateRangeFilter.start.toISOString().split('T')[0]}
                 onChange={(e) => {
-                  setDateRangeFilter((prev) => ({
-                    ...prev,
-                    start: new Date(e.target.value),
-                  }));
+                  const newStart = new Date(e.target.value);
+                  setDateRangeFilter((prev) => {
+                    // If new start date is after current end date, swap them
+                    if (newStart > prev.end) {
+                      return { start: prev.end, end: newStart };
+                    }
+                    return { ...prev, start: newStart };
+                  });
                 }}
                 className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 focus:border-transparent"
               />
@@ -533,10 +617,14 @@ const EarningsReport: React.FC = () => {
                 type="date"
                 value={dateRangeFilter.end.toISOString().split('T')[0]}
                 onChange={(e) => {
-                  setDateRangeFilter((prev) => ({
-                    ...prev,
-                    end: new Date(e.target.value),
-                  }));
+                  const newEnd = new Date(e.target.value);
+                  setDateRangeFilter((prev) => {
+                    // If new end date is before current start date, swap them
+                    if (newEnd < prev.start) {
+                      return { start: newEnd, end: prev.start };
+                    }
+                    return { ...prev, end: newEnd };
+                  });
                 }}
                 className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 focus:border-transparent"
               />
@@ -750,9 +838,7 @@ const EarningsReport: React.FC = () => {
                         View
                       </button>
                       <button
-                        onClick={() => {
-                          window.open(`/api/earnings/tax-documents/${doc._id}/download`, '_blank');
-                        }}
+                        onClick={() => handleDownloadTaxDocument(doc._id)}
                         className="text-gray-600 hover:text-gray-800 text-xs sm:text-sm font-medium p-1"
                       >
                         <Download className="w-4 h-4" />
@@ -871,9 +957,7 @@ const EarningsReport: React.FC = () => {
                   </td>
                   <td className="px-6 py-4">
                     <button
-                      onClick={() => {
-                        // View report details
-                      }}
+                      onClick={() => handleViewReportDetails(report._id)}
                       className="text-primary-600 hover:text-primary-800 text-sm font-medium"
                     >
                       View Details
@@ -954,7 +1038,7 @@ const EarningsReport: React.FC = () => {
 
         {/* Tabs */}
         <div className="border-b border-gray-200 mb-6">
-          <nav className="-mb-px flex space-x-8">
+          <nav className="-mb-px flex space-x-8" role="tablist">
             {[
               { id: 'overview', label: 'Overview', icon: PieChart },
               { id: 'commissions', label: 'Commissions', icon: DollarSign },
@@ -963,7 +1047,25 @@ const EarningsReport: React.FC = () => {
             ].map((tab) => (
               <button
                 key={tab.id}
-                onClick={() => setActiveTab(tab.id as TabType)}
+                role="tab"
+                aria-selected={activeTab === tab.id}
+                aria-controls={`${tab.id}-content`}
+                id={`${tab.id}-tab`}
+                tabIndex={activeTab === tab.id ? 0 : -1}
+                onClick={() => handleTabChange(tab.id as TabType)}
+                onKeyDown={(e) => {
+                  const tabs = ['overview', 'commissions', 'tax-documents', 'reports'];
+                  const currentIndex = tabs.indexOf(activeTab);
+                  if (e.key === 'ArrowRight' && currentIndex < tabs.length - 1) {
+                    e.preventDefault();
+                    handleTabChange(tabs[currentIndex + 1] as TabType);
+                    document.getElementById(`${tabs[currentIndex + 1]}-tab`)?.focus();
+                  } else if (e.key === 'ArrowLeft' && currentIndex > 0) {
+                    e.preventDefault();
+                    handleTabChange(tabs[currentIndex - 1] as TabType);
+                    document.getElementById(`${tabs[currentIndex - 1]}-tab`)?.focus();
+                  }
+                }}
                 className={`group inline-flex items-center py-4 px-1 border-b-2 font-medium text-sm ${
                   activeTab === tab.id
                     ? 'border-primary-500 text-primary-600'
@@ -1007,10 +1109,15 @@ const EarningsReport: React.FC = () => {
         <div className="fixed inset-0 z-50 overflow-y-auto">
           <div className="flex min-h-screen items-center justify-center p-4">
             <div className="fixed inset-0 bg-black bg-opacity-50" onClick={() => setShowCommissionModal(false)} />
-            <div className="relative bg-white rounded-xl shadow-xl max-w-lg w-full p-6">
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="commission-modal-title"
+              className="relative bg-white rounded-xl shadow-xl max-w-lg w-full p-6"
+            >
               <div className="flex justify-between items-start mb-6">
                 <div>
-                  <h2 className="text-xl font-bold text-gray-900">Commission Details</h2>
+                  <h2 id="commission-modal-title" className="text-xl font-bold text-gray-900">Commission Details</h2>
                   <p className="text-sm text-gray-500">{selectedCommission.bookingNumber}</p>
                 </div>
                 <button
@@ -1237,9 +1344,7 @@ const EarningsReport: React.FC = () => {
               <div className="mt-6 flex justify-between">
                 <Button
                   variant="outline"
-                  onClick={() => {
-                    window.open(`/api/earnings/tax-documents/${selectedTaxDocument._id}/download`, '_blank');
-                  }}
+                  onClick={() => handleDownloadTaxDocument(selectedTaxDocument._id)}
                 >
                   <Download className="w-4 h-4 mr-2" />
                   Download PDF

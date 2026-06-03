@@ -383,6 +383,30 @@ export class ChatService {
   // =============================================================================
 
   /**
+   * Check if a user is a participant in a specific chat room (lightweight validation)
+   * This is optimized for socket operations to avoid heavy DB calls
+   */
+  async isUserParticipant(chatRoomId: string, userId: string): Promise<boolean> {
+    if (!mongoose.Types.ObjectId.isValid(chatRoomId)) {
+      return false;
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return false;
+    }
+
+    // Lightweight count query - uses indexed fields only
+    const count = await ChatRoom.countDocuments({
+      _id: new mongoose.Types.ObjectId(chatRoomId),
+      'participants.userId': new mongoose.Types.ObjectId(userId),
+      status: 'active',
+      isDeleted: false
+    });
+
+    return count > 0;
+  }
+
+  /**
    * Get chat rooms for a user
    */
   async getChatRooms(

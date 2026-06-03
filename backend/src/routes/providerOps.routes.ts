@@ -1,6 +1,7 @@
 import express from 'express';
 import multer from 'multer';
 import { authenticate, requireRole } from '../middleware/auth.middleware';
+import { validateProviderIdParam } from '../middleware/validateObjectId.middleware';
 import {
   getProviders,
   getProviderDetails,
@@ -49,39 +50,41 @@ const upload = multer({
 router.use(authenticate);
 router.use(requireRole('admin'));
 
+const providerIdRoutes = express.Router({ mergeParams: true });
+providerIdRoutes.use(validateProviderIdParam);
+
 // Provider list and details
 router.get('/providers', getProviders);
-router.get('/providers/:id', getProviderDetails);
+router.get('/providers/:providerId', validateProviderIdParam, getProviderDetails);
 
 // Provider actions
-router.post('/providers/:providerId/approve', approveProvider);
-router.post('/providers/:providerId/reject', rejectProvider);
-router.post('/providers/:providerId/suspend', suspendProvider);
-router.post('/providers/:providerId/reactivate', reactivateProvider);
-
-// Payout management
-router.post('/providers/:providerId/payout-hold', placePayoutHold);
-router.post('/providers/:providerId/payout-release', releasePayoutHold);
+providerIdRoutes.post('/approve', approveProvider);
+providerIdRoutes.post('/reject', rejectProvider);
+providerIdRoutes.post('/suspend', suspendProvider);
+providerIdRoutes.post('/reactivate', reactivateProvider);
+providerIdRoutes.post('/payout-hold', placePayoutHold);
+providerIdRoutes.post('/payout-release', releasePayoutHold);
+router.use('/providers/:providerId', providerIdRoutes);
 
 // Verification management
-router.get('/verification/:providerId', getVerification);
-router.get('/verification/:providerId/documents', getDocumentVerificationStatus);
-router.post('/verification/:providerId/documents', upload.single('document'), uploadKycDocument);
-router.post('/verification/:providerId/documents/:documentId/verify', verifyDocument);
-router.post('/verification/:providerId/submit', submitForReview);
+router.get('/verification/:providerId', validateProviderIdParam, getVerification);
+router.get('/verification/:providerId/documents', validateProviderIdParam, getDocumentVerificationStatus);
+router.post('/verification/:providerId/documents', validateProviderIdParam, upload.single('document'), uploadKycDocument);
+router.post('/verification/:providerId/documents/:documentId/verify', validateProviderIdParam, verifyDocument);
+router.post('/verification/:providerId/submit', validateProviderIdParam, submitForReview);
 
 // Onboarding
-router.get('/onboarding/:providerId', getOnboardingStatus);
+router.get('/onboarding/:providerId', validateProviderIdParam, getOnboardingStatus);
 
-// Metrics
-router.get('/metrics/:providerId', getProviderMetrics);
-router.get('/sla/:providerId', getSlaMetrics);
+// Metrics — violations route before :providerId param route
+router.get('/metrics/:providerId', validateProviderIdParam, getProviderMetrics);
 router.get('/sla/violations', getSlaViolations);
+router.get('/sla/:providerId', validateProviderIdParam, getSlaMetrics);
 
 // Fraud detection
-router.post('/fraud/check/:providerId', runFraudCheck);
-router.get('/fraud/status/:providerId', getFraudStatus);
-router.post('/fraud/resolve/:providerId/:flagId', resolveFraudFlag);
+router.post('/fraud/check/:providerId', validateProviderIdParam, runFraudCheck);
+router.get('/fraud/status/:providerId', validateProviderIdParam, getFraudStatus);
+router.post('/fraud/resolve/:providerId/:flagId', validateProviderIdParam, resolveFraudFlag);
 router.get('/fraud/stats', getFraudStats);
 
 // Dashboard

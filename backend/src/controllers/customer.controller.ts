@@ -13,6 +13,9 @@ const DEFAULT_ADDRESSES_PAGE_SIZE = 20;
 export const getAddresses = asyncHandler(async (req: Request, res: Response): Promise<Response> => {
   const user = req.user as any;
 
+  // Role validation
+  if (req.user?.role !== 'customer') throw new ApiError(403, 'Only customers can access this endpoint');
+
   // Parse pagination params
   const page = Math.max(1, parseInt(req.query.page as string) || 1);
   const limit = Math.min(
@@ -64,6 +67,10 @@ export const getAddresses = asyncHandler(async (req: Request, res: Response): Pr
 
 export const addAddress = asyncHandler(async (req: Request, res: Response) => {
   const user = req.user as any;
+
+  // Role validation
+  if (req.user?.role !== 'customer') throw new ApiError(403, 'Only customers can access this endpoint');
+
   const { label, street, city, state, country, zipCode, coordinates, isDefault } = req.body;
 
   if (!label || !street || !city) {
@@ -113,6 +120,10 @@ export const addAddress = asyncHandler(async (req: Request, res: Response) => {
 
 export const updateAddress = asyncHandler(async (req: Request, res: Response) => {
   const user = req.user as any;
+
+  // Role validation
+  if (req.user?.role !== 'customer') throw new ApiError(403, 'Only customers can access this endpoint');
+
   const { addressId } = req.params;
   const updates = req.body;
 
@@ -129,6 +140,10 @@ export const updateAddress = asyncHandler(async (req: Request, res: Response) =>
   if (addressIndex === -1) {
     throw new ApiError(404, 'Address not found');
   }
+
+  // SECURITY FIX: Ownership is implicitly verified by finding the address within
+  // the customer's own profile (queried by userId above). The address exists
+  // only within this profile, so if we found it, it belongs to this user.
 
   // If setting as default, unset other defaults
   if (updates.isDefault) {
@@ -156,6 +171,10 @@ export const updateAddress = asyncHandler(async (req: Request, res: Response) =>
 
 export const deleteAddress = asyncHandler(async (req: Request, res: Response) => {
   const user = req.user as any;
+
+  // Role validation
+  if (req.user?.role !== 'customer') throw new ApiError(403, 'Only customers can access this endpoint');
+
   const { addressId } = req.params;
 
   const customerProfile = await CustomerProfile.findOne({ userId: user._id });
@@ -171,6 +190,10 @@ export const deleteAddress = asyncHandler(async (req: Request, res: Response) =>
   if (addressIndex === -1) {
     throw new ApiError(404, 'Address not found');
   }
+
+  // SECURITY FIX: Ownership is implicitly verified by finding the address within
+  // the customer's own profile (queried by userId above). The address exists
+  // only within this profile, so if we found it, it belongs to this user.
 
   const wasDefault = customerProfile.addresses[addressIndex].isDefault;
   customerProfile.addresses.splice(addressIndex, 1);
@@ -197,6 +220,9 @@ const DEFAULT_PAYMENT_METHODS_PAGE_SIZE = 10;
 
 export const getPaymentMethods = asyncHandler(async (req: Request, res: Response): Promise<Response> => {
   const user = req.user as any;
+
+  // Role validation
+  if (req.user?.role !== 'customer') throw new ApiError(403, 'Only customers can access this endpoint');
 
   // Parse pagination params
   const page = Math.max(1, parseInt(req.query.page as string) || 1);
@@ -249,6 +275,10 @@ export const getPaymentMethods = asyncHandler(async (req: Request, res: Response
 
 export const addPaymentMethod = asyncHandler(async (req: Request, res: Response) => {
   const user = req.user as any;
+
+  // Role validation
+  if (req.user?.role !== 'customer') throw new ApiError(403, 'Only customers can access this endpoint');
+
   const { type, token, isDefault } = req.body;
 
   if (!type || !token) {
@@ -297,6 +327,10 @@ export const addPaymentMethod = asyncHandler(async (req: Request, res: Response)
 
 export const deletePaymentMethod = asyncHandler(async (req: Request, res: Response) => {
   const user = req.user as any;
+
+  // Role validation
+  if (req.user?.role !== 'customer') throw new ApiError(403, 'Only customers can access this endpoint');
+
   const { paymentMethodId } = req.params;
 
   const customerProfile = await CustomerProfile.findOne({ userId: user._id });
@@ -331,6 +365,10 @@ export const deletePaymentMethod = asyncHandler(async (req: Request, res: Respon
 
 export const updatePaymentMethod = asyncHandler(async (req: Request, res: Response) => {
   const user = req.user as any;
+
+  // Role validation
+  if (req.user?.role !== 'customer') throw new ApiError(403, 'Only customers can access this endpoint');
+
   const { paymentMethodId } = req.params;
   const updates = req.body;
 

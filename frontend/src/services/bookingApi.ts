@@ -3,168 +3,23 @@ import { api } from './api';
 // ============================================
 // BOOKING TYPES
 // ============================================
+// Types imported from shared types file to ensure consistency across services
+export type {
+  Booking,
+  BookingLocation,
+  BookingCustomerInfo,
+  BookingAddOn,
+  BookingPricing,
+  BookingStatus,
+  PaymentStatus,
+  CreateBookingData,
+  UpdateBookingData,
+  GetBookingsOptions,
+  BookingFilters,
+} from '../types/booking.types';
 
-export type BookingStatus = 'pending' | 'confirmed' | 'in_progress' | 'completed' | 'cancelled' | 'no_show';
-export type PaymentStatus = 'pending' | 'paid' | 'refunded' | 'failed';
-
-export interface BookingLocation {
-  type?: 'customer_address' | 'provider_location' | 'online';
-  address?: {
-    street?: string;
-    city?: string;
-    state?: string;
-    zipCode?: string;
-    country?: string;
-    coordinates?: {
-      lat: number;
-      lng: number;
-    };
-  };
-  notes?: string;
-}
-
-export interface BookingPricing {
-  basePrice: number;
-  addOns?: Array<{ name: string; price: number; description?: string }>;
-  subtotal: number;
-  tax: number; // FIX: Backend uses 'tax' not 'taxes'
-  totalAmount: number;
-  total?: number; // Optional - some legacy code may use this
-  currency: string;
-}
-
-export interface Booking {
-  _id: string;
-  id?: string;
-  bookingNumber: string;
-  customerId: string;
-  providerId: string;
-  serviceId: string;
-  scheduledDate: string;
-  scheduledTime: string;
-  estimatedDuration: number;
-  actualDuration?: number;
-  status: BookingStatus;
-  location: BookingLocation;
-  pricing: BookingPricing;
-  paymentStatus: PaymentStatus;
-  paymentMethod?: string;
-  service?: {
-    _id: string;
-    name: string;
-    description?: string;
-    category?: string;
-    duration?: number;
-    price?: { amount: number; currency: string };
-  };
-  provider?: {
-    _id: string;
-    firstName: string;
-    lastName: string;
-    email?: string;
-    phone?: string;
-    avatar?: string;
-    rating?: number;
-    businessInfo?: { businessName?: string; businessType?: string };
-  };
-  customer?: {
-    _id: string;
-    firstName: string;
-    lastName: string;
-    email?: string;
-    phone?: string;
-    avatar?: string;
-  };
-  customerInfo?: {
-    firstName?: string;
-    lastName?: string;
-    email?: string;
-    phone?: string;
-    specialRequests?: string;
-    accessInstructions?: string;
-  };
-  providerResponse?: {
-    status: 'pending' | 'accepted' | 'rejected';
-    message?: string;
-    estimatedArrival?: string;
-    notes?: string;
-    respondedAt?: string;
-  };
-  customerRating?: {
-    rating: number;
-    review?: string;
-    ratedAt: string;
-  };
-  providerRating?: {
-    rating: number;
-    review?: string;
-    ratedAt: string;
-  };
-  etaMinutes?: number;
-  distanceRemaining?: number;
-  providerLocation?: {
-    latitude: number;
-    longitude: number;
-    heading?: number;
-    speed?: number;
-  };
-  confirmedAt?: string;
-  startedAt?: string;
-  completedAt?: string;
-  cancelledAt?: string;
-  cancellationReason?: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface CreateBookingData {
-  serviceId: string;
-  providerId: string;
-  scheduledDate: string;
-  scheduledTime: string;
-  location?: BookingLocation;
-  customerInfo?: Booking['customerInfo'];
-  addOns?: Array<{ name: string; price: number; description?: string }>;
-  notes?: string;
-  locationType?: 'at_home' | 'hotel';
-  selectedDuration?: number;
-  genderPreference?: 'male' | 'female' | 'no_preference';
-  paymentMethod?: 'apple_pay' | 'credit_card' | 'cash';
-  couponCode?: string;
-}
-
-export interface UpdateBookingData {
-  scheduledDate?: string;
-  scheduledTime?: string;
-  location?: BookingLocation;
-  customerInfo?: Booking['customerInfo'];
-  notes?: string;
-}
-
-export interface GetBookingsOptions {
-  page?: number;
-  limit?: number;
-  status?: BookingStatus;
-  dateFrom?: string;
-  dateTo?: string;
-  providerId?: string;
-  customerId?: string;
-  serviceId?: string;
-  search?: string;
-  sortBy?: 'scheduledDate' | 'createdAt' | 'total';
-  sortOrder?: 'asc' | 'desc';
-}
-
-export interface BookingFilters {
-  status?: BookingStatus | BookingStatus[];
-  dateFrom?: string;
-  dateTo?: string;
-  providerId?: string;
-  customerId?: string;
-  serviceId?: string;
-  minPrice?: number;
-  maxPrice?: number;
-}
+// Re-export helper functions from shared types
+export { normalizeBooking, formatBookingStatus } from '../types/booking.types';
 
 // ============================================
 // BOOKING API SERVICE
@@ -260,6 +115,28 @@ export interface BookingApi {
   getAvailableSlots: (providerId: string, date: string, serviceId: string) => Promise<{
     slots: Array<{ time: string; available: boolean }>;
   }>;
+
+  /**
+   * Validate a coupon code
+   */
+  validateCoupon: (code: string, bookingId: string) => Promise<{
+    valid: boolean;
+    code: string;
+    discountType?: 'fixed' | 'percentage';
+    discountValue?: number;
+    discountAmount?: number;
+    message?: string;
+  }>;
+
+  /**
+   * Apply a coupon to a booking
+   */
+  applyCoupon: (bookingId: string, code: string) => Promise<{ booking: Booking }>;
+
+  /**
+   * Remove a coupon from a booking
+   */
+  removeCoupon: (bookingId: string) => Promise<{ booking: Booking }>;
 }
 
 // Error class for booking API errors
@@ -361,7 +238,8 @@ export const bookingApi: BookingApi = {
    */
   rescheduleBooking: async (bookingId: string, newDate: string, newTime: string, reason?: string) => {
     try {
-      const response = await api.post(`/bookings/${bookingId}/reschedule`, {
+      // FIX: Backend expects PATCH method, not POST
+      const response = await api.patch(`/bookings/${bookingId}/reschedule`, {
         scheduledDate: newDate,
         scheduledTime: newTime,
         reason,
@@ -505,6 +383,70 @@ export const bookingApi: BookingApi = {
       throw new BookingApiError(message, statusCode, 'GET_SLOTS_FAILED');
     }
   },
+
+  /**
+   * Validate a coupon code
+   */
+  validateCoupon: async (code: string, orderValue: number, serviceId?: string) => {
+    try {
+      const response = await api.post('/coupons/validate', { code, orderValue, serviceId });
+      const data = response.data.data;
+      // Map backend response (discount) to frontend expected (discountAmount)
+      return {
+        ...data,
+        discountAmount: data.discountAmount ?? data.discount,
+        code: data.couponCode || code,
+      };
+    } catch (error: unknown) {
+      const err = error as { response?: { status?: number; data?: { message?: string } }; message?: string };
+      const message = err.response?.data?.message || err.message || 'Failed to validate coupon';
+      const statusCode = err.response?.status;
+
+      // Return a structured error response for invalid coupons
+      if (statusCode === 400 || statusCode === 404) {
+        return {
+          valid: false,
+          code,
+          message: message || 'Invalid coupon code',
+        };
+      }
+
+      console.error('[bookingApi] validateCoupon error:', message, statusCode);
+      throw new BookingApiError(message, statusCode, 'VALIDATE_COUPON_FAILED');
+    }
+  },
+
+  /**
+   * Apply a coupon to a booking
+   */
+  applyCoupon: async (bookingId: string, code: string) => {
+    try {
+      const response = await api.post(`/bookings/${bookingId}/coupon`, { code });
+      return response.data.data;
+    } catch (error: unknown) {
+      const err = error as { response?: { status?: number; data?: { message?: string } }; message?: string };
+      const message = err.response?.data?.message || err.message || 'Failed to apply coupon';
+      const statusCode = err.response?.status;
+      console.error('[bookingApi] applyCoupon error:', message, statusCode);
+      throw new BookingApiError(message, statusCode, 'APPLY_COUPON_FAILED');
+    }
+  },
+
+  /**
+   * Remove a coupon from a booking
+   */
+  removeCoupon: async (bookingId: string) => {
+    try {
+      const response = await api.delete(`/bookings/${bookingId}/coupon`);
+      return response.data.data;
+    } catch (error: unknown) {
+      const err = error as { response?: { status?: number; data?: { message?: string } }; message?: string };
+      const message = err.response?.data?.message || err.message || 'Failed to remove coupon';
+      const statusCode = err.response?.status;
+      console.error('[bookingApi] removeCoupon error:', message, statusCode);
+      throw new BookingApiError(message, statusCode, 'REMOVE_COUPON_FAILED');
+    }
+  },
 };
 
 // ============================================
@@ -532,37 +474,12 @@ export function formatBookingStatus(status: BookingStatus): string {
     completed: 'Completed',
     cancelled: 'Cancelled',
     no_show: 'No Show',
+    refunded: 'Refunded',
   };
   return statusLabels[status] || status;
 }
 
-/**
- * Check if booking can be cancelled
- */
-export function canCancelBooking(booking: Booking): boolean {
-  const cancellableStatuses: BookingStatus[] = ['pending', 'confirmed'];
-  if (!cancellableStatuses.includes(booking.status)) return false;
-
-  // Check if booking is more than 24 hours away
-  const bookingDate = new Date(`${booking.scheduledDate}T${booking.scheduledTime}`);
-  const now = new Date();
-  const hoursUntilBooking = (bookingDate.getTime() - now.getTime()) / (1000 * 60 * 60);
-
-  return hoursUntilBooking > 0;
-}
-
-/**
- * Check if booking can be rescheduled
- */
-export function canRescheduleBooking(booking: Booking): boolean {
-  const reschedulableStatuses: BookingStatus[] = ['pending', 'confirmed'];
-  if (!reschedulableStatuses.includes(booking.status)) return false;
-
-  const bookingDate = new Date(`${booking.scheduledDate}T${booking.scheduledTime}`);
-  const now = new Date();
-  const hoursUntilBooking = (bookingDate.getTime() - now.getTime()) / (1000 * 60 * 60);
-
-  return hoursUntilBooking > 0;
-}
+// Note: canCancelBooking and canRescheduleBooking are now consolidated in BookingService.ts
+// to maintain a single source of truth with the 24-hour cancellation rule
 
 export default bookingApi;

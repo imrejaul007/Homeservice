@@ -4,6 +4,7 @@ import Booking from '../models/booking.model';
 import Service from '../models/service.model';
 import logger from '../utils/logger';
 import { taxService } from './taxService';
+import { getPlatformPolicySync } from './platformSettingsPolicy.service';
 
 // Commission calculation input
 export interface CommissionCalculationInput {
@@ -60,6 +61,7 @@ const DEFAULT_PAYMENT_PROCESSING_FEE_PERCENT = 2.5; // 2.5% payment processing f
 export class CommissionService {
   /**
    * Get the applicable commission rule for a booking
+   * PERFORMANCE FIX: Single aggregation query with $or conditions instead of up to 5 sequential queries
    */
   private async getApplicableRule(params: {
     providerId: Types.ObjectId;
@@ -69,90 +71,72 @@ export class CommissionService {
   }): Promise<ICommissionRule | null> {
     const { providerId, categoryId, amount, date = new Date() } = params;
 
-    // Priority order:
+    // Build match conditions that apply to all rule types
+    const dateCondition = {
+      startDate: {
+        $or: [
+          { $exists: false },
+          { $lte: date },
+        ],
+      },
+      endDate: {
+        $or: [
+          { $exists: false },
+          { $gte: date },
+        ],
+      },
+    };
+
+    // Single aggregation query to fetch all applicable rules
+    const rules = await CommissionRule.aggregate([
+      {
+        $match: {
+          isActive: true,
+          ...dateCondition,
+          $or: [
+            // Provider-specific rule
+            { providerId, type: 'provider' },
+            // Category-specific rule
+            ...(categoryId ? [{ categoryId, type: 'category' }] : []),
+            // Promotional rule
+            { type: 'promotional' },
+            // Tiered rule
+            { type: 'tiered', tiers: { $exists: true, $ne: [] } },
+            // Standard rule
+            { type: 'standard' },
+          ],
+        },
+      },
+      // Sort by priority (descending) and rate (ascending for promotional)
+      { $sort: { priority: -1, rate: 1 } },
+      // Limit to reasonable number for post-processing
+      { $limit: 10 },
+    ]);
+
+    if (rules.length === 0) {
+      return null;
+    }
+
+    // Priority order (must match original logic):
     // 1. Provider-specific rule (highest priority)
     // 2. Category-specific rule
     // 3. Promotional rule
     // 4. Standard tiered rule
     // 5. Standard flat rule (fallback)
+    const priorityOrder = ['provider', 'category', 'promotional', 'tiered', 'standard'];
 
-    // Try provider-specific rule first
-    const providerRule = await CommissionRule.findOne({
-      providerId,
-      isActive: true,
-      type: 'provider',
-      $and: [
-        { $or: [{ startDate: { $exists: false } }, { startDate: { $lte: date } }] },
-        { $or: [{ endDate: { $exists: false } }, { endDate: { $gte: date } }] },
-      ],
-    }).sort({ priority: -1 });
-
-    if (providerRule) {
-      return providerRule;
-    }
-
-    // Try category-specific rule
-    if (categoryId) {
-      const categoryRule = await CommissionRule.findOne({
-        categoryId,
-        isActive: true,
-        type: 'category',
-        $and: [
-          { $or: [{ startDate: { $exists: false } }, { startDate: { $lte: date } }] },
-          { $or: [{ endDate: { $exists: false } }, { endDate: { $gte: date } }] },
-        ],
-      }).sort({ priority: -1 });
-
-      if (categoryRule) {
-        return categoryRule;
+    // Find first matching rule by priority
+    for (const type of priorityOrder) {
+      const rule = rules.find(r => r.type === type);
+      if (rule) {
+        // For tiered rules, also verify it has valid tiers
+        if (type === 'tiered' && (!rule.tiers || rule.tiers.length === 0)) {
+          continue;
+        }
+        return rule as unknown as ICommissionRule;
       }
     }
 
-    // Try promotional rule
-    const promoRule = await CommissionRule.findOne({
-      type: 'promotional',
-      isActive: true,
-      $and: [
-        { $or: [{ startDate: { $exists: false } }, { startDate: { $lte: date } }] },
-        { $or: [{ endDate: { $exists: false } }, { endDate: { $gte: date } }] },
-      ],
-    })
-      .sort({ priority: -1, rate: 1 }) // Lower rate is better for providers
-      .limit(1);
-
-    if (promoRule) {
-      return promoRule;
-    }
-
-    // Try tiered standard rule
-    const tieredRule = await CommissionRule.findOne({
-      type: 'tiered',
-      isActive: true,
-      $and: [
-        { $or: [{ startDate: { $exists: false } }, { startDate: { $lte: date } }] },
-        { $or: [{ endDate: { $exists: false } }, { endDate: { $gte: date } }] },
-      ],
-    }).sort({ priority: -1 });
-
-    if (tieredRule && tieredRule.tiers && tieredRule.tiers.length > 0) {
-      return tieredRule;
-    }
-
-    // Fall back to standard rule
-    const standardRule = await CommissionRule.findOne({
-      type: 'standard',
-      isActive: true,
-      $and: [
-        { $or: [{ startDate: { $exists: false } }, { startDate: { $lte: date } }] },
-        { $or: [{ endDate: { $exists: false } }, { endDate: { $gte: date } }] },
-      ],
-    }).sort({ priority: -1 });
-
-    if (standardRule) {
-      return standardRule;
-    }
-
-    // No rule found - return null and use default
     return null;
   }
 
@@ -273,43 +257,58 @@ export class CommissionService {
         ruleId = new Types.ObjectId();
         ruleName = 'Default Commission';
         ruleType = 'standard';
-        commissionRate = DEFAULT_COMMISSION_RATE;
-        commissionAmount = taxableAmount * (DEFAULT_COMMISSION_RATE / 100);
+        commissionRate = getPlatformPolicySync().commissionRate ?? DEFAULT_COMMISSION_RATE;
+        commissionAmount = taxableAmount * (commissionRate / 100);
       }
+
+      const processingFeePercent =
+        getPlatformPolicySync().paymentProcessingFee ?? DEFAULT_PAYMENT_PROCESSING_FEE_PERCENT;
 
       // Calculate platform and processing fees
       const platformFee = rule?.type === 'promotional' ? 0 : DEFAULT_PLATFORM_FEE;
-      const paymentProcessingFee = taxableAmount * (DEFAULT_PAYMENT_PROCESSING_FEE_PERCENT / 100);
+      const paymentProcessingFee = taxableAmount * (processingFeePercent / 100);
 
       // Calculate total deductions and provider earnings
       const totalDeductions = commissionAmount + platformFee + paymentProcessingFee;
       const providerEarnings = Math.max(0, grossAmount - discountAmount - taxAmount - totalDeductions);
 
-      // Get category name
+      // Get category name and provider name in parallel
+      // PERFORMANCE FIX: Parallel execution instead of sequential queries
       let categoryName = 'Uncategorized';
-      if (categoryId) {
-        try {
-          const ServiceCategory = mongoose.model('ServiceCategory');
-          const category = await ServiceCategory.findById(categoryId);
-          if (category) {
-            categoryName = category.name;
-          }
-        } catch {
-          // Category lookup failed, use default
-        }
-      }
-
-      // Get provider name
       let providerName = 'Unknown Provider';
-      try {
-        const User = mongoose.model('User');
-        const provider = await User.findById(providerId);
-        if (provider) {
-          providerName = `${provider.firstName || ''} ${provider.lastName || ''}`.trim() || 'Unknown Provider';
-        }
-      } catch {
-        // Provider lookup failed, use default
-      }
+
+      const [categoryResult, providerResult] = await Promise.all([
+        categoryId
+          ? (async () => {
+              try {
+                const ServiceCategory = mongoose.model('ServiceCategory');
+                const category = await ServiceCategory.findById(categoryId).lean() as { name?: string } | null;
+                return category?.name || 'Uncategorized';
+              } catch (error) {
+                logger.warn('Failed to lookup ServiceCategory for commission', {
+                  categoryId: categoryId?.toString(),
+                  error: error instanceof Error ? error.message : 'Unknown error',
+                });
+                return 'Uncategorized';
+              }
+            })()
+          : Promise.resolve('Uncategorized'),
+        (async () => {
+          try {
+            const User = mongoose.model('User');
+            const provider = await User.findById(providerId).lean();
+            if (provider) {
+              return `${(provider as any).firstName || ''} ${(provider as any).lastName || ''}`.trim() || 'Unknown Provider';
+            }
+            return 'Unknown Provider';
+          } catch {
+            return 'Unknown Provider';
+          }
+        })(),
+      ]);
+
+      categoryName = categoryResult;
+      providerName = providerResult;
 
       // Create commission record
       const commission = new Commission({
@@ -479,9 +478,15 @@ export class CommissionService {
 
   /**
    * Get commission by ID
+   * PERFORMANCE FIX: Use selective field population to reduce data transfer
    */
   async getCommissionById(commissionId: string | Types.ObjectId): Promise<ICommission | null> {
-    return Commission.findById(commissionId).populate('bookingId serviceId categoryId providerId');
+    return Commission.findById(commissionId).populate([
+      { path: 'bookingId', select: 'bookingNumber customerId serviceId providerId scheduledDate pricing status' },
+      { path: 'serviceId', select: 'name description' },
+      { path: 'categoryId', select: 'name' },
+      { path: 'providerId', select: 'firstName lastName email' },
+    ]);
   }
 
   /**
@@ -540,6 +545,7 @@ export class CommissionService {
 
   /**
    * Get provider commission summary
+   * PERFORMANCE FIX: Uses MongoDB aggregation pipeline instead of loading all records into memory
    */
   async getProviderCommissionSummary(
     providerId: string | Types.ObjectId,
@@ -548,82 +554,135 @@ export class CommissionService {
   ): Promise<ProviderCommissionSummary> {
     const providerObjectId = typeof providerId === 'string' ? new Types.ObjectId(providerId) : providerId;
 
-    // Get all commissions in the period
-    const commissions = await Commission.find({
-      providerId: providerObjectId,
-      'metadata.bookingDate': { $gte: startDate, $lte: endDate },
-    });
+    // Use aggregation pipeline for database-level computation
+    const result = await Commission.aggregate([
+      // Match by provider and date range (also check completedAt for safety)
+      {
+        $match: {
+          providerId: providerObjectId,
+          $or: [
+            { 'metadata.bookingDate': { $gte: startDate, $lte: endDate } },
+            { completedAt: { $gte: startDate, $lte: endDate } },
+          ],
+        },
+      },
+      // Group all commissions and compute totals
+      {
+        $group: {
+          _id: null,
+          totalGross: { $sum: '$grossAmount' },
+          totalNet: { $sum: '$netAmount' },
+          totalCommission: { $sum: '$commissionAmount' },
+          totalPlatformFee: { $sum: '$platformFee' },
+          totalPaymentProcessingFee: { $sum: '$paymentProcessingFee' },
+          totalTax: { $sum: '$taxAmount' },
+          totalProviderEarnings: { $sum: '$providerEarnings' },
+          bookingCount: { $sum: 1 },
+          // Group by status
+          byStatus: {
+            $push: {
+              status: '$status',
+              commissionAmount: '$commissionAmount',
+            },
+          },
+          // Group by category
+          byCategory: {
+            $push: {
+              categoryId: '$categoryId',
+              categoryName: { $ifNull: ['$metadata.categoryName', 'Uncategorized'] },
+              grossAmount: '$grossAmount',
+              commissionAmount: '$commissionAmount',
+            },
+          },
+        },
+      },
+      // Compute average commission rate
+      {
+        $addFields: {
+          averageCommissionRate: {
+            $cond: {
+              if: { $gt: ['$totalGross', 0] },
+              then: { $multiply: [{ $divide: ['$totalCommission', '$totalGross'] }, 100] },
+              else: 0,
+            },
+          },
+        },
+      },
+    ]);
 
-    // Calculate summary
-    let totalGross = 0;
-    let totalNet = 0;
-    let totalCommission = 0;
-    let totalPlatformFee = 0;
-    let totalPaymentProcessingFee = 0;
-    let totalTax = 0;
-    let totalProviderEarnings = 0;
-    const statusMap = new Map<string, { count: number; amount: number }>();
-    const categoryMap = new Map<string, { name: string; count: number; gross: number; commission: number }>();
+    // Handle empty result
+    if (!result.length) {
+      return {
+        providerId: providerObjectId,
+        period: { start: startDate, end: endDate },
+        totalGross: 0,
+        totalNet: 0,
+        totalCommission: 0,
+        totalPlatformFee: 0,
+        totalPaymentProcessingFee: 0,
+        totalTax: 0,
+        totalProviderEarnings: 0,
+        bookingCount: 0,
+        averageCommissionRate: 0,
+        byStatus: [],
+        byCategory: [],
+      };
+    }
 
-    for (const comm of commissions) {
-      totalGross += comm.grossAmount;
-      totalNet += comm.netAmount;
-      totalCommission += comm.commissionAmount;
-      totalPlatformFee += comm.platformFee;
-      totalPaymentProcessingFee += comm.paymentProcessingFee;
-      totalTax += comm.taxAmount;
-      totalProviderEarnings += comm.providerEarnings;
+    const data = result[0];
 
-      // By status
-      const statusKey = comm.status;
-      const existingStatus = statusMap.get(statusKey) || { count: 0, amount: 0 };
-      statusMap.set(statusKey, {
-        count: existingStatus.count + 1,
-        amount: existingStatus.amount + comm.commissionAmount,
+    // Aggregate by status
+    const statusGroups = new Map<string, { count: number; amount: number }>();
+    for (const item of data.byStatus) {
+      const existing = statusGroups.get(item.status) || { count: 0, amount: 0 };
+      statusGroups.set(item.status, {
+        count: existing.count + 1,
+        amount: existing.amount + item.commissionAmount,
       });
+    }
+    const byStatus = Array.from(statusGroups.entries()).map(([status, stats]) => ({
+      status: status as ICommission['status'],
+      count: stats.count,
+      amount: stats.amount,
+    }));
 
-      // By category
-      const categoryKey = comm.categoryId?.toString() || 'uncategorized';
-      const existingCategory = categoryMap.get(categoryKey) || {
-        name: comm.metadata?.categoryName || 'Uncategorized',
+    // Aggregate by category
+    const categoryGroups = new Map<string, { name: string; count: number; gross: number; commission: number }>();
+    for (const item of data.byCategory) {
+      const key = item.categoryId?.toString() || 'uncategorized';
+      const existing = categoryGroups.get(key) || {
+        name: item.categoryName,
         count: 0,
         gross: 0,
         commission: 0,
       };
-      categoryMap.set(categoryKey, {
-        name: existingCategory.name,
-        count: existingCategory.count + 1,
-        gross: existingCategory.gross + comm.grossAmount,
-        commission: existingCategory.commission + comm.commissionAmount,
+      categoryGroups.set(key, {
+        name: item.categoryName,
+        count: existing.count + 1,
+        gross: existing.gross + item.grossAmount,
+        commission: existing.commission + item.commissionAmount,
       });
     }
-
-    const byStatus = Array.from(statusMap.entries()).map(([status, data]) => ({
-      status: status as ICommission['status'],
-      count: data.count,
-      amount: data.amount,
-    }));
-
-    const byCategory = Array.from(categoryMap.entries()).map(([categoryId, data]) => ({
+    const byCategory = Array.from(categoryGroups.entries()).map(([categoryId, stats]) => ({
       categoryId: new Types.ObjectId(categoryId === 'uncategorized' ? '000000000000000000000000' : categoryId),
-      categoryName: data.name,
-      count: data.count,
-      grossAmount: data.gross,
-      commission: data.commission,
+      categoryName: stats.name,
+      count: stats.count,
+      grossAmount: stats.gross,
+      commission: stats.commission,
     }));
 
     return {
       providerId: providerObjectId,
       period: { start: startDate, end: endDate },
-      totalGross,
-      totalNet,
-      totalCommission,
-      totalPlatformFee,
-      totalPaymentProcessingFee,
-      totalTax,
-      totalProviderEarnings,
-      bookingCount: commissions.length,
-      averageCommissionRate: totalGross > 0 ? (totalCommission / totalGross) * 100 : 0,
+      totalGross: data.totalGross,
+      totalNet: data.totalNet,
+      totalCommission: data.totalCommission,
+      totalPlatformFee: data.totalPlatformFee,
+      totalPaymentProcessingFee: data.totalPaymentProcessingFee,
+      totalTax: data.totalTax,
+      totalProviderEarnings: data.totalProviderEarnings,
+      bookingCount: data.bookingCount,
+      averageCommissionRate: data.averageCommissionRate,
       byStatus,
       byCategory,
     };
@@ -729,6 +788,7 @@ export class CommissionService {
 
   /**
    * Update commission status
+   * ERROR HANDLING FIX: Wrap in transaction to prevent race conditions during concurrent updates
    */
   async updateCommissionStatus(
     commissionId: string | Types.ObjectId,
@@ -737,32 +797,67 @@ export class CommissionService {
     changedByRole: 'system' | 'admin' | 'provider',
     reason?: string
   ): Promise<{ success: boolean; commission?: ICommission; error?: string }> {
+    const session = await mongoose.startSession();
     try {
+      session.startTransaction();
+
       const commissionObjectId =
         typeof commissionId === 'string' ? new Types.ObjectId(commissionId) : commissionId;
       const changedByObjectId = typeof changedBy === 'string' ? new Types.ObjectId(changedBy) : changedBy;
 
-      const commission = await Commission.findById(commissionObjectId);
+      const commission = await Commission.findById(commissionObjectId).session(session);
       if (!commission) {
+        await session.abortTransaction();
         return { success: false, error: 'Commission not found' };
       }
 
+      const oldStatus = commission.status;
       await (commission as any).updateStatus(newStatus, changedByObjectId, changedByRole, reason);
+
+      // Create status change history entry
+      const CommissionHistory = mongoose.model('CommissionHistory');
+      const historyEntry = new CommissionHistory({
+        commissionId: commission._id,
+        previousStatus: oldStatus,
+        previousEarnings: commission.providerEarnings,
+        newStatus: commission.status,
+        newEarnings: commission.providerEarnings,
+        adjustment: {
+          type: 'correction',
+          amount: 0,
+          reason: reason || `Status changed from ${oldStatus} to ${newStatus}`,
+        },
+        adjustedBy: changedByObjectId,
+        adjustedByRole: changedByRole,
+        adjustedAt: new Date(),
+      });
+      await historyEntry.save({ session });
+
+      await commission.save({ session });
+      await session.commitTransaction();
 
       logger.info('Commission status updated', {
         commissionId: commission._id,
-        oldStatus: commission.status,
+        oldStatus,
         newStatus,
         changedBy,
+        historyId: historyEntry._id,
       });
 
       return { success: true, commission };
     } catch (error) {
+      if (session && session.hasEnded === false) {
+        await session.abortTransaction();
+      }
       logger.error('Error updating commission status', { error, commissionId, newStatus });
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to update commission status',
       };
+    } finally {
+      if (session && session.hasEnded === false) {
+        await session.endSession();
+      }
     }
   }
 

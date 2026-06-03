@@ -1,323 +1,327 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { api } from '../../services/api';
+import React, { useState, useEffect, useCallback } from 'react';
+import { toast } from 'react-hot-toast';
+import {
+  Wrench,
+  RefreshCw,
+  Loader2,
+  AlertTriangle,
+  CheckCircle2,
+  Info,
+  Save,
+} from 'lucide-react';
 import { ErrorBoundary } from '../../components/common/ErrorBoundary';
 import { AdminPageShell } from '../../components/admin/AdminPageShell';
+import { cn } from '../../lib/utils';
+import {
+  adminMaintenanceApi,
+  DURATION_PRESETS,
+  type MaintenanceSettings,
+} from '../../services/adminMaintenanceApi';
 
-interface MaintenanceSettings {
-  maintenanceMode: boolean;
-  message: string;
-  estimatedDuration?: string;
-  updatedAt?: string;
-  updatedBy?: string;
+const DEFAULT_MESSAGE =
+  'The platform is currently under maintenance. Please try again later.';
+
+function extractError(err: unknown): string | undefined {
+  if (err && typeof err === 'object' && 'response' in err) {
+    return (err as { response?: { data?: { message?: string } } }).response?.data?.message;
+  }
+  return undefined;
 }
 
 const MaintenanceMode: React.FC = () => {
   const [settings, setSettings] = useState<MaintenanceSettings | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     enabled: false,
-    message: 'The platform is currently under maintenance. Please try again later.',
+    message: DEFAULT_MESSAGE,
     estimatedDuration: '',
   });
-  const successTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  useEffect(() => {
-    return () => {
-      if (successTimeoutRef.current) {
-        clearTimeout(successTimeoutRef.current);
-      }
-    };
-  }, []);
-
-  const fetchSettings = async () => {
+  const loadSettings = useCallback(async (isRefresh = false) => {
+    if (isRefresh) setRefreshing(true);
+    else setLoading(true);
     try {
-      setLoading(true);
-      setError(null);
-      const response = await api.get('/admin/maintenance');
-      const data = response.data.data;
+      const data = await adminMaintenanceApi.get();
       setSettings(data);
       setFormData({
         enabled: data.maintenanceMode,
-        message: data.message,
+        message: data.message || DEFAULT_MESSAGE,
         estimatedDuration: data.estimatedDuration || '',
       });
-    } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to load maintenance settings');
+      if (isRefresh) toast.success('Settings refreshed');
+    } catch (err) {
+      toast.error(extractError(err) || 'Failed to load maintenance settings');
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    fetchSettings();
-  }, []);
+    loadSettings();
+  }, [loadSettings]);
+
+  const isDirty =
+    settings &&
+    (formData.enabled !== settings.maintenanceMode ||
+      formData.message !== (settings.message || DEFAULT_MESSAGE) ||
+      formData.estimatedDuration !== (settings.estimatedDuration || ''));
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!formData.message.trim()) {
+      toast.error('Maintenance message is required');
+      return;
+    }
+    if (formData.enabled && !confirm(
+      'Enable maintenance mode? Customers and providers will be blocked from the app.'
+    )) {
+      return;
+    }
+
+    setSaving(true);
     try {
-      setSaving(true);
-      setError(null);
-      setSuccessMessage(null);
-
-      await api.put('/admin/maintenance', {
+      await adminMaintenanceApi.update({
         enabled: formData.enabled,
-        message: formData.message,
-        estimatedDuration: formData.estimatedDuration || undefined,
+        message: formData.message.trim(),
+        estimatedDuration: formData.estimatedDuration.trim() || undefined,
       });
-
-      setSuccessMessage(`Maintenance mode ${formData.enabled ? 'enabled' : 'disabled'} successfully.`);
-      fetchSettings();
-
-      // Auto-hide success message after 5 seconds
-      successTimeoutRef.current = setTimeout(() => setSuccessMessage(null), 5000);
-    } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to update maintenance settings');
+      toast.success(
+        formData.enabled ? 'Maintenance mode enabled' : 'Maintenance mode disabled'
+      );
+      await loadSettings(true);
+    } catch (err) {
+      toast.error(extractError(err) || 'Failed to save settings');
     } finally {
       setSaving(false);
     }
   };
 
-  const quickDurationOptions = [
-    { label: '15 minutes', value: '15 minutes' },
-    { label: '30 minutes', value: '30 minutes' },
-    { label: '1 hour', value: '1 hour' },
-    { label: '2 hours', value: '2 hours' },
-    { label: '4 hours', value: '4 hours' },
-    { label: '8 hours', value: '8 hours' },
-    { label: '24 hours', value: '24 hours' },
-  ];
+  const resetForm = () => {
+    if (!settings) return;
+    setFormData({
+      enabled: settings.maintenanceMode,
+      message: settings.message || DEFAULT_MESSAGE,
+      estimatedDuration: settings.estimatedDuration || '',
+    });
+  };
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-100 flex items-center justify-center">
-        <div className="text-center">
-          <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-          <p className="text-gray-600">Loading...</p>
-        </div>
+      <div className="min-h-[50vh] flex items-center justify-center">
+        <Loader2 className="w-10 h-10 text-nilin-coral animate-spin" />
       </div>
     );
   }
 
+  const liveMode = settings?.maintenanceMode ?? false;
+  const previewMode = formData.enabled;
+
   return (
     <ErrorBoundary>
       <AdminPageShell
+        wideLayout
         title="Maintenance Mode"
         subtitle="Control platform availability during maintenance windows"
         breadcrumbItems={[
           { label: 'Admin', href: '/admin/dashboard' },
           { label: 'Maintenance', current: true },
         ]}
+        headerActions={
+          <button
+            type="button"
+            onClick={() => loadSettings(true)}
+            disabled={refreshing}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl glass glass-blur border border-nilin-border/50 text-sm hover:bg-nilin-blush/40 disabled:opacity-50"
+          >
+            <RefreshCw className={cn('w-4 h-4', refreshing && 'animate-spin')} />
+            Refresh
+          </button>
+        }
       >
-        <div className="max-w-3xl">
-
-        {/* Status Card */}
-        <div className={`rounded-lg shadow p-6 mb-6 ${
-          settings?.maintenanceMode ? 'bg-red-50 border-2 border-red-200' : 'bg-green-50 border-2 border-green-200'
-        }`}>
-          <div className="flex items-center gap-4">
-            <div className={`w-12 h-12 rounded-full flex items-center justify-center ${
-              settings?.maintenanceMode ? 'bg-red-100' : 'bg-green-100'
-            }`}>
-              {settings?.maintenanceMode ? (
-                <svg className="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                </svg>
+        <div className="max-w-3xl space-y-6">
+          <div
+            className={cn(
+              'rounded-2xl border p-6 flex gap-4',
+              liveMode
+                ? 'bg-red-50/80 border-red-200'
+                : 'bg-emerald-50/80 border-emerald-200'
+            )}
+          >
+            <div
+              className={cn(
+                'w-12 h-12 rounded-full flex items-center justify-center flex-shrink-0',
+                liveMode ? 'bg-red-100' : 'bg-emerald-100'
+              )}
+            >
+              {liveMode ? (
+                <AlertTriangle className="w-6 h-6 text-red-600" />
               ) : (
-                <svg className="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
+                <CheckCircle2 className="w-6 h-6 text-emerald-600" />
               )}
             </div>
             <div>
-              <h2 className={`text-lg font-semibold ${
-                settings?.maintenanceMode ? 'text-red-800' : 'text-green-800'
-              }`}>
-                Platform Status: {settings?.maintenanceMode ? 'Under Maintenance' : 'Operational'}
+              <h2
+                className={cn(
+                  'text-lg font-serif',
+                  liveMode ? 'text-red-900' : 'text-emerald-900'
+                )}
+              >
+                Platform status: {liveMode ? 'Under maintenance' : 'Operational'}
               </h2>
-              <p className={`text-sm ${
-                settings?.maintenanceMode ? 'text-red-600' : 'text-green-600'
-              }`}>
-                {settings?.maintenanceMode
-                  ? 'Users cannot access the platform except admins.'
-                  : 'The platform is currently available to all users.'}
+              <p className={cn('text-sm mt-1', liveMode ? 'text-red-700' : 'text-emerald-700')}>
+                {liveMode
+                  ? 'Non-admin users see the maintenance page and receive 503 on API calls.'
+                  : 'All users can access the platform normally.'}
               </p>
               {settings?.updatedAt && (
-                <p className="text-xs text-gray-500 mt-1">
-                  Last updated: {new Date(settings.updatedAt).toLocaleString()}
-                  {settings.updatedBy && ` by admin`}
+                <p className="text-xs text-nilin-warmGray mt-2">
+                  Last saved {new Date(settings.updatedAt).toLocaleString('en-AE')}
+                  {settings.updatedByName ? ` by ${settings.updatedByName}` : ''}
                 </p>
               )}
             </div>
           </div>
-        </div>
 
-        {/* Success/Error Messages */}
-        {successMessage && (
-          <div className="bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded mb-4">
-            {successMessage}
-          </div>
-        )}
-
-        {error && (
-          <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
-            {error}
-          </div>
-        )}
-
-        {/* Maintenance Form */}
-        <div className="bg-white rounded-lg shadow p-6">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">Configure Maintenance Mode</h3>
-          <form onSubmit={handleSubmit} className="space-y-6">
-            {/* Enable/Disable Toggle */}
-            <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-              <div>
-                <label className="text-sm font-medium text-gray-700">Enable Maintenance Mode</label>
-                <p className="text-xs text-gray-500">
-                  When enabled, regular users will see a maintenance page.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setFormData({ ...formData, enabled: !formData.enabled })}
-                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                  formData.enabled ? 'bg-red-600' : 'bg-gray-200'
-                }`}
-              >
-                <span
-                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                    formData.enabled ? 'translate-x-6' : 'translate-x-1'
-                  }`}
-                />
-              </button>
-            </div>
-
-            {/* Warning when enabling */}
-            {formData.enabled && (
-              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-                <div className="flex items-start gap-3">
-                  <svg className="w-5 h-5 text-yellow-600 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                  </svg>
-                  <div>
-                    <h4 className="text-sm font-medium text-yellow-800">Warning</h4>
-                    <p className="text-xs text-yellow-700 mt-1">
-                      Enabling maintenance mode will prevent all non-admin users from accessing the platform.
-                      Make sure you have completed any necessary backups or data operations before proceeding.
-                    </p>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Maintenance Message */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Maintenance Message
-              </label>
-              <textarea
-                value={formData.message}
-                onChange={(e) => setFormData({ ...formData, message: e.target.value })}
-                className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                rows={3}
-                maxLength={500}
-                required
-                placeholder="Enter the message users will see during maintenance..."
-              />
-              <p className="text-xs text-gray-500 mt-1">
-                {formData.message.length}/500 characters
-              </p>
-            </div>
-
-            {/* Estimated Duration */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Estimated Duration (Optional)
-              </label>
-              <input
-                type="text"
-                value={formData.estimatedDuration}
-                onChange={(e) => setFormData({ ...formData, estimatedDuration: e.target.value })}
-                className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                placeholder="e.g., 2 hours, 30 minutes"
-              />
-              <div className="flex flex-wrap gap-2 mt-2">
-                {quickDurationOptions.map((option) => (
-                  <button
-                    key={option.value}
-                    type="button"
-                    onClick={() => setFormData({ ...formData, estimatedDuration: option.value })}
-                    className={`px-3 py-1 text-xs rounded-full border ${
-                      formData.estimatedDuration === option.value
-                        ? 'bg-blue-100 border-blue-300 text-blue-800'
-                        : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100'
-                    }`}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Preview */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                User Preview
-              </label>
-              <div className="bg-gray-100 rounded-lg p-4 text-center">
-                <div className="w-16 h-16 bg-gray-300 rounded-full mx-auto mb-3 flex items-center justify-center">
-                  <svg className="w-8 h-8 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                  </svg>
-                </div>
-                <h4 className="font-semibold text-gray-800 mb-1">Service Unavailable</h4>
-                <p className="text-sm text-gray-600">{formData.message || 'No message set'}</p>
-                {formData.estimatedDuration && (
-                  <p className="text-xs text-gray-500 mt-2">
-                    Expected duration: {formData.estimatedDuration}
+          <div className="glass glass-blur rounded-2xl border border-nilin-border/50 p-6">
+            <h3 className="font-medium text-nilin-charcoal mb-4 flex items-center gap-2">
+              <Wrench className="w-5 h-5 text-nilin-coral" />
+              Configure maintenance
+            </h3>
+            <form onSubmit={handleSubmit} className="space-y-6">
+              <div className="flex items-center justify-between p-4 rounded-xl bg-white/60 border border-nilin-border/40">
+                <div>
+                  <p className="font-medium text-nilin-charcoal">Enable maintenance mode</p>
+                  <p className="text-xs text-nilin-warmGray mt-0.5">
+                    Blocks customers and providers; admins keep full access.
                   </p>
-                )}
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={formData.enabled}
+                  onClick={() => setFormData((f) => ({ ...f, enabled: !f.enabled }))}
+                  className={cn(
+                    'relative inline-flex h-7 w-12 items-center rounded-full transition-colors',
+                    formData.enabled ? 'bg-red-500' : 'bg-gray-300'
+                  )}
+                >
+                  <span
+                    className={cn(
+                      'inline-block h-5 w-5 transform rounded-full bg-white transition-transform',
+                      formData.enabled ? 'translate-x-6' : 'translate-x-1'
+                    )}
+                  />
+                </button>
               </div>
-            </div>
 
-            {/* Submit Buttons */}
-            <div className="flex justify-end gap-3 pt-4 border-t">
-              <button
-                type="button"
-                onClick={fetchSettings}
-                className="px-4 py-2 border rounded-lg hover:bg-gray-50"
-              >
-                Reset
-              </button>
-              <button
-                type="submit"
-                disabled={saving || (!formData.enabled && settings?.maintenanceMode === false)}
-                className={`px-4 py-2 rounded-lg text-white ${
-                  formData.enabled
-                    ? 'bg-red-600 hover:bg-red-700'
-                    : 'bg-green-600 hover:bg-green-700'
-                } disabled:opacity-50 disabled:cursor-not-allowed`}
-              >
-                {saving ? 'Saving...' : formData.enabled ? 'Enable Maintenance Mode' : 'Disable Maintenance Mode'}
-              </button>
-            </div>
-          </form>
-        </div>
+              {formData.enabled && (
+                <div className="rounded-xl border border-amber-200 bg-amber-50/80 p-4 flex gap-3 text-sm text-amber-900">
+                  <AlertTriangle className="w-5 h-5 flex-shrink-0" />
+                  <p>
+                    Active bookings and payments may still process via webhooks. Communicate with
+                    your team before enabling.
+                  </p>
+                </div>
+              )}
 
-        {/* Info Box */}
-        <div className="mt-6 bg-blue-50 border border-blue-200 rounded-lg p-4">
-          <h4 className="text-sm font-medium text-blue-800 mb-2">How it works</h4>
-          <ul className="text-xs text-blue-700 space-y-1 list-disc list-inside">
-            <li>When maintenance mode is enabled, regular users see a maintenance page.</li>
-            <li>Admin users can still access all platform features.</li>
-            <li>Health check endpoints remain accessible for monitoring.</li>
-            <li>Users currently logged in will be redirected to the maintenance page.</li>
-            <li>API requests from non-admin users will return 503 status.</li>
-          </ul>
-        </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">User-facing message</label>
+                <textarea
+                  value={formData.message}
+                  onChange={(e) => setFormData({ ...formData, message: e.target.value })}
+                  maxLength={500}
+                  rows={3}
+                  required
+                  className="w-full px-3 py-2 rounded-xl border border-nilin-border/60 bg-white/80 text-sm"
+                />
+                <p className="text-xs text-nilin-warmGray mt-1">{formData.message.length}/500</p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-1">Estimated duration (optional)</label>
+                <input
+                  type="text"
+                  value={formData.estimatedDuration}
+                  onChange={(e) =>
+                    setFormData({ ...formData, estimatedDuration: e.target.value })
+                  }
+                  placeholder="e.g., 2 hours"
+                  className="w-full px-3 py-2 rounded-xl border border-nilin-border/60 bg-white/80 text-sm"
+                />
+                <div className="flex flex-wrap gap-2 mt-2">
+                  {DURATION_PRESETS.map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setFormData({ ...formData, estimatedDuration: preset })}
+                      className={cn(
+                        'px-3 py-1 rounded-full text-xs border transition-colors',
+                        formData.estimatedDuration === preset
+                          ? 'bg-nilin-coral/15 border-nilin-coral text-nilin-charcoal'
+                          : 'bg-white/80 border-nilin-border/50 hover:bg-nilin-blush/30'
+                      )}
+                    >
+                      {preset}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <p className="text-sm font-medium mb-2">User preview</p>
+                <div className="rounded-xl bg-gray-100 border border-gray-200 p-6 text-center">
+                  <Wrench className="w-10 h-10 text-gray-400 mx-auto mb-3" />
+                  <p className="font-semibold text-gray-800">Service unavailable</p>
+                  <p className="text-sm text-gray-600 mt-2">{formData.message || '—'}</p>
+                  {formData.estimatedDuration && (
+                    <p className="text-xs text-gray-500 mt-2">
+                      Expected back in {formData.estimatedDuration}
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-3 pt-2 border-t border-nilin-border/40">
+                <button
+                  type="button"
+                  onClick={resetForm}
+                  disabled={!isDirty || saving}
+                  className="px-4 py-2 rounded-xl border text-sm disabled:opacity-40"
+                >
+                  Reset
+                </button>
+                <button
+                  type="submit"
+                  disabled={saving || !isDirty}
+                  className={cn(
+                    'btn-nilin inline-flex items-center gap-2 disabled:opacity-50',
+                    previewMode && 'from-red-500 to-red-600'
+                  )}
+                >
+                  {saving ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Save className="w-4 h-4" />
+                  )}
+                  {formData.enabled ? 'Save & enable maintenance' : 'Save changes'}
+                </button>
+              </div>
+            </form>
+          </div>
+
+          <div className="rounded-2xl border border-sky-200/70 bg-sky-50/60 p-5 flex gap-3 text-sm text-sky-950">
+            <Info className="w-5 h-5 flex-shrink-0" />
+            <ul className="space-y-1 list-disc list-inside">
+              <li>Public status: GET /api/platform/maintenance (no auth).</li>
+              <li>Non-admin API requests return HTTP 503 with your message.</li>
+              <li>Admins bypass maintenance using their JWT on all routes.</li>
+              <li>Auth, webhooks, and /api/admin/* stay reachable for operations.</li>
+              <li>The SPA redirects users to /maintenance automatically.</li>
+            </ul>
+          </div>
         </div>
       </AdminPageShell>
     </ErrorBoundary>

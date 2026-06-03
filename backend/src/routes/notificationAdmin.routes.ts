@@ -2,12 +2,16 @@ import { Router, Request, Response } from 'express';
 import User from '../models/user.model';
 import BookingNotification from '../models/bookingNotification.model';
 import { authenticate, requireRole } from '../middleware/auth.middleware';
+import { adminLimiter } from '../middleware/rateLimiter';
 import { asyncHandler } from '../utils/asyncHandler';
 import Joi from 'joi';
 import { ApiError, ERROR_CODES } from '../utils/ApiError';
 import logger from '../utils/logger';
 
 const router = Router();
+
+// Apply rate limiting to all notification admin routes
+router.use(adminLimiter);
 
 // ============================================
 // Validation Schemas

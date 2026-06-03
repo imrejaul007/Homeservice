@@ -88,18 +88,11 @@ export const customerRegistrationSchema = Joi.object({
   gender: Joi.string().valid('male', 'female', 'other', 'prefer_not_to_say').optional(),
   referralCode: Joi.string().max(50).allow('').optional(),
 
-  agreeToTerms: Joi.alternatives()
+  agreeToTermsAndPrivacy: Joi.alternatives()
     .try(Joi.boolean().valid(true), Joi.string().valid('true', '1'))
     .required()
     .messages({
-      'any.required': 'You must agree to the terms of service',
-    }),
-
-  agreeToPrivacy: Joi.alternatives()
-    .try(Joi.boolean().valid(true), Joi.string().valid('true', '1'))
-    .required()
-    .messages({
-      'any.required': 'You must agree to the privacy policy',
+      'any.required': 'You must agree to Terms of Service and Privacy Policy',
     }),
 }).options({ stripUnknown: true });
 

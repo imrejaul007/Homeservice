@@ -174,15 +174,40 @@ export class CustomerAnalyticsService {
     return getCachedData(cacheKey, async () => {
       const { startDate, endDate } = getDateRange(period);
 
-      // Get all bookings for the customer
-      const bookings = await Booking.find({
-        customerId,
-        status: { $in: ['completed', 'confirmed', 'in_progress'] },
-        createdAt: { $gte: startDate, $lte: endDate },
-      })
-        .populate('serviceId', 'category')
-        .sort({ createdAt: 1 })
-        .lean();
+      // Use aggregation pipeline with $lookup to join categories in a single query
+      const bookings = await Booking.aggregate([
+        {
+          $match: {
+            customerId,
+            status: { $in: ['completed', 'confirmed', 'in_progress'] },
+            createdAt: { $gte: startDate, $lte: endDate },
+          },
+        },
+        {
+          $lookup: {
+            from: 'services',
+            localField: 'serviceId',
+            foreignField: '_id',
+            as: 'service',
+          },
+        },
+        { $unwind: { path: '$service', preserveNullAndEmptyArrays: true } },
+        {
+          $lookup: {
+            from: 'servicecategories',
+            localField: 'service.category',
+            foreignField: '_id',
+            as: 'categoryData',
+          },
+        },
+        {
+          $addFields: {
+            categoryId: { $arrayElemAt: ['$categoryData._id', 0] },
+            categoryName: { $arrayElemAt: ['$categoryData.name', 0] },
+          },
+        },
+        { $sort: { createdAt: 1 } },
+      ]);
 
       // Calculate bookings by period
       const now = new Date();
@@ -217,29 +242,17 @@ export class CustomerAnalyticsService {
       const peakHour = Object.entries(hourCount).sort((a, b) => b[1] - a[1])[0]?.[0] || 10;
       const peakHours = `${peakHour}:00 - ${Number(peakHour) + 2}:00`;
 
-      // Get favorite categories
+      // Get favorite categories (category data already joined via $lookup)
       const categoryCount: Record<string, { count: number; categoryName: string }> = {};
       bookings.forEach(booking => {
-        const service = booking.serviceId as any;
-        if (service?.category) {
-          const catId = service.category.toString();
+        if (booking.categoryId) {
+          const catId = booking.categoryId.toString();
           if (!categoryCount[catId]) {
-            categoryCount[catId] = { count: 0, categoryName: '' };
+            categoryCount[catId] = { count: 0, categoryName: booking.categoryName || '' };
           }
           categoryCount[catId].count++;
         }
       });
-
-      // Populate category names
-      const categoryIds = Object.keys(categoryCount);
-      if (categoryIds.length > 0) {
-        const categories = await ServiceCategory.find({ _id: { $in: categoryIds } }).lean();
-        categories.forEach(cat => {
-          if (categoryCount[cat._id.toString()]) {
-            categoryCount[cat._id.toString()].categoryName = cat.name;
-          }
-        });
-      }
 
       const favoriteCategories = Object.entries(categoryCount)
         .sort((a, b) => b[1].count - a[1].count)
@@ -284,16 +297,41 @@ export class CustomerAnalyticsService {
       const previousStartDate = new Date(startDate.getTime() - periodLength);
       const previousEndDate = new Date(startDate.getTime() - 1);
 
-      // Get current period bookings
-      const currentBookings = await Booking.find({
-        customerId,
-        status: 'completed',
-        createdAt: { $gte: startDate, $lte: endDate },
-      })
-        .populate('serviceId', 'category')
-        .lean();
+      // Get current period bookings with category lookup in single query
+      const currentBookings = await Booking.aggregate([
+        {
+          $match: {
+            customerId,
+            status: 'completed',
+            createdAt: { $gte: startDate, $lte: endDate },
+          },
+        },
+        {
+          $lookup: {
+            from: 'services',
+            localField: 'serviceId',
+            foreignField: '_id',
+            as: 'service',
+          },
+        },
+        { $unwind: { path: '$service', preserveNullAndEmptyArrays: true } },
+        {
+          $lookup: {
+            from: 'servicecategories',
+            localField: 'service.category',
+            foreignField: '_id',
+            as: 'categoryData',
+          },
+        },
+        {
+          $addFields: {
+            categoryId: { $arrayElemAt: ['$categoryData._id', 0] },
+            categoryName: { $arrayElemAt: ['$categoryData.name', 0] },
+          },
+        },
+      ]);
 
-      // Get previous period bookings
+      // Get previous period bookings (no category lookup needed)
       const previousBookings = await Booking.find({
         customerId,
         status: 'completed',
@@ -322,29 +360,18 @@ export class CustomerAnalyticsService {
       const highestOrder = Math.max(...allAmounts, 0);
       const lowestOrder = Math.min(...allAmounts.filter(a => a > 0), 0);
 
-      // Calculate AOV by category
+      // Calculate AOV by category (category data already joined via $lookup)
       const categoryTotals: Record<string, { total: number; count: number; name: string }> = {};
       currentBookings.forEach(booking => {
-        const service = booking.serviceId as any;
-        if (service?.category) {
-          const catId = service.category.toString();
+        if (booking.categoryId) {
+          const catId = booking.categoryId.toString();
           if (!categoryTotals[catId]) {
-            categoryTotals[catId] = { total: 0, count: 0, name: '' };
+            categoryTotals[catId] = { total: 0, count: 0, name: booking.categoryName || '' };
           }
           categoryTotals[catId].total += booking.pricing?.totalAmount || 0;
           categoryTotals[catId].count++;
         }
       });
-
-      const categoryIds = Object.keys(categoryTotals);
-      if (categoryIds.length > 0) {
-        const categories = await ServiceCategory.find({ _id: { $in: categoryIds } }).lean();
-        categories.forEach(cat => {
-          if (categoryTotals[cat._id.toString()]) {
-            categoryTotals[cat._id.toString()].name = cat.name;
-          }
-        });
-      }
 
       const aovByCategory = Object.entries(categoryTotals)
         .map(([categoryId, data]) => ({
@@ -380,48 +407,62 @@ export class CustomerAnalyticsService {
     return getCachedData(cacheKey, async () => {
       const { startDate, endDate } = getDateRange(period);
 
-      // Get bookings with service info
-      const bookings = await Booking.find({
-        customerId,
-        status: 'completed',
-        createdAt: { $gte: startDate, $lte: endDate },
-      })
-        .populate('serviceId', 'category')
-        .lean();
+      // Use aggregation pipeline with $lookup to join categories in a single query
+      const bookings = await Booking.aggregate([
+        {
+          $match: {
+            customerId,
+            status: 'completed',
+            createdAt: { $gte: startDate, $lte: endDate },
+          },
+        },
+        {
+          $lookup: {
+            from: 'services',
+            localField: 'serviceId',
+            foreignField: '_id',
+            as: 'service',
+          },
+        },
+        { $unwind: { path: '$service', preserveNullAndEmptyArrays: true } },
+        {
+          $lookup: {
+            from: 'servicecategories',
+            localField: 'service.category',
+            foreignField: '_id',
+            as: 'categoryData',
+          },
+        },
+        {
+          $addFields: {
+            categoryId: { $arrayElemAt: ['$categoryData._id', 0] },
+            categoryName: { $arrayElemAt: ['$categoryData.name', 0] },
+            amount: '$pricing.totalAmount',
+          },
+        },
+      ]);
 
-      // Aggregate by category
-      const categoryTotals: Record<string, { totalSpent: number; bookingCount: number }> = {};
+      // Aggregate by category (category data already joined via $lookup)
+      const categoryTotals: Record<string, { totalSpent: number; bookingCount: number; name: string }> = {};
       let totalSpent = 0;
 
       bookings.forEach(booking => {
-        const service = booking.serviceId as any;
-        const amount = booking.pricing?.totalAmount || 0;
+        const amount = booking.amount || 0;
         totalSpent += amount;
 
-        if (service?.category) {
-          const catId = service.category.toString();
+        if (booking.categoryId) {
+          const catId = booking.categoryId.toString();
           if (!categoryTotals[catId]) {
-            categoryTotals[catId] = { totalSpent: 0, bookingCount: 0 };
+            categoryTotals[catId] = { totalSpent: 0, bookingCount: 0, name: booking.categoryName || '' };
           }
           categoryTotals[catId].totalSpent += amount;
           categoryTotals[catId].bookingCount++;
         }
       });
 
-      // Populate category names
-      const categoryIds = Object.keys(categoryTotals);
-      const categoryNames: Record<string, string> = {};
-
-      if (categoryIds.length > 0) {
-        const categories = await ServiceCategory.find({ _id: { $in: categoryIds } }).lean();
-        categories.forEach(cat => {
-          categoryNames[cat._id.toString()] = cat.name;
-        });
-      }
-
       const categories = Object.entries(categoryTotals).map(([categoryId, data]) => ({
         categoryId,
-        categoryName: categoryNames[categoryId] || 'Unknown',
+        categoryName: data.name || 'Unknown',
         totalSpent: data.totalSpent,
         bookingCount: data.bookingCount,
         percentage: totalSpent > 0 ? (data.totalSpent / totalSpent) * 100 : 0,

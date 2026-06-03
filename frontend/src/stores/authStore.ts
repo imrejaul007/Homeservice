@@ -2,9 +2,10 @@ import { create } from 'zustand';
 import { persist, createJSONStorage, StateStorage } from 'zustand/middleware';
 import { immer } from 'zustand/middleware/immer';
 import type { AuthTokens, AuthUser, LoginCredentials, RegisterData } from '../services/AuthService';
+import { ApiError } from '../services/AuthService';
 import type { BusinessInfo, LocationInfo, ServiceInput } from '../types/auth';
 import { secureStorage } from '@/lib/security';
-import { socketService } from '../services/SocketService';
+import { socketService } from '../services/socket';
 import logger from '../lib/logger';
 
 /**
@@ -144,6 +145,10 @@ export interface ProviderProfile {
     previousBookings?: number;
     previousViews?: number;
     totalBookings?: number;
+    customerMetrics?: {
+      repeatCustomers?: number;
+      totalCustomers?: number;
+    };
   };
   // Settings properties
   businessSettings?: {
@@ -209,6 +214,7 @@ export interface AuthState {
   setUser: (user: User | null) => void;
   setCustomerProfile: (profile: CustomerProfile | null) => void;
   setProviderProfile: (profile: ProviderProfile | null) => void;
+  refreshProviderProfile: () => Promise<void>;
 }
 
 // Create the Zustand store with AuthService delegation
@@ -282,12 +288,16 @@ export const useAuthStore = create<AuthState>()(
             state.isAuthenticated = true;
             state.isLoading = false;
           });
-        } catch (error) {
+        } catch (err: unknown) {
+          // Preserve the ApiError structure so components can access status and data
+          const error = err instanceof ApiError ? err : ApiError.fromAxios(err);
           set((state) => {
             state.isLoading = false;
             state.errors = [{
-              message: error instanceof Error ? error.message : 'Registration failed',
-              code: 'REGISTER_ERROR'
+              message: error.message,
+              code: error.code || 'REGISTER_ERROR',
+              status: error.status,
+              data: error.data
             }];
           });
           throw error;
@@ -708,11 +718,18 @@ export const useAuthStore = create<AuthState>()(
               state.isAuthenticated = true;
               state.isInitialized = true;
             });
-          } catch (error: any) {
+          } catch (error: unknown) {
             console.error('Failed to initialize auth:', error);
 
+            // FIX: Type-safe error handling for non-axios errors
+            // Check if error is an axios error with response property
+            const isAxiosError = error &&
+              typeof error === 'object' &&
+              'response' in error &&
+              error.response !== undefined;
+
             // If it's a 401 and we have refresh token, try to refresh
-            if (error?.response?.status === 401 && tokens?.refreshToken) {
+            if (isAxiosError && (error as { response: { status?: number } }).response?.status === 401 && tokens?.refreshToken) {
               try {
                 const authService = (await import('../services/AuthService')).default;
                 const response = await authService.post<{ tokens: AuthTokens }>('/auth/refresh-token', {
@@ -777,6 +794,10 @@ export const useAuthStore = create<AuthState>()(
         set((state) => {
           state.providerProfile = profile;
         });
+      },
+
+      refreshProviderProfile: async () => {
+        await get().getCurrentUser();
       },
 
       // Token update handler reference for cleanup

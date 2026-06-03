@@ -27,13 +27,13 @@ const triggerWinbackValidation = [
   body('offerCode').optional().isString(),
 ];
 
-// Helper to return 501 Not Implemented
+// Helper to return 503 Service Unavailable with proper message
 const notImplemented = (res: Response, feature: string): void => {
-  res.status(501).json({
+  res.status(503).json({
     success: false,
-    message: `${feature} is not yet implemented`,
-    error: 'COMING_SOON',
-    details: `This feature is scheduled for a future release.`,
+    message: 'This feature is coming soon',
+    code: 'FEATURE_NOT_AVAILABLE',
+    error: `The ${feature.toLowerCase()} feature is scheduled for a future release.`,
   });
 };
 

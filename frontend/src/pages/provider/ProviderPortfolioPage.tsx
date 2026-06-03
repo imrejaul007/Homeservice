@@ -20,12 +20,18 @@ import Footer from '../../components/layout/Footer';
 import Breadcrumb from '../../components/common/Breadcrumb';
 import { useAuthStore } from '../../stores/authStore';
 import { portfolioApi, PortfolioItem, CreatePortfolioItemData } from '../../services/portfolioApi';
+import { categoryApi } from '../../services/categoryApi';
 import { useToast } from '../../components/common/Toast';
 
 interface PortfolioImage {
   _id?: string;
   url: string;
   caption?: string;
+}
+
+interface ImageDeleteState {
+  itemId: string;
+  imageUrl: string;
 }
 
 const ProviderPortfolioPage: React.FC = () => {
@@ -49,6 +55,8 @@ const ProviderPortfolioPage: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleteItemId, setDeleteItemId] = useState<string | null>(null);
+  const [imageToDelete, setImageToDelete] = useState<ImageDeleteState | null>(null);
+  const [isDeletingImage, setIsDeletingImage] = useState(false);
 
   // Form state
   const [formData, setFormData] = useState({
@@ -58,6 +66,10 @@ const ProviderPortfolioPage: React.FC = () => {
     tags: '',
   });
 
+  // FIX: Categories fetched from API instead of hardcoded
+  const [categories, setCategories] = useState<string[]>(['Hair', 'Makeup', 'Nails', 'Skin', 'Massage', 'Spa', 'Other']);
+  const [categoriesLoading, setCategoriesLoading] = useState(false);
+
   // Image upload state
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [imagePreviews, setImagePreviews] = useState<string[]>([]);
@@ -65,12 +77,29 @@ const ProviderPortfolioPage: React.FC = () => {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const categories = ['Hair', 'Makeup', 'Nails', 'Skin', 'Massage', 'Spa', 'Other'];
-
-  // Fetch portfolio items on mount
+  // Fetch portfolio items and categories on mount
   useEffect(() => {
     fetchPortfolio();
+    fetchCategories();
   }, []);
+
+  // FIX: Fetch categories from API
+  const fetchCategories = async () => {
+    try {
+      setCategoriesLoading(true);
+      const { categories: apiCategories } = await categoryApi.getServiceCategories();
+      if (apiCategories && apiCategories.length > 0) {
+        setCategories(apiCategories);
+        // Set default category to first one from API
+        setFormData(prev => ({ ...prev, category: apiCategories[0] }));
+      }
+    } catch (err) {
+      console.error('Failed to fetch categories:', err);
+      // Fall back to hardcoded categories
+    } finally {
+      setCategoriesLoading(false);
+    }
+  };
 
   // Cleanup blob URLs on unmount to prevent memory leaks
   useEffect(() => {
@@ -136,7 +165,8 @@ const ProviderPortfolioPage: React.FC = () => {
   // Open modal for adding new item
   const handleOpenAddModal = () => {
     setEditingItem(null);
-    setFormData({ title: '', description: '', category: 'Hair', tags: '' });
+    // FIX: Use first category from fetched list as default
+    setFormData({ title: '', description: '', category: categories[0] || 'Hair', tags: '' });
     setSelectedFiles([]);
     setImagePreviews([]);
     setUploadError(null);
@@ -188,6 +218,43 @@ const ProviderPortfolioPage: React.FC = () => {
   const handleDeleteClick = (id: string) => {
     setDeleteItemId(id);
     setShowDeleteModal(true);
+  };
+
+  // Delete individual image from a portfolio item
+  const handleDeleteImage = async () => {
+    if (!imageToDelete) return;
+
+    setIsDeletingImage(true);
+    try {
+      await portfolioApi.removeImage(imageToDelete.itemId, imageToDelete.imageUrl);
+      // Update local state to remove the image
+      setPortfolioItems((prev) =>
+        prev.map((item) => {
+          if (item._id === imageToDelete.itemId) {
+            return {
+              ...item,
+              images: item.images.filter((img) => img.url !== imageToDelete.imageUrl),
+            };
+          }
+          return item;
+        })
+      );
+      toast.addToast({
+        title: 'Image deleted',
+        description: 'Image removed from portfolio item',
+        variant: 'success',
+      });
+    } catch (err: any) {
+      console.error('Failed to delete image:', err);
+      toast.addToast({
+        title: 'Failed to delete image',
+        description: err.response?.data?.message || 'Failed to remove image',
+        variant: 'error',
+      });
+    } finally {
+      setIsDeletingImage(false);
+      setImageToDelete(null);
+    }
   };
 
   // Submit form
@@ -294,7 +361,8 @@ const ProviderPortfolioPage: React.FC = () => {
   const handleCloseModal = () => {
     setShowAddModal(false);
     setEditingItem(null);
-    setFormData({ title: '', description: '', category: 'Hair', tags: '' });
+    // FIX: Use first category from fetched list as default
+    setFormData({ title: '', description: '', category: categories[0] || 'Hair', tags: '' });
     setSelectedFiles([]);
     imagePreviews.forEach((url) => URL.revokeObjectURL(url));
     setImagePreviews([]);
@@ -451,6 +519,19 @@ const ProviderPortfolioPage: React.FC = () => {
                           </span>
                         </div>
                       )}
+
+                      {/* Individual Image Delete Button */}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setImageToDelete({ itemId: item._id, imageUrl: item.images[0].url });
+                        }}
+                        className="absolute bottom-4 left-4 p-1.5 bg-red-500/80 hover:bg-red-500 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                        title="Delete image"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </button>
                     </div>
 
                     {/* Content */}
@@ -636,11 +717,16 @@ const ProviderPortfolioPage: React.FC = () => {
                 <select
                   value={formData.category}
                   onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                  className="w-full px-4 py-3 rounded-nilin bg-white border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none text-nilin-charcoal"
+                  disabled={categoriesLoading}
+                  className="w-full px-4 py-3 rounded-nilin bg-white border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none text-nilin-charcoal disabled:opacity-50"
                 >
-                  {categories.map((cat) => (
-                    <option key={cat} value={cat}>{cat}</option>
-                  ))}
+                  {categoriesLoading ? (
+                    <option value="">Loading categories...</option>
+                  ) : (
+                    categories.map((cat) => (
+                      <option key={cat} value={cat}>{cat}</option>
+                    ))
+                  )}
                 </select>
               </div>
 
@@ -702,6 +788,38 @@ const ProviderPortfolioPage: React.FC = () => {
       )}
 
       <Footer />
+
+      {/* Delete Image Confirmation Modal */}
+      {imageToDelete && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-nilin-lg max-w-md w-full p-6 shadow-xl">
+            <div className="text-center">
+              <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center mx-auto mb-4">
+                <Trash2 className="h-6 w-6 text-red-600" />
+              </div>
+              <h3 className="text-lg font-serif text-nilin-charcoal mb-2">Delete Image</h3>
+              <p className="text-nilin-warmGray mb-6">
+                Are you sure you want to delete this image? This action cannot be undone.
+              </p>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setImageToDelete(null)}
+                  className="flex-1 px-4 py-3 rounded-nilin border border-nilin-border text-nilin-charcoal hover:bg-nilin-muted transition-colors font-medium"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleDeleteImage}
+                  disabled={isDeletingImage}
+                  className="flex-1 px-4 py-3 rounded-nilin bg-red-500 text-white hover:bg-red-600 transition-colors font-medium disabled:opacity-50"
+                >
+                  {isDeletingImage ? 'Deleting...' : 'Delete'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Delete Portfolio Item Confirmation Modal */}
       {showDeleteModal && (

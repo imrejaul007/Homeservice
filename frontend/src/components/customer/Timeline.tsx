@@ -73,8 +73,8 @@ const Timeline: React.FC<TimelineProps> = ({ events }) => {
             {/* Connecting Line */}
             {!isLast && (
               <div
-                className={`absolute left-4 top-10 w-0.5 h-full ${config.line}`}
-                style={{ height: 'calc(100% - 2rem)' }}
+                className={`absolute left-4 top-10 w-0.5 ${config.line}`}
+                style={{ height: 'calc(100% - 2.25rem)' }}
               />
             )}
 

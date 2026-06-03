@@ -24,6 +24,7 @@ import Breadcrumb from '../../components/common/Breadcrumb';
 import { useAuthStore } from '../../stores/authStore';
 import { useToastActions } from '../../components/common/Toast';
 import { api } from '../../services/api';
+import { API_BASE_URL } from '../../config/api';
 import { secureStorage } from '../../lib/security';
 import {
   serviceAreasToStrings,
@@ -243,8 +244,7 @@ const ProviderProfilePage: React.FC = () => {
         throw new Error('Authentication required');
       }
 
-      const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
-      const response = await fetch(`${API_URL}/auth/profile-image`, {
+      const response = await fetch(`${API_BASE_URL}/auth/profile-image`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${accessToken}`,
@@ -278,14 +278,25 @@ const ProviderProfilePage: React.FC = () => {
     setIsSaving(true);
     setErrorMessage('');
 
-    const areaNames =
-      serviceLocation?.label
-        ? [serviceLocation.label]
-        : profileData.serviceAreas.length > 0
-          ? profileData.serviceAreas
-          : serviceAreaDisplay.trim()
-            ? serviceAreaDisplay.split(',').map((s) => s.trim()).filter(Boolean)
-            : [];
+    // Build service areas as proper objects (not just strings)
+    const serviceAreasPayload = (() => {
+      // If serviceLocation is selected, use it as the primary service area object
+      if (serviceLocation) {
+        return [{
+          name: serviceLocation.label,
+          type: serviceLocation.type || 'area',
+          ...(serviceLocation.city && { city: serviceLocation.city }),
+          ...(serviceLocation.emirate && { emirate: serviceLocation.emirate }),
+        }];
+      }
+      // Otherwise, convert string area names to proper objects
+      const areas = profileData.serviceAreas.length > 0
+        ? profileData.serviceAreas
+        : serviceAreaDisplay.trim()
+          ? serviceAreaDisplay.split(',').map((s) => s.trim()).filter(Boolean)
+          : [];
+      return areas.map((name) => ({ name, type: 'area' as const }));
+    })();
 
     try {
       const payload: Record<string, unknown> = {
@@ -296,8 +307,8 @@ const ProviderProfilePage: React.FC = () => {
         yearsExperience: profileData.yearsExperience ?? undefined,
       };
 
-      if (areaNames.length > 0) {
-        payload.serviceAreas = areaNames;
+      if (serviceAreasPayload.length > 0) {
+        payload.serviceAreas = serviceAreasPayload;
       }
 
       if (serviceLocation) {
@@ -621,9 +632,13 @@ const ProviderProfilePage: React.FC = () => {
                       onChange={handleInputChange}
                       disabled={!isEditing}
                       rows={4}
+                      maxLength={500}
                       placeholder="Tell customers about yourself, your experience, and what makes your services special..."
                       className="w-full px-4 py-3 rounded-nilin bg-white border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none disabled:bg-nilin-muted text-nilin-charcoal transition-all resize-none"
                     />
+                    <p className="text-xs text-nilin-warmGray mt-1 text-right">
+                      {profileData.bio.length}/500 characters
+                    </p>
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -707,7 +722,7 @@ const ProviderProfilePage: React.FC = () => {
                   </div>
 
                   <button
-                    onClick={() => navigate('/change-password')}
+                    onClick={() => navigate('/provider/change-password')}
                     className="w-full py-3 rounded-nilin border border-nilin-border text-nilin-charcoal hover:bg-nilin-muted transition-colors text-sm font-medium"
                   >
                     Change Password

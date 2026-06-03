@@ -114,18 +114,27 @@ export const submitReview = asyncHandler(async (req: Request, res: Response) => 
   // Rating updates are now handled in admin.controller.ts moderateReview function
   // when the review status is set to 'approved'
 
-  // Publish review received event for notifications
+  // FIX: Get booking details for socket event
+  const bookingDetails = await Booking.findById(booking._id)
+    .select('bookingNumber serviceId')
+    .populate('serviceId', 'name')
+    .lean();
+
+  // Publish review received event for notifications (now includes bookingNumber and serviceName for socket)
   eventBus.publish(EVENT_TYPES.REVIEW_RECEIVED, {
     reviewId: review._id.toString(),
     providerId: booking.providerId.toString(),
     bookingId: booking._id.toString(),
+    bookingNumber: bookingDetails?.bookingNumber || '',
     customerName: user.firstName + ' ' + user.lastName,
     rating: review.rating,
+    comment: review.comment,
+    serviceName: (bookingDetails?.serviceId as any)?.name || '',
   });
 
   res.status(201).json({
     success: true,
-    message: 'Review submitted successfully',
+    message: 'Review submitted successfully. It will appear on the provider profile after admin approval.',
     data: {
       review: {
         _id: review._id,
@@ -134,6 +143,7 @@ export const submitReview = asyncHandler(async (req: Request, res: Response) => 
         comment: review.comment,
         photos: review.photos,
         isVerified: review.isVerified,
+        moderationStatus: 'pending',
         createdAt: review.createdAt,
       },
     },

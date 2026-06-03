@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import multer from 'multer';
 import { authenticate, requireRole } from '../middleware/auth.middleware';
+import { enforceAdminIpAllowlist } from '../middleware/platformSettings.middleware';
 import {
   getSettings,
   updateSettings,
@@ -35,6 +36,7 @@ const router = Router();
 // All settings routes require admin authentication
 router.use(authenticate);
 router.use(requireRole('admin'));
+router.use(enforceAdminIpAllowlist);
 
 // Core settings operations
 router.get('/', getSettings);
@@ -44,18 +46,16 @@ router.post('/reset', resetSettings);
 // Settings history
 router.get('/history', getSettingsHistory);
 
-// Single setting value
-router.get('/:key', getSetting);
+// Export/Import & tests (must be before /:key)
+router.get('/export', exportSettings);
+router.post('/import', importSettings);
+router.post('/test-email', testEmailConfig);
 
 // Logo operations
 router.post('/upload-logo', upload.single('logo'), uploadLogo);
 router.delete('/logo', deleteLogo);
 
-// Export/Import
-router.get('/export', exportSettings);
-router.post('/import', importSettings);
-
-// Test configuration
-router.post('/test-email', testEmailConfig);
+// Single setting value
+router.get('/:key', getSetting);
 
 export default router;

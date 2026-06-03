@@ -587,17 +587,28 @@ export class TaxService {
       documentNumber,
       providerDetails: {
         name: `${provider.firstName || ''} ${provider.lastName || ''}`.trim(),
+        address: (provider as any).address?.street
+          ? `${(provider as any).address.street}, ${(provider as any).address.city || ''}, ${(provider as any).address.country || ''}`.trim()
+          : undefined,
         email: provider.email || '',
         taxRegistrationNumber: (provider as any).taxRegistrationNumber,
       },
-      customerDetails: options.customerInfo,
+      customerDetails: options.customerInfo?.name
+        ? {
+            name: options.customerInfo.name,
+            address: options.customerInfo.address,
+            taxId: options.customerInfo.taxId,
+            email: options.customerInfo.email,
+          }
+        : undefined,
       lineItems,
       subtotal,
       totalTax,
       totalAmount,
       currency: 'AED',
       taxBreakdown,
-      status: 'draft',
+      status: 'issued',
+      issuedAt: new Date(),
     });
 
     await taxDocument.save();

@@ -125,6 +125,15 @@ const startServer = async () => {
       logger.warn('Scheduled jobs initialization failed:', error);
     }
 
+    // Load platform settings policy into memory for runtime enforcement
+    try {
+      const { refreshPlatformPolicy } = await import('./services/platformSettingsPolicy.service');
+      await refreshPlatformPolicy();
+      logger.info('Platform settings policy loaded');
+    } catch (policyError) {
+      logger.warn('Platform settings policy load failed:', policyError);
+    }
+
 
     // Start listening
     server.listen(PORT, () => {

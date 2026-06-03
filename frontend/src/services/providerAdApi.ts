@@ -76,7 +76,7 @@ export interface ProviderAd {
   endDate?: string;
   content: AdContent;
   statistics: AdStatistics;
-  approvalStatus: 'pending' | 'approved' | 'rejected';
+  approvalStatus: 'pending' | 'pending_review' | 'approved' | 'rejected';
   scheduling: {
     runContinuously: boolean;
     scheduleType: 'immediate' | 'scheduled' | 'recurring';

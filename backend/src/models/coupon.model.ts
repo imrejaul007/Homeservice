@@ -57,6 +57,11 @@ export interface ICoupon extends Document {
   createdBy: mongoose.Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
+
+  // Instance methods (defined in schema)
+  isValid(): { valid: boolean; reason?: string };
+  calculateDiscount(orderValue: number): number;
+  getDiscountObject(orderValue: number): { code: string; amount: number; type: 'fixed' | 'percentage' };
 }
 
 const couponSchema = new Schema<ICoupon>(
@@ -274,6 +279,27 @@ couponSchema.methods.calculateDiscount = function(orderValue: number): number {
   }
 
   return Math.round(discount * 100) / 100;
+};
+
+/**
+ * Get discount object with code, amount, and type
+ * Matches frontend BookingPricing.discounts interface: Array<{ code, amount, type }>
+ */
+couponSchema.methods.getDiscountObject = function(orderValue: number): { code: string; amount: number; type: 'fixed' | 'percentage' } {
+  const amount = this.calculateDiscount(orderValue);
+
+  // Map backend type to frontend type (frontend only supports 'fixed' | 'percentage')
+  // 'free_service' is treated as percentage (full discount) on frontend
+  let frontendType: 'fixed' | 'percentage' = this.type as 'fixed' | 'percentage';
+  if (this.type === 'free_service') {
+    frontendType = 'percentage';
+  }
+
+  return {
+    code: this.code,
+    amount,
+    type: frontendType,
+  };
 };
 
 // Indexes for query optimization

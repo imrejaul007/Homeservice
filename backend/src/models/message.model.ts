@@ -119,7 +119,8 @@ const messageSchema = new Schema<IMessage>(
 
     type: {
       type: String,
-      enum: ['text', 'image', 'file', 'system'],
+      // Issue #17: Added 'booking_update' to match frontend enum
+      enum: ['text', 'image', 'file', 'system', 'booking_update'],
       default: 'text',
       required: true
     },

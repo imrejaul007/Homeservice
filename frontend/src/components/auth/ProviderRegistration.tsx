@@ -34,13 +34,27 @@ const ProviderRegistration: React.FC = () => {
   const { categories } = useCategories();
   const navigate = useNavigate();
 
-  const { register, handleSubmit, formState: { errors: formErrors, isSubmitting }, setError, clearErrors, watch, setValue } = useForm<ProviderRegistrationForm>({
+  const { register, handleSubmit, formState: { errors: formErrors, isSubmitting }, setError, clearErrors, watch, setValue, trigger } = useForm<ProviderRegistrationForm>({
     resolver: zodResolver(providerRegistrationSchema),
     defaultValues: { serviceCategories: [], agreeToTerms: false, agreeToPrivacy: false },
   });
 
   const watchedPassword = watch('password');
   const watchedCategories = watch('serviceCategories');
+
+  const validateStep1 = async () => {
+    const fieldsToValidate: Array<keyof ProviderRegistrationForm> = [
+      'firstName',
+      'lastName',
+      'email',
+      'phone',
+      'password',
+      'confirmPassword'
+    ];
+
+    const result = await trigger(fieldsToValidate);
+    return result;
+  };
 
   const toggleCategory = (catId: string) => {
     const current = watchedCategories || [];
@@ -175,7 +189,7 @@ const ProviderRegistration: React.FC = () => {
                   {formErrors.confirmPassword && <p className="mt-1 text-xs text-red-500">{formErrors.confirmPassword.message}</p>}
                 </div>
 
-                <button type="button" onClick={() => setStep(2)} className="w-full py-4 rounded-xl bg-gradient-to-r from-nilin-rose to-nilin-coral text-white font-medium shadow-lg shadow-nilin-rose/30 hover:shadow-xl transition-all flex items-center justify-center gap-2">
+                <button type="button" onClick={async () => { if (await validateStep1()) setStep(2) }} className="w-full py-4 rounded-xl bg-gradient-to-r from-nilin-rose to-nilin-coral text-white font-medium shadow-lg shadow-nilin-rose/30 hover:shadow-xl transition-all flex items-center justify-center gap-2">
                   Continue <ChevronRight className="w-5 h-5" />
                 </button>
               </form>

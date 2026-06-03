@@ -16,6 +16,8 @@ interface PageLayoutProps {
   className?: string;
   headerActions?: React.ReactNode;
   backHref?: string;
+  /** Wider content area for data-heavy admin pages */
+  contentWidth?: 'default' | 'wide';
 }
 
 const PageLayout: React.FC<PageLayoutProps> = ({
@@ -26,14 +28,20 @@ const PageLayout: React.FC<PageLayoutProps> = ({
   breadcrumbItems,
   className = '',
   headerActions,
-  backHref
+  backHref,
+  contentWidth = 'default',
 }) => {
+  const containerClass =
+    contentWidth === 'wide'
+      ? 'max-w-[min(100%,1680px)] mx-auto px-3 sm:px-5 lg:px-6'
+      : 'max-w-7xl mx-auto px-4 sm:px-6 lg:px-8';
+
   return (
     <div className={`min-h-screen bg-nilin-cream ${className}`}>
       {/* Breadcrumb Navigation */}
       {showBreadcrumb && (
         <div className="bg-white border-b border-nilin-border">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3">
+          <div className={`${containerClass} py-3`}>
             <Breadcrumb items={breadcrumbItems} />
           </div>
         </div>
@@ -42,7 +50,7 @@ const PageLayout: React.FC<PageLayoutProps> = ({
       {/* Page Header */}
       {(title || headerActions || backHref) && (
         <div className="bg-white border-b border-nilin-border">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+          <div className={`${containerClass} py-5`}>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-4">
                 {backHref && (
@@ -77,7 +85,7 @@ const PageLayout: React.FC<PageLayoutProps> = ({
       )}
 
       {/* Page Content */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      <div className={`${containerClass} py-4`}>
         {children}
       </div>
     </div>

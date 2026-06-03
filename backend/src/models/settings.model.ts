@@ -7,6 +7,9 @@ export interface IPlatformSettings extends Document {
   platformLogoPublicId?: string; // For Cloudinary
   supportEmail: string;
   supportPhone: string;
+  currency: string;
+  dateFormat: string;
+  language: string;
   maintenanceMode: boolean;
   maintenanceMessage: string;
   maintenanceEstimatedDuration?: string;
@@ -18,18 +21,28 @@ export interface IPlatformSettings extends Document {
   paymentProcessingFee: number;
   minimumWithdrawalAmount: number;
   platformFeeType: 'percentage' | 'fixed' | 'both';
+  taxRate: number;
+  weekendRates: number;
+  holidayRates: number;
 
   // Booking Settings
   defaultBookingBufferMinutes: number;
   cancellationWindowHours: number;
   autoAssignmentEnabled: boolean;
+  autoConfirmEnabled: boolean;
+  instantBooking: boolean;
   maxBookingAdvanceDays: number;
   minBookingAdvanceHours: number;
+  maxDailyBookings: number;
 
   // Notification Settings
   emailNotificationsEnabled: boolean;
   smsNotificationsEnabled: boolean;
   pushNotificationsEnabled: boolean;
+  notificationSounds: boolean;
+  quietHoursEnabled: boolean;
+  quietHoursStart: string;
+  quietHoursEnd: string;
 
   // Email Configuration
   emailConfig: {
@@ -147,6 +160,20 @@ export interface IPlatformSettings extends Document {
   passwordRequireUppercase: boolean;
   maxLoginAttempts: number;
   lockoutDurationMinutes: number;
+  enableFAQ: boolean;
+  enableAuditLogs: boolean;
+  ipAllowlist: string[];
+
+  // Branding
+  favicon: string;
+  primaryColor: string;
+  secondaryColor: string;
+
+  // Backup
+  backupCloudStorage: 'none' | 'aws' | 'gcp' | 'azure';
+  backupRetentionDays: number;
+  backupEnabled: boolean;
+  backupLastRunAt?: Date;
 
   // System Settings
   cacheTTLSeconds: number;
@@ -199,6 +226,9 @@ const SettingsSchema = new Schema<IPlatformSettings>(
       default: '',
       trim: true
     },
+    currency: { type: String, default: 'AED', trim: true },
+    dateFormat: { type: String, default: 'DD/MM/YYYY' },
+    language: { type: String, default: 'en' },
     maintenanceMode: {
       type: Boolean,
       default: false
@@ -236,6 +266,9 @@ const SettingsSchema = new Schema<IPlatformSettings>(
       enum: ['percentage', 'fixed', 'both'],
       default: 'percentage'
     },
+    taxRate: { type: Number, default: 0, min: 0, max: 100 },
+    weekendRates: { type: Number, default: 0, min: 0, max: 100 },
+    holidayRates: { type: Number, default: 0, min: 0, max: 100 },
 
     // Booking Settings
     defaultBookingBufferMinutes: {
@@ -252,6 +285,9 @@ const SettingsSchema = new Schema<IPlatformSettings>(
       type: Boolean,
       default: false
     },
+    autoConfirmEnabled: { type: Boolean, default: false },
+    instantBooking: { type: Boolean, default: false },
+    maxDailyBookings: { type: Number, default: 5, min: 1 },
     maxBookingAdvanceDays: {
       type: Number,
       default: 30,
@@ -276,6 +312,10 @@ const SettingsSchema = new Schema<IPlatformSettings>(
       type: Boolean,
       default: true
     },
+    notificationSounds: { type: Boolean, default: true },
+    quietHoursEnabled: { type: Boolean, default: false },
+    quietHoursStart: { type: String, default: '22:00' },
+    quietHoursEnd: { type: String, default: '08:00' },
 
     // Email Configuration
     emailConfig: {
@@ -498,6 +538,22 @@ const SettingsSchema = new Schema<IPlatformSettings>(
       default: 30,
       min: [5, 'Must be at least 5 minutes']
     },
+    enableFAQ: { type: Boolean, default: true },
+    enableAuditLogs: { type: Boolean, default: true },
+    ipAllowlist: { type: [String], default: [] },
+
+    favicon: { type: String, default: '' },
+    primaryColor: { type: String, default: '#E8B4A8' },
+    secondaryColor: { type: String, default: '#D4A89A' },
+
+    backupCloudStorage: {
+      type: String,
+      enum: ['none', 'aws', 'gcp', 'azure'],
+      default: 'none',
+    },
+    backupRetentionDays: { type: Number, default: 30, min: 1 },
+    backupEnabled: { type: Boolean, default: false },
+    backupLastRunAt: { type: Date },
 
     // System Settings
     cacheTTLSeconds: {

@@ -24,14 +24,18 @@ import offerRoutes from './offer.routes';
 import notificationRoutes from './notification.routes';
 import notificationAdminRoutes from './notificationAdmin.routes';
 import couponRoutes from './coupon.routes';
+import couponPublicRoutes from './coupon.public.routes';
 import apiKeyAdminRoutes from './apiKeyAdmin.routes';
+import integrationRoutes from './integration.routes';
 import referralRoutes from './referral.routes';
 import favoritesRoutes from './favorites.routes';
 import loyaltyRoutes from './loyalty.routes';
 import customerRoutes from './customer.routes';
+import customerDashboardRoutes from './customerDashboard.routes';
 import reviewRoutes from './review.routes';
 import experienceRoutes from './experience.routes';
 import experienceAdminRoutes from './experience.admin.routes';
+import anomalyAdminRoutes from './anomaly.admin.routes';
 import walletRoutes from './wallet.routes';
 import aiRoutes from './ai.routes';
 import settingsRoutes from './settings.routes';
@@ -76,6 +80,8 @@ import onboardingRoutes from './onboarding.routes';
 import winbackRoutes from './winback.routes';
 import automationAdminRoutes from './automationAdmin.routes';
 import healthRoutes from './health.routes';
+import platformRoutes from './platform.routes';
+import iaAgentRoutes from './iaAgent.routes';
 
 const router = Router();
 
@@ -124,6 +130,9 @@ router.get('/', (_req, res) => {
     }
   });
 });
+
+// Public platform status (maintenance mode)
+router.use('/platform', platformRoutes);
 
 // Authentication routes
 router.use('/auth', authRoutes);
@@ -206,8 +215,14 @@ router.use('/admin/notifications', notificationAdminRoutes);
 // Admin coupon management routes
 router.use('/admin/coupons', couponRoutes);
 
+// Customer-facing coupon routes (auth required)
+router.use('/coupons', couponPublicRoutes);
+
 // Admin API key management routes
 router.use('/admin/api-keys', apiKeyAdminRoutes);
+
+// External integrations (admin API keys)
+router.use('/integrations/v1', integrationRoutes);
 
 // Referral routes
 router.use('/referrals', referralRoutes);
@@ -221,6 +236,15 @@ router.use('/loyalty', loyaltyRoutes);
 // Customer routes (addresses, payment methods)
 router.use('/customers', customerRoutes);
 
+// Customer Dashboard routes
+router.use('/customer', customerDashboardRoutes);
+
+// Dashboard routes (activity, recommended-pros)
+router.use('/dashboard', customerDashboardRoutes);
+
+// Packages routes (public listing)
+router.use('/packages', customerDashboardRoutes);
+
 // Reviews routes
 router.use('/reviews', reviewRoutes);
 
@@ -230,11 +254,17 @@ router.use('/experiences', experienceRoutes);
 // Admin Experience routes
 router.use('/admin/experiences', experienceAdminRoutes);
 
+// Admin Anomaly Detection routes
+router.use('/admin/anomalies', anomalyAdminRoutes);
+
 // Wallet/Earnings routes (for providers)
 router.use('/provider', walletRoutes);
 
 // AI routes (insights, provider scoring, churn prediction)
 router.use('/ai', aiRoutes);
+
+// IA Agent routes (chatbot builder)
+router.use('/ia-agents', iaAgentRoutes);
 
 // Settings routes
 router.use('/settings', settingsRoutes);

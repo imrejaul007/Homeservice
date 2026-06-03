@@ -11,11 +11,15 @@ const router = Router();
 // Twilio Webhook Authentication
 // ============================================
 
-// Get Twilio credentials from environment
-const getTwilioCredentials = (): { accountSid: string; authToken: string } | null => {
+const getTwilioCredentials = async (): Promise<{ accountSid: string; authToken: string } | null> => {
+  const { getTwilioTransportConfig } = await import('../../services/platformSmsTransport.service');
+  const transport = await getTwilioTransportConfig();
+  if (transport) {
+    return { accountSid: transport.accountSid, authToken: transport.authToken };
+  }
+
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
   const authToken = process.env.TWILIO_AUTH_TOKEN;
-
   if (!accountSid || !authToken) {
     logger.error('Twilio credentials not configured', {
       context: 'TwilioWebhooks',
@@ -23,7 +27,6 @@ const getTwilioCredentials = (): { accountSid: string; authToken: string } | nul
     });
     return null;
   }
-
   return { accountSid, authToken };
 };
 
@@ -31,9 +34,9 @@ const getTwilioCredentials = (): { accountSid: string; authToken: string } | nul
  * Verify Twilio webhook signature using twilio.validateRequest()
  * SECURITY FIX: Implements proper signature verification to prevent spoofed webhooks
  */
-const verifyTwilioSignature = (req: Request): boolean => {
+const verifyTwilioSignature = async (req: Request): Promise<boolean> => {
   const twilioSignature = req.headers['x-twilio-signature'] as string;
-  const credentials = getTwilioCredentials();
+  const credentials = await getTwilioCredentials();
 
   // In development, skip verification
   if (process.env.NODE_ENV !== 'production') {
@@ -108,7 +111,7 @@ const verifyTwilioSignature = (req: Request): boolean => {
 router.post('/status', async (req: Request, res: Response): Promise<void> => {
   try {
     // Verify signature in production
-    if (process.env.NODE_ENV === 'production' && !verifyTwilioSignature(req)) {
+    if (process.env.NODE_ENV === 'production' && !(await verifyTwilioSignature(req))) {
       res.status(401).json({ error: 'Invalid signature' });
       return;
     }
@@ -169,7 +172,7 @@ router.post('/status', async (req: Request, res: Response): Promise<void> => {
 router.post('/incoming', async (req: Request, res: Response): Promise<void> => {
   try {
     // Verify signature in production
-    if (process.env.NODE_ENV === 'production' && !verifyTwilioSignature(req)) {
+    if (process.env.NODE_ENV === 'production' && !(await verifyTwilioSignature(req))) {
       res.status(401).json({ error: 'Invalid signature' });
       return;
     }

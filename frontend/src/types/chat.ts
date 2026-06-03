@@ -4,6 +4,7 @@
 // Chat Participant
 // =============================================================================
 
+// Issue #22: Updated role enum to match backend chatRoom.model.ts participant role enum
 export interface ChatParticipant {
   _id: string;
   id?: string;
@@ -12,7 +13,8 @@ export interface ChatParticipant {
   name?: string;
   email?: string;
   avatar?: string;
-  role: 'customer' | 'provider' | 'admin';
+  // Role in chat room - matches backend: 'owner' | 'admin' | 'member'
+  role: 'owner' | 'admin' | 'member';
   isOnline?: boolean;
   lastSeen?: string;
   userId?: {
@@ -31,8 +33,11 @@ export interface ChatParticipant {
 export interface ChatMessage {
   _id: string;
   id?: string;
+  // Issue #20: Standardize on chatRoomId (backend uses chatRoomId)
   roomId?: string;
   chatRoomId?: string;
+  // Issue #18: Added bookingId field to match backend message.model.ts
+  bookingId?: string;
   senderId: string | { _id: string; firstName: string; lastName: string; avatar?: string };
   receiverId: string;
   senderName?: string;
@@ -43,7 +48,8 @@ export interface ChatMessage {
   metadata?: ChatMessageMetadata;
   status: 'sent' | 'delivered' | 'read';
   isRead?: boolean;
-  readAt?: string;
+  // Issue #19: Accept both string (API response) and Date for backend compatibility
+  readAt?: string | Date;
   createdAt: string;
   updatedAt?: string;
   replyTo?: ChatReplyTo;
@@ -79,6 +85,11 @@ export interface ChatReplyTo {
 // Chat Room
 // =============================================================================
 
+// Issue #9 & #10 fix: Added missing fields from backend chatRoom.model.ts
+// - settings: Room settings (allowMessages, notificationsEnabled)
+// - unreadCounts: Map of userId to unread count (for multi-user rooms)
+// - isDeleted: Soft delete flag
+// - deletedAt: Soft delete timestamp
 export interface ChatRoom {
   _id: string;
   id?: string;
@@ -103,6 +114,15 @@ export interface ChatRoom {
   isPinned: boolean;
   isMuted: boolean;
   status: 'active' | 'archived' | 'blocked';
+  // Issue #9 fix: Added settings and unreadCounts from backend
+  settings?: {
+    allowMessages: boolean;
+    notificationsEnabled: boolean;
+  };
+  unreadCounts?: Record<string, number>;
+  // Issue #10 fix: Added soft delete fields from backend
+  isDeleted?: boolean;
+  deletedAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -169,12 +189,10 @@ export interface CreateChatRoomPayload {
 // API Responses
 // =============================================================================
 
+// Issue #21: Updated to match actual backend response (chat.routes.ts returns only rooms and total)
 export interface ChatRoomsResponse {
   rooms: ChatRoomListItem[];
   total: number;
-  page: number;
-  limit: number;
-  totalPages: number;
 }
 
 export interface MessagesResponse {
@@ -195,6 +213,19 @@ export interface UnreadCountResponse {
 // Socket Events
 // =============================================================================
 
+/**
+ * Issue #11 fix: Document socket event consistency
+ *
+ * Socket event naming conventions:
+ * - Backend emits: 'message:new' (standard event) and 'chat:new_message' (frontend compatibility)
+ * - Frontend ChatSocketMessageEvent uses 'messageId' field
+ * - Backend chat.service.ts emits 'messageId' - CONSISTENT
+ *
+ * Note: The backend intentionally emits both event names for backward compatibility.
+ * Different frontend components listen for different events:
+ * - ChatWidget listens for 'chat:new_message'
+ * - Standard components should use 'message:new'
+ */
 export interface ChatSocketMessageEvent {
   messageId: string;
   chatRoomId: string;

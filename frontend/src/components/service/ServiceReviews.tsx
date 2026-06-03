@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Star, User, Loader2, AlertCircle } from 'lucide-react';
+import toast from 'react-hot-toast';
 import { reviewsApi, type Review } from '@/services/reviewsApi';
 
 interface ServiceReviewsProps {
@@ -20,6 +21,55 @@ const RATING_DISTRIBUTION = [
   { stars: 1, percent: 0 },
 ];
 
+const formatDate = (dateString: string): string => {
+  const date = new Date(dateString);
+  const now = new Date();
+  const diffTime = Math.abs(now.getTime() - date.getTime());
+  const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+
+  if (diffDays < 1) return 'Today';
+  if (diffDays === 1) return 'Yesterday';
+  if (diffDays < 7) return `${diffDays} days ago`;
+  if (diffDays < 30) return `${Math.floor(diffDays / 7)} weeks ago`;
+  if (diffDays < 365) return `${Math.floor(diffDays / 30)} months ago`;
+  return `${Math.floor(diffDays / 365)} years ago`;
+};
+
+/**
+ * Validates that a URL is a safe image URL.
+ * Only allows http:// and https:// protocols to prevent XSS via javascript: or data: URLs.
+ */
+const isValidImageUrl = (url: string): boolean => {
+  try {
+    const parsed = new URL(url);
+    // Only allow http and https protocols - blocks javascript:, data:, and other dangerous schemes
+    return ['http:', 'https:'].includes(parsed.protocol);
+  } catch {
+    return false;
+  }
+};
+
+interface StarRatingDisplayProps {
+  rating: number;
+  maxStars?: number;
+}
+
+const StarRatingDisplay: React.FC<StarRatingDisplayProps> = ({ rating, maxStars = 5 }) => (
+  <div className="flex items-center gap-0.5" role="img" aria-label={`${rating} out of ${maxStars} stars`}>
+    {Array.from({ length: maxStars }, (_, i) => i + 1).map((star) => (
+      <Star
+        key={star}
+        className={`w-3.5 h-3.5 ${
+          star <= rating
+            ? 'text-amber-400 fill-amber-400'
+            : 'text-gray-200 fill-gray-200'
+        }`}
+        aria-hidden="true"
+      />
+    ))}
+  </div>
+);
+
 const ServiceReviews: React.FC<ServiceReviewsProps> = ({ providerId, rating, reviewCount }) => {
   const [reviews, setReviews] = useState<Review[]>([]);
   const [total, setTotal] = useState(0);
@@ -28,42 +78,29 @@ const ServiceReviews: React.FC<ServiceReviewsProps> = ({ providerId, rating, rev
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const fetchReviews = async () => {
-      try {
-        setIsLoading(true);
-        setError(null);
-        const response = await reviewsApi.getProviderReviews(providerId);
-        setReviews(response.data.reviews);
-        setTotal(response.data.total);
-        setAverageRating(response.data.averageRating || rating);
-        setDistribution(response.data.ratingDistribution || { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 });
-      } catch (err) {
-        console.error('Failed to fetch reviews:', err);
-        setError('Failed to load reviews');
-      } finally {
-        setIsLoading(false);
-      }
-    };
+  const fetchReviews = async () => {
+    try {
+      setIsLoading(true);
+      setError(null);
+      const response = await reviewsApi.getProviderReviews(providerId);
+      setReviews(response.data?.reviews ?? []);
+      setTotal(response.data?.total ?? 0);
+      setAverageRating(response.data?.averageRating ?? rating);
+      setDistribution(response.data?.ratingDistribution ?? { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 });
+    } catch (err) {
+      console.error('Failed to fetch reviews:', err);
+      setError('Failed to load reviews');
+      toast.error('Failed to load reviews. Please try again.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
+  useEffect(() => {
     if (providerId) {
       fetchReviews();
     }
   }, [providerId, rating]);
-
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    const now = new Date();
-    const diffTime = Math.abs(now.getTime() - date.getTime());
-    const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-
-    if (diffDays < 1) return 'Today';
-    if (diffDays === 1) return 'Yesterday';
-    if (diffDays < 7) return `${diffDays} days ago`;
-    if (diffDays < 30) return `${Math.floor(diffDays / 7)} weeks ago`;
-    if (diffDays < 365) return `${Math.floor(diffDays / 30)} months ago`;
-    return `${Math.floor(diffDays / 365)} years ago`;
-  };
 
   const getDisplayDistribution = () => {
     return RATING_DISTRIBUTION.map(dist => ({
@@ -97,7 +134,13 @@ const ServiceReviews: React.FC<ServiceReviewsProps> = ({ providerId, rating, rev
           <div className="flex items-center justify-center py-12">
             <div className="text-center">
               <AlertCircle className="h-8 w-8 text-red-500 mx-auto mb-4" />
-              <p className="text-gray-600">{error}</p>
+              <p className="text-gray-600 mb-4">{error}</p>
+              <button
+                onClick={fetchReviews}
+                className="px-4 py-2 bg-nilin text-white rounded-lg hover:bg-opacity-90 transition-colors text-sm font-medium"
+              >
+                Try Again
+              </button>
             </div>
           </div>
         </div>
@@ -120,7 +163,7 @@ const ServiceReviews: React.FC<ServiceReviewsProps> = ({ providerId, rating, rev
               <div className="text-4xl md:text-5xl font-bold text-gray-900 mb-1">
                 {averageRating.toFixed(1)}
               </div>
-              <div className="flex items-center justify-center md:justify-start gap-0.5 mb-1">
+              <div className="flex items-center justify-center md:justify-start gap-0.5 mb-1" role="img" aria-label={`${averageRating.toFixed(1)} out of 5 stars`}>
                 {[1, 2, 3, 4, 5].map((star) => (
                   <Star
                     key={star}
@@ -129,6 +172,7 @@ const ServiceReviews: React.FC<ServiceReviewsProps> = ({ providerId, rating, rev
                         ? 'text-amber-400 fill-amber-400'
                         : 'text-gray-200 fill-gray-200'
                     }`}
+                    aria-hidden="true"
                   />
                 ))}
               </div>
@@ -193,16 +237,7 @@ const ServiceReviews: React.FC<ServiceReviewsProps> = ({ providerId, rating, rev
                       </div>
                     </div>
                     <div className="flex items-center gap-0.5 mb-2">
-                      {[1, 2, 3, 4, 5].map((star) => (
-                        <Star
-                          key={star}
-                          className={`w-3.5 h-3.5 ${
-                            star <= review.rating
-                              ? 'text-amber-400 fill-amber-400'
-                              : 'text-gray-200 fill-gray-200'
-                          }`}
-                        />
-                      ))}
+                      <StarRatingDisplay rating={review.rating} />
                     </div>
                     {review.title && (
                       <h5 className="font-medium text-gray-900 text-sm mb-1">{review.title}</h5>
@@ -212,14 +247,21 @@ const ServiceReviews: React.FC<ServiceReviewsProps> = ({ providerId, rating, rev
                     </p>
                     {review.photos && review.photos.length > 0 && (
                       <div className="flex gap-2 mt-3">
-                        {review.photos.map((photo, idx) => (
-                          <img
-                            key={idx}
-                            src={photo}
-                            alt={`Review photo ${idx + 1}`}
-                            className="w-20 h-20 object-cover rounded-lg"
-                          />
-                        ))}
+                        {review.photos
+                          .filter((photo): photo is string => typeof photo === 'string' && isValidImageUrl(photo))
+                          .map((photo, idx) => (
+                            <img
+                              key={idx}
+                              src={photo}
+                              alt={`Review photo ${idx + 1}`}
+                              className="w-20 h-20 object-cover rounded-lg"
+                              onError={(e) => {
+                                // Hide broken images by setting display to none
+                                const target = e.currentTarget;
+                                target.style.display = 'none';
+                              }}
+                            />
+                          ))}
                       </div>
                     )}
                   </div>

@@ -13,7 +13,8 @@ import { getTenantContext, TenantContext } from '../utils/tenantFilter';
 import { sendProviderApproval, sendProviderRejection } from '../services/email.service';
 import { getSocketServer } from '../socket';
 import { NotificationService } from '../services/notification.service';
-import { churnService } from '../services/churn.service';
+import { churnService, ChurnFilters } from '../services/churn.service';
+import { churnPredictionService, RetentionAction } from '../services/churnPrediction.service';
 import crypto from 'crypto';
 
 // Initialize Stripe client
@@ -479,6 +480,24 @@ export const rejectProvider = asyncHandler(async (req: Request, res: Response) =
         undefined
       );
     }
+
+    // FIX: Deactivate all provider's services when suspending to prevent new bookings
+    const providerUserId = (provider.userId as any)?._id || provider.userId;
+    await Service.updateMany(
+      { providerId: providerUserId },
+      {
+        isActive: false,
+        status: 'inactive'
+      }
+    );
+
+    logger.info('ADMIN_AUDIT: Provider services deactivated due to suspension', {
+      action: 'PROVIDER_SERVICES_DEACTIVATED',
+      adminId: adminUser._id,
+      providerId: id,
+      providerUserId: providerUserId.toString(),
+      timestamp: new Date().toISOString()
+    });
   }
 
   // Audit logging for provider rejection
@@ -1259,9 +1278,30 @@ export const updateUserStatus = asyncHandler(async (req: Request, res: Response)
   }
 
   // Update user status
+  const previousStatus = user.accountStatus;
   user.accountStatus = status;
 
   await user.save();
+
+  // Emit socket event to notify the user of their status change
+  const socketServer = getSocketServer();
+  if (socketServer) {
+    socketServer.emitUserStatusChanged(
+      user._id.toString(),
+      status,
+      status === 'suspended' ? 'Your account has been suspended by an administrator' :
+      status === 'banned' ? 'Your account has been banned' :
+      status === 'active' ? 'Your account has been reactivated' : undefined
+    );
+
+    // If account is locked/suspended, also emit account locked event
+    if (status === 'suspended' || status === 'banned') {
+      socketServer.emitUserAccountLocked(
+        user._id.toString(),
+        status === 'banned' ? 'Account banned by administrator' : 'Account suspended by administrator'
+      );
+    }
+  }
 
   logger.info('ADMIN_AUDIT: User status updated', {
     action: 'USER_STATUS_UPDATED',
@@ -1472,14 +1512,14 @@ export const getProvidersWithServices = asyncHandler(async (req: Request, res: R
 
   // PERFORMANCE FIX: Use aggregation to fetch providers with services in a single query
   // This replaces the previous N+1 query pattern (1 for providers + N for services)
-  const providerIds = await ProviderProfile.find(query)
-    .select('_id')
+  const providerPage = await ProviderProfile.find(query)
+    .select('_id userId')
     .sort({ createdAt: -1 })
     .skip(skip)
     .limit(limit)
     .lean();
 
-  if (providerIds.length === 0) {
+  if (providerPage.length === 0) {
     res.json({
       success: true,
       data: {
@@ -1497,8 +1537,13 @@ export const getProvidersWithServices = asyncHandler(async (req: Request, res: R
     return;
   }
 
-  // Batch fetch all services for the paginated providers in a single query
-  const serviceQuery: any = { providerId: { $in: providerIds.map((p: any) => p._id) } };
+  const providerProfileIds = providerPage.map((p: { _id: mongoose.Types.ObjectId }) => p._id);
+  const providerUserIds = providerPage
+    .map((p: { userId?: mongoose.Types.ObjectId }) => p.userId)
+    .filter(Boolean);
+
+  // Service.providerId stores User._id, not ProviderProfile._id
+  const serviceQuery: any = { providerId: { $in: providerUserIds } };
   if (!tenantContext.isAdmin && tenantContext.tenantId) {
     serviceQuery.tenantId = tenantContext.tenantId;
   }
@@ -1519,7 +1564,7 @@ export const getProvidersWithServices = asyncHandler(async (req: Request, res: R
   }
 
   // Fetch provider profiles with user data
-  const providers = await ProviderProfile.find({ _id: { $in: providerIds.map((p: any) => p._id) } })
+  const providers = await ProviderProfile.find({ _id: { $in: providerProfileIds } })
     .populate('userId', 'firstName lastName email accountStatus')
     .sort({ createdAt: -1 })
     .lean();
@@ -1575,6 +1620,16 @@ export const batchServiceAction = asyncHandler(async (req: Request, res: Respons
     query.tenantId = tenantContext.tenantId;
   }
 
+  // Fetch services first to get provider IDs for socket notifications
+  const servicesToUpdate = await Service.find(query).select('providerId');
+  const providerIds: string[] = [
+    ...new Set(
+      servicesToUpdate
+        .map((s: { providerId?: { toString(): string } }) => s.providerId?.toString())
+        .filter(Boolean) as string[]
+    ),
+  ];
+
   const result = await Service.updateMany(
     query,
     {
@@ -1584,6 +1639,14 @@ export const batchServiceAction = asyncHandler(async (req: Request, res: Respons
       updatedAt: new Date()
     }
   );
+
+  // Emit socket events to all affected providers
+  if (providerIds.length > 0) {
+    const socketServer = getSocketServer();
+    if (socketServer) {
+      socketServer.emitServicesBatchCompleted(providerIds, serviceIds, result.modifiedCount, action);
+    }
+  }
 
   res.json({
     success: true,
@@ -1855,6 +1918,34 @@ export const updateBookingStatus = asyncHandler(async (req: Request, res: Respon
 
   await booking.save();
 
+  // Emit socket events to affected users (customer and provider)
+  const socketServer = getSocketServer();
+  if (socketServer) {
+    // Notify customer
+    const customerId = (booking.customerId as any)?._id?.toString() || booking.customerId?.toString();
+    if (customerId) {
+      socketServer.emitBookingAdminUpdatedToCustomer(
+        customerId,
+        id,
+        booking.bookingNumber,
+        status,
+        reason
+      );
+    }
+
+    // Notify provider
+    const providerId = (booking.providerId as any)?._id?.toString() || booking.providerId?.toString();
+    if (providerId) {
+      socketServer.emitBookingAdminUpdatedToProvider(
+        providerId,
+        id,
+        booking.bookingNumber,
+        status,
+        reason
+      );
+    }
+  }
+
   // SECURITY FIX: Enhanced audit logging for admin booking actions
   logger.info('ADMIN_BOOKING_AUDIT: Booking status updated', {
     action: 'BOOKING_STATUS_UPDATED',
@@ -2018,6 +2109,53 @@ export const cancelBooking = asyncHandler(async (req: Request, res: Response) =>
 
   await booking.save();
 
+  // FIX [MEDIUM-4]: Admin cancel should trigger settlement reversal if settlement exists
+  if (booking.status === 'cancelled' && refundAmount > 0) {
+    try {
+      const Settlement = require('../models/settlement.model').default;
+
+      // Find the settlement record for this booking
+      const settlement = await Settlement.findOne({
+        'lineItems.bookingId': booking._id
+      });
+
+      if (settlement) {
+        // Add deduction to reverse the payout for this cancelled booking
+        const lineItem = settlement.lineItems.find(
+          (item: any) => item.bookingId?.toString() === booking._id.toString()
+        );
+
+        if (lineItem) {
+          await settlement.addDeduction(
+            'refund_reversal',
+            lineItem.netAmount,
+            `Refund for cancelled booking ${booking.bookingNumber} - Admin cancelled`,
+            booking._id.toString()
+          );
+          await settlement.save();
+
+          logger.info('Settlement deduction added for admin-cancelled booking', {
+            action: 'SETTLEMENT_REFUND_REVERSAL',
+            settlementId: settlement._id.toString(),
+            settlementNumber: settlement.settlementNumber,
+            bookingId: booking._id.toString(),
+            bookingNumber: booking.bookingNumber,
+            deductionAmount: lineItem.netAmount,
+            cancelledBy: 'admin',
+            refundAmount,
+          });
+        }
+      }
+    } catch (settlementError) {
+      // Log but don't fail the cancellation - settlement reversal is secondary
+      logger.error('Failed to add settlement deduction for cancelled booking', {
+        action: 'SETTLEMENT_REVERSAL_ERROR',
+        bookingId: booking._id.toString(),
+        error: settlementError instanceof Error ? settlementError.message : String(settlementError),
+      });
+    }
+  }
+
   // SECURITY FIX: Enhanced audit logging for admin booking cancellations
   logger.info('ADMIN_BOOKING_AUDIT: Booking cancelled', {
     action: 'BOOKING_CANCELLED',
@@ -2091,8 +2229,11 @@ export const getAdminStats = asyncHandler(async (req: Request, res: Response) =>
       ...baseQuery,
       createdAt: { $gte: today, $lt: tomorrow }
     }),
-    // Pending provider verifications
-    ProviderProfile.countDocuments({ ...baseQuery, 'verificationStatus.overall': 'pending' }),
+    // Pending provider verifications (pending + under review)
+    ProviderProfile.countDocuments({
+      ...baseQuery,
+      'verificationStatus.overall': { $in: ['pending', 'in_progress'] },
+    }),
     // Monthly completed bookings for revenue calculation
     Booking.find({
       ...baseQuery,
@@ -2148,7 +2289,7 @@ export const getAllCategories = asyncHandler(async (req: Request, res: Response)
 
   // Enforce hard limits on pagination params
   const page = Math.max(1, parseInt(req.query.page as string) || 1);
-  const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
+  const limit = Math.min(200, Math.max(1, parseInt(req.query.limit as string) || 100));
 
   const {
     search,
@@ -2242,11 +2383,34 @@ export const getCategoryDetails = asyncHandler(async (req: Request, res: Respons
 export const createCategory = asyncHandler(async (req: Request, res: Response) => {
   // Extract tenant context for service calls
   const tenantContext: TenantContext = getTenantContext(req);
-  const { name, description, icon, color, imageUrl, subcategories, isActive, isFeatured, sortOrder } = req.body;
+  const {
+    name,
+    slug: bodySlug,
+    description,
+    icon,
+    color,
+    imageUrl,
+    subcategories,
+    isActive,
+    isFeatured,
+    sortOrder,
+    comingSoon,
+  } = req.body;
   const adminUser = req.user as any;
 
-  // Check if category with same name or slug exists (scoped to tenant)
-  const slug = name.toLowerCase().trim().replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, '-');
+  const slug =
+    typeof bodySlug === 'string' && bodySlug.trim()
+      ? bodySlug
+          .toLowerCase()
+          .trim()
+          .replace(/[^a-z0-9-]/g, '-')
+          .replace(/-+/g, '-')
+          .replace(/^-|-$/g, '')
+      : name
+          .toLowerCase()
+          .trim()
+          .replace(/[^a-z0-9\s-]/g, '')
+          .replace(/\s+/g, '-');
   const existingQuery: any = { $or: [{ name }, { slug }] };
   if (!tenantContext.isAdmin && tenantContext.tenantId) {
     existingQuery.tenantId = tenantContext.tenantId;
@@ -2267,6 +2431,7 @@ export const createCategory = asyncHandler(async (req: Request, res: Response) =
     subcategories: subcategories || [],
     isActive: isActive !== false,
     isFeatured: isFeatured || false,
+    comingSoon: Boolean(comingSoon),
     sortOrder: sortOrder || 0,
     createdBy: adminUser._id,
     updatedBy: adminUser._id,
@@ -2315,18 +2480,30 @@ export const updateCategory = asyncHandler(async (req: Request, res: Response) =
     throw new ApiError(404, 'Category not found');
   }
 
-  // If name is being updated, regenerate slug
-  if (updates.name && updates.name !== category.name) {
-    updates.slug = updates.name.toLowerCase().trim().replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, '-');
+  // Slug: use explicit slug from client, or regenerate when name changes
+  if (typeof updates.slug === 'string' && updates.slug.trim()) {
+    updates.slug = updates.slug
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9-]/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '');
+  } else if (updates.name && updates.name !== category.name) {
+    updates.slug = updates.name
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9\s-]/g, '')
+      .replace(/\s+/g, '-');
+  }
 
-    // Check if new slug conflicts (scoped to tenant)
+  if (updates.slug && updates.slug !== category.slug) {
     const existingQuery: any = { slug: updates.slug, _id: { $ne: id } };
     if (!tenantContext.isAdmin && tenantContext.tenantId) {
       existingQuery.tenantId = tenantContext.tenantId;
     }
     const existing = await ServiceCategory.findOne(existingQuery);
     if (existing) {
-      throw new ApiError(400, 'Category with this name already exists');
+      throw new ApiError(400, 'Category with this slug already exists');
     }
   }
 
@@ -2337,6 +2514,26 @@ export const updateCategory = asyncHandler(async (req: Request, res: Response) =
   category.updatedBy = adminUser._id;
 
   await category.save();
+
+  // FIX: Notify providers whose services are affected by category changes
+  const oldCategoryName = category.name; // Category name after update
+  const affectedServices = await Service.find({
+    category: oldCategoryName,
+    status: { $in: ['active', 'pending_review'] }
+  }).select('_id providerId name category').lean();
+
+  const socketServer = getSocketServer();
+  for (const svc of affectedServices) {
+    if (socketServer && updates.name && updates.name !== oldCategoryName) {
+      socketServer.emitServiceCategoryChanged(
+        (svc as any)._id?.toString(),
+        svc.providerId?.toString(),
+        svc.name,
+        oldCategoryName,
+        updates.name
+      );
+    }
+  }
 
   // Audit logging
   logger.info('ADMIN_AUDIT: Category updated', {
@@ -2460,7 +2657,7 @@ export const addSubcategory = asyncHandler(async (req: Request, res: Response) =
   // Extract tenant context for service calls
   const tenantContext: TenantContext = getTenantContext(req);
   const { id } = req.params;
-  const { name, description, icon, color, imageUrl } = req.body;
+  const { name, slug: bodySlug, description, icon, color, imageUrl, sortOrder } = req.body;
   const adminUser = req.user as any;
 
   // Build tenant-scoped query
@@ -2475,7 +2672,19 @@ export const addSubcategory = asyncHandler(async (req: Request, res: Response) =
     throw new ApiError(404, 'Category not found');
   }
 
-  const slug = name.toLowerCase().trim().replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, '-');
+  const slug =
+    typeof bodySlug === 'string' && bodySlug.trim()
+      ? bodySlug
+          .toLowerCase()
+          .trim()
+          .replace(/[^a-z0-9-]/g, '-')
+          .replace(/-+/g, '-')
+          .replace(/^-|-$/g, '')
+      : name
+          .toLowerCase()
+          .trim()
+          .replace(/[^a-z0-9\s-]/g, '')
+          .replace(/\s+/g, '-');
 
   // Check if subcategory with same slug exists
   const existingSub = category.subcategories.find(sub => sub.slug === slug);
@@ -2495,7 +2704,7 @@ export const addSubcategory = asyncHandler(async (req: Request, res: Response) =
     color,
     imageUrl,
     isActive: true,
-    sortOrder: maxSortOrder + 1
+    sortOrder: typeof sortOrder === 'number' ? sortOrder : maxSortOrder + 1,
   });
 
   category.updatedBy = adminUser._id;
@@ -2766,10 +2975,11 @@ export const moderateReview = asyncHandler(async (req: Request, res: Response) =
   const { action, reason } = req.body;
   const adminUser = req.user as any;
 
-  // Validate action
-  const validActions = ['approve', 'reject', 'hide', 'delete'];
+  // Validate action (restore is alias for approve — unhide rejected reviews)
+  const normalizedAction = action === 'restore' ? 'approve' : action;
+  const validActions = ['approve', 'reject', 'hide', 'delete', 'restore'];
   if (!validActions.includes(action)) {
-    throw new ApiError(400, `Invalid action. Must be one of: ${validActions.join(', ')}`);
+    throw new ApiError(400, `Invalid action. Must be one of: approve, reject, hide, delete, restore`);
   }
 
   // Build query
@@ -2791,7 +3001,7 @@ export const moderateReview = asyncHandler(async (req: Request, res: Response) =
   const previousHidden = review.isHidden;
 
   // Apply moderation action
-  switch (action) {
+  switch (normalizedAction) {
     case 'approve':
       review.moderationStatus = 'approved';
       review.isHidden = false;
@@ -2823,7 +3033,23 @@ export const moderateReview = asyncHandler(async (req: Request, res: Response) =
       break;
 
     case 'delete':
-      await Review.findByIdAndDelete(id);
+      {
+        const revieweeUserIdForDelete =
+          (review.revieweeId as any)?._id?.toString?.() ||
+          review.revieweeId?.toString?.();
+        await Review.findByIdAndDelete(id);
+
+        if (revieweeUserIdForDelete) {
+          try {
+            await ProviderProfile.recalculateReviewsData(revieweeUserIdForDelete);
+          } catch (syncError) {
+            logger.error('Failed to recalculate provider reviews data after delete', {
+              reviewId: id,
+              revieweeUserId: revieweeUserIdForDelete,
+              error: syncError instanceof Error ? syncError.message : String(syncError),
+            });
+          }
+        }
 
       logger.info('ADMIN_AUDIT: Review deleted', {
         action: 'REVIEW_DELETED',
@@ -2842,6 +3068,7 @@ export const moderateReview = asyncHandler(async (req: Request, res: Response) =
         message: 'Review deleted successfully'
       });
       return;
+      }
   }
 
   // Update moderation metadata
@@ -2849,6 +3076,22 @@ export const moderateReview = asyncHandler(async (req: Request, res: Response) =
   review.moderatedBy = adminUser._id;
 
   await review.save();
+
+  // Sync denormalized provider reviewsData from Review collection
+  const revieweeUserId =
+    (review.revieweeId as any)?._id?.toString?.() ||
+    review.revieweeId?.toString?.();
+  if (revieweeUserId) {
+    try {
+      await ProviderProfile.recalculateReviewsData(revieweeUserId);
+    } catch (syncError) {
+      logger.error('Failed to recalculate provider reviews data after moderation', {
+        reviewId: id,
+        revieweeUserId,
+        error: syncError instanceof Error ? syncError.message : String(syncError),
+      });
+    }
+  }
 
   // Audit logging
   logger.info('ADMIN_AUDIT: Review moderated', {
@@ -2868,7 +3111,7 @@ export const moderateReview = asyncHandler(async (req: Request, res: Response) =
   });
 
   // Notify reviewer (customer who wrote the review) if rejected
-  if (action === 'reject') {
+  if (normalizedAction === 'reject') {
     const reviewerId = (review.reviewerId as any)?._id;
     if (reviewerId) {
       try {
@@ -2892,7 +3135,7 @@ export const moderateReview = asyncHandler(async (req: Request, res: Response) =
   }
 
   // Notify reviewee (provider who received the review) if hidden
-  if (action === 'hide') {
+  if (normalizedAction === 'hide') {
     const revieweeId = (review.revieweeId as any)?._id;
     if (revieweeId) {
       try {
@@ -2920,13 +3163,13 @@ export const moderateReview = asyncHandler(async (req: Request, res: Response) =
   if (socketServer) {
     // Notify provider (reviewee) when review is approved or hidden
     const providerId = (review.revieweeId as any)?._id?.toString();
-    if (providerId && (action === 'approve' || action === 'hide')) {
-      socketServer.emitReviewModerated(providerId, id, action, review.rating);
+    if (providerId && (normalizedAction === 'approve' || normalizedAction === 'hide')) {
+      socketServer.emitReviewModerated(providerId, id, normalizedAction, review.rating);
     }
 
     // Notify customer (reviewer) when review is rejected
     const customerId = (review.reviewerId as any)?._id?.toString();
-    if (customerId && action === 'reject') {
+    if (customerId && normalizedAction === 'reject') {
       socketServer.emitReviewModeratedToCustomer(customerId, id, action, reason);
     }
   }
@@ -2981,6 +3224,20 @@ export const getReviewStats = asyncHandler(async (req: Request, res: Response) =
     }
   ]);
 
+  const distribution = ratingStats[0]
+    ? {
+        5: ratingStats[0].rating5,
+        4: ratingStats[0].rating4,
+        3: ratingStats[0].rating3,
+        2: ratingStats[0].rating2,
+        1: ratingStats[0].rating1,
+      }
+    : { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
+
+  const averageRating = ratingStats[0]
+    ? Math.round((ratingStats[0].avgRating || 0) * 10) / 10
+    : 0;
+
   res.json({
     success: true,
     data: {
@@ -2990,20 +3247,18 @@ export const getReviewStats = asyncHandler(async (req: Request, res: Response) =
       rejected,
       hidden,
       flagged,
-      rating: ratingStats[0] ? {
-        average: Math.round((ratingStats[0].avgRating || 0) * 10) / 10,
-        distribution: {
-          5: ratingStats[0].rating5,
-          4: ratingStats[0].rating4,
-          3: ratingStats[0].rating3,
-          2: ratingStats[0].rating2,
-          1: ratingStats[0].rating1,
-        }
-      } : {
-        average: 0,
-        distribution: { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 }
-      }
-    }
+      rating: { average: averageRating, distribution },
+      stats: {
+        total,
+        pending,
+        approved,
+        rejected: rejected + hidden,
+        hidden,
+        flagged,
+        averageRating,
+        ratingDistribution: distribution,
+      },
+    },
   });
 });
 
@@ -3049,12 +3304,42 @@ export const getAllReviews = asyncHandler(async (req: Request, res: Response) =>
     }
   }
 
-  // Search by review content
+  // Search by review content, code, or reviewer/reviewee names
   if (search && typeof search === 'string') {
-    query.$or = [
-      { comment: { $regex: search, $options: 'i' } },
-      { title: { $regex: search, $options: 'i' } }
-    ];
+    // PERFORMANCE FIX: Use text index search instead of regex for comment/title
+    // Text search is indexed and much faster than case-insensitive regex
+    const searchRegex = { $regex: search, $options: 'i' };
+
+    // First, find matching users by their names/email (limited to 100 for performance)
+    const matchedUsers = await User.find({
+      $or: [
+        { firstName: searchRegex },
+        { lastName: searchRegex },
+        { email: searchRegex },
+        { 'businessInfo.businessName': searchRegex },
+      ],
+    })
+      .select('_id')
+      .limit(100)
+      .lean();
+
+    const userIds = matchedUsers.map((u) => u._id);
+
+    // Build search conditions using text index for review content
+    const searchConditions: Record<string, unknown>[] = [];
+
+    // Use text search on comment and title (leveraging text index)
+    searchConditions.push({ $text: { $search: search } });
+
+    // Also match by user IDs if any users matched the search criteria
+    if (userIds.length > 0) {
+      searchConditions.push(
+        { reviewerId: { $in: userIds } },
+        { revieweeId: { $in: userIds } }
+      );
+    }
+
+    query.$or = searchConditions;
   }
 
   // Filter by rating
@@ -3091,16 +3376,59 @@ export const getAllReviews = asyncHandler(async (req: Request, res: Response) =>
 
   // Sort options
   const sortOptions: any = {};
-  sortOptions[sortBy as string] = order === 'desc' ? -1 : 1;
+  const isTextSearch = search && typeof search === 'string';
 
-  const reviews = await Review.find(query)
-    .populate('reviewerId', 'firstName lastName email avatar')
-    .populate('revieweeId', 'firstName lastName email businessInfo.businessName')
-    .populate('bookingId', 'bookingNumber scheduledDate serviceId')
-    .sort(sortOptions)
-    .skip((Number(page) - 1) * Number(limit))
-    .limit(Number(limit));
+  // When using text search, sort by relevance (textScore) first, then by specified field
+  // MongoDB $text search requires sorting by score for relevance ordering
+  if (isTextSearch) {
+    sortOptions.score = { $meta: 'textScore' };
+    // Secondary sort by specified field for consistent pagination
+    if (sortBy !== 'score') {
+      sortOptions[sortBy as string] = order === 'desc' ? -1 : 1;
+    }
+  } else {
+    sortOptions[sortBy as string] = order === 'desc' ? -1 : 1;
+  }
 
+  // Build the query with proper typing based on whether text search is used
+  let reviews: any;
+  if (isTextSearch) {
+    // Text search: use select with textScore projection and lean() for proper typing
+    reviews = await Review.find(query)
+      .select({ score: { $meta: 'textScore' } })
+      .populate('reviewerId', 'firstName lastName email avatar')
+      .populate('revieweeId', 'firstName lastName email businessInfo.businessName')
+      .populate({
+        path: 'bookingId',
+        select: 'bookingNumber scheduledDate serviceId providerId',
+        populate: [
+          { path: 'serviceId', select: 'name category' },
+          { path: 'providerId', select: 'firstName lastName email' },
+        ],
+      })
+      .sort(sortOptions)
+      .skip((Number(page) - 1) * Number(limit))
+      .limit(Number(limit))
+      .lean();
+  } else {
+    // Non-text search: standard find without projection
+    reviews = await Review.find(query)
+      .populate('reviewerId', 'firstName lastName email avatar')
+      .populate('revieweeId', 'firstName lastName email businessInfo.businessName')
+      .populate({
+        path: 'bookingId',
+        select: 'bookingNumber scheduledDate serviceId providerId',
+        populate: [
+          { path: 'serviceId', select: 'name category' },
+          { path: 'providerId', select: 'firstName lastName email' },
+        ],
+      })
+      .sort(sortOptions)
+      .skip((Number(page) - 1) * Number(limit))
+      .limit(Number(limit));
+  }
+
+  // For text search, countDocuments works fine with $text query
   const total = await Review.countDocuments(query);
 
   res.json({
@@ -3143,14 +3471,13 @@ export const getPendingWithdrawals = asyncHandler(async (req: Request, res: Resp
     query.tenantId = tenantContext.tenantId;
   }
 
-  // Filter by status
-  if (status && typeof status === 'string') {
-    query['transactions.referenceType'] = 'payout';
-    query['transactions.status'] = status;
-  } else {
-    // Default: show pending withdrawals
-    query['transactions.referenceType'] = 'payout';
-    query['transactions.status'] = 'pending';
+  const statusParam = typeof status === 'string' ? status : 'pending';
+  const txStatus =
+    statusParam === 'rejected' ? 'reversed' : statusParam === 'all' ? null : statusParam;
+
+  query['transactions.referenceType'] = 'payout';
+  if (txStatus) {
+    query['transactions.status'] = txStatus;
   }
 
   // Filter by provider
@@ -3181,7 +3508,7 @@ export const getPendingWithdrawals = asyncHandler(async (req: Request, res: Resp
     {
       $match: {
         'transactions.referenceType': 'payout',
-        'transactions.status': status ? status : 'pending',
+        ...(txStatus ? { 'transactions.status': txStatus } : {}),
       },
     },
     {
@@ -3195,7 +3522,14 @@ export const getPendingWithdrawals = asyncHandler(async (req: Request, res: Resp
     { $unwind: '$user' },
     {
       $project: {
-        _id: 1,
+        _id: {
+          $concat: [
+            { $toString: '$_id' },
+            ':',
+            { $ifNull: [{ $toString: '$transactions.id' }, ''] },
+          ],
+        },
+        walletId: '$_id',
         balance: 1,
         currency: 1,
         pendingBalance: 1,
@@ -3287,17 +3621,18 @@ export const getWithdrawalStats = asyncHandler(async (req: Request, res: Respons
   };
 
   for (const stat of stats) {
-    const status = stat._id as keyof typeof result;
-    if (status in result) {
-      (result as any)[status] = {
+    const rawStatus = String(stat._id || '');
+    const statusKey = rawStatus === 'reversed' ? 'rejected' : rawStatus;
+    if (statusKey in result && statusKey !== 'totalPendingAmount' && statusKey !== 'totalProcessedAmount') {
+      (result as any)[statusKey] = {
         count: stat.count,
         totalAmount: stat.totalAmount,
       };
     }
-    if (status === 'completed' || status === 'processing') {
+    if (rawStatus === 'completed' || rawStatus === 'processing') {
       result.totalProcessedAmount += stat.totalAmount;
     }
-    if (status === 'pending' || status === 'processing') {
+    if (rawStatus === 'pending' || rawStatus === 'processing') {
       result.totalPendingAmount += stat.totalAmount;
     }
   }
@@ -3345,6 +3680,19 @@ export const approveWithdrawal = asyncHandler(async (req: Request, res: Response
 
   if (!transaction) {
     throw new ApiError(404, 'Withdrawal transaction not found');
+  }
+
+  // FIX [MEDIUM-1]: Add idempotency check - prevent double approval of already approved/rejected withdrawals
+  const terminalStatuses = ['completed', 'approved', 'rejected', 'failed'];
+  if (terminalStatuses.includes(transaction.status)) {
+    logger.warn('Withdrawal approval attempted on already processed transaction', {
+      action: 'WITHDRAWAL_IDEMPOTENCY_CHECK',
+      withdrawalId: id,
+      walletId,
+      transactionId,
+      currentStatus: transaction.status,
+    });
+    throw new ApiError(400, `Withdrawal has already been processed with status: ${transaction.status}`);
   }
 
   if (transaction.status !== 'pending') {
@@ -3938,6 +4286,115 @@ export const getChurnStats = asyncHandler(async (req: Request, res: Response) =>
   }
 });
 
+/**
+ * GET /api/admin/churn/at-risk
+ */
+export const getChurnAtRiskCustomers = asyncHandler(async (req: Request, res: Response) => {
+  const {
+    minRiskLevel,
+    minDaysInactive,
+    maxDaysInactive,
+    limit = '100',
+    offset = '0',
+  } = req.query;
+
+  const validLevels = ['low', 'medium', 'high', 'critical'];
+  if (minRiskLevel && !validLevels.includes(minRiskLevel as string)) {
+    throw ApiError.badRequest(`Invalid risk level. Must be one of: ${validLevels.join(', ')}`);
+  }
+
+  const filters: ChurnFilters = {
+    limit: Math.min(500, Math.max(1, parseInt(limit as string, 10) || 100)),
+    offset: Math.max(0, parseInt(offset as string, 10) || 0),
+  };
+
+  if (minRiskLevel) {
+    filters.minRiskLevel = minRiskLevel as ChurnFilters['minRiskLevel'];
+  }
+  if (minDaysInactive) {
+    const minDays = parseInt(minDaysInactive as string, 10);
+    if (isNaN(minDays) || minDays < 0) throw ApiError.badRequest('minDaysInactive must be a non-negative number');
+    filters.minDaysInactive = minDays;
+  }
+  if (maxDaysInactive) {
+    const maxDays = parseInt(maxDaysInactive as string, 10);
+    if (isNaN(maxDays) || maxDays < 0) throw ApiError.badRequest('maxDaysInactive must be a non-negative number');
+    filters.maxDaysInactive = maxDays;
+  }
+
+  const customers = await churnService.getAtRiskCustomers(filters);
+
+  res.json({
+    success: true,
+    data: {
+      customers,
+      total: customers.length,
+      pagination: { limit: filters.limit, offset: filters.offset },
+    },
+  });
+});
+
+/**
+ * GET /api/admin/churn/overview
+ */
+export const getChurnOverview = asyncHandler(async (_req: Request, res: Response) => {
+  const now = new Date();
+  const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+  const stats = await churnService.getChurnStats({ startDate: thirtyDaysAgo, endDate: now });
+  const atRiskCustomers = await churnService.getAtRiskCustomers({ minRiskLevel: 'medium', limit: 5 });
+
+  res.json({
+    success: true,
+    data: {
+      totalAtRisk: stats.atRiskCustomers,
+      churnRate: stats.churnRate,
+      byRiskLevel: stats.byRiskLevel,
+      averageRiskScore: stats.averageRiskScore,
+      totalLifetimeValueAtRisk: stats.totalLifetimeValueAtRisk,
+      topRiskFactors: stats.topRiskFactors.slice(0, 3),
+      recentAlerts: atRiskCustomers.map((c) => ({
+        customerId: c.customerId,
+        customerName: c.customerName,
+        riskLevel: c.riskLevel,
+        riskScore: c.riskScore,
+        daysSinceLastBooking: c.daysSinceLastBooking,
+        recommendedAction: c.recommendedActions[0] || 'Monitor',
+      })),
+    },
+  });
+});
+
+/**
+ * GET /api/admin/churn/segments
+ */
+export const getChurnSegments = asyncHandler(async (_req: Request, res: Response) => {
+  const segments = await churnPredictionService.getCustomerSegments();
+  res.json({ success: true, data: segments });
+});
+
+/**
+ * POST /api/admin/churn/refresh
+ */
+export const refreshChurnCache = asyncHandler(async (_req: Request, res: Response) => {
+  await churnService.clearCache();
+  res.json({ success: true, message: 'Churn data cache refreshed' });
+});
+
+/**
+ * POST /api/admin/churn/execute/:userId
+ */
+export const executeChurnRetentionAction = asyncHandler(async (req: Request, res: Response) => {
+  const { userId } = req.params;
+  const { action } = req.body as { action: RetentionAction };
+
+  if (!userId) throw ApiError.badRequest('User ID is required');
+  if (!action?.type) throw ApiError.badRequest('Action is required with type property');
+
+  const result = await churnPredictionService.executeRetentionAction(userId, action);
+  res.json({ success: true, data: result });
+});
+
 // Default export
 export default {
   // Provider Management
@@ -3989,4 +4446,9 @@ export default {
   rejectWithdrawal,
   // Churn Management
   getChurnStats,
+  getChurnAtRiskCustomers,
+  getChurnOverview,
+  getChurnSegments,
+  refreshChurnCache,
+  executeChurnRetentionAction,
 };

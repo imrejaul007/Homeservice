@@ -1,6 +1,8 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Calendar, Clock, CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { Calendar, Clock, CheckCircle, AlertCircle, Loader2, RefreshCw } from 'lucide-react';
+import axios, { type AxiosError } from 'axios';
 import { cn } from '../../lib/utils';
+import { API_BASE_URL } from '@/config/api';
 
 // ============================================
 // Type Definitions
@@ -29,6 +31,22 @@ export interface ProviderAvailabilityData {
   maxAdvanceDays: number;
 }
 
+export interface AvailabilityError {
+  message: string;
+  code?: string;
+  retryable?: boolean;
+}
+
+// API Response Types
+interface AvailabilitySlotsResponse {
+  success: boolean;
+  data?: {
+    slots: string[];
+    timezone: string;
+  };
+  message?: string;
+}
+
 interface ProviderAvailabilityWidgetProps {
   providerId: string;
   serviceId?: string;
@@ -41,48 +59,87 @@ interface ProviderAvailabilityWidgetProps {
 }
 
 // ============================================
-// Mock Data Generator
+// API Configuration
 // ============================================
 
-const generateMockSlots = (): TimeSlot[] => {
-  const slots: TimeSlot[] = [];
-  const startHour = 9;
-  const endHour = 18;
-  const slotDuration = 60; // minutes
+const availabilityApi = axios.create({
+  baseURL: `${API_BASE_URL}/availability`,
+  timeout: 10000,
+});
 
-  for (let hour = startHour; hour < endHour; hour++) {
-    const isBooked = Math.random() > 0.7;
-    slots.push({
-      id: `slot-${hour}`,
-      startTime: `${hour.toString().padStart(2, '0')}:00`,
-      endTime: `${(hour + 1).toString().padStart(2, '0')}:00`,
-      isAvailable: !isBooked,
-      isBooked,
-    });
+// Get auth tokens from sessionStorage
+const getAuthTokens = () => {
+  try {
+    const stored = sessionStorage.getItem('auth-storage');
+    if (!stored) return null;
+    const parsed = JSON.parse(stored);
+    const tokens = parsed?.state?.tokens;
+    if (tokens?.accessToken && tokens?.refreshToken) {
+      return tokens;
+    }
+    return null;
+  } catch {
+    return null;
   }
-
-  return slots;
 };
 
-const generateWeeklySchedule = (): DayAvailability[] => {
-  const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-  const today = new Date();
+// Add auth interceptor
+availabilityApi.interceptors.request.use((config) => {
+  const tokens = getAuthTokens();
+  if (tokens?.accessToken) {
+    config.headers.Authorization = `Bearer ${tokens.accessToken}`;
+  }
+  return config;
+});
 
-  return days.map((day, index) => {
-    const date = new Date(today);
-    date.setDate(today.getDate() + index);
+// Add response interceptor for 401 handling (token expiration)
+availabilityApi.interceptors.response.use(
+  (response) => response,
+  async (error: AxiosError) => {
+    const originalRequest = error.config;
 
-    const isWeekend = index === 0 || index === 6;
-    const isPast = date < today;
+    // Handle 401 Unauthorized - token expired
+    if (error.response?.status === 401 && originalRequest) {
+      const tokens = getAuthTokens();
 
-    return {
-      date: date.toISOString().split('T')[0],
-      dayOfWeek: day,
-      isAvailable: !isWeekend && !isPast,
-      slots: !isWeekend && !isPast ? generateMockSlots() : [],
-    };
-  });
-};
+      if (tokens?.refreshToken) {
+        try {
+          // Attempt to refresh the token
+          const refreshResponse = await axios.post(
+            `${API_BASE_URL}/auth/refresh`,
+            { refreshToken: tokens.refreshToken }
+          );
+
+          if (refreshResponse.data?.success && refreshResponse.data?.data) {
+            const { accessToken, refreshToken: newRefreshToken } = refreshResponse.data.data;
+
+            // Update stored tokens
+            const stored = sessionStorage.getItem('auth-storage');
+            if (stored) {
+              const parsed = JSON.parse(stored);
+              parsed.state.tokens = { accessToken, refreshToken: newRefreshToken };
+              sessionStorage.setItem('auth-storage', JSON.stringify(parsed));
+            }
+
+            // Retry the original request with new token
+            originalRequest.headers.Authorization = `Bearer ${accessToken}`;
+            return availabilityApi(originalRequest);
+          }
+        } catch {
+          // Refresh failed - clear auth and redirect to login
+          sessionStorage.removeItem('auth-storage');
+          window.dispatchEvent(new CustomEvent('auth:expired'));
+        }
+      } else {
+        // No refresh token - clear auth and redirect
+        sessionStorage.removeItem('auth-storage');
+        window.dispatchEvent(new CustomEvent('auth:expired'));
+      }
+    }
+
+    return Promise.reject(error);
+  }
+);
 
 // ============================================
 // Component
@@ -102,34 +159,156 @@ const ProviderAvailabilityWidget: React.FC<ProviderAvailabilityWidgetProps> = ({
   const [availability, setAvailability] = useState<ProviderAvailabilityData | null>(null);
   const [currentWeekOffset, setCurrentWeekOffset] = useState(0);
   const [hoveredSlot, setHoveredSlot] = useState<string | null>(null);
+  const [error, setError] = useState<AvailabilityError | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
+  const [isNavigating, setIsNavigating] = useState(false);
 
-  // Fetch availability data
-  useEffect(() => {
-    const fetchAvailability = async () => {
-      setIsLoading(true);
-      try {
-        // Simulate API call
-        await new Promise(resolve => setTimeout(resolve, 500));
+  // Track current week dates for isToday comparison
+  const weekDatesRef = useRef<Date[]>([]);
 
-        // Generate mock data
-        const mockData: ProviderAvailabilityData = {
-          providerId,
-          weeklySchedule: generateWeeklySchedule(),
-          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-          advanceBookingHours: 2,
-          maxAdvanceDays: 30,
-        };
+  // Helper to get week dates
+  const getWeekDates = useCallback((offset: number): Date[] => {
+    const today = new Date();
+    const dates: Date[] = [];
+    for (let i = 0; i < 7; i++) {
+      const date = new Date(today);
+      date.setDate(today.getDate() + (offset * 7) + i);
+      dates.push(date);
+    }
+    return dates;
+  }, []);
 
-        setAvailability(mockData);
-      } catch (error) {
-        console.error('Failed to fetch availability:', error);
-      } finally {
-        setIsLoading(false);
+  // Helper to format date as YYYY-MM-DD
+  const formatDate = (date: Date): string => {
+    return date.toISOString().split('T')[0];
+  };
+
+  // Helper to get day name
+  const getDayName = (date: Date): string => {
+    return date.toLocaleDateString('en-US', { weekday: 'long' });
+  };
+
+  // Helper to check if two dates are the same day
+  const isSameDay = (date1: Date, date2: Date): boolean => {
+    return (
+      date1.getFullYear() === date2.getFullYear() &&
+      date1.getMonth() === date2.getMonth() &&
+      date1.getDate() === date2.getDate()
+    );
+  };
+
+  // Fetch availability slots for a specific date
+  const fetchSlotsForDate = async (date: string, duration: number = 60): Promise<TimeSlot[]> => {
+    try {
+      const response = await availabilityApi.get<AvailabilitySlotsResponse>(
+        `/provider/${providerId}/slots`,
+        {
+          params: { date, duration },
+        }
+      );
+
+      if (response.data.success && response.data.data) {
+        // Convert time strings to TimeSlot objects with end times
+        return response.data.data.slots.map((timeStr, index) => {
+          const [hours, minutes] = timeStr.split(':').map(Number);
+          const startDate = new Date();
+          startDate.setHours(hours, minutes, 0, 0);
+          const endDate = new Date(startDate.getTime() + duration * 60 * 1000);
+
+          const formatTime = (d: Date) => {
+            return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+          };
+
+          return {
+            id: `slot-${date}-${timeStr}`,
+            startTime: formatTime(startDate),
+            endTime: formatTime(endDate),
+            isAvailable: true,
+          };
+        });
       }
-    };
 
+      return [];
+    } catch (err) {
+      const axiosError = err as AxiosError<AvailabilitySlotsResponse>;
+      const errorMessage = axiosError.response?.data?.message || axiosError.message || 'Failed to fetch slots';
+      throw new Error(errorMessage);
+    }
+  };
+
+  // Fetch availability data for the current week
+  const fetchAvailability = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const weekDates = getWeekDates(currentWeekOffset);
+      const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+      // Fetch slots for all 7 days in parallel (respecting API rate)
+      const weeklySchedule: DayAvailability[] = await Promise.all(
+        weekDates.map(async (date, index) => {
+          const dateStr = formatDate(date);
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          const isPast = date < today;
+          const isWeekend = index === 0 || index === 6;
+
+          let slots: TimeSlot[] = [];
+
+          if (!isPast && !isWeekend) {
+            try {
+              // Use service-specific duration if available, default to 60 minutes
+              const duration = serviceId ? 60 : 60;
+              slots = await fetchSlotsForDate(dateStr, duration);
+            } catch {
+              // If fetch fails for a specific day, return empty slots
+              slots = [];
+            }
+          }
+
+          return {
+            date: dateStr,
+            dayOfWeek: dayNames[date.getDay()],
+            isAvailable: !isPast && !isWeekend && slots.length > 0,
+            slots,
+          };
+        })
+      );
+
+      // Find the timezone from the first successful response or use local
+      const providerAvailability: ProviderAvailabilityData = {
+        providerId,
+        weeklySchedule,
+        timezone,
+        advanceBookingHours: 2,
+        maxAdvanceDays: 30,
+      };
+
+      setAvailability(providerAvailability);
+      setRetryCount(0);
+    } catch (err) {
+      const axiosError = err as AxiosError<AvailabilitySlotsResponse>;
+      const errorMessage = axiosError.response?.data?.message || axiosError.message || 'Failed to load availability';
+      const isRetryable = !axiosError.response || axiosError.response.status >= 500;
+
+      setError({
+        message: errorMessage,
+        code: axiosError.code,
+        retryable: isRetryable,
+      });
+    } finally {
+      setIsLoading(false);
+      setIsNavigating(false);
+      weekDatesRef.current = getWeekDates(currentWeekOffset);
+    }
+  }, [providerId, currentWeekOffset, serviceId, getWeekDates]);
+
+  // Fetch availability on mount and when dependencies change
+  useEffect(() => {
     fetchAvailability();
-  }, [providerId, currentWeekOffset]);
+  }, [fetchAvailability]);
 
   // Handle slot selection
   const handleSlotClick = useCallback((slot: TimeSlot, date: string) => {
@@ -137,19 +316,27 @@ const ProviderAvailabilityWidget: React.FC<ProviderAvailabilityWidgetProps> = ({
     onSlotSelect?.(slot, date);
   }, [onSlotSelect]);
 
-  // Navigate weeks
-  const goToPreviousWeek = () => {
-    if (currentWeekOffset > 0) {
+  // Handle retry on error
+  const handleRetry = useCallback(() => {
+    setRetryCount(prev => prev + 1);
+    fetchAvailability();
+  }, [fetchAvailability]);
+
+  // Navigate weeks with debounce to prevent race conditions
+  const goToPreviousWeek = useCallback(() => {
+    if (currentWeekOffset > 0 && !isLoading && !isNavigating) {
+      setIsNavigating(true);
       setCurrentWeekOffset(prev => prev - 1);
     }
-  };
+  }, [currentWeekOffset, isLoading, isNavigating]);
 
-  const goToNextWeek = () => {
+  const goToNextWeek = useCallback(() => {
     const maxOffset = availability?.maxAdvanceDays ? Math.floor(availability.maxAdvanceDays / 7) : 4;
-    if (currentWeekOffset < maxOffset) {
+    if (currentWeekOffset < maxOffset && !isLoading && !isNavigating) {
+      setIsNavigating(true);
       setCurrentWeekOffset(prev => prev + 1);
     }
-  };
+  }, [currentWeekOffset, availability?.maxAdvanceDays, isLoading, isNavigating]);
 
   if (isLoading) {
     return (
@@ -159,11 +346,31 @@ const ProviderAvailabilityWidget: React.FC<ProviderAvailabilityWidgetProps> = ({
     );
   }
 
+  // Error state with retry button
+  if (error) {
+    return (
+      <div className={cn('flex flex-col items-center justify-center p-8 text-center', className)}>
+        <AlertCircle className="h-8 w-8 text-nilin-error mb-2" />
+        <p className="text-nilin-charcoal font-medium mb-1">Unable to load availability</p>
+        <p className="text-sm text-nilin-warmGray mb-4 max-w-xs">{error.message}</p>
+        {error.retryable !== false && (
+          <button
+            onClick={handleRetry}
+            className="flex items-center gap-2 px-4 py-2 bg-nilin-coral text-white rounded-lg hover:bg-nilin-coral/90 transition-colors"
+          >
+            <RefreshCw className="h-4 w-4" />
+            <span>Try Again</span>
+          </button>
+        )}
+      </div>
+    );
+  }
+
   if (!availability) {
     return (
       <div className={cn('flex flex-col items-center justify-center p-8 text-center', className)}>
         <AlertCircle className="h-8 w-8 text-nilin-error mb-2" />
-        <p className="text-nilin-warmGray">Unable to load availability</p>
+        <p className="text-nilin-warmGray">No availability data</p>
       </div>
     );
   }
@@ -192,10 +399,10 @@ const ProviderAvailabilityWidget: React.FC<ProviderAvailabilityWidgetProps> = ({
           <div className="flex items-center gap-1">
             <button
               onClick={goToPreviousWeek}
-              disabled={currentWeekOffset === 0}
+              disabled={currentWeekOffset === 0 || isLoading || isNavigating}
               className={cn(
                 'p-2 rounded-lg transition-colors',
-                currentWeekOffset === 0
+                currentWeekOffset === 0 || isLoading || isNavigating
                   ? 'text-nilin-warmGray cursor-not-allowed'
                   : 'hover:bg-nilin-blush/50 text-nilin-charcoal'
               )}
@@ -206,10 +413,10 @@ const ProviderAvailabilityWidget: React.FC<ProviderAvailabilityWidgetProps> = ({
             </button>
             <button
               onClick={goToNextWeek}
-              disabled={currentWeekOffset >= 4}
+              disabled={currentWeekOffset >= 4 || isLoading || isNavigating}
               className={cn(
                 'p-2 rounded-lg transition-colors',
-                currentWeekOffset >= 4
+                currentWeekOffset >= 4 || isLoading || isNavigating
                   ? 'text-nilin-warmGray cursor-not-allowed'
                   : 'hover:bg-nilin-blush/50 text-nilin-charcoal'
               )}
@@ -227,7 +434,9 @@ const ProviderAvailabilityWidget: React.FC<ProviderAvailabilityWidgetProps> = ({
         <div className="grid grid-cols-7 gap-1 p-4 bg-nilin-blush/30">
           {availability.weeklySchedule.map((day, index) => {
             const isSelected = selectedDate === day.date;
-            const isToday = index === 0;
+            const weekDate = weekDatesRef.current[index];
+            const today = new Date();
+            const isToday = weekDate ? isSameDay(weekDate, today) : false;
 
             return (
               <div
@@ -325,7 +534,12 @@ const ProviderAvailabilityWidget: React.FC<ProviderAvailabilityWidgetProps> = ({
             .map((slot, index) => (
               <button
                 key={`${slot.id}-${index}`}
-                onClick={() => onSlotSelect?.(slot, availability.weeklySchedule.find(d => d.slots.includes(slot))?.date || '')}
+                onClick={() => {
+                  const dayEntry = availability.weeklySchedule.find(d => d.slots.includes(slot));
+                  if (dayEntry?.date) {
+                    onSlotSelect?.(slot, dayEntry.date);
+                  }
+                }}
                 className="w-full flex items-center justify-between p-3 bg-nilin-blush/30 rounded-xl mb-2 hover:bg-nilin-blush/50 transition-colors"
               >
                 <div className="flex items-center gap-3">

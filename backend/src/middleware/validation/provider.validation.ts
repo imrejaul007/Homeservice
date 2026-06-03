@@ -1,6 +1,9 @@
 import Joi from 'joi';
 import { Request, Response, NextFunction } from 'express';
+import mongoose from 'mongoose';
 import { ApiError } from '../../utils/ApiError';
+import ServiceCategory from '../../models/serviceCategory.model';
+import type { IServiceCategory } from '../../models/serviceCategory.model';
 
 // Service creation validation schema
 const serviceCreationSchema = Joi.object({
@@ -149,17 +152,25 @@ const serviceIdSchema = Joi.object({
 });
 
 // Validation middleware functions
-export const validateServiceCreation = (req: Request, _res: Response, next: NextFunction) => {
-  const { error, value } = serviceCreationSchema.validate(req.body, { 
+export const validateServiceCreation = async (req: Request, _res: Response, next: NextFunction) => {
+  const { error, value } = serviceCreationSchema.validate(req.body, {
     abortEarly: false,
     stripUnknown: true
   });
-  
+
   if (error) {
     const errorDetails = error.details.map(detail => ({ field: detail.path.join('.'), message: detail.message }));
     throw new ApiError(400, 'Service creation validation failed', errorDetails);
   }
-  
+
+  // Validate that the category exists in the database
+  if (value.category) {
+    const categoryExists = await ServiceCategory.findById(value.category);
+    if (!categoryExists) {
+      throw new ApiError(400, `Category with ID ${value.category} does not exist`);
+    }
+  }
+
   req.body = value;
   next();
 };

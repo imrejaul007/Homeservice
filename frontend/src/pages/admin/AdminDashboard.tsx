@@ -37,7 +37,10 @@ import {
 } from 'recharts';
 import { AdminPageShell } from '../../components/admin/AdminPageShell';
 import { Skeleton } from '../../components/common/Skeleton';
+import { ServiceApprovalPanel } from '../../components/admin/ServiceApprovalPanel';
+import { toast } from 'react-hot-toast';
 import { useAuthStore } from '../../stores/authStore';
+import authService from '../../services/AuthService';
 import { api } from '../../services/api';
 import { socketService } from '../../services/socket';
 
@@ -52,11 +55,32 @@ interface DashboardStats {
   activeIncidents: number;
 }
 
+/** Response shape from GET /admin/stats */
+interface AdminStatsResponse {
+  totalUsers?: number;
+  activeProviders?: number;
+  todayBookings?: number;
+  monthlyRevenue?: number;
+  revenue?: number;
+  pendingVerifications?: number;
+  activeIncidents?: number;
+  customers?: { total?: number };
+  providers?: { active?: number; pending?: number };
+  bookings?: { today?: number };
+}
+
 interface AnalyticsData {
   customers: { total: number; active: number; newThisMonth: number };
   providers: { total: number; active: number; pending: number; newThisMonth: number };
   bookings: { total: number; completed: number; pending: number; cancelled: number };
-  revenue: { thisMonth: number; lastMonth: number; monthOverMonthGrowth: number };
+  revenue: { thisMonth: number; lastMonth: number; monthOverMonthGrowth: number | null };
+}
+
+interface BookingsSummary {
+  total: number;
+  completed: number;
+  pending: number;
+  cancelled: number;
 }
 
 interface ChurnData {
@@ -96,6 +120,53 @@ interface LiveNotification {
 
 function formatAED(amount: number) {
   return `AED ${amount.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+}
+
+function formatRevenueGrowthSub(
+  thisMonth: number,
+  lastMonth: number,
+  growth: number | null | undefined
+): string {
+  if (thisMonth === 0 && lastMonth === 0) {
+    return 'No revenue recorded yet';
+  }
+  if (growth === null || growth === undefined) {
+    return lastMonth > 0 ? `Last month ${formatAED(lastMonth)}` : 'No revenue this month';
+  }
+  return `${growth >= 0 ? '+' : ''}${growth.toFixed(1)}% vs last month`;
+}
+
+function mapOverviewToAnalytics(data: Record<string, unknown>): AnalyticsData {
+  const customers = (data.customers ?? {}) as Record<string, number>;
+  const providers = (data.providers ?? {}) as Record<string, unknown>;
+  const providersByStatus = (providers.providersByStatus ?? {}) as Record<string, number>;
+  const bookings = (data.bookings ?? {}) as Record<string, number>;
+  const revenue = (data.revenue ?? {}) as Record<string, number | null>;
+
+  return {
+    customers: {
+      total: customers.totalCustomers ?? customers.total ?? 0,
+      active: customers.activeCustomers ?? customers.active ?? 0,
+      newThisMonth: customers.newCustomersThisMonth ?? customers.newThisMonth ?? 0,
+    },
+    providers: {
+      total: (providers.totalProviders as number) ?? (providers.total as number) ?? 0,
+      active: (providers.activeProviders as number) ?? (providers.active as number) ?? 0,
+      pending: providersByStatus.pending ?? (providers.pending as number) ?? 0,
+      newThisMonth: (providers.newProvidersThisMonth as number) ?? (providers.newThisMonth as number) ?? 0,
+    },
+    bookings: {
+      total: bookings.totalBookings ?? bookings.total ?? 0,
+      completed: bookings.completedBookings ?? bookings.completed ?? 0,
+      pending: bookings.pendingBookings ?? bookings.pending ?? 0,
+      cancelled: bookings.cancelledBookings ?? bookings.cancelled ?? 0,
+    },
+    revenue: {
+      thisMonth: revenue.revenueThisMonth ?? revenue.totalRevenue ?? revenue.thisMonth ?? 0,
+      lastMonth: revenue.revenueLastMonth ?? revenue.lastMonth ?? 0,
+      monthOverMonthGrowth: revenue.monthOverMonthGrowth ?? null,
+    },
+  };
 }
 
 const ANALYTICS_RANGE = {
@@ -320,6 +391,7 @@ export function AdminDashboard() {
     activeIncidents: 0,
   });
   const [analytics, setAnalytics] = useState<AnalyticsData | null>(null);
+  const [bookingsAllTime, setBookingsAllTime] = useState<BookingsSummary | null>(null);
   const [churnData, setChurnData] = useState<ChurnData | null>(null);
   const [funnelData, setFunnelData] = useState<FunnelData | null>(null);
   const [geographicData, setGeographicData] = useState<GeographicData | null>(null);
@@ -338,57 +410,51 @@ export function AdminDashboard() {
     if (showRefresh) setRefreshing(true);
 
     try {
-      const [statsRes, overviewRes, churnRes, funnelRes, geoRes] = await Promise.allSettled([
-        api.get('/admin/stats'),
-        api.get('/analytics/overview'),
-        api.get('/admin/churn/stats'),
-        api.get('/analytics/funnel', { params: ANALYTICS_RANGE }),
-        api.get('/analytics/geographic', { params: ANALYTICS_RANGE }),
-      ]);
+      if (showRefresh) {
+        try {
+          await authService.post('/analytics/refresh');
+        } catch {
+          // Non-blocking cache clear
+        }
+      }
+
+      const [statsRes, overviewMonthRes, overviewAllRes, churnRes, funnelRes, geoRes] =
+        await Promise.allSettled([
+          api.get('/admin/stats'),
+          api.get('/analytics/overview', { params: { period: 'month' } }),
+          api.get('/analytics/overview', { params: { period: 'all' } }),
+          api.get('/admin/churn/stats'),
+          api.get('/analytics/funnel', { params: ANALYTICS_RANGE }),
+          api.get('/analytics/geographic', { params: ANALYTICS_RANGE }),
+        ]);
 
       if (statsRes.status === 'fulfilled' && statsRes.value.status === 200) {
         const response = statsRes.value.data;
         if (response?.success && response.data) {
-          const data = response.data;
+          const data = response.data as AdminStatsResponse;
           setStats({
             totalUsers: data.totalUsers || data.customers?.total || 0,
             activeProviders: data.activeProviders || data.providers?.active || 0,
             todayBookings: data.todayBookings || data.bookings?.today || 0,
-            revenue: data.monthlyRevenue ?? data.revenue ?? data.revenue?.total ?? 0,
+            revenue: data.monthlyRevenue ?? data.revenue ?? 0,
             pendingVerifications: data.pendingVerifications || data.providers?.pending || 0,
             activeIncidents: data.activeIncidents || 0,
           });
         }
       }
 
-      if (overviewRes.status === 'fulfilled' && overviewRes.value.status === 200) {
-        const response = overviewRes.value.data;
+      if (overviewMonthRes.status === 'fulfilled' && overviewMonthRes.value.status === 200) {
+        const response = overviewMonthRes.value.data;
         if (response?.success && response.data) {
-          const data = response.data;
-          setAnalytics({
-            customers: {
-              total: data.customers?.totalCustomers ?? data.customers?.total ?? 0,
-              active: data.customers?.activeCustomers ?? data.customers?.active ?? 0,
-              newThisMonth: data.customers?.newCustomersThisMonth ?? data.customers?.newThisMonth ?? 0,
-            },
-            providers: {
-              total: data.providers?.totalProviders ?? data.providers?.total ?? 0,
-              active: data.providers?.activeProviders ?? data.providers?.active ?? 0,
-              pending: data.providers?.providersByStatus?.pending ?? data.providers?.pending ?? 0,
-              newThisMonth: data.providers?.newProvidersThisMonth ?? data.providers?.newThisMonth ?? 0,
-            },
-            bookings: {
-              total: data.bookings?.totalBookings ?? data.bookings?.total ?? 0,
-              completed: data.bookings?.completedBookings ?? data.bookings?.completed ?? 0,
-              pending: data.bookings?.pendingBookings ?? data.bookings?.pending ?? 0,
-              cancelled: data.bookings?.cancelledBookings ?? data.bookings?.cancelled ?? 0,
-            },
-            revenue: {
-              thisMonth: data.revenue?.revenueThisMonth ?? data.revenue?.totalRevenue ?? data.revenue?.thisMonth ?? 0,
-              lastMonth: data.revenue?.revenueLastMonth ?? data.revenue?.lastMonth ?? 0,
-              monthOverMonthGrowth: data.revenue?.monthOverMonthGrowth ?? 0,
-            },
-          });
+          setAnalytics(mapOverviewToAnalytics(response.data as Record<string, unknown>));
+        }
+      }
+
+      if (overviewAllRes.status === 'fulfilled' && overviewAllRes.value.status === 200) {
+        const response = overviewAllRes.value.data;
+        if (response?.success && response.data) {
+          const mapped = mapOverviewToAnalytics(response.data as Record<string, unknown>);
+          setBookingsAllTime(mapped.bookings);
         }
       }
 
@@ -426,8 +492,10 @@ export function AdminDashboard() {
       }
 
       setLastUpdated(new Date());
+      if (showRefresh) toast.success('Dashboard updated');
     } catch (error) {
       console.error('Failed to fetch dashboard data:', error);
+      toast.error('Failed to refresh dashboard');
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -532,14 +600,25 @@ export function AdminDashboard() {
     return [];
   }, [funnelData, analytics]);
 
-  const revenueThisMonth = stats.revenue > 0 ? stats.revenue : analytics?.revenue?.thisMonth || 0;
-  const growth = analytics?.revenue?.monthOverMonthGrowth ?? 0;
+  // Primary source: stats.revenue (from /admin/stats), fallback: analytics.revenue.thisMonth (from /analytics/overview)
+  const revenueThisMonth = stats.revenue > 0 ? stats.revenue : (analytics?.revenue?.thisMonth ?? 0);
+  const revenueLastMonth = analytics?.revenue?.lastMonth ?? 0;
+  const growth = analytics?.revenue?.monthOverMonthGrowth;
+  const approvedProviders = Math.max(
+    stats.activeProviders,
+    analytics?.providers.active ?? 0
+  );
+  const allTimeBookingsTotal =
+    bookingsAllTime?.total ?? geographicData?.summary?.totalBookings ?? analytics?.bookings.total ?? 0;
+  const monthBookingsTotal = analytics?.bookings.total ?? 0;
+  const showHistoricalContext =
+    revenueThisMonth === 0 && revenueLastMonth > 0 && monthBookingsTotal === 0 && allTimeBookingsTotal > 0;
 
   const headerActions = (
     <div className="flex flex-wrap items-center gap-2">
       {lastUpdated && (
         <span className="text-xs text-nilin-warmGray font-sans hidden sm:inline">
-          Updated {lastUpdated.toLocaleTimeString()}
+          Updated {lastUpdated.toLocaleTimeString('en-AE')}
         </span>
       )}
       <button
@@ -564,6 +643,7 @@ export function AdminDashboard() {
   if (loading) {
     return (
       <AdminPageShell
+        wideLayout
         title="Operations Dashboard"
         subtitle="Real-time platform health and admin actions"
         breadcrumbItems={[
@@ -591,6 +671,7 @@ export function AdminDashboard() {
 
   return (
     <AdminPageShell
+      wideLayout
       title="Operations Dashboard"
       subtitle="Monitor bookings, revenue, risk, and take action across the platform"
       breadcrumbItems={[
@@ -636,6 +717,23 @@ export function AdminDashboard() {
             </div>
           )}
 
+          {showHistoricalContext && (
+            <div className="rounded-2xl border border-sky-200 bg-sky-50/80 px-5 py-4">
+              <p className="text-sm font-medium text-sky-900">Historical activity, quiet this month</p>
+              <p className="text-sm text-sky-800 mt-1">
+                {formatAED(revenueLastMonth)} was earned last month and {allTimeBookingsTotal.toLocaleString()}{' '}
+                booking{allTimeBookingsTotal !== 1 ? 's' : ''} exist platform-wide, but nothing is scheduled for this
+                calendar month yet. Month KPIs show 0; geographic and funnel reflect longer windows.
+              </p>
+              <Link
+                to="/admin/reports?tab=bookings&period=all"
+                className="inline-flex items-center gap-1 mt-2 text-sm font-medium text-sky-700 hover:text-sky-900"
+              >
+                View all-time reports <ChevronRight className="w-4 h-4" />
+              </Link>
+            </div>
+          )}
+
           {/* Primary KPIs */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <KpiCard
@@ -648,11 +746,11 @@ export function AdminDashboard() {
             />
             <KpiCard
               icon={CheckCircle}
-              label="Active providers"
-              value={stats.activeProviders.toLocaleString()}
+              label="Approved providers"
+              value={approvedProviders.toLocaleString()}
               subValue={
                 stats.pendingVerifications > 0
-                  ? `${stats.pendingVerifications} pending verification`
+                  ? `${stats.pendingVerifications} awaiting verification`
                   : analytics
                     ? `${analytics.providers.newThisMonth} new this month`
                     : undefined
@@ -664,17 +762,23 @@ export function AdminDashboard() {
               icon={Calendar}
               label="Today's bookings"
               value={stats.todayBookings.toLocaleString()}
-              subValue={analytics ? `${analytics.bookings.completed} completed all-time` : undefined}
+              subValue={
+                monthBookingsTotal > 0
+                  ? `${monthBookingsTotal} created this month`
+                  : allTimeBookingsTotal > 0
+                    ? `${allTimeBookingsTotal} all-time · none today`
+                    : 'No bookings yet'
+              }
               accent="coral"
-              to="/admin/reports"
+              to="/admin/reports?tab=bookings"
             />
             <KpiCard
               icon={DollarSign}
               label="Revenue this month"
               value={formatAED(revenueThisMonth)}
-              subValue={`${growth >= 0 ? '+' : ''}${growth.toFixed(1)}% vs last month`}
+              subValue={formatRevenueGrowthSub(revenueThisMonth, revenueLastMonth, growth)}
               accent="gold"
-              to="/admin/reports"
+              to="/admin/reports?tab=revenue"
             />
           </div>
 
@@ -690,11 +794,11 @@ export function AdminDashboard() {
             />
             <KpiCard
               icon={Calendar}
-              label="All bookings"
-              value={analytics?.bookings.total ?? stats.todayBookings}
-              subValue={`${analytics?.bookings.pending ?? 0} pending · ${analytics?.bookings.cancelled ?? 0} cancelled`}
+              label="Bookings (all time)"
+              value={allTimeBookingsTotal}
+              subValue={`${monthBookingsTotal} this month · ${bookingsAllTime?.pending ?? analytics?.bookings.pending ?? 0} pending`}
               accent="coral"
-              to="/admin/reports"
+              to="/admin/reports?tab=bookings&period=all"
             />
             <KpiCard
               icon={TrendingUp}
@@ -708,11 +812,14 @@ export function AdminDashboard() {
               icon={MapPin}
               label="Top city"
               value={geographicData?.summary?.topCity || '—'}
-              subValue={`${geographicData?.summary?.totalBookings?.toLocaleString() ?? 0} bookings platform-wide`}
+              subValue={`${geographicData?.summary?.totalBookings?.toLocaleString() ?? 0} bookings · last 12 months`}
               accent="sage"
-              to="/admin/reports"
+              to="/admin/reports?tab=bookings&period=year"
             />
           </div>
+
+          {/* Service Approval Panel */}
+          <ServiceApprovalPanel defaultVisible={true} />
 
           {/* Platform snapshot + live feed */}
           <div className="grid lg:grid-cols-5 gap-6">
@@ -738,13 +845,13 @@ export function AdminDashboard() {
                   icon={CheckCircle}
                   label="Completed bookings"
                   value={analytics?.bookings.completed ?? 0}
-                  detail={`${analytics?.bookings.total ?? 0} total`}
+                  detail={`${analytics?.bookings.total ?? 0} this month`}
                 />
                 <SnapshotTile
                   icon={DollarSign}
                   label="Last month revenue"
                   value={formatAED(analytics?.revenue.lastMonth ?? 0)}
-                  detail={`AOV trend in reports`}
+                  detail="Source: analytics overview (period=all)"
                 />
               </div>
             </SectionCard>
@@ -788,7 +895,7 @@ export function AdminDashboard() {
                       />
                       <div className="flex-1 min-w-0">
                         <p className="text-nilin-charcoal leading-snug">{n.message}</p>
-                        <p className="text-xs text-nilin-warmGray mt-0.5">{n.timestamp.toLocaleTimeString()}</p>
+                        <p className="text-xs text-nilin-warmGray mt-0.5">{n.timestamp.toLocaleTimeString('en-AE')}</p>
                       </div>
                     </li>
                   ))}
@@ -819,7 +926,7 @@ export function AdminDashboard() {
           <div className="grid lg:grid-cols-2 gap-6">
             <SectionCard
               title="Booking funnel"
-              subtitle="Conversion through each stage"
+              subtitle="Marketing funnel (last 12 months) — may differ from booking DB totals"
               action={
                 <Link to="/admin/reports" className="text-xs text-nilin-coral hover:text-nilin-rose font-sans">
                   Details
@@ -863,7 +970,7 @@ export function AdminDashboard() {
               )}
             </SectionCard>
 
-            <SectionCard title="Geographic performance" subtitle="Bookings by city">
+            <SectionCard title="Geographic performance" subtitle="Completed bookings by city (last 12 months)">
               {geographicData?.byCity && geographicData.byCity.length > 0 ? (
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm font-sans">
@@ -948,10 +1055,19 @@ export function AdminDashboard() {
               className="glass glass-blur rounded-xl border border-nilin-border/50 p-4 flex items-center gap-3 hover:bg-nilin-blush/30 transition-colors"
             >
               <Shield className="w-5 h-5 text-nilin-coral" />
-              <div>
+              <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium text-nilin-charcoal font-sans">Review queue</p>
-                <p className="text-xs text-nilin-warmGray">Provider verifications</p>
+                <p className="text-xs text-nilin-warmGray">
+                  {stats.pendingVerifications > 0
+                    ? `${stats.pendingVerifications} awaiting verification`
+                    : 'Provider verifications'}
+                </p>
               </div>
+              {stats.pendingVerifications > 0 && (
+                <span className="min-w-[1.25rem] h-5 px-1.5 rounded-full text-xs font-bold bg-nilin-coral text-white flex items-center justify-center">
+                  {stats.pendingVerifications}
+                </span>
+              )}
             </Link>
           </div>
       </div>

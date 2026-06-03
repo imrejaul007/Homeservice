@@ -43,7 +43,7 @@ export interface SettlementResult {
 }
 
 // Default commission configuration
-const DEFAULT_COMMISSION_CONFIG: CommissionConfig = {
+export const DEFAULT_COMMISSION_CONFIG: CommissionConfig = {
   defaultRate: 0.15, // 15%
   tieredRates: [
     { minAmount: 0, maxAmount: 10000, rate: 0.15 },
@@ -53,7 +53,7 @@ const DEFAULT_COMMISSION_CONFIG: CommissionConfig = {
 };
 
 // Default platform fee configuration
-const DEFAULT_PLATFORM_FEE_CONFIG: PlatformFeeConfig = {
+export const DEFAULT_PLATFORM_FEE_CONFIG: PlatformFeeConfig = {
   type: 'percentage',
   value: 0.02, // 2%
 };
@@ -252,10 +252,12 @@ export const generateSettlement = async (
   const netAmount = grossAmount - totalCommission - totalPlatformFee;
 
   // FIX: Generate settlement number first (atomic counter)
+  // FIX [LOW-7]: Consistent number format across payout and settlement systems
   const date = new Date();
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
-  const counterKey = `settlement-${year}${month}`;
+  const day = String(date.getDate()).padStart(2, '0');
+  const counterKey = `settlement-${year}${month}${day}`;
 
   // Get atomic sequence number
   const sequenceResult = await mongoose.model('Counter').findOneAndUpdate(
@@ -264,7 +266,8 @@ export const generateSettlement = async (
     { new: true, upsert: true, returnDocument: 'after' }
   );
   const sequenceNumber = sequenceResult?.seq || 1;
-  const settlementNumber = `STL-${year}${month}-${String(sequenceNumber).padStart(4, '0')}`;
+  // Use consistent format: STL-YYYYMMDD-NNNN (matching payout format PYT-YYYYMMDD-NNNN)
+  const settlementNumber = `STL-${year}${month}${day}-${String(sequenceNumber).padStart(4, '0')}`;
 
   // FIX: Use atomic findOneAndUpdate with upsert to prevent race condition
   // $setOnInsert only applies when creating a new document
@@ -616,13 +619,15 @@ export const autoReconcileSettlements = async (
 
 /**
  * Add deduction to a settlement
+ * FIX [LOW-6]: Add comprehensive audit logging for all settlement operations
  */
 export const addSettlementDeduction = async (
   settlementId: string,
   type: string,
   amount: number,
   description: string,
-  reference?: string
+  reference?: string,
+  addedBy?: string
 ): Promise<void> => {
   const settlement = await Settlement.findById(settlementId);
 
@@ -634,15 +639,40 @@ export const addSettlementDeduction = async (
     throw new ApiError(400, 'Cannot modify paid settlement');
   }
 
+  // Audit log: Before deduction
+  logger.info('AUDIT_SETTLEMENT_DEDUCTION_START', {
+    action: 'SETTLEMENT_DEDUCTION_START',
+    settlementId,
+    settlementNumber: settlement.settlementNumber,
+    providerId: settlement.providerId.toString(),
+    deductionType: type,
+    deductionAmount: amount,
+    description,
+    reference,
+    addedBy,
+    netAmountBefore: settlement.netAmount,
+    grossAmount: settlement.grossAmount,
+    commission: settlement.commission,
+    platformFee: settlement.platformFee,
+    currentDeductions: settlement.deductions.reduce((sum, d) => sum + d.amount, 0),
+    timestamp: new Date().toISOString(),
+  });
+
   (settlement as any).addDeduction(type, amount, description, reference);
   await settlement.save();
 
-  logger.info('Settlement deduction added', {
+  // Audit log: After deduction
+  logger.info('AUDIT_SETTLEMENT_DEDUCTION_COMPLETE', {
+    action: 'SETTLEMENT_DEDUCTION_COMPLETE',
     settlementId,
-    type,
-    amount,
-    description,
-    action: 'SETTLEMENT_DEDUCTION_ADDED',
+    settlementNumber: settlement.settlementNumber,
+    providerId: settlement.providerId.toString(),
+    deductionType: type,
+    deductionAmount: amount,
+    netAmountAfter: settlement.netAmount,
+    settlementStatus: settlement.status,
+    totalDeductions: settlement.deductions.reduce((sum, d) => sum + d.amount, 0),
+    timestamp: new Date().toISOString(),
   });
 };
 
@@ -965,7 +995,9 @@ export const processBookingCompletion = async (bookingId: string): Promise<{
     const now = new Date();
     const year = now.getFullYear();
     const month = String(now.getMonth() + 1).padStart(2, '0');
-    const counterKey = `booking-settlement-${year}${month}`;
+    const day = String(now.getDate()).padStart(2, '0');
+    // FIX [LOW-7]: Consistent number format - use same pattern as payout (PYT-YYYYMMDD-NNNN)
+    const counterKey = `booking-settlement-${year}${month}${day}`;
 
     // Get atomic sequence number
     const sequenceResult = await mongoose.model('Counter').findOneAndUpdate(
@@ -974,7 +1006,8 @@ export const processBookingCompletion = async (bookingId: string): Promise<{
       { new: true, upsert: true, returnDocument: 'after' }
     );
     const sequenceNumber = sequenceResult?.seq || 1;
-    const settlementNumber = `BS-${year}${month}-${String(sequenceNumber).padStart(6, '0')}`;
+    // Use consistent format: BS-YYYYMMDD-NNNN (matching payout and settlement formats)
+    const settlementNumber = `BS-${year}${month}${day}-${String(sequenceNumber).padStart(4, '0')}`;
 
     const settlement = await Settlement.create({
       providerId: booking.providerId,

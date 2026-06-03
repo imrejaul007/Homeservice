@@ -75,6 +75,45 @@ export interface TypingEvent {
 }
 
 /**
+ * Chat room typing event
+ */
+export interface ChatTypingEvent {
+  chatRoomId: string;
+  userId: string;
+  userName?: string;
+}
+
+/**
+ * Chat message event from server
+ */
+export interface ChatMessageEvent {
+  messageId: string;
+  chatRoomId: string;
+  senderId: string;
+  receiverId: string;
+  content: string;
+  type: 'text' | 'image' | 'file' | 'system';
+  attachments?: Array<{
+    url: string;
+    filename: string;
+    mimeType: string;
+    size: number;
+  }>;
+  status: 'sent' | 'delivered' | 'read';
+  createdAt: Date;
+}
+
+/**
+ * Message read event
+ */
+export interface MessageReadEvent {
+  chatRoomId: string;
+  userId: string;
+  messageIds?: string[];
+  readAt: Date;
+}
+
+/**
  * Server-to-client event definitions
  * Events emitted by the server to the client
  */
@@ -112,8 +151,21 @@ export interface ServerToClientEvents {
   /** Booking chat message (alias) */
   'booking:message': (data: MessageEvent) => void;
 
-  /** Provider location update during booking */
-  'booking:provider_location': (data: { bookingId: string; latitude: number; longitude: number; timestamp?: Date }) => void;
+  /**
+   * Provider location update during active booking
+   * Emitted when a provider starts tracking to a booking location
+   * NOTE: This event is emitted by backend when providerLocation tracking is enabled
+   */
+  'booking:provider_location': (data: {
+    bookingId: string;
+    latitude: number;
+    longitude: number;
+    heading?: number;
+    speed?: number;
+    etaMinutes?: number;
+    distanceRemaining?: number;
+    timestamp?: Date;
+  }) => void;
 
   /** Socket connected and authenticated */
   'connected': (data: { socketId: string }) => void;
@@ -129,6 +181,41 @@ export interface ServerToClientEvents {
 
   /** User stopped typing in booking chat */
   'typing:stop': (data: TypingEvent) => void;
+
+  // Chat events
+  /** Chat room joined */
+  'chat:room_joined': (data: { chatRoomId: string }) => void;
+
+  /** Chat room left */
+  'chat:room_left': (data: { chatRoomId: string }) => void;
+
+  /** New chat message received */
+  'chat:message:new': (data: ChatMessageEvent) => void;
+
+  // FIX #3: Add type definition for chat:new_message event (alternative event name from backend)
+  /** Alternative event for new chat message (backend may emit this) */
+  'chat:new_message': (data: ChatMessageEvent) => void;
+
+  /** Chat message delivered */
+  'chat:message:delivered': (data: { messageId: string; chatRoomId: string; deliveredAt: Date }) => void;
+
+  /** Chat message read */
+  'chat:message:read': (data: MessageReadEvent) => void;
+
+  /** Chat message deleted */
+  'chat:message:deleted': (data: { chatRoomId: string; messageId: string }) => void;
+
+  /** User started typing in chat */
+  'chat:typing:start': (data: ChatTypingEvent) => void;
+
+  /** User stopped typing in chat */
+  'chat:typing:stop': (data: ChatTypingEvent) => void;
+
+  /** User online status */
+  'chat:presence:online': (data: { userId: string }) => void;
+
+  /** User offline status */
+  'chat:presence:offline': (data: { userId: string }) => void;
 
   // Provider status events (Admin -> Provider)
   /** Provider account approved */
@@ -158,6 +245,12 @@ export interface ServerToClientEvents {
   /** Service rejected by admin */
   'service:rejected': (data: { serviceId: string; providerId: string; reason: string }) => void;
 
+  /** Service submitted for review by provider */
+  'service:pending_review': (data: { serviceId: string; serviceName: string; previousStatus: string; newStatus: string; timestamp: Date }) => void;
+
+  /** Service category changed by admin */
+  'service:category_changed': (data: { serviceId: string; providerId: string; serviceName: string; oldCategory: string; newCategory: string; timestamp: Date }) => void;
+
   // Review moderation events (Admin -> Provider/Customer)
   /** Review moderated by admin */
   'review:moderated': (data: {
@@ -167,6 +260,70 @@ export interface ServerToClientEvents {
     action: 'approved' | 'hidden' | 'rejected';
     rating?: number;
     reason?: string;
+    timestamp: Date;
+  }) => void;
+
+  /** New review submitted by customer */
+  'review:new': (data: {
+    reviewId: string;
+    bookingId: string;
+    bookingNumber: string;
+    providerId: string;
+    customerId: string;
+    customerName: string;
+    rating: number;
+    comment?: string;
+    serviceName?: string;
+    timestamp: Date;
+  }) => void;
+
+  // FIX #8: Add type definition for review:visible event
+  /** Review visibility changed by admin - notifies dashboard when review becomes visible */
+  'review:visible': (data: {
+    reviewId: string;
+    customerId: string;
+    providerId?: string;
+    rating: number;
+    visible: boolean;
+    timestamp: Date;
+  }) => void;
+
+  // FIX #6: Add type definition for user:status_changed event
+  /** User account status changed by admin */
+  'user:status_changed': (data: {
+    userId: string;
+    status: 'active' | 'suspended' | 'banned';
+    reason?: string;
+    timestamp: Date;
+  }) => void;
+
+  // FIX #5: Add type definition for user:account_locked event
+  /** User account locked by admin */
+  'user:account_locked': (data: {
+    userId: string;
+    reason: string;
+    until?: Date;
+    timestamp: Date;
+  }) => void;
+
+  // FIX #6: Add type definition for booking:admin_updated event
+  /** Booking updated by admin */
+  'booking:admin_updated': (data: {
+    bookingId: string;
+    bookingNumber: string;
+    status: string;
+    updatedBy: 'admin';
+    reason?: string;
+    timestamp: Date;
+  }) => void;
+
+  // FIX #7: Add type definition for services:batch_completed event
+  /** Batch service operation completed */
+  'services:batch_completed': (data: {
+    providerIds: string[];
+    serviceIds: string[];
+    affectedCount: number;
+    action: 'approved' | 'rejected';
     timestamp: Date;
   }) => void;
 
@@ -247,32 +404,93 @@ export interface ServerToClientEvents {
     rejectedAt: string;
   }) => void;
 
-  // Built-in Socket.IO events
-  /** Socket disconnected from server */
-  'disconnect': (data: { reason: string }) => void;
-
-  // Chat events (from chat handler)
-  /** Chat room joined */
-  'chat:room_joined': (data: { chatRoomId: string }) => void;
-  /** Chat room left */
-  'chat:room_left': (data: { chatRoomId: string }) => void;
-  /** Chat message new */
-  'chat:new_message': (data: {
-    messageId: string;
-    chatRoomId: string;
-    senderId: string;
-    receiverId: string;
-    content: string;
-    type: string;
-    status: string;
-    createdAt: Date;
+  // Payment events
+  /** Payment completed - updates earnings in real-time for provider */
+  'payment:completed': (data: {
+    bookingId: string;
+    bookingNumber: string;
+    amount: number;
+    currency: string;
+    transactionId: string;
+    paidAt: Date;
+    customerId: string;
+    providerId: string;
   }) => void;
-  /** Chat message read */
-  'chat:message_read': (data: {
-    chatRoomId: string;
+
+  /** Payment refunded */
+  'payment:refunded': (data: {
+    bookingId: string;
+    bookingNumber: string;
+    amount: number;
+    currency: string;
+    refundedAt: Date;
+    customerId: string;
+  }) => void;
+
+  /** Invoice status changed */
+  'invoice:status_changed': (data: {
+    invoiceId: string;
+    invoiceNumber: string;
+    status: string;
+    previousStatus: string;
     userId: string;
-    messageIds?: string[];
-    readAt: Date;
+  }) => void;
+
+  // Wallet events
+  /** Wallet balance updated in real-time */
+  'wallet:balance_updated': (data: {
+    userId: string;
+    balance: number;
+    pendingBalance: number;
+    totalEarned: number;
+    currency: string;
+    timestamp: Date;
+  }) => void;
+
+  // Earnings events
+  /** Provider earnings credited - real-time update for provider wallet */
+  'earnings:credited': (data: {
+    earningsId: string;
+    providerId: string;
+    bookingId: string;
+    bookingNumber: string;
+    amount: number;
+    currency: string;
+    type: 'service' | 'tip' | 'bonus' | 'adjustment';
+    newBalance: number;
+    previousBalance: number;
+    creditedAt: Date;
+  }) => void;
+
+  // Ad status events
+  /** Ad status changed */
+  'ad:status_changed': (data: {
+    adId: string;
+    providerId: string;
+    adName: string;
+    previousStatus: string;
+    newStatus: string;
+    timestamp: Date;
+  }) => void;
+
+  /** Ad budget exhausted */
+  'ad:budget_exhausted': (data: {
+    adId: string;
+    providerId: string;
+    adName: string;
+    reason: 'daily' | 'total' | 'monthly';
+    timestamp: Date;
+  }) => void;
+
+  /** Ad approval status changed */
+  'ad:approval_status_changed': (data: {
+    adId: string;
+    providerId: string;
+    adName: string;
+    previousStatus: string;
+    newStatus: string;
+    notes?: string;
+    timestamp: Date;
   }) => void;
 }
 
@@ -293,11 +511,43 @@ export interface ClientToServerEvents {
   /** Leave booking's chat room */
   'leave:booking_room': (bookingId: string) => void;
 
+  /** Join chat room */
+  'join:chat_room': (chatRoomId: string) => void;
+
+  /** Leave chat room */
+  'leave:chat_room': (chatRoomId: string) => void;
+
+  /** Send chat message */
+  'send:message': (data: {
+    chatRoomId: string;
+    receiverId: string;
+    content?: string;
+    type?: 'text' | 'image' | 'file';
+    bookingId?: string;
+    replyTo?: string;
+    attachments?: Array<{
+      url: string;
+      filename: string;
+      mimeType: string;
+      size: number;
+      thumbnailUrl?: string;
+    }>;
+  }) => void;
+
+  /** Mark messages as read */
+  'mark:read': (data: { chatRoomId: string; messageIds?: string[] }) => void;
+
   /** Start typing indicator in booking chat */
   'typing:start': (data: { bookingId: string }) => void;
 
   /** Stop typing indicator in booking chat */
   'typing:stop': (data: { bookingId: string }) => void;
+
+  /** Start typing in chat room */
+  'chat:typing:start': (data: { chatRoomId: string }) => void;
+
+  /** Stop typing in chat room */
+  'chat:typing:stop': (data: { chatRoomId: string }) => void;
 }
 
 // Typed socket instance
@@ -548,7 +798,8 @@ class SocketService {
         resolve(this.socket?.id || '');
       });
 
-      this.socket.on('disconnect', (reason: string) => {
+      // Use type assertion for built-in Socket.IO events
+      (this.socket as unknown as { on: Function }).on('disconnect', (reason: string) => {
         console.log('[SocketService] Disconnected:', reason);
         this.notifyListeners('disconnect', { reason });
 
@@ -584,8 +835,26 @@ class SocketService {
 
       this.socket.on('unauthorized', () => {
         console.error('[SocketService] Unauthorized - token may be invalid or expired');
+        // Issue #15: Implement automatic token refresh and reconnection when socket receives unauthorized
         this.disconnect();
         this.notifyListeners('unauthorized', {});
+
+        // Trigger token refresh flow - the auth store should handle token refresh
+        // Components listening to 'unauthorized' can redirect to login or refresh token
+        const stored = secureStorage.getItem('auth-storage');
+        if (stored) {
+          try {
+            const parsed = JSON.parse(stored);
+            // Emit a custom event that auth store or components can listen to for token refresh
+            if (typeof window !== 'undefined') {
+              window.dispatchEvent(new CustomEvent('socket:unauthorized', {
+                detail: { shouldRefreshToken: true }
+              }));
+            }
+          } catch {
+            // Invalid stored data - user needs to re-login
+          }
+        }
       });
 
       this.socket.on('error', (data: { message: string }) => {
@@ -808,6 +1077,66 @@ class SocketService {
   }
 
   // ---------------------------------------------------------------------------
+  // Chat Room Methods
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Join a chat room to receive messages
+   */
+  joinChatRoom(chatRoomId: string): void {
+    this.emit('join:chat_room', chatRoomId);
+  }
+
+  /**
+   * Leave a chat room to stop receiving messages
+   */
+  leaveChatRoom(chatRoomId: string): void {
+    this.emit('leave:chat_room', chatRoomId);
+  }
+
+  /**
+   * Send a chat message
+   */
+  sendMessage(data: {
+    chatRoomId: string;
+    receiverId: string;
+    content?: string;
+    type?: 'text' | 'image' | 'file';
+    bookingId?: string;
+    replyTo?: string;
+    attachments?: Array<{
+      url: string;
+      filename: string;
+      mimeType: string;
+      size: number;
+      thumbnailUrl?: string;
+    }>;
+  }): void {
+    this.emit('send:message', data);
+  }
+
+  /**
+   * Mark messages as read in a chat room
+   */
+  markMessagesRead(chatRoomId: string, messageIds?: string[]): void {
+    this.emit('mark:read', { chatRoomId, messageIds });
+  }
+
+  /**
+   * Send typing indicator in chat room
+   */
+  startChatTyping(chatRoomId: string): void {
+    this.emit('chat:typing:start', { chatRoomId });
+  }
+
+  /**
+   * Stop typing indicator in chat room
+   */
+  stopChatTyping(chatRoomId: string): void {
+    this.emit('chat:typing:stop', { chatRoomId });
+  }
+
+  // ---------------------------------------------------------------------------
   // Event Subscription
   // ---------------------------------------------------------------------------
 
@@ -898,11 +1227,12 @@ class SocketService {
       this.notifyListeners('connected', data);
     });
 
-    this.socket.on('disconnect', (reason) => {
+    // Use type assertion for built-in Socket.IO events
+    (this.socket as unknown as { on: Function }).on('disconnect', (reason: string) => {
       this.notifyListeners('disconnect', { reason });
     });
 
-    this.socket.on('connect_error', (error) => {
+    (this.socket as unknown as { on: Function }).on('connect_error', (error: { message: string }) => {
       this.notifyListeners('connect_error', { error: error.message });
     });
 
@@ -916,19 +1246,56 @@ class SocketService {
     });
 
     this.socket.on('booking:confirmed', (data) => {
+      // Forward to generic status_changed for unified handling
+      this.notifyListeners('booking:status_changed', data);
       this.notifyListeners('booking:confirmed', data);
     });
 
     this.socket.on('booking:cancelled', (data) => {
+      // Forward to generic status_changed for unified handling
+      this.notifyListeners('booking:status_changed', data);
       this.notifyListeners('booking:cancelled', data);
     });
 
     this.socket.on('booking:completed', (data) => {
+      // Forward to generic status_changed for unified handling
+      this.notifyListeners('booking:status_changed', data);
       this.notifyListeners('booking:completed', data);
+    });
+
+    // FIX: Add listeners for specific booking status events
+    this.socket.on('booking:accepted', (data) => {
+      this.notifyListeners('booking:status_changed', data);
+      this.notifyListeners('booking:accepted', data);
+    });
+
+    this.socket.on('booking:rejected', (data) => {
+      this.notifyListeners('booking:status_changed', data);
+      this.notifyListeners('booking:rejected', data);
+    });
+
+    this.socket.on('booking:started', (data) => {
+      this.notifyListeners('booking:status_changed', data);
+      this.notifyListeners('booking:started', data);
+    });
+
+    this.socket.on('booking:rescheduled', (data) => {
+      this.notifyListeners('booking:status_changed', data);
+      this.notifyListeners('booking:rescheduled', data);
+    });
+
+    this.socket.on('booking:no_show', (data) => {
+      this.notifyListeners('booking:status_changed', data);
+      this.notifyListeners('booking:no_show', data);
     });
 
     this.socket.on('booking:reminder', (data) => {
       this.notifyListeners('booking:reminder', data);
+    });
+
+    // Provider location updates
+    this.socket.on('booking:provider_location', (data) => {
+      this.notifyListeners('booking:provider_location', data);
     });
 
     // Notification events
@@ -964,15 +1331,16 @@ class SocketService {
       this.notifyListeners('chat:room_left', data);
     });
 
-    this.socket.on('chat:new_message', (data) => {
-      this.notifyListeners('message:new', data);
+    // Chat message events - listen on correct event names
+    this.socket.on('chat:message:new', (data) => {
+      this.notifyListeners('chat:message:new', data);
     });
 
-    this.socket.on('chat:message_read', (data) => {
-      this.notifyListeners('message:read', data);
+    this.socket.on('chat:message:read', (data) => {
+      this.notifyListeners('chat:message:read', data);
     });
 
-    // Typing events - FIX #9: Proper typing for typing events
+    // Typing events
     this.socket.on('typing:start', (data: TypingEvent) => {
       this.notifyListeners('typing:start', data);
     });
@@ -1011,9 +1379,23 @@ class SocketService {
       this.notifyListeners('service:rejected', data);
     });
 
+    // FIX: Add listeners for new service events
+    this.socket.on('service:pending_review', (data) => {
+      this.notifyListeners('service:pending_review', data);
+    });
+
+    this.socket.on('service:category_changed', (data) => {
+      this.notifyListeners('service:category_changed', data);
+    });
+
     // Review moderation events
     this.socket.on('review:moderated', (data) => {
       this.notifyListeners('review:moderated', data);
+    });
+
+    // New review submitted event - notifies provider dashboard in real-time
+    this.socket.on('review:new', (data) => {
+      this.notifyListeners('review:new', data);
     });
 
     this.socket.on('service:status_changed', (data) => {
@@ -1053,6 +1435,66 @@ class SocketService {
 
     this.socket.on('withdrawal:rejected', (data) => {
       this.notifyListeners('withdrawal:rejected', data);
+    });
+
+    // FIX #1: Add subscription for payment:refunded event
+    this.socket.on('payment:refunded', (data) => {
+      this.notifyListeners('payment:refunded', data);
+    });
+
+    // FIX #2: Add subscription for invoice:status_changed event
+    this.socket.on('invoice:status_changed', (data) => {
+      this.notifyListeners('invoice:status_changed', data);
+    });
+
+    // FIX #4: Add subscription for user:status_changed event
+    this.socket.on('user:status_changed', (data) => {
+      this.notifyListeners('user:status_changed', data);
+    });
+
+    // FIX #5: Add subscription for user:account_locked event
+    this.socket.on('user:account_locked', (data) => {
+      this.notifyListeners('user:account_locked', data);
+    });
+
+    // FIX #6: Add subscription for booking:admin_updated event
+    this.socket.on('booking:admin_updated', (data) => {
+      this.notifyListeners('booking:admin_updated', data);
+    });
+
+    // FIX #7: Add subscription for services:batch_completed event
+    this.socket.on('services:batch_completed', (data) => {
+      this.notifyListeners('services:batch_completed', data);
+    });
+
+    // FIX #8: Add subscription for review:visible event
+    this.socket.on('review:visible', (data) => {
+      this.notifyListeners('review:visible', data);
+    });
+
+    // FIX #3: Add subscription for chat:new_message event (backend emits this, also listening for chat:message:new)
+    this.socket.on('chat:new_message', (data) => {
+      this.notifyListeners('chat:new_message', data);
+    });
+
+    // FIX #16: Add subscription for review:reply event (notifies customer when provider replies)
+    this.socket.on('review:reply', (data) => {
+      this.notifyListeners('review:reply', data);
+    });
+
+    // FIX #17: Add subscription for payment:failed event (notifies users when payment fails)
+    this.socket.on('payment:failed', (data) => {
+      this.notifyListeners('payment:failed', data);
+    });
+
+    // FIX #2: Add subscription for wallet:balance_updated event
+    this.socket.on('wallet:balance_updated', (data) => {
+      this.notifyListeners('wallet:balance_updated', data);
+    });
+
+    // FIX #2: Add subscription for earnings:credited event
+    this.socket.on('earnings:credited', (data) => {
+      this.notifyListeners('earnings:credited', data);
     });
   }
 
@@ -1105,6 +1547,31 @@ class SocketService {
    */
   onBookingStatusChanged(callback: (data: BookingEvent) => void): () => void {
     return this.on('booking:status_changed', callback);
+  }
+
+  /**
+   * Subscribe to new booking request - notifies provider when a new booking request is created
+   */
+  onNewBookingRequest(
+    callback: (data: { booking: BookingEvent; providerId: string }) => void
+  ): () => void {
+    return this.on('booking:new_request', callback);
+  }
+
+  /**
+   * Subscribe to provider location updates during active booking
+   */
+  onProviderLocation(callback: (data: {
+    bookingId: string;
+    latitude: number;
+    longitude: number;
+    heading?: number;
+    speed?: number;
+    etaMinutes?: number;
+    distanceRemaining?: number;
+    timestamp?: Date;
+  }) => void): () => void {
+    return this.on('booking:provider_location', callback);
   }
 
   // ---------------------------------------------------------------------------
@@ -1162,6 +1629,20 @@ class SocketService {
     return this.on('service:rejected', callback);
   }
 
+  onReviewModerated(
+    callback: (data: {
+      reviewId: string;
+      providerId?: string;
+      customerId?: string;
+      action: 'approved' | 'hidden' | 'rejected';
+      rating?: number;
+      reason?: string;
+      timestamp: Date;
+    }) => void
+  ): () => void {
+    return this.on('review:moderated', callback);
+  }
+
   onServiceStatusChanged(
     callback: (data: {
       serviceId: string;
@@ -1171,6 +1652,49 @@ class SocketService {
     }) => void
   ): () => void {
     return this.on('service:status_changed', callback);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Ad Event Subscribers
+  // ---------------------------------------------------------------------------
+
+  onAdStatusChanged(
+    callback: (data: {
+      adId: string;
+      providerId: string;
+      adName: string;
+      previousStatus: string;
+      newStatus: string;
+      timestamp: Date;
+    }) => void
+  ): () => void {
+    return this.on('ad:status_changed', callback);
+  }
+
+  onAdBudgetExhausted(
+    callback: (data: {
+      adId: string;
+      providerId: string;
+      adName: string;
+      reason: 'daily' | 'total' | 'monthly';
+      timestamp: Date;
+    }) => void
+  ): () => void {
+    return this.on('ad:budget_exhausted', callback);
+  }
+
+  onAdApprovalStatusChanged(
+    callback: (data: {
+      adId: string;
+      providerId: string;
+      adName: string;
+      previousStatus: string;
+      newStatus: string;
+      notes?: string;
+      timestamp: Date;
+    }) => void
+  ): () => void {
+    return this.on('ad:approval_status_changed', callback);
   }
 
   // ---------------------------------------------------------------------------
@@ -1209,6 +1733,102 @@ class SocketService {
     callback: (data: { disputeId: string; resolution: string; resolutionType: string }) => void
   ): () => void {
     return this.on('dispute:resolved', callback);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Payment Event Subscribers
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Subscribe to payment completed event - updates earnings in real-time
+   */
+  onPaymentCompleted(
+    callback: (data: {
+      bookingId: string;
+      bookingNumber: string;
+      amount: number;
+      currency: string;
+      transactionId: string;
+      paidAt: Date;
+      customerId: string;
+      providerId: string;
+    }) => void
+  ): () => void {
+    return this.on('payment:completed', callback);
+  }
+
+  /**
+   * Subscribe to earnings credited event - real-time update for provider wallet
+   * Notifies provider when earnings are added to their wallet balance
+   */
+  onEarningsCredited(
+    callback: (data: {
+      earningsId: string;
+      providerId: string;
+      bookingId: string;
+      bookingNumber: string;
+      amount: number;
+      currency: string;
+      type: 'service' | 'tip' | 'bonus' | 'adjustment';
+      newBalance: number;
+      previousBalance: number;
+      creditedAt: Date;
+    }) => void
+  ): () => void {
+    return this.on('earnings:credited', callback);
+  }
+
+  /**
+   * Subscribe to payment refunded event - notifies customer when refund is processed
+   * FIX #1: Added missing callback for payment:refunded event
+   */
+  onPaymentRefunded(
+    callback: (data: {
+      bookingId: string;
+      bookingNumber: string;
+      amount: number;
+      currency: string;
+      refundedAt: Date;
+      customerId: string;
+    }) => void
+  ): () => void {
+    return this.on('payment:refunded', callback);
+  }
+
+  /**
+   * Subscribe to invoice status changed event
+   * FIX #2: Added missing callback for invoice:status_changed event
+   */
+  onInvoiceStatusChanged(
+    callback: (data: {
+      invoiceId: string;
+      invoiceNumber: string;
+      status: string;
+      previousStatus: string;
+      userId: string;
+    }) => void
+  ): () => void {
+    return this.on('invoice:status_changed', callback);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Wallet Event Subscribers
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Subscribe to wallet balance updated event - real-time update for user wallet
+   */
+  onWalletBalanceUpdated(
+    callback: (data: {
+      userId: string;
+      balance: number;
+      pendingBalance: number;
+      totalEarned: number;
+      currency: string;
+      timestamp: Date;
+    }) => void
+  ): () => void {
+    return this.on('wallet:balance_updated', callback);
   }
 
   // ---------------------------------------------------------------------------
@@ -1268,6 +1888,92 @@ class SocketService {
   }
 
   // ---------------------------------------------------------------------------
+  // User Status Event Subscribers
+  // ---------------------------------------------------------------------------
+
+  onUserStatusChanged(
+    callback: (data: { userId: string; status: 'active' | 'suspended' | 'banned'; reason?: string; timestamp: Date }) => void
+  ): () => void {
+    return this.on('user:status_changed', callback);
+  }
+
+  onUserAccountLocked(
+    callback: (data: { userId: string; reason: string; until?: Date; timestamp: Date }) => void
+  ): () => void {
+    return this.on('user:account_locked', callback);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Booking Admin Update Event Subscribers
+  // ---------------------------------------------------------------------------
+
+  onBookingAdminUpdated(
+    callback: (data: { bookingId: string; bookingNumber: string; status: string; updatedBy: 'admin'; reason?: string; timestamp: Date }) => void
+  ): () => void {
+    return this.on('booking:admin_updated', callback);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Batch Service Operation Event Subscribers
+  // ---------------------------------------------------------------------------
+
+  onServicesBatchCompleted(
+    callback: (data: { providerIds: string[]; serviceIds: string[]; affectedCount: number; action: 'approved' | 'rejected'; timestamp: Date }) => void
+  ): () => void {
+    return this.on('services:batch_completed', callback);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Review Visibility Event Subscribers
+  // ---------------------------------------------------------------------------
+
+  onReviewVisible(
+    callback: (data: { reviewId: string; customerId: string; providerId?: string; rating: number; visible: boolean; timestamp: Date }) => void
+  ): () => void {
+    return this.on('review:visible', callback);
+  }
+
+  /**
+   * Subscribe to new review received event - real-time update for provider dashboard
+   * Notifies provider when a customer submits a new review
+   */
+  onReviewReceived(
+    callback: (data: {
+      reviewId: string;
+      bookingId: string;
+      bookingNumber: string;
+      providerId: string;
+      customerId: string;
+      customerName: string;
+      rating: number;
+      comment?: string;
+      serviceName?: string;
+      timestamp: Date;
+    }) => void
+  ): () => void {
+    return this.on('review:new', callback);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Insights Update Event Subscribers
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Subscribe to insights dashboard update events
+   * Notifies provider when their insights data should be refreshed
+   */
+  onInsightsUpdated(
+    callback: (data: {
+      providerId: string;
+      reason: 'booking_completed' | 'review_submitted' | 'withdrawal_processed' | 'booking_cancelled';
+      affectedMetrics: string[];
+      timestamp: Date;
+    }) => void
+  ): () => void {
+    return this.on('insights:updated', callback);
+  }
+
+  // ---------------------------------------------------------------------------
   // Message & Typing Event Subscribers
   // ---------------------------------------------------------------------------
 
@@ -1281,6 +1987,80 @@ class SocketService {
 
   onTypingStop(callback: (data: TypingEvent) => void): () => void {
     return this.on('typing:stop', callback);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Chat Event Subscribers
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Subscribe to chat room joined event
+   */
+  onChatRoomJoined(callback: (data: { chatRoomId: string }) => void): () => void {
+    return this.on('chat:room_joined', callback);
+  }
+
+  /**
+   * Subscribe to chat room left event
+   */
+  onChatRoomLeft(callback: (data: { chatRoomId: string }) => void): () => void {
+    return this.on('chat:room_left', callback);
+  }
+
+  /**
+   * Subscribe to new chat messages
+   */
+  onNewChatMessage(callback: (data: ChatMessageEvent) => void): () => void {
+    return this.on('chat:message:new', callback);
+  }
+
+  /**
+   * Subscribe to chat message delivered event
+   */
+  onChatMessageDelivered(callback: (data: { messageId: string; chatRoomId: string; deliveredAt: Date }) => void): () => void {
+    return this.on('chat:message:delivered', callback);
+  }
+
+  /**
+   * Subscribe to chat message read event
+   */
+  onChatMessageRead(callback: (data: MessageReadEvent) => void): () => void {
+    return this.on('chat:message:read', callback);
+  }
+
+  /**
+   * Subscribe to chat message deleted event
+   */
+  onChatMessageDeleted(callback: (data: { chatRoomId: string; messageId: string }) => void): () => void {
+    return this.on('chat:message:deleted', callback);
+  }
+
+  /**
+   * Subscribe to chat typing start event
+   */
+  onChatTypingStart(callback: (data: ChatTypingEvent) => void): () => void {
+    return this.on('chat:typing:start', callback);
+  }
+
+  /**
+   * Subscribe to chat typing stop event
+   */
+  onChatTypingStop(callback: (data: ChatTypingEvent) => void): () => void {
+    return this.on('chat:typing:stop', callback);
+  }
+
+  /**
+   * Subscribe to user online presence
+   */
+  onUserOnline(callback: (data: { userId: string }) => void): () => void {
+    return this.on('chat:presence:online', callback);
+  }
+
+  /**
+   * Subscribe to user offline presence
+   */
+  onUserOffline(callback: (data: { userId: string }) => void): () => void {
+    return this.on('chat:presence:offline', callback);
   }
 
   // ---------------------------------------------------------------------------
@@ -1325,11 +2105,16 @@ class SocketService {
 
   /**
    * Subscribe to disconnection events
-   *
-   * FIX #3: Properly handling disconnect built-in event
    */
   onDisconnect(callback: (data: { reason: string }) => void): () => void {
-    return this.on('disconnect', callback);
+    // Use type assertion for built-in Socket.IO events
+    if (!this.listeners.has('disconnect')) {
+      this.listeners.set('disconnect', new Set());
+    }
+    this.listeners.get('disconnect')?.add(callback as Function);
+    return () => {
+      this.listeners.get('disconnect')?.delete(callback as Function);
+    };
   }
 
   // ---------------------------------------------------------------------------

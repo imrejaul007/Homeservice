@@ -501,6 +501,10 @@ serviceSchema.index({ isActive: 1, 'searchMetadata.searchCount': -1 });
 // Index for price range queries with rating
 serviceSchema.index({ 'price.amount': 1, 'rating.average': -1, isActive: 1 });
 
+// FIX: Add compound index for provider service queries with status filter
+// Supports queries like: find all active services for provider X
+serviceSchema.index({ providerId: 1, status: 1 });
+
 // ===================================
 // TENANT ISOLATION INDEXES (CRITICAL)
 // ===================================
@@ -880,7 +884,15 @@ Service.recalculateRating = async function(serviceId: string | mongoose.Types.Ob
     // Filter to only reviews for this service
     { $match: { 'booking.serviceId': serviceObjectId } },
     // Filter to only visible reviews
-    { $match: { isHidden: false } },
+    {
+      $match: {
+        isHidden: false,
+        $or: [
+          { moderationStatus: 'approved' },
+          { moderationStatus: { $exists: false } },
+        ],
+      },
+    },
     // Group and calculate stats
     {
       $group: {

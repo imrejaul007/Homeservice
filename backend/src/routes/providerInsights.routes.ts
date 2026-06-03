@@ -3,6 +3,7 @@ import authMiddleware from '../middleware/auth.middleware';
 import { validateProviderRole } from '../middleware/validation.middleware';
 import rateLimit from 'express-rate-limit';
 import providerInsightsController from '../controllers/providerInsights.controller';
+import providerPLController from '../controllers/providerPL.controller';
 
 const router = Router();
 
@@ -25,6 +26,9 @@ router.use(insightsRateLimit);
 // ============================================
 // PROVIDER INSIGHTS ROUTES
 // ============================================
+
+// FIX #4: P&L endpoint
+router.get('/profit-loss', providerPLController.getProfitLoss);
 
 // Get comprehensive provider insights
 router.get('/insights', providerInsightsController.getInsights);

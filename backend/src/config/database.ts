@@ -37,6 +37,16 @@ const RETRY_CONFIG = {
   backoffMultiplier: parseInt(process.env.MONGODB_BACKOFF_MULTIPLIER || '2'),
 };
 
+/**
+ * Multi-document transactions require readPreference `primary`.
+ * The global connection may use `primaryPreferred` (Atlas default) for normal reads.
+ */
+export const DEFAULT_MONGO_TRANSACTION_OPTIONS = {
+  readPreference: 'primary' as const,
+  readConcern: { level: 'snapshot' as const },
+  writeConcern: { w: 'majority' as const },
+};
+
 interface DatabaseConfig {
   uri: string;
   options?: mongoose.ConnectOptions;

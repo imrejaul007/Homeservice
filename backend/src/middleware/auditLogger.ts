@@ -59,6 +59,11 @@ export const auditLogger = (req: Request, res: Response, next: NextFunction) => 
 
   // Hook into response finish event
   res.on('finish', () => {
+    const { shouldRecordAuditLog } = require('./platformSettings.middleware');
+    if (!shouldRecordAuditLog()) {
+      return;
+    }
+
     const duration = Date.now() - start;
 
     const auditLog: AuditLog = {

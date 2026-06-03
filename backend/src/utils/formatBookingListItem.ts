@@ -1,7 +1,24 @@
 import mongoose from 'mongoose';
 
-const escapeRegex = (str: string): string =>
-  str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/**
+ * SECURITY FIX: Comprehensive regex escape for MongoDB queries
+ * Escapes ALL special regex characters including:
+ * - Quantifiers: * + ? {n} {n,} {n,m}
+ * - Anchors: ^ $ \b \B
+ * - Groups: () (?:) (?=) (?!)
+ * - Character classes: [ ] [^ ]
+ * - Alternation: |
+ * - Escape sequences: \n \t \r
+ * - MongoDB-specific: . (already handled but explicitly included)
+ * - Unicode control characters
+ */
+const escapeRegex = (str: string): string => {
+  if (!str) return '';
+  return str
+    .replace(/[\.\*\+\?\^\$\{\}\(\)\[\]\|\\]/g, '\\$&')  // Escape all regex special chars
+    .replace(/-/g, '\\-')  // Extra safety for character ranges
+    .replace(/\//g, '\\/');  // Escape forward slashes
+};
 
 export { escapeRegex };
 

@@ -3,6 +3,7 @@ import User from '../models/user.model';
 import ProviderProfile from '../models/providerProfile.model';
 import Service from '../models/service.model';
 import ServiceCategory from '../models/serviceCategory.model';
+import ProviderAd from '../models/providerAd.model';
 import logger from '../utils/logger';
 import { cache } from '../config/redis';
 
@@ -280,7 +281,7 @@ export class ProviderAnalyticsService {
         const current = serviceData.get(serviceId) || {
           revenue: 0,
           bookings: 0,
-          name: service.title || 'Unknown',
+          name: service.name || 'Unknown Service',
           categoryId: service.category?.toString() || '',
           categoryName: '',
           rating: service.rating?.average || 0,
@@ -339,45 +340,105 @@ export class ProviderAnalyticsService {
 
   /**
    * Get ROAS (Return on Ad Spend) data for a provider
+   * FIX #3: Connect ROAS calculation to real ad spend data from providerAd model
    */
   async getROAS(providerId: string, period: string = '30d'): Promise<ROASData> {
     const cacheKey = `analytics:provider:${providerId}:roas:${period}`;
 
     return getCachedData(cacheKey, async () => {
       const { startDate, endDate } = getDateRange(period);
+      const providerObjectId = new (require('mongoose').Types.ObjectId)(providerId);
 
-      // Get ad spend data (from providerAd service or a placeholder)
-      // For now, using mock data structure
-      const dailyData: Array<{ date: string; spend: number; revenue: number; roas: number }> = [];
-      const days = Math.ceil((endDate.getTime() - startDate.getTime()) / (24 * 60 * 60 * 1000));
+      // FIX #3: Get real ad spend data from providerAd model
+      const ads = await ProviderAd.find({
+        providerId: providerObjectId,
+        isActive: true,
+        status: { $in: ['active', 'paused'] },
+      }).lean();
 
+      // Aggregate ad spend by day from dailyStats
+      const dailyAdSpend: Map<string, number> = new Map();
       let totalAdSpend = 0;
-      let totalRevenueFromAds = 0;
 
-      // Generate daily data
+      for (const ad of ads) {
+        // Add total spent from budget
+        totalAdSpend += (ad.budget?.spent || 0);
+
+        // Process daily statistics if available
+        const dailyStats = ad.statistics?.dailyStats || [];
+        for (const stat of dailyStats) {
+          const dateStr = new Date(stat.date).toISOString().split('T')[0];
+          if (new Date(stat.date) >= startDate && new Date(stat.date) <= endDate) {
+            const currentSpend = dailyAdSpend.get(dateStr) || 0;
+            dailyAdSpend.set(dateStr, currentSpend + (stat.spent || 0));
+          }
+        }
+      }
+
+      // Get bookings attributed to ads within the period
+      // FIX #3: Calculate real revenue from ad-attributed bookings
+      // We track conversions from ad clicks to determine revenue attribution
+      const bookingsFromAds = await Booking.find({
+        providerId: providerObjectId,
+        status: 'completed',
+        createdAt: { $gte: startDate, $lte: endDate },
+        // bookingsFromAd: true, // Would need this field in booking model
+      }).lean();
+
+      // For now, estimate ad-attributed revenue based on ad conversions
+      // This could be enhanced by tracking the source of each booking
+      let totalRevenueFromAds = 0;
+      let adConversionCount = 0;
+
+      for (const ad of ads) {
+        adConversionCount += (ad.statistics?.conversions || 0);
+      }
+
+      // Estimate average booking value from completed bookings
+      const completedBookings = await Booking.find({
+        providerId: providerObjectId,
+        status: 'completed',
+        createdAt: { $gte: startDate, $lte: endDate },
+      }).lean();
+
+      const avgBookingValue = completedBookings.length > 0
+        ? completedBookings.reduce((sum, b) => sum + (b.pricing?.totalAmount || 0), 0) / completedBookings.length
+        : 0;
+
+      // Revenue from ads = conversions * estimated value per conversion
+      // This is an approximation; ideally we'd track booking source
+      totalRevenueFromAds = adConversionCount * avgBookingValue;
+
+      // Generate daily data for the period
+      const days = Math.ceil((endDate.getTime() - startDate.getTime()) / (24 * 60 * 60 * 1000));
+      const dailyData: Array<{ date: string; spend: number; revenue: number; roas: number }> = [];
+
       for (let i = 0; i < days; i++) {
         const date = new Date(startDate.getTime() + i * 24 * 60 * 60 * 1000);
         const dateStr = date.toISOString().split('T')[0];
 
-        // Mock ad spend data
-        const spend = Math.random() * 100 + 50;
-        const roas = Math.random() * 3 + 2;
-        const revenue = spend * roas;
+        const spend = dailyAdSpend.get(dateStr) || 0;
+        // Estimate daily revenue proportionally
+        const dailyRevenue = days > 0 ? (totalRevenueFromAds / days) : 0;
+        const dailyROAS = spend > 0 ? dailyRevenue / spend : 0;
 
-        dailyData.push({ date: dateStr, spend, revenue, roas });
-        totalAdSpend += spend;
-        totalRevenueFromAds += revenue;
+        dailyData.push({
+          date: dateStr,
+          spend: Math.round(spend * 100) / 100,
+          revenue: Math.round(dailyRevenue * 100) / 100,
+          roas: Math.round(dailyROAS * 100) / 100,
+        });
       }
 
-      const roas = totalAdSpend > 0 ? totalRevenueFromAds / totalAdSpend : 0;
+      const overallROAS = totalAdSpend > 0 ? totalRevenueFromAds / totalAdSpend : 0;
       const benchmark = 3.0; // Industry benchmark
-      const trend = roas > benchmark ? 5 : -3;
+      const trend = Math.round((overallROAS - benchmark) * 10) / 10;
 
       return {
         providerId,
-        totalAdSpend,
-        revenueFromAds: totalRevenueFromAds,
-        roas,
+        totalAdSpend: Math.round(totalAdSpend * 100) / 100,
+        revenueFromAds: Math.round(totalRevenueFromAds * 100) / 100,
+        roas: Math.round(overallROAS * 100) / 100,
         benchmark,
         trend,
         dailyData,
@@ -387,56 +448,220 @@ export class ProviderAnalyticsService {
 
   /**
    * Get competitive position for a provider
+   * FIX #6: Calculate actual average ratings and bookings from database
    */
   async getCompetitivePosition(providerId: string): Promise<CompetitivePositionData> {
     const cacheKey = `analytics:provider:${providerId}:competitive`;
 
     return getCachedData(cacheKey, async () => {
+      const providerObjectId = new (require('mongoose').Types.ObjectId)(providerId);
+
+      // FIX #6: Get real data from database instead of hardcoded values
       // Get provider's own stats
       const providerBookings = await Booking.find({
-        providerId,
+        providerId: providerObjectId,
         status: 'completed',
       }).lean();
 
-      const providerProfile = await ProviderProfile.findOne({ userId: providerId }).lean();
+      const providerProfile = await ProviderProfile.findOne({ userId: providerObjectId }).lean();
       const totalProviders = await User.countDocuments({ role: 'provider' });
 
       // Calculate provider's metrics
       const providerRating = providerProfile?.reviewsData?.averageRating || 0;
       const providerBookingsCount = providerBookings.length;
 
-      // Get aggregate stats for all providers (simplified)
-      const avgRating = 4.2;
-      const avgBookings = 100;
+      // FIX #6: Calculate real aggregate stats from all providers
+      // Get average rating across all providers
+      const ratingStats = await ProviderProfile.aggregate([
+        {
+          $lookup: {
+            from: 'users',
+            localField: 'userId',
+            foreignField: '_id',
+            as: 'user',
+          },
+        },
+        { $unwind: '$user' },
+        { $match: { 'user.role': 'provider' } },
+        {
+          $group: {
+            _id: null,
+            avgRating: { $avg: '$reviewsData.averageRating' },
+            minRating: { $min: '$reviewsData.averageRating' },
+            maxRating: { $max: '$reviewsData.averageRating' },
+          },
+        },
+      ]);
 
-      // Calculate ranks (simplified)
-      const ratingRank = Math.round((1 - (providerRating / 5)) * totalProviders);
-      const volumeRank = Math.round((1 - (providerBookingsCount / 1000)) * totalProviders);
+      const avgRating = ratingStats[0]?.avgRating || 0;
+      const minRating = ratingStats[0]?.minRating || 0;
+      const maxRating = ratingStats[0]?.maxRating || 5;
 
+      // Get average bookings count across all providers
+      const bookingsStats = await Booking.aggregate([
+        { $match: { status: 'completed' } },
+        {
+          $group: {
+            _id: '$providerId',
+            bookingCount: { $sum: 1 },
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            avgBookings: { $avg: '$bookingCount' },
+            maxBookings: { $max: '$bookingCount' },
+          },
+        },
+      ]);
+
+      const avgBookings = Math.round(bookingsStats[0]?.avgBookings || 0);
+      const maxBookings = bookingsStats[0]?.maxBookings || 100;
+
+      // Get completion rate stats
+      const completionStats = await Booking.aggregate([
+        {
+          $match: {
+            status: { $in: ['completed', 'cancelled'] },
+          },
+        },
+        {
+          $group: {
+            _id: '$providerId',
+            completed: {
+              $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] },
+            },
+            total: { $sum: 1 },
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            avgCompletionRate: { $avg: { $multiply: [{ $divide: ['$completed', '$total'] }, 100] } },
+          },
+        },
+      ]);
+
+      const avgCompletionRate = Math.round(completionStats[0]?.avgCompletionRate || 0);
+
+      // FIX #6: Calculate proper percentile ranking
+      // Get all provider ratings to determine actual percentile
+      const allProviderRatings = await ProviderProfile.aggregate([
+        {
+          $lookup: {
+            from: 'users',
+            localField: 'userId',
+            foreignField: '_id',
+            as: 'user',
+          },
+        },
+        { $unwind: '$user' },
+        { $match: { 'user.role': 'provider' } },
+        {
+          $group: {
+            _id: '$userId',
+            rating: { $first: '$reviewsData.averageRating' },
+            bookingCount: { $sum: 1 },
+          },
+        },
+        { $sort: { rating: -1 } },
+      ]);
+
+      // Find provider's rank
+      const providerIndex = allProviderRatings.findIndex(
+        (p) => p._id.toString() === providerId
+      );
+      const ratingRank = providerIndex >= 0 ? providerIndex + 1 : totalProviders;
+
+      // Get volume rank
+      const allProviderVolumes = await Booking.aggregate([
+        { $match: { status: 'completed' } },
+        {
+          $group: {
+            _id: '$providerId',
+            bookingCount: { $sum: 1 },
+          },
+        },
+        { $sort: { bookingCount: -1 } },
+      ]);
+
+      const volumeIndex = allProviderVolumes.findIndex(
+        (p) => p._id.toString() === providerId
+      );
+      const volumeRank = volumeIndex >= 0 ? volumeIndex + 1 : totalProviders;
+
+      // Calculate overall rank (average of rating and volume rank)
       const overallRank = Math.round((ratingRank + volumeRank) / 2);
       const percentile = Math.round(((totalProviders - overallRank) / totalProviders) * 100);
 
+      // Calculate provider's completion rate
+      const providerCompleted = providerBookings.filter((b) => b.status === 'completed').length;
+      const providerCompletionRate = providerBookings.length > 0
+        ? Math.round((providerCompleted / providerBookings.length) * 100)
+        : 0;
+
       const metrics = [
-        { metric: 'Overall', rank: overallRank, percentile, change: 5 },
-        { metric: 'Rating', rank: ratingRank, percentile: Math.round(((totalProviders - ratingRank) / totalProviders) * 100), change: 2 },
-        { metric: 'Volume', rank: volumeRank, percentile: Math.round(((totalProviders - volumeRank) / totalProviders) * 100), change: -3 },
+        { metric: 'Overall', rank: overallRank, percentile, change: 0 },
+        { metric: 'Rating', rank: ratingRank, percentile: Math.round(((totalProviders - ratingRank) / totalProviders) * 100), change: 0 },
+        { metric: 'Volume', rank: volumeRank, percentile: Math.round(((totalProviders - volumeRank) / totalProviders) * 100), change: 0 },
       ];
+
+      // Get top 10% rating threshold
+      const top10Index = Math.ceil(allProviderRatings.length * 0.1) - 1;
+      const top10Rating = allProviderRatings[top10Index]?.rating || 4.7;
 
       const comparison = {
         rating: providerRating,
-        avgRating,
-        top10Rating: 4.7,
-        responseTime: 95,
-        avgResponseTime: 72,
-        completionRate: 96,
-        avgCompletionRate: 85,
+        avgRating: Math.round(avgRating * 10) / 10,
+        top10Rating: Math.round(top10Rating * 10) / 10,
+        responseTime: 0, // Would need response time tracking
+        avgResponseTime: 0,
+        completionRate: providerCompletionRate,
+        avgCompletionRate,
       };
 
-      const suggestions = [
-        { category: 'Rating', priority: 'medium' as const, title: 'Request reviews', description: 'Ask satisfied customers to leave reviews', potential: 10 },
-        { category: 'Volume', priority: 'high' as const, title: 'Expand services', description: 'Add more service categories to attract customers', potential: 25 },
-        { category: 'Response', priority: 'low' as const, title: 'Quick replies', description: 'Set up automated quick responses', potential: 5 },
-      ];
+      // Generate suggestions based on actual data
+      const suggestions = [];
+
+      if (providerRating < avgRating) {
+        suggestions.push({
+          category: 'Rating',
+          priority: 'high' as const,
+          title: 'Improve customer ratings',
+          description: `Your rating (${providerRating.toFixed(1)}) is below average (${avgRating.toFixed(1)}). Focus on service quality and customer satisfaction.`,
+          potential: Math.round((avgRating - providerRating) * 10),
+        });
+      }
+
+      if (providerBookingsCount < avgBookings) {
+        suggestions.push({
+          category: 'Volume',
+          priority: 'high' as const,
+          title: 'Increase booking volume',
+          description: `Your bookings (${providerBookingsCount}) are below average (${avgBookings}). Consider expanding services or improving visibility.`,
+          potential: Math.round(((avgBookings - providerBookingsCount) / avgBookings) * 100),
+        });
+      }
+
+      if (providerCompletionRate < avgCompletionRate) {
+        suggestions.push({
+          category: 'Completion',
+          priority: 'medium' as const,
+          title: 'Improve completion rate',
+          description: `Your completion rate (${providerCompletionRate}%) is below average (${avgCompletionRate}%). Focus on fulfilling bookings.`,
+          potential: Math.round(avgCompletionRate - providerCompletionRate),
+        });
+      }
+
+      if (suggestions.length === 0) {
+        suggestions.push({
+          category: 'Performance',
+          priority: 'low' as const,
+          title: 'Maintain excellence',
+          description: 'You are performing above average. Keep up the great work!',
+          potential: 0,
+        });
+      }
 
       return {
         providerId,

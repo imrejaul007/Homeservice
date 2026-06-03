@@ -5,14 +5,64 @@
  */
 
 import { Router, Request, Response, NextFunction } from 'express';
-import { param, query, validationResult } from 'express-validator';
+import { param, query, validationResult, body } from 'express-validator';
 import { authenticate, requireRole } from '../middleware/auth.middleware';
 import { asyncHandler } from '../utils/asyncHandler';
 import mongoose from 'mongoose';
 import logger from '../utils/logger';
 import { send as emailSend } from '../services/email.service';
+import { pdfService, InvoiceData } from '../services/pdf.service';
 
 const router = Router();
+
+// Helper to transform invoice data to match frontend expectations
+const transformInvoiceForFrontend = (inv: any) => {
+  const customer = inv.customerId || {};
+  const provider = inv.providerId || {};
+  const booking = inv.bookingId || {};
+
+  return {
+    id: inv._id?.toString() || inv.id,
+    invoiceNumber: inv.invoiceNumber,
+    type: 'booking',
+    status: inv.status,
+    customerId: customer._id?.toString() || '',
+    customerName: `${customer.firstName || ''} ${customer.lastName || ''}`.trim(),
+    customerEmail: customer.email || '',
+    customerPhone: customer.phone,
+    customerAddress: undefined,
+    providerId: provider._id?.toString(),
+    providerName: `${provider.firstName || ''} ${provider.lastName || ''}`.trim(),
+    bookingId: booking._id?.toString(),
+    bookingDetails: booking.bookingNumber ? {
+      serviceName: 'Service',
+      scheduledDate: booking.scheduledDate?.toISOString(),
+      address: booking.location?.address,
+    } : undefined,
+    // Transform lineItems to items for frontend compatibility
+    items: (inv.lineItems || []).map((item: any, index: number) => ({
+      id: `${index}`,
+      description: item.description,
+      quantity: item.quantity,
+      unitPrice: item.unitPrice,
+      totalPrice: item.total,
+    })),
+    subtotal: inv.subtotal,
+    taxRate: inv.taxRate,
+    taxAmount: inv.taxAmount,
+    discountAmount: inv.discount || 0,
+    totalAmount: inv.total,
+    currency: inv.currency || 'AED',
+    dueDate: inv.dueDate?.toISOString(),
+    paidAt: inv.paidAt?.toISOString(),
+    sentAt: inv.sentAt?.toISOString(),
+    notes: inv.notes,
+    terms: inv.terms,
+    pdfUrl: inv.pdfUrl,
+    createdAt: inv.createdAt?.toISOString(),
+    updatedAt: inv.updatedAt?.toISOString(),
+  };
+};
 
 // Invoice model interface
 interface InvoiceDocument extends mongoose.Document {
@@ -32,7 +82,7 @@ interface InvoiceDocument extends mongoose.Document {
   taxAmount: number;
   total: number;
   currency: string;
-  status: 'draft' | 'pending' | 'sent' | 'paid' | 'overdue' | 'cancelled';
+  status: 'draft' | 'pending' | 'sent' | 'viewed' | 'paid' | 'overdue' | 'cancelled' | 'refunded';
   dueDate: Date;
   paidAt?: Date;
   sentAt?: Date;
@@ -75,7 +125,7 @@ interface PopulatedInvoice {
   taxAmount: number;
   total: number;
   currency: string;
-  status: 'draft' | 'pending' | 'sent' | 'paid' | 'overdue' | 'cancelled';
+  status: 'draft' | 'pending' | 'sent' | 'viewed' | 'paid' | 'overdue' | 'cancelled' | 'refunded';
   dueDate: Date;
   paidAt?: Date;
   sentAt?: Date;
@@ -104,7 +154,7 @@ const createInvoiceSchema = () => {
     currency: { type: String, default: 'AED' },
     status: {
       type: String,
-      enum: ['draft', 'pending', 'sent', 'paid', 'overdue', 'cancelled'],
+      enum: ['draft', 'pending', 'sent', 'viewed', 'paid', 'overdue', 'cancelled', 'refunded'],
       default: 'pending'
     },
     dueDate: { type: Date, required: true },
@@ -188,25 +238,7 @@ router.get(
       res.status(200).json({
         success: true,
         data: {
-          invoices: invoices.map((inv: any) => ({
-            id: inv._id.toString(),
-            invoiceNumber: inv.invoiceNumber,
-            customer: inv.customerId,
-            provider: inv.providerId,
-            booking: inv.bookingId,
-            lineItems: inv.lineItems,
-            subtotal: inv.subtotal,
-            taxRate: inv.taxRate,
-            taxAmount: inv.taxAmount,
-            total: inv.total,
-            currency: inv.currency,
-            status: inv.status,
-            dueDate: inv.dueDate,
-            paidAt: inv.paidAt,
-            sentAt: inv.sentAt,
-            notes: inv.notes,
-            createdAt: inv.createdAt,
-          })),
+          invoices: invoices.map(transformInvoiceForFrontend),
           pagination: {
             page: pageNum,
             limit: limitNum,
@@ -277,25 +309,7 @@ router.get(
 
       res.status(200).json({
         success: true,
-        data: {
-          id: invoice._id.toString(),
-          invoiceNumber: invoice.invoiceNumber,
-          customer: invoice.customerId,
-          provider: invoice.providerId,
-          booking: invoice.bookingId,
-          lineItems: invoice.lineItems,
-          subtotal: invoice.subtotal,
-          taxRate: invoice.taxRate,
-          taxAmount: invoice.taxAmount,
-          total: invoice.total,
-          currency: invoice.currency,
-          status: invoice.status,
-          dueDate: invoice.dueDate,
-          paidAt: invoice.paidAt,
-          sentAt: invoice.sentAt,
-          notes: invoice.notes,
-          createdAt: invoice.createdAt,
-        },
+        data: transformInvoiceForFrontend(invoice),
       });
     } catch (error) {
       logger.error('Error fetching invoice', { error });
@@ -427,6 +441,468 @@ router.post(
 );
 
 /**
+ * POST /api/invoices
+ * Create a new invoice
+ */
+router.post(
+  '/',
+  authenticate,
+  asyncHandler(async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { body } = req;
+      const user = req.user as any;
+      const isProvider = user.role === 'provider';
+      const isAdmin = user.role === 'admin';
+
+      // Only provider or admin can create invoices
+      if (!isProvider && !isAdmin) {
+        res.status(403).json({
+          success: false,
+          message: 'Only providers or admins can create invoices',
+        });
+        return;
+      }
+
+      // Validate required fields
+      const { customerId, lineItems, subtotal, total, dueDate } = body;
+      if (!customerId || !lineItems || !subtotal || !total || !dueDate) {
+        res.status(400).json({
+          success: false,
+          message: 'Missing required fields: customerId, lineItems, subtotal, total, dueDate',
+        });
+        return;
+      }
+
+      const Invoice = createInvoiceSchema();
+
+      // Generate invoice number
+      const yearMonth = new Date().toISOString().slice(0, 7).replace('-', '');
+      const count = await Invoice.countDocuments({
+        invoiceNumber: new RegExp(`^${yearMonth}-`),
+      });
+      const invoiceNumber = `${yearMonth}-${String(count + 1).padStart(4, '0')}`;
+
+      // Validate line items totals
+      for (const item of lineItems) {
+        const calculatedTotal = item.quantity * item.unitPrice;
+        if (Math.abs(calculatedTotal - item.total) > 0.01) {
+          res.status(400).json({
+            success: false,
+            message: `Line item total mismatch for "${item.description}". Expected ${calculatedTotal}, got ${item.total}`,
+          });
+          return;
+        }
+      }
+
+      const invoice = new Invoice({
+        invoiceNumber,
+        customerId: new mongoose.Types.ObjectId(customerId),
+        providerId: user._id,
+        bookingId: body.bookingId ? new mongoose.Types.ObjectId(body.bookingId) : undefined,
+        lineItems: lineItems.map((item: any) => ({
+          description: item.description,
+          quantity: item.quantity || 1,
+          unitPrice: item.unitPrice,
+          total: item.total,
+        })),
+        subtotal,
+        taxRate: body.taxRate || 0,
+        taxAmount: body.taxAmount || 0,
+        total,
+        currency: body.currency || 'AED',
+        status: 'draft',
+        dueDate: new Date(dueDate),
+        notes: body.notes,
+      });
+
+      await invoice.save();
+
+      logger.info('Invoice created', {
+        invoiceId: invoice._id,
+        invoiceNumber: invoice.invoiceNumber,
+        createdBy: user._id,
+      });
+
+      res.status(201).json({
+        success: true,
+        data: transformInvoiceForFrontend(invoice.toObject()),
+      });
+    } catch (error) {
+      logger.error('Error creating invoice', { error });
+      next(error);
+    }
+  })
+);
+
+/**
+ * PATCH /api/invoices/:id
+ * Update an existing invoice (only draft invoices can be fully edited)
+ */
+router.patch(
+  '/:id',
+  authenticate,
+  param('id').isMongoId().withMessage('Valid invoice ID required'),
+  asyncHandler(async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        res.status(400).json({
+          success: false,
+          message: 'Validation failed',
+          errors: errors.array(),
+        });
+        return;
+      }
+
+      const { id } = req.params;
+      const { body } = req;
+      const user = req.user as any;
+      const isAdmin = user.role === 'admin';
+
+      const Invoice = createInvoiceSchema();
+      const invoice = await Invoice.findById(id);
+
+      if (!invoice) {
+        res.status(404).json({
+          success: false,
+          message: 'Invoice not found',
+        });
+        return;
+      }
+
+      // Only draft invoices can be edited, or admin can update status
+      if (invoice.status !== 'draft' && !isAdmin) {
+        res.status(400).json({
+          success: false,
+          message: 'Only draft invoices can be edited',
+        });
+        return;
+      }
+
+      // Authorization check for providers
+      if (!isAdmin && invoice.providerId.toString() !== user._id.toString()) {
+        res.status(403).json({
+          success: false,
+          message: 'Not authorized to update this invoice',
+        });
+        return;
+      }
+
+      // Update allowed fields
+      const allowedFields = ['lineItems', 'subtotal', 'taxRate', 'taxAmount', 'total', 'dueDate', 'notes'];
+      const updates: Record<string, any> = {};
+
+      for (const field of allowedFields) {
+        if (body[field] !== undefined) {
+          updates[field] = body[field];
+        }
+      }
+
+      // If admin is updating status
+      if (isAdmin && body.status) {
+        const validStatuses = ['draft', 'pending', 'sent', 'viewed', 'paid', 'overdue', 'cancelled', 'refunded'];
+        if (validStatuses.includes(body.status)) {
+          updates.status = body.status;
+          if (body.status === 'paid') {
+            updates.paidAt = new Date();
+          }
+        }
+      }
+
+      const updatedInvoice = await Invoice.findByIdAndUpdate(
+        id,
+        { $set: updates },
+        { new: true }
+      ).lean() as (typeof invoice & { _id: mongoose.Types.ObjectId }) | null;
+
+      if (!updatedInvoice) {
+        res.status(404).json({
+          success: false,
+          message: 'Invoice not found after update',
+        });
+        return;
+      }
+
+      logger.info('Invoice updated', {
+        invoiceId: id,
+        updatedBy: user._id,
+        updates: Object.keys(updates),
+      });
+
+      res.status(200).json({
+        success: true,
+        data: {
+          id: updatedInvoice._id.toString(),
+          invoiceNumber: updatedInvoice.invoiceNumber,
+          status: updatedInvoice.status,
+          updatedAt: updatedInvoice.updatedAt,
+        },
+      });
+    } catch (error) {
+      logger.error('Error updating invoice', { error });
+      next(error);
+    }
+  })
+);
+
+/**
+ * DELETE /api/invoices/:id
+ * Delete a draft invoice
+ */
+router.delete(
+  '/:id',
+  authenticate,
+  param('id').isMongoId().withMessage('Valid invoice ID required'),
+  asyncHandler(async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        res.status(400).json({
+          success: false,
+          message: 'Validation failed',
+          errors: errors.array(),
+        });
+        return;
+      }
+
+      const { id } = req.params;
+      const user = req.user as any;
+      const isAdmin = user.role === 'admin';
+
+      const Invoice = createInvoiceSchema();
+      const invoice = await Invoice.findById(id);
+
+      if (!invoice) {
+        res.status(404).json({
+          success: false,
+          message: 'Invoice not found',
+        });
+        return;
+      }
+
+      // Only draft invoices can be deleted
+      if (invoice.status !== 'draft') {
+        res.status(400).json({
+          success: false,
+          message: 'Only draft invoices can be deleted',
+        });
+        return;
+      }
+
+      // Authorization check
+      if (!isAdmin && invoice.providerId.toString() !== user._id.toString()) {
+        res.status(403).json({
+          success: false,
+          message: 'Not authorized to delete this invoice',
+        });
+        return;
+      }
+
+      await Invoice.findByIdAndDelete(id);
+
+      logger.info('Invoice deleted', {
+        invoiceId: id,
+        deletedBy: user._id,
+      });
+
+      res.status(200).json({
+        success: true,
+        message: 'Invoice deleted successfully',
+      });
+    } catch (error) {
+      logger.error('Error deleting invoice', { error });
+      next(error);
+    }
+  })
+);
+
+/**
+ * POST /api/invoices/:id/pay
+ * Mark invoice as paid
+ */
+router.post(
+  '/:id/pay',
+  authenticate,
+  param('id').isMongoId().withMessage('Valid invoice ID required'),
+  asyncHandler(async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        res.status(400).json({
+          success: false,
+          message: 'Validation failed',
+          errors: errors.array(),
+        });
+        return;
+      }
+
+      const { id } = req.params;
+      const { paymentMethod, transactionId, notes } = req.body;
+      const user = req.user as any;
+      const isAdmin = user.role === 'admin';
+      const isCustomer = user.role === 'customer';
+
+      const Invoice = createInvoiceSchema();
+      const invoice = await Invoice.findById(id);
+
+      if (!invoice) {
+        res.status(404).json({
+          success: false,
+          message: 'Invoice not found',
+        });
+        return;
+      }
+
+      // Check if invoice can be paid
+      if (invoice.status === 'paid') {
+        res.status(400).json({
+          success: false,
+          message: 'Invoice is already paid',
+        });
+        return;
+      }
+
+      if (invoice.status === 'cancelled') {
+        res.status(400).json({
+          success: false,
+          message: 'Cannot pay a cancelled invoice',
+        });
+        return;
+      }
+
+      // Authorization: customer must own the invoice, or admin
+      if (!isAdmin) {
+        if (isCustomer && invoice.customerId.toString() !== user._id.toString()) {
+          res.status(403).json({
+            success: false,
+            message: 'Not authorized to pay this invoice',
+          });
+          return;
+        }
+        if (user.role === 'provider' && invoice.providerId.toString() !== user._id.toString()) {
+          res.status(403).json({
+            success: false,
+            message: 'Not authorized to pay this invoice',
+          });
+          return;
+        }
+      }
+
+      // Update invoice status
+      invoice.status = 'paid';
+      invoice.paidAt = new Date();
+      await invoice.save();
+
+      logger.info('Invoice marked as paid', {
+        invoiceId: id,
+        paidBy: user._id,
+        paymentMethod,
+        transactionId,
+      });
+
+      res.status(200).json({
+        success: true,
+        data: {
+          id: invoice._id.toString(),
+          invoiceNumber: invoice.invoiceNumber,
+          status: 'paid',
+          paidAt: invoice.paidAt,
+          paymentMethod,
+          transactionId,
+        },
+      });
+    } catch (error) {
+      logger.error('Error marking invoice as paid', { error });
+      next(error);
+    }
+  })
+);
+
+/**
+ * POST /api/invoices/:id/cancel
+ * Cancel an invoice
+ */
+router.post(
+  '/:id/cancel',
+  authenticate,
+  param('id').isMongoId().withMessage('Valid invoice ID required'),
+  asyncHandler(async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        res.status(400).json({
+          success: false,
+          message: 'Validation failed',
+          errors: errors.array(),
+        });
+        return;
+      }
+
+      const { id } = req.params;
+      const { reason } = req.body;
+      const user = req.user as any;
+      const isAdmin = user.role === 'admin';
+      const isProvider = user.role === 'provider';
+
+      const Invoice = createInvoiceSchema();
+      const invoice = await Invoice.findById(id);
+
+      if (!invoice) {
+        res.status(404).json({
+          success: false,
+          message: 'Invoice not found',
+        });
+        return;
+      }
+
+      // Cannot cancel paid invoices
+      if (invoice.status === 'paid') {
+        res.status(400).json({
+          success: false,
+          message: 'Cannot cancel a paid invoice. Process a refund instead.',
+        });
+        return;
+      }
+
+      // Authorization: provider who created it or admin
+      if (!isAdmin) {
+        if (isProvider && invoice.providerId.toString() !== user._id.toString()) {
+          res.status(403).json({
+            success: false,
+            message: 'Not authorized to cancel this invoice',
+          });
+          return;
+        }
+      }
+
+      invoice.status = 'cancelled';
+      if (reason) {
+        invoice.notes = invoice.notes ? `${invoice.notes}\nCancellation reason: ${reason}` : `Cancellation reason: ${reason}`;
+      }
+      await invoice.save();
+
+      logger.info('Invoice cancelled', {
+        invoiceId: id,
+        cancelledBy: user._id,
+        reason,
+      });
+
+      res.status(200).json({
+        success: true,
+        data: {
+          id: invoice._id.toString(),
+          invoiceNumber: invoice.invoiceNumber,
+          status: 'cancelled',
+        },
+      });
+    } catch (error) {
+      logger.error('Error cancelling invoice', { error });
+      next(error);
+    }
+  })
+);
+
+/**
  * GET /api/invoices/:id/pdf
  * Download invoice as PDF
  */
@@ -477,39 +953,153 @@ router.get(
         return;
       }
 
-      // Generate simple text-based invoice response
-      // In production, would use a PDF library like pdfkit or puppeteer
-      const invoiceText = `
-INVOICE
-=======
-Invoice Number: ${invoice.invoiceNumber}
-Date: ${invoice.createdAt.toLocaleDateString()}
-Due Date: ${invoice.dueDate.toLocaleDateString()}
+      // Build PDF-compatible invoice data
+      const customer = (invoice as any).customerId || {};
+      const provider = (invoice as any).providerId || {};
+      const customerName = `${customer.firstName || ''} ${customer.lastName || ''}`.trim();
+      const providerName = `${provider.firstName || ''} ${provider.lastName || ''}`.trim();
 
-BILL TO:
-${(invoice as any).customerId?.firstName} ${(invoice as any).customerId?.lastName}
-${(invoice as any).customerId?.email}
+      const invoicePdfData: InvoiceData = {
+        invoiceNumber: invoice.invoiceNumber,
+        invoiceDate: invoice.createdAt,
+        dueDate: invoice.dueDate,
+        customer: {
+          name: customerName,
+          email: customer.email || '',
+          phone: undefined,
+          address: undefined,
+        },
+        provider: {
+          name: providerName,
+          email: provider.email || '',
+          phone: undefined,
+          address: undefined,
+          businessName: undefined,
+          licenseNumber: undefined,
+        },
+        service: {
+          name: 'Service',
+          category: undefined,
+          description: undefined,
+        },
+        booking: {
+          number: invoice.invoiceNumber,
+          date: invoice.createdAt,
+          scheduledDate: invoice.dueDate,
+          scheduledTime: 'N/A',
+          locationType: 'N/A',
+          address: undefined,
+          duration: 0,
+        },
+        lineItems: invoice.lineItems.map(item => ({
+          description: item.description,
+          quantity: item.quantity,
+          unitPrice: item.unitPrice,
+          total: item.total,
+        })),
+        pricing: {
+          subtotal: invoice.subtotal,
+          discount: 0,
+          taxRate: invoice.taxRate,
+          taxAmount: invoice.taxAmount,
+          total: invoice.total,
+          currency: invoice.currency || 'AED',
+        },
+        payment: {
+          status: invoice.status === 'paid' ? 'paid' : invoice.status === 'refunded' ? 'refunded' : 'pending',
+        },
+        notes: invoice.notes,
+        terms: 'Payment due within 14 days of service completion.',
+      };
 
-FROM:
-${(invoice as any).providerId?.firstName} ${(invoice as any).providerId?.lastName}
+      // Generate actual PDF using pdfService
+      const pdfBuffer = await pdfService.generateInvoicePDF(invoicePdfData);
 
-SERVICES:
-${invoice.lineItems.map((item, i) => `${i + 1}. ${item.description} x${item.quantity} @ ${invoice.currency} ${item.unitPrice} = ${invoice.currency} ${item.total}`).join('\n')}
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename=invoice-${invoice.invoiceNumber}.pdf`);
+      res.setHeader('Content-Length', pdfBuffer.length);
+      res.status(200).send(pdfBuffer);
 
----------------------------------
-Subtotal: ${invoice.currency} ${invoice.subtotal}
-Tax (${invoice.taxRate}%): ${invoice.currency} ${invoice.taxAmount}
-TOTAL: ${invoice.currency} ${invoice.total}
----------------------------------
-
-Status: ${invoice.status}
-`;
-
-      res.setHeader('Content-Type', 'text/plain');
-      res.setHeader('Content-Disposition', `attachment; filename=invoice-${invoice.invoiceNumber}.txt`);
-      res.status(200).send(invoiceText);
+      logger.info('Invoice PDF generated', {
+        invoiceId: id,
+        invoiceNumber: invoice.invoiceNumber,
+        downloadedBy: user._id,
+      });
     } catch (error) {
       logger.error('Error generating invoice PDF', { error });
+      next(error);
+    }
+  })
+);
+
+/**
+ * GET /api/invoices/stats
+ * Get invoice statistics
+ */
+router.get(
+  '/stats',
+  authenticate,
+  asyncHandler(async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { startDate, endDate, customerId, providerId } = req.query;
+      const user = req.user as any;
+      const isAdmin = user.role === 'admin';
+      const isProvider = user.role === 'provider';
+
+      const Invoice = createInvoiceSchema();
+      const query: Record<string, any> = {};
+
+      // Apply date filters
+      if (startDate || endDate) {
+        query.dueDate = {};
+        if (startDate) query.dueDate.$gte = new Date(startDate as string);
+        if (endDate) query.dueDate.$lte = new Date(endDate as string);
+      }
+
+      // Role-based filtering
+      if (!isAdmin) {
+        if (isProvider) {
+          query.providerId = user._id;
+        } else {
+          query.customerId = user._id;
+        }
+      } else {
+        // Admin can filter by customer or provider
+        if (customerId) query.customerId = new mongoose.Types.ObjectId(customerId as string);
+        if (providerId) query.providerId = new mongoose.Types.ObjectId(providerId as string);
+      }
+
+      const invoices = await Invoice.find(query).lean();
+
+      // Calculate stats
+      const stats = {
+        totalInvoices: invoices.length,
+        totalRevenue: invoices.reduce((sum, inv) => sum + (inv.status === 'paid' ? inv.total : 0), 0),
+        pendingAmount: invoices.reduce((sum, inv) => sum + (inv.status === 'pending' || inv.status === 'sent' ? inv.total : 0), 0),
+        overdueAmount: invoices.reduce((sum, inv) => sum + (inv.status === 'overdue' ? inv.total : 0), 0),
+        paidThisMonth: invoices.filter(inv =>
+          inv.status === 'paid' &&
+          inv.paidAt &&
+          new Date(inv.paidAt).getMonth() === new Date().getMonth()
+        ).length,
+        byStatus: {
+          draft: invoices.filter(inv => inv.status === 'draft').length,
+          pending: invoices.filter(inv => inv.status === 'pending').length,
+          sent: invoices.filter(inv => inv.status === 'sent').length,
+          viewed: invoices.filter(inv => inv.status === 'viewed').length,
+          paid: invoices.filter(inv => inv.status === 'paid').length,
+          overdue: invoices.filter(inv => inv.status === 'overdue').length,
+          cancelled: invoices.filter(inv => inv.status === 'cancelled').length,
+          refunded: invoices.filter(inv => inv.status === 'refunded').length,
+        },
+      };
+
+      res.status(200).json({
+        success: true,
+        data: stats,
+      });
+    } catch (error) {
+      logger.error('Error fetching invoice stats', { error });
       next(error);
     }
   })

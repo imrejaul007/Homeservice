@@ -8,11 +8,33 @@ import { Commission, CommissionRule } from '../models/commission.model';
 import { asyncHandler } from '../utils/asyncHandler';
 import logger from '../utils/logger';
 
+// Helper to serialize dates in an object (convert Date to ISO string)
+const serializeDates = (obj: any): any => {
+  if (obj === null || obj === undefined) return obj;
+  if (Array.isArray(obj)) return obj.map(serializeDates);
+  if (obj instanceof Date) return obj.toISOString();
+  if (typeof obj !== 'object') return obj;
+
+  const serialized: any = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value instanceof Date) {
+      serialized[key] = (value as Date).toISOString();
+    } else if (Array.isArray(value)) {
+      serialized[key] = value.map(serializeDates);
+    } else if (value !== null && typeof value === 'object' && !(value instanceof mongoose.Types.ObjectId)) {
+      serialized[key] = serializeDates(value);
+    } else {
+      serialized[key] = value;
+    }
+  }
+  return serialized;
+};
+
 // Helper to send success response
 const sendSuccess = (res: Response, data: any, message?: string, statusCode = 200) => {
   res.status(statusCode).json({
     success: true,
-    data,
+    data: serializeDates(data),
     message,
   });
 };
@@ -28,7 +50,7 @@ const sendError = (res: Response, message: string, statusCode = 400, error?: any
 };
 
 // Parse date range from query params
-const parseDateRange = (query: any): { startDate: Date; endDate: Date } => {
+const parseDateRange = (query: any): { startDate: Date; endDate: Date } | null => {
   const now = new Date();
   let startDate: Date;
   let endDate: Date = now;
@@ -42,6 +64,11 @@ const parseDateRange = (query: any): { startDate: Date; endDate: Date } => {
   if (query.endDate) {
     endDate = new Date(query.endDate);
     endDate.setHours(23, 59, 59, 999);
+  }
+
+  // Validate dates: check if they are valid Date objects
+  if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+    return null;
   }
 
   return { startDate, endDate };
@@ -63,7 +90,11 @@ export const getCommissions = asyncHandler(async (req: Request, res: Response) =
 
   const page = parseInt(req.query.page as string) || 1;
   const limit = parseInt(req.query.limit as string) || 20;
-  const { startDate, endDate } = parseDateRange(req.query);
+  const dateRange = parseDateRange(req.query);
+  if (!dateRange) {
+    return sendError(res, 'Invalid date format', 400);
+  }
+  const { startDate, endDate } = dateRange;
   const status = req.query.status as string;
   const categoryId = req.query.categoryId as string;
 
@@ -85,6 +116,12 @@ export const getCommissions = asyncHandler(async (req: Request, res: Response) =
  */
 export const getCommissionById = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
+
+  // Validate MongoDB ObjectId format
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return sendError(res, 'Invalid commission ID format', 400);
+  }
+
   const commission = await commissionService.getCommissionById(id);
 
   if (!commission) {
@@ -109,7 +146,11 @@ export const getCommissionSummary = asyncHandler(async (req: Request, res: Respo
     return sendError(res, 'Authentication required', 401);
   }
 
-  const { startDate, endDate } = parseDateRange(req.query);
+  const dateRange = parseDateRange(req.query);
+  if (!dateRange) {
+    return sendError(res, 'Invalid date format', 400);
+  }
+  const { startDate, endDate } = dateRange;
   const summary = await commissionService.getProviderCommissionSummary(providerId, startDate, endDate);
 
   sendSuccess(res, summary);
@@ -120,8 +161,8 @@ export const getCommissionSummary = asyncHandler(async (req: Request, res: Respo
 // ============================================
 
 const adjustCommissionSchema = Joi.object({
-  type: Joi.string().valid('bonus', 'penalty', 'correction').required().messages({
-    'any.only': 'Type must be one of: bonus, penalty, correction',
+  type: Joi.string().valid('bonus', 'penalty', 'correction', 'promotion').required().messages({
+    'any.only': 'Type must be one of: bonus, penalty, correction, promotion',
     'any.required': 'Type is required',
   }),
   amount: Joi.number().min(-10000).max(10000).required().messages({
@@ -138,10 +179,10 @@ const adjustCommissionSchema = Joi.object({
 
 const updateCommissionStatusSchema = Joi.object({
   status: Joi.string()
-    .valid('pending', 'approved', 'paid', 'cancelled', 'disputed')
+    .valid('calculated', 'pending', 'approved', 'paid', 'disputed', 'reversed')
     .required()
     .messages({
-      'any.only': 'Status must be one of: pending, approved, paid, cancelled, disputed',
+      'any.only': 'Status must be one of: calculated, pending, approved, paid, disputed, reversed',
       'any.required': 'Status is required',
     }),
   reason: Joi.string().max(500).optional(),
@@ -153,6 +194,11 @@ const updateCommissionStatusSchema = Joi.object({
  */
 export const adjustCommission = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
+
+  // Validate MongoDB ObjectId format
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return sendError(res, 'Invalid commission ID format', 400);
+  }
 
   // Validate request body with Joi schema
   const { error, value } = adjustCommissionSchema.validate(req.body);
@@ -187,6 +233,11 @@ export const adjustCommission = asyncHandler(async (req: Request, res: Response)
  */
 export const updateCommissionStatus = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
+
+  // Validate MongoDB ObjectId format
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return sendError(res, 'Invalid commission ID format', 400);
+  }
 
   // Validate request body with Joi schema
   const { error, value } = updateCommissionStatusSchema.validate(req.body);
@@ -299,6 +350,12 @@ export const generateInvoice = asyncHandler(async (req: Request, res: Response) 
  */
 export const downloadTaxDocument = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
+
+  // Validate MongoDB ObjectId format
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return sendError(res, 'Invalid document ID format', 400);
+  }
+
   const document = await taxService.getTaxDocumentById(id);
 
   if (!document) {
@@ -343,7 +400,22 @@ export const getEarningsReports = asyncHandler(async (req: Request, res: Respons
     status,
   });
 
-  sendSuccess(res, result);
+  // Serialize Date objects to ISO strings for frontend compatibility
+  const serializedReports = result.reports.map((report: any) => ({
+    ...report,
+    period: {
+      start: report.period.start instanceof Date ? report.period.start.toISOString() : report.period.start,
+      end: report.period.end instanceof Date ? report.period.end.toISOString() : report.period.end,
+    },
+    generatedAt: report.generatedAt instanceof Date ? report.generatedAt.toISOString() : report.generatedAt,
+    createdAt: report.createdAt instanceof Date ? report.createdAt.toISOString() : report.createdAt,
+    updatedAt: report.updatedAt instanceof Date ? report.updatedAt.toISOString() : report.updatedAt,
+  }));
+
+  sendSuccess(res, {
+    ...result,
+    reports: serializedReports,
+  });
 });
 
 /**
@@ -352,6 +424,12 @@ export const getEarningsReports = asyncHandler(async (req: Request, res: Respons
  */
 export const getEarningsReportById = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
+
+  // Validate MongoDB ObjectId format
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return sendError(res, 'Invalid report ID format', 400);
+  }
+
   const report = await earningsReportService.getReportById(id);
 
   if (!report) {
@@ -363,7 +441,19 @@ export const getEarningsReportById = asyncHandler(async (req: Request, res: Resp
     return sendError(res, 'Access denied', 403);
   }
 
-  sendSuccess(res, { report });
+  // Serialize Date objects to ISO strings for frontend compatibility
+  const serializedReport = {
+    ...report,
+    period: {
+      start: report.period.start instanceof Date ? report.period.start.toISOString() : report.period.start,
+      end: report.period.end instanceof Date ? report.period.end.toISOString() : report.period.end,
+    },
+    generatedAt: report.generatedAt instanceof Date ? report.generatedAt.toISOString() : report.generatedAt,
+    createdAt: report.createdAt instanceof Date ? report.createdAt.toISOString() : report.createdAt,
+    updatedAt: report.updatedAt instanceof Date ? report.updatedAt.toISOString() : report.updatedAt,
+  };
+
+  sendSuccess(res, { report: serializedReport });
 });
 
 /**
@@ -382,14 +472,26 @@ export const generateEarningsReport = asyncHandler(async (req: Request, res: Res
     return sendError(res, 'Start date and end date are required', 400);
   }
 
-  const report = await earningsReportService.generateEarningsReport(
+  const report: any = await earningsReportService.generateEarningsReport(
     providerId,
     new Date(startDate),
     new Date(endDate),
     { includeTaxDocument, region }
   );
 
-  sendSuccess(res, { report }, 'Earnings report generated successfully', 201);
+  // Serialize Date objects to ISO strings for frontend compatibility
+  const serializedReport = {
+    ...report,
+    period: {
+      start: report.period.start instanceof Date ? report.period.start.toISOString() : report.period.start,
+      end: report.period.end instanceof Date ? report.period.end.toISOString() : report.period.end,
+    },
+    generatedAt: report.generatedAt instanceof Date ? report.generatedAt.toISOString() : report.generatedAt,
+    createdAt: report.createdAt instanceof Date ? report.createdAt.toISOString() : report.createdAt,
+    updatedAt: report.updatedAt instanceof Date ? report.updatedAt.toISOString() : report.updatedAt,
+  };
+
+  sendSuccess(res, { report: serializedReport }, 'Earnings report generated successfully', 201);
 });
 
 /**
@@ -419,8 +521,13 @@ export const getAnnualStatement = asyncHandler(async (req: Request, res: Respons
   }
 
   const year = parseInt(req.params.year);
-  if (!year || isNaN(year)) {
+  if (isNaN(year)) {
     return sendError(res, 'Valid year is required', 400);
+  }
+
+  const currentYear = new Date().getFullYear();
+  if (year < 2000 || year > currentYear + 1) {
+    return sendError(res, `Year must be between 2000 and ${currentYear + 1}`, 400);
   }
 
   const statement = await earningsReportService.getAnnualStatement(providerId, year);
@@ -438,7 +545,11 @@ export const exportEarnings = asyncHandler(async (req: Request, res: Response) =
   }
 
   const { format } = req.query;
-  const { startDate, endDate } = parseDateRange(req.query);
+  const dateRange = parseDateRange(req.query);
+  if (!dateRange) {
+    return sendError(res, 'Invalid date format', 400);
+  }
+  const { startDate, endDate } = dateRange;
   const exportFormat = (format as string) || 'json';
 
   const result = await earningsReportService.exportEarningsData(

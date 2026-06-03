@@ -1,6 +1,7 @@
 import rateLimit from 'express-rate-limit';
 import { Request, Response } from 'express';
 import logger from '../utils/logger';
+import { getPlatformPolicySync } from '../services/platformSettingsPolicy.service';
 
 // SECURITY FIX: Redis rate limiting is REQUIRED in production
 const useRedis = process.env.NODE_ENV === 'production'
@@ -44,13 +45,29 @@ const setRateLimitHeaders = (
 /**
  * General API rate limiter
  * Applied to all /api routes
+ *
+ * Platform `rateLimitRequestsPerMinute` is applied as a per-minute cap when set.
+ * Authenticated admin settings routes are exempt — the SPA loads many sections
+ * from one GET and must not compete with the global IP bucket.
  */
 export const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // 100 requests per 15 minutes
+  windowMs: 60 * 1000,
+  max: (req: Request) => {
+    if (process.env.NODE_ENV !== 'production') {
+      return 500;
+    }
+    const perMinute = getPlatformPolicySync().rateLimitRequestsPerMinute;
+    return Math.max(60, perMinute || 100);
+  },
   message: { success: false, error: 'Too many requests, please try again later.' },
   standardHeaders: true,
   legacyHeaders: true,
+  skip: (req: Request) => {
+    const path = req.path || '';
+    const isSettingsRoute = path === '/settings' || path.startsWith('/settings/');
+    const hasAuth = Boolean(req.headers.authorization);
+    return isSettingsRoute && hasAuth;
+  },
   handler: (req: Request, res: Response) => {
     logger.warn('API rate limit exceeded', {
       ip: req.ip,
@@ -63,6 +80,10 @@ export const apiLimiter = rateLimit({
     });
   },
   keyGenerator: (req: Request) => {
+    const userId = (req as Request & { user?: { id?: string } }).user?.id;
+    if (userId) {
+      return `user:${userId}`;
+    }
     return req.ip || 'unknown';
   },
 });
@@ -180,6 +201,35 @@ export const otpLimiter = rateLimit({
     res.status(429).json({
       success: false,
       error: 'Too many verification code requests, please try again after 15 minutes.',
+    });
+  },
+});
+
+/**
+ * Message rate limiter - for booking message endpoints
+ * SECURITY: Prevents message spam in booking conversations
+ * Limits to 30 messages per minute per user
+ */
+export const messageLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 30, // 30 messages per minute
+  message: { success: false, error: 'Too many messages, please slow down.' },
+  standardHeaders: true,
+  legacyHeaders: true,
+  keyGenerator: (req: Request) => {
+    const user = (req as Request & { user?: { _id?: string } }).user;
+    return user?._id || req.ip || 'unknown';
+  },
+  handler: (req: Request, res: Response) => {
+    logger.warn('Message rate limit exceeded', {
+      ip: req.ip,
+      path: req.path,
+      userId: (req as Request & { user?: { _id?: string } }).user?._id,
+      action: 'MESSAGE_RATE_LIMIT_EXCEEDED',
+    });
+    res.status(429).json({
+      success: false,
+      error: 'Too many messages sent. Please wait a moment before sending more.',
     });
   },
 });
@@ -319,4 +369,5 @@ export default {
   perUserRateLimiter,
   adminLimiter,
   registrationLimiter,
+  messageLimiter,
 };

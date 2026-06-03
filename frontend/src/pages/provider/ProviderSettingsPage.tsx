@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, Link, useSearchParams } from 'react-router-dom';
 import {
   User,
   Bell,
@@ -83,6 +83,17 @@ interface ProviderProfileSettings {
 const ProviderSettingsPage: React.FC = () => {
   const navigate = useNavigate();
   const { user, providerProfile } = useAuthStore();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // URL param helpers
+  const getInitialSection = (): string => {
+    const section = searchParams.get('section');
+    const validSections = ['notifications', 'business', 'privacy', 'security', 'profile'];
+    if (section && validSections.includes(section)) {
+      return section;
+    }
+    return 'notifications';
+  };
 
   // Redirect if not a provider
   useEffect(() => {
@@ -92,7 +103,13 @@ const ProviderSettingsPage: React.FC = () => {
   }, [user, navigate]);
 
   // Active section state
-  const [activeSection, setActiveSection] = useState('notifications');
+  const [activeSection, setActiveSection] = useState(getInitialSection);
+
+  // Section change handler
+  const handleSectionChange = (section: string) => {
+    setActiveSection(section);
+    setSearchParams({ section });
+  };
 
   // UI state
   const [isSaving, setIsSaving] = useState(false);
@@ -374,7 +391,7 @@ const ProviderSettingsPage: React.FC = () => {
                 {sections.map((section) => (
                   <button
                     key={section.id}
-                    onClick={() => setActiveSection(section.id)}
+                    onClick={() => handleSectionChange(section.id)}
                     className={`w-full flex items-center px-4 py-3 text-left transition-colors ${
                       activeSection === section.id
                         ? 'bg-nilin-blush/50 text-nilin-coral border-l-4 border-nilin-coral'

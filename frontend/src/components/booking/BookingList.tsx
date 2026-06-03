@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Calendar,
@@ -78,6 +78,8 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className, hideHead
   const [actionLoading, setActionLoading] = useState<{ [key: string]: string | null }>({});
   const [rejectTargetId, setRejectTargetId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState('');
+  const rejectModalRef = useRef<HTMLDivElement>(null);
+  const rejectTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   const bookings = userType === 'customer' ? customerBookings : providerBookings;
   const pagination = userType === 'customer' ? customerBookingsPagination : providerBookingsPagination;
@@ -108,7 +110,52 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className, hideHead
     void reloadBookings();
   }, [reloadBookings]);
 
-  const handleFilterChange = (key: keyof BookingFilters, value: any) => {
+  // Focus trap and Escape key handling for reject modal
+  useEffect(() => {
+    if (!rejectTargetId) return;
+
+    // Focus the textarea when modal opens
+    if (rejectTextareaRef.current) {
+      rejectTextareaRef.current.focus();
+    }
+
+    // Escape key to close modal
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setRejectTargetId(null);
+        setRejectReason('');
+      }
+    };
+
+    // Focus trap - keep focus within modal
+    const handleTabKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab' || !rejectModalRef.current) return;
+
+      const focusableElements = rejectModalRef.current.querySelectorAll<HTMLElement>(
+        'button, [href], input, textarea, select, [tabindex]:not([tabindex="-1"])'
+      );
+      const firstElement = focusableElements[0];
+      const lastElement = focusableElements[focusableElements.length - 1];
+
+      if (e.shiftKey && document.activeElement === firstElement) {
+        e.preventDefault();
+        lastElement?.focus();
+      } else if (!e.shiftKey && document.activeElement === lastElement) {
+        e.preventDefault();
+        firstElement?.focus();
+      }
+    };
+
+    document.addEventListener('keydown', handleEscape);
+    document.addEventListener('keydown', handleTabKey);
+
+    return () => {
+      document.removeEventListener('keydown', handleEscape);
+      document.removeEventListener('keydown', handleTabKey);
+    };
+  }, [rejectTargetId]);
+
+  const handleFilterChange = (key: keyof BookingFilters, value: BookingFilters[keyof BookingFilters]) => {
     setFilters(prev => ({
       ...prev,
       [key]: value,
@@ -331,7 +378,7 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className, hideHead
             onClick={() => void reloadBookings()}
             disabled={isLoading}
             className="glass-btn p-2 rounded-xl transition-all"
-            title="Refresh"
+            aria-label="Refresh bookings"
           >
             <RefreshCw className={cn("h-4 w-4 text-nilin-warmGray", isLoading && "animate-spin")} />
           </button>
@@ -392,6 +439,7 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className, hideHead
                 <option value="in_progress">In Progress</option>
                 <option value="completed">Completed</option>
                 <option value="cancelled">Cancelled</option>
+                <option value="no_show">No Show</option>
               </select>
             </div>
 
@@ -536,7 +584,11 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className, hideHead
 
                               <div className="flex items-center gap-2 text-sm text-nilin-warmGray">
                                 <Clock className="h-4 w-4 text-nilin-rose" />
-                                {(booking as any).duration || booking.estimatedDuration || (booking as any).selectedDuration || booking.service?.duration || '—'} minutes
+                                {(booking as { duration?: number; selectedDuration?: number }).duration
+                                  ?? booking.estimatedDuration
+                                  ?? (booking as { selectedDuration?: number }).selectedDuration
+                                  ?? booking.service?.duration
+                                  ?? '—'} minutes
                               </div>
 
                               <div className="flex items-center gap-2 text-sm text-nilin-warmGray">
@@ -553,7 +605,7 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className, hideHead
                                 (booking as { guestInfo?: { phone?: string } }).guestInfo?.phone) && (
                                 <div className="flex items-center gap-2 text-sm text-nilin-warmGray">
                                   <Phone className="h-4 w-4 text-nilin-rose" />
-                                  {booking.customerInfo?.phone ||
+                                  {(booking.customerInfo?.phone || '').trim() ||
                                     booking.customer?.phone ||
                                     (booking as { guestInfo?: { phone?: string } }).guestInfo?.phone}
                                 </div>
@@ -609,10 +661,10 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className, hideHead
                         {(booking.messages?.length ?? 0) > 0 && (
                           <div className="mb-4">
                             <h4 className="text-sm font-medium text-nilin-charcoal mb-2">
-                              Recent Messages ({booking.messages!.length})
+                              Recent Messages ({booking.messages?.length ?? 0})
                             </h4>
                             <div className="glass p-3 rounded-xl">
-                              {booking.messages!.slice(-2).map((message) => (
+                              {booking.messages?.slice(-2).map((message) => (
                                 <div key={message._id} className="text-sm">
                                   <span className="font-medium text-nilin-charcoal">
                                     {message.senderType === 'customer' ? 'Customer' : 'Provider'}:
@@ -620,9 +672,9 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className, hideHead
                                   <span className="ml-2 text-nilin-warmGray">{message.message}</span>
                                 </div>
                               ))}
-                              {booking.messages!.length > 2 && (
+                              {(booking.messages?.length ?? 0) > 2 && (
                                 <p className="text-xs text-nilin-warmGray mt-1">
-                                  +{booking.messages!.length - 2} more messages
+                                  +{(booking.messages?.length ?? 0) - 2} more messages
                                 </p>
                               )}
                             </div>
@@ -737,15 +789,14 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className, hideHead
                       ? "text-nilin-lightGray cursor-not-allowed"
                       : "text-nilin-charcoal hover:bg-nilin-blush/30"
                   )}
+                  aria-label="Previous page"
                 >
                   Previous
                 </button>
 
                 {Array.from({ length: Math.min(5, pagination.pages) }, (_, i) => {
-                  const pageNum = pagination.page <= 3
-                    ? i + 1
-                    : Math.max(1, pagination.page - 2) + i;
-
+                  const startPage = Math.max(1, Math.min(pagination.page - 2, pagination.pages - 4));
+                  const pageNum = startPage + i;
                   if (pageNum > pagination.pages) return null;
 
                   return (
@@ -765,7 +816,7 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className, hideHead
                 })}
 
                 <button
-                  onClick={() => handlePageChange(pagination.page + 1)}
+                  onClick={() => handlePageChange(Math.min(pagination.page + 1, pagination.pages))}
                   disabled={pagination.page === pagination.pages}
                   className={cn(
                     "px-3 py-2 rounded-xl text-sm",
@@ -773,6 +824,7 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className, hideHead
                       ? "text-nilin-lightGray cursor-not-allowed"
                       : "text-nilin-charcoal hover:bg-nilin-blush/30"
                   )}
+                  aria-label="Next page"
                 >
                   Next
                 </button>
@@ -783,13 +835,20 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className, hideHead
       )}
 
       {rejectTargetId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40">
-          <div className="glass w-full max-w-md rounded-2xl p-6 shadow-nilin-warm">
-            <h3 className="text-lg font-serif text-nilin-charcoal mb-2">Decline booking</h3>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40" role="presentation">
+          <div
+            ref={rejectModalRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="reject-modal-title"
+            className="glass w-full max-w-md rounded-2xl p-6 shadow-nilin-warm"
+          >
+            <h3 id="reject-modal-title" className="text-lg font-serif text-nilin-charcoal mb-2">Decline booking</h3>
             <p className="text-sm text-nilin-warmGray mb-4 font-sans">
               Optionally tell the customer why you cannot take this request.
             </p>
             <textarea
+              ref={rejectTextareaRef}
               value={rejectReason}
               onChange={(e) => setRejectReason(e.target.value)}
               rows={3}

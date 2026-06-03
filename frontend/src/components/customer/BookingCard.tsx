@@ -1,34 +1,91 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Calendar, Clock, MapPin, User, Phone, MoreVertical, Eye, Edit, X } from 'lucide-react';
+import { Booking } from '../../services/BookingService';
 
-export interface Booking {
-  _id: string;
+// Adapter interface for component-specific display fields
+interface BookingCardBooking extends Omit<Booking, 'service' | 'provider' | 'customer' | 'location'> {
   service: {
     _id: string;
-    title: string;
+    name?: string;
+    title?: string;
     category?: string;
   };
   provider: {
     _id: string;
-    name: string;
+    firstName?: string;
+    lastName?: string;
+    name?: string;
     phone?: string;
   };
   customer?: {
     _id: string;
-    name: string;
+    firstName?: string;
+    lastName?: string;
+    name?: string;
   };
-  scheduledDate: string;
-  scheduledTime: string;
-  status: 'pending' | 'confirmed' | 'in_progress' | 'completed' | 'cancelled' | 'no_show';
-  totalPrice: number;
+  totalPrice?: number;
+  pricing?: {
+    totalAmount?: number;
+    total?: number;
+  };
   location?: {
-    address?: string;
+    address?: string | { street?: string; city?: string; state?: string; zipCode?: string; country?: string };
+  };
+  isGuestBooking?: boolean;
+  guestInfo?: {
+    name?: string;
+    email?: string;
+    phone?: string;
   };
 }
 
+// Helper to get provider display name
+const getProviderDisplayName = (provider: BookingCardBooking['provider']): string => {
+  if (provider.name) return provider.name;
+  if (provider.firstName || provider.lastName) {
+    return [provider.firstName, provider.lastName].filter(Boolean).join(' ');
+  }
+  return 'Unknown Provider';
+};
+
+// Helper to get service display name
+const getServiceDisplayName = (service: BookingCardBooking['service']): string => {
+  return service.name || service.title || 'Unknown Service';
+};
+
+// Helper to get location address string
+const getLocationAddress = (location: BookingCardBooking['location']): string | undefined => {
+  if (!location?.address) return undefined;
+  if (typeof location.address === 'string') return location.address;
+  const addr = location.address;
+  const parts = [addr.street, addr.city, addr.state, addr.zipCode, addr.country].filter(Boolean);
+  return parts.join(', ') || undefined;
+};
+
+// Helper to get customer/guest display info
+const getCustomerDisplayInfo = (booking: BookingCardBooking): { name: string; isGuest: boolean } => {
+  if (booking.isGuestBooking && booking.guestInfo?.name) {
+    return { name: booking.guestInfo.name, isGuest: true };
+  }
+  if (booking.customer) {
+    if (booking.customer.name) {
+      return { name: booking.customer.name, isGuest: false };
+    }
+    const name = [booking.customer.firstName, booking.customer.lastName].filter(Boolean).join(' ');
+    return { name: name || 'Unknown Customer', isGuest: false };
+  }
+  return { name: 'Unknown Customer', isGuest: false };
+};
+
+// Helper to get total price
+const getTotalPrice = (booking: BookingCardBooking): number => {
+  if (booking.totalPrice !== undefined) return booking.totalPrice;
+  return booking.pricing?.totalAmount ?? booking.pricing?.total ?? 0;
+};
+
 interface BookingCardProps {
-  booking: Booking;
+  booking: BookingCardBooking;
   showActions?: boolean;
   onView?: (bookingId: string) => void;
   onReschedule?: (bookingId: string) => void;
@@ -114,11 +171,16 @@ const BookingCard: React.FC<BookingCardProps> = ({
         <div className="flex-1">
           <div className="flex items-center gap-2 mb-1">
             <h3 className="font-semibold text-gray-900 group-hover:text-blue-600 transition-colors">
-              {booking.service.title}
+              {getServiceDisplayName(booking.service)}
             </h3>
             {booking.service.category && (
               <span className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded">
                 {booking.service.category}
+              </span>
+            )}
+            {booking.isGuestBooking && (
+              <span className="text-xs bg-purple-100 text-purple-700 px-2 py-1 rounded">
+                Guest
               </span>
             )}
           </div>
@@ -152,7 +214,7 @@ const BookingCard: React.FC<BookingCardProps> = ({
           </div>
           <div>
             <p className="text-xs text-gray-500 mb-0.5">Provider</p>
-            <p className="text-sm font-medium text-gray-900">{booking.provider.name}</p>
+            <p className="text-sm font-medium text-gray-900">{getProviderDisplayName(booking.provider)}</p>
             {booking.provider.phone && (
               <p className="text-sm text-gray-600 flex items-center gap-1">
                 <Phone className="h-3 w-3" />
@@ -163,14 +225,38 @@ const BookingCard: React.FC<BookingCardProps> = ({
         </div>
 
         {/* Location */}
-        {booking.location?.address && (
+        {getLocationAddress(booking.location) && (
           <div className="flex items-start gap-3 sm:col-span-2">
             <div className="p-2 bg-gradient-nilin-tertiary rounded-lg">
               <MapPin className="h-5 w-5 text-gray-700" />
             </div>
             <div>
               <p className="text-xs text-gray-500 mb-0.5">Location</p>
-              <p className="text-sm text-gray-900">{booking.location.address}</p>
+              <p className="text-sm text-gray-900">{getLocationAddress(booking.location)}</p>
+            </div>
+          </div>
+        )}
+
+        {/* Guest Info - Show when guest booking */}
+        {booking.isGuestBooking && booking.guestInfo && (
+          <div className="flex items-start gap-3 sm:col-span-2">
+            <div className="p-2 bg-purple-100 rounded-lg">
+              <User className="h-5 w-5 text-purple-700" />
+            </div>
+            <div>
+              <p className="text-xs text-gray-500 mb-0.5">Guest Info</p>
+              {booking.guestInfo.name && (
+                <p className="text-sm font-medium text-gray-900">{booking.guestInfo.name}</p>
+              )}
+              {booking.guestInfo.phone && (
+                <p className="text-sm text-gray-600 flex items-center gap-1">
+                  <Phone className="h-3 w-3" />
+                  {booking.guestInfo.phone}
+                </p>
+              )}
+              {booking.guestInfo.email && (
+                <p className="text-sm text-gray-600">{booking.guestInfo.email}</p>
+              )}
             </div>
           </div>
         )}
@@ -180,7 +266,7 @@ const BookingCard: React.FC<BookingCardProps> = ({
       <div className="p-4 bg-gray-50 border-t border-gray-100 flex items-center justify-between">
         <div>
           <p className="text-xs text-gray-500 mb-0.5">Total Price</p>
-          <p className="text-xl font-bold text-gray-900">AED {booking.totalPrice}</p>
+          <p className="text-xl font-bold text-gray-900">AED {getTotalPrice(booking)}</p>
         </div>
 
         {showActions && booking.status !== 'cancelled' && booking.status !== 'completed' && (

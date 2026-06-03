@@ -14,34 +14,85 @@ const BookServicePage: React.FC = () => {
   const location = useLocation();
   const { isAuthenticated } = useAuthStore();
   const isGuest = !isAuthenticated;
-  const [service, setService] = useState<Service | null>(location.state?.service || null);
-  const [loading, setLoading] = useState(!service);
+  const [service, setService] = useState<Service | null>(null);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [selectedVariantIndex, setSelectedVariantIndex] = useState<number | null>(null);
 
-  // FIX: Generate client-side idempotency key to prevent duplicate bookings on rapid clicks
-  const idempotencyKey = useMemo(() => crypto.randomUUID(), []);
-
+  // CRITICAL: Load service and variant from state or fetch from API
   useEffect(() => {
-    if (!service && serviceId) {
+    // First check if service was passed via state (faster, no API call)
+    const stateService = location.state?.service as Service | undefined;
+
+    // Check if the state service matches the URL serviceId (flexible check)
+    const stateServiceId = (stateService as any)?._id || (stateService as any)?.id;
+    if (stateService && stateServiceId === serviceId) {
+      console.log('[BookServicePage] Service loaded from state:', stateService.name, 'variant:', (stateService as any).selectedVariant);
+      setService(stateService);
+      // Also store variant info if passed
+      if ((stateService as any).selectedVariant !== undefined) {
+        setSelectedVariantIndex((stateService as any).selectedVariant);
+      }
+      setLoading(false);
+      return;
+    }
+
+    // If not in state, fetch from API
+    if (serviceId) {
       fetchServiceDetails();
+    } else {
+      setError('Invalid service ID');
+      setLoading(false);
     }
   }, [serviceId]);
 
+  // When navigating TO search, it means something went wrong - log it
+  useEffect(() => {
+    const currentPath = location.pathname;
+    if (currentPath === '/search' || currentPath.startsWith('/search?')) {
+      console.error('[BookServicePage] REDIRECT TO SEARCH DETECTED - This should not happen!');
+      console.error('This means BookServicePage could not load the service.');
+    }
+  }, [location.pathname]);
+
+  // FIX: Store idempotency key in sessionStorage to persist across component re-renders
+  // Generate once per session for the same service booking
+  const idempotencyKey = useMemo(() => {
+    const storageKey = `booking_idempotency_${serviceId}`;
+    const existing = sessionStorage.getItem(storageKey);
+    if (existing) {
+      return existing;
+    }
+    const newKey = crypto.randomUUID();
+    sessionStorage.setItem(storageKey, newKey);
+    return newKey;
+  }, [serviceId]);
+
   const fetchServiceDetails = async () => {
+    if (!serviceId) {
+      setError('Invalid service ID');
+      setLoading(false);
+      return;
+    }
+
     try {
       setLoading(true);
       setError(null);
+      console.log('[BookServicePage] Fetching service:', serviceId);
 
       // Use the searchApi service to fetch service details
       const response = await searchApi.getServiceById(serviceId);
 
-      if (response.success) {
-        setService(response.data.service);
+      if (response.success && response.data?.service) {
+        const fetchedService = response.data.service;
+        console.log('[BookServicePage] Service fetched successfully:', fetchedService.name);
+        setService(fetchedService);
       } else {
-        setError('Failed to fetch service details');
+        console.error('[BookServicePage] Service not found:', response);
+        setError('Service not found. It may have been removed.');
       }
     } catch (error) {
-      console.error('Error fetching service:', error);
+      console.error('[BookServicePage] Error fetching service:', error);
       setError('Unable to load service details. Please try again.');
     } finally {
       setLoading(false);
@@ -49,6 +100,9 @@ const BookServicePage: React.FC = () => {
   };
 
   const handleBookingSuccess = (bookingId: string, bookingNumber?: string) => {
+    // Clear the booking state from sessionStorage
+    sessionStorage.removeItem(`booking_idempotency_${serviceId}`);
+
     if (isGuest && bookingNumber) {
       navigate(`/track/${bookingNumber}`, {
         state: { message: 'Booking created successfully! Check your email for details.' }
@@ -61,6 +115,8 @@ const BookServicePage: React.FC = () => {
   };
 
   const handleCancel = () => {
+    // Clear the booking state
+    sessionStorage.removeItem(`booking_idempotency_${serviceId}`);
     navigate(-1);
   };
 

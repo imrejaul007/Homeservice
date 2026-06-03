@@ -5,7 +5,6 @@ import * as settingsService from '../services/settings.service';
 import { uploadBufferToCloudinary, deleteFromCloudinary } from '../utils/cloudinary';
 import PlatformSettings from '../models/settings.model';
 import logger from '../utils/logger';
-import { sendEmail } from '../services/email.service';
 import { IUser } from '../models/user.model';
 
 /**
@@ -190,7 +189,10 @@ export const exportSettings = asyncHandler(async (_req: Request, res: Response) 
   res.setHeader('Content-Type', 'application/json');
   res.setHeader('Content-Disposition', `attachment; filename=settings-${Date.now()}.json`);
 
-  res.json(exportData);
+  res.json({
+    success: true,
+    data: exportData,
+  });
 });
 
 /**
@@ -291,8 +293,24 @@ export const testEmailConfig = asyncHandler(async (req: Request, res: Response) 
     </div>
   `;
 
+  const { getUnsupportedEmailProviderMessage, sendViaPlatformTransport, isEmailTransportConfigured } =
+    await import('../services/platformEmailTransport.service');
+
+  const unsupported = getUnsupportedEmailProviderMessage();
+  if (unsupported) {
+    throw new ApiError(400, unsupported);
+  }
+
+  const configured = await isEmailTransportConfigured();
+  if (!configured) {
+    throw new ApiError(400, 'Email transport is not configured. Save SMTP or Resend credentials in settings or set env vars.');
+  }
+
   try {
-    await sendEmail(testEmail, testSubject, testHtml);
+    await sendViaPlatformTransport(
+      { to: testEmail, subject: testSubject, html: testHtml },
+      { forceSend: true }
+    );
 
     logger.info('Test email sent successfully', {
       action: 'TEST_EMAIL_SENT',

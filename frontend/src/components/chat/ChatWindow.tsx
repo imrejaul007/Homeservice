@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { cn } from '../../lib/utils';
+import { toast } from 'react-hot-toast';
 import { ChatHistory } from './ChatHistory';
 import { MessageInput } from './MessageInput';
 import { TypingIndicator } from './TypingIndicator';
 import { Badge } from '../common/Badge';
 import { chatApi, ChatMessage as ChatMessageType, ChatRoom as ChatRoomType, normalizeChatRoom, normalizeMessage } from '../../services/chatApi';
-import { socketService } from '../../services/SocketService';
+import { socketService } from '../../services/socket';
 
 // =============================================================================
 // Types
@@ -177,6 +178,7 @@ export function ChatWindow({
       }
     } catch (err) {
       console.error('Error sending message:', err);
+      toast.error('Failed to send message. Please try again.');
     }
   }, [selectedRoom, userId, onNewMessage]);
 
@@ -210,8 +212,9 @@ export function ChatWindow({
 
     if (selectedRoom) {
       const roomId = selectedRoom._id || (selectedRoom as unknown as { id: string }).id;
-      // Emit typing start via socket service
+      // Emit typing start via socket service (both booking and chat room)
       socketService.startTyping(roomId);
+      socketService.startChatTyping(roomId);
     }
 
     // Auto stop after 3 seconds
@@ -228,8 +231,9 @@ export function ChatWindow({
 
     if (selectedRoom) {
       const roomId = selectedRoom._id || (selectedRoom as unknown as { id: string }).id;
-      // Emit typing stop via socket service
+      // Emit typing stop via socket service (both booking and chat room)
       socketService.stopTyping(roomId);
+      socketService.stopChatTyping(roomId);
     }
   }, [selectedRoom]);
 
@@ -238,40 +242,129 @@ export function ChatWindow({
   // =============================================================================
 
   const handleSelectRoom = useCallback((room: ChatRoomWithDetails) => {
+    // Clear typing timeout when changing rooms
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = null;
+    }
+
     setSelectedRoomState(room);
     onSelectRoom(room);
-    fetchMessages(room._id);
+    const roomId = room._id || (room as unknown as { id: string }).id;
+    fetchMessages(roomId);
   }, [fetchMessages, onSelectRoom]);
 
   // =============================================================================
   // Effects
   // =============================================================================
 
-  // Initial load
+  // Combined effect for initial load and socket setup
+  // Uses refs to avoid dependency changes that cause cascading renders
   useEffect(() => {
+    const currentSelectedRoomId = selectedRoom?._id;
+    const currentUserId = userId;
+
+    // Use refs to capture current values for socket callbacks
+    // This avoids re-subscribing on every selectedRoom change
+    const selectedRoomIdRef = { current: currentSelectedRoomId };
+    const userIdRef = { current: currentUserId };
+
+    // Initial load of chat rooms
     fetchChatRooms();
-  }, [fetchChatRooms]);
 
-  // Load messages when room changes
-  useEffect(() => {
-    if (selectedRoom) {
-      fetchMessages(selectedRoom._id);
+    // Load messages when room changes
+    if (currentSelectedRoomId) {
+      fetchMessages(currentSelectedRoomId);
     }
-  }, [selectedRoom, fetchMessages]);
 
-  // Scroll to bottom on new messages
+    // Subscribe to socket events once (not on every dependency change)
+    const unsubNewMessage = socketService.on('message:new', (data: {
+      messageId?: string;
+      chatRoomId?: string;
+      senderId?: string;
+      receiverId?: string;
+      content?: string;
+      type?: string;
+      attachments?: Array<{ url: string; filename: string; mimeType: string; size: number; thumbnailUrl?: string }>;
+      status?: string;
+      createdAt?: string | Date;
+    }) => {
+      // Use ref values to check if message belongs to current room
+      const selectedRoomId = selectedRoomIdRef.current;
+      if (data.chatRoomId === selectedRoomId && data.senderId !== userIdRef.current) {
+        // Convert socket message to ChatMessage format
+        const chatMessage: ChatMessageType = {
+          _id: data.messageId,
+          chatRoomId: data.chatRoomId,
+          senderId: data.senderId,
+          receiverId: data.receiverId,
+          content: data.content,
+          type: data.type as 'text' | 'image' | 'file' | 'system' | 'booking_update',
+          attachments: data.attachments,
+          status: data.status as 'sent' | 'delivered' | 'read',
+          createdAt: typeof data.createdAt === 'string' ? data.createdAt : data.createdAt.toString(),
+        };
+        setMessages(prev => [...prev, chatMessage]);
+        onNewMessage?.(chatMessage);
+      }
+    });
+
+    const unsubTypingStart = socketService.onChatTypingStart((data) => {
+      const selectedRoomId = selectedRoomIdRef.current;
+      if (data.chatRoomId === selectedRoomId && data.userId !== userIdRef.current) {
+        setTypingUsers(prev => {
+          if (prev.some(u => u.userId === data.userId)) return prev;
+          return [...prev, { userId: data.userId, userName: data.userName || 'User' }];
+        });
+      }
+    });
+
+    const unsubTypingStop = socketService.onChatTypingStop((data) => {
+      const selectedRoomId = selectedRoomIdRef.current;
+      if (data.chatRoomId === selectedRoomId) {
+        setTypingUsers(prev => prev.filter(u => u.userId !== data.userId));
+      }
+    });
+
+    const unsubMessageDelivered = socketService.onChatMessageDelivered((data) => {
+      const selectedRoomId = selectedRoomIdRef.current;
+      if (data.chatRoomId === selectedRoomId) {
+        setMessages(prev =>
+          prev.map(msg =>
+            (msg._id || msg.id) === data.messageId
+              ? { ...msg, status: 'delivered' as const }
+              : msg
+          )
+        );
+      }
+    });
+
+    // Join/leave chat room when selected
+    if (currentSelectedRoomId) {
+      socketService.joinChatRoom(currentSelectedRoomId);
+    }
+
+    // Cleanup function
+    return () => {
+      unsubNewMessage();
+      unsubTypingStart();
+      unsubTypingStop();
+      unsubMessageDelivered();
+      if (currentSelectedRoomId) {
+        socketService.leaveChatRoom(currentSelectedRoomId);
+      }
+      // Clear typing timeout on unmount
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+        typingTimeoutRef.current = null;
+      }
+    };
+  }, []); // Empty deps - run once on mount, cleanup on unmount
+
+  // Scroll to bottom when messages change (separate to avoid re-running socket setup)
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
-
-  // Cleanup
-  useEffect(() => {
-    return () => {
-      if (typingTimeoutRef.current) {
-        clearTimeout(typingTimeoutRef.current);
-      }
-    };
-  }, []);
 
   // =============================================================================
   // Render

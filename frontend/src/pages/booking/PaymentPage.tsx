@@ -1,14 +1,21 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, CheckCircle, CreditCard, Lock, AlertCircle } from 'lucide-react';
 import NavigationHeader from '../../components/layout/NavigationHeader';
 import Footer from '../../components/layout/Footer';
-import { StripePaymentWrapper } from '../../components/payment';
+import { StripePaymentWrapper, CouponCodeInput, PriceBreakdown, DuplicateChargeWarning } from '../../components/payment';
 import PaymentService from '../../services/PaymentService';
 import { useAuthStore } from '../../stores/authStore';
 import authService from '../../services/AuthService';
-import type { Booking } from '../../services/BookingService';
+import { bookingApi, type Booking } from '../../services/bookingApi';
+import type { PaymentMethodType } from '../../services/PaymentService';
+import { cn } from '../../lib/utils';
+
+interface AppliedCoupon {
+  code: string;
+  discountAmount: number;
+}
 
 const PaymentPage: React.FC = () => {
   const { bookingId } = useParams<{ bookingId: string }>();
@@ -19,6 +26,78 @@ const PaymentPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [paymentComplete, setPaymentComplete] = useState(false);
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethodType>('credit_card');
+  const [appliedCoupon, setAppliedCoupon] = useState<AppliedCoupon | null>(null);
+  const [showDuplicateWarning, setShowDuplicateWarning] = useState(true);
+  const [isUpdatingPricing, setIsUpdatingPricing] = useState(false);
+
+  // Calculate pricing with coupon applied
+  const calculatePricing = useCallback(() => {
+    const pricing = booking?.pricing;
+    if (!pricing) {
+      return { subtotal: 0, discount: 0, tax: 0, total: 0 };
+    }
+
+    const basePrice = pricing.basePrice || 0;
+    const addOnsTotal = pricing.addOns?.reduce((sum, addOn) => sum + addOn.price, 0) || 0;
+    const subtotal = basePrice + addOnsTotal;
+    const discount = appliedCoupon?.discountAmount || 0;
+    const taxableAmount = Math.max(0, subtotal - discount);
+    const taxRate = 0.05; // 5% VAT
+    const tax = Math.round(taxableAmount * taxRate * 100) / 100;
+    const total = Math.round((taxableAmount + tax) * 100) / 100;
+
+    return { subtotal, discount, tax, total };
+  }, [booking, appliedCoupon]);
+
+  const pricing = calculatePricing();
+
+  const handleCouponApply = async (code: string) => {
+    if (!bookingId) {
+      return { valid: false, code, message: 'Booking ID is missing' };
+    }
+
+    setIsUpdatingPricing(true);
+    try {
+      // Calculate order value from booking
+      const basePrice = booking?.pricing?.basePrice || 0;
+      const addOnsTotal = booking?.pricing?.addOns?.reduce((sum, addOn) => sum + addOn.price, 0) || 0;
+      const orderValue = basePrice + addOnsTotal;
+
+      const result = await bookingApi.validateCoupon(code, orderValue, booking?.serviceId);
+
+      if (result.valid) {
+        // Apply the coupon to the booking
+        const updatedBooking = await bookingApi.applyCoupon(bookingId, code);
+        setBooking(updatedBooking.booking);
+        setAppliedCoupon({
+          code: result.code,
+          discountAmount: result.discountAmount || 0,
+        });
+      }
+
+      return result;
+    } finally {
+      setIsUpdatingPricing(false);
+    }
+  };
+
+  const handleCouponRemove = async () => {
+    if (!bookingId) return;
+
+    setIsUpdatingPricing(true);
+    try {
+      await bookingApi.removeCoupon(bookingId);
+      setAppliedCoupon(null);
+      await fetchBookingDetails();
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to remove coupon';
+      setError(errorMessage);
+      throw err; // Re-throw so CouponCodeInput shows the error
+    } finally {
+      setIsUpdatingPricing(false);
+    }
+  };
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -130,7 +209,7 @@ const PaymentPage: React.FC = () => {
   }
 
   // If already paid
-  if ((booking as any)?.payment?.status === 'paid' || paymentComplete) {
+  if (booking?.paymentStatus === 'completed' || paymentComplete) {
     return (
       <div className="min-h-screen bg-nilin-cream flex flex-col">
         <NavigationHeader />
@@ -195,7 +274,7 @@ const PaymentPage: React.FC = () => {
             <div className="space-y-3">
               <div className="flex justify-between">
                 <span className="text-gray-600">Service</span>
-                <span className="font-medium">{(booking as any)?.serviceId?.name || 'Service'}</span>
+                <span className="font-medium">{booking?.service?.name || 'Service'}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-600">Date</span>
@@ -213,22 +292,118 @@ const PaymentPage: React.FC = () => {
                 <span className="text-gray-600">Time</span>
                 <span className="font-medium">{booking?.scheduledTime || 'N/A'}</span>
               </div>
-              <div className="border-t pt-3 flex justify-between">
-                <span className="font-semibold text-gray-900">Total</span>
-                <span className="font-bold text-xl text-nilin-rose">
-                  {formatAmount(booking?.pricing?.totalAmount || 0, booking?.pricing?.currency)}
-                </span>
-              </div>
             </div>
           </div>
+
+          {/* Price Breakdown */}
+          <div className="bg-white rounded-2xl p-6 shadow-sm mb-6">
+            <h3 className="font-semibold text-gray-900 mb-4">Price Details</h3>
+            <PriceBreakdown
+              subtotal={pricing.subtotal}
+              discount={pricing.discount}
+              tax={pricing.tax}
+              total={pricing.total}
+              currency={booking?.pricing?.currency || 'AED'}
+              couponCode={appliedCoupon?.code}
+            />
+
+            {/* Coupon Code Input */}
+            <div className="mt-4 pt-4 border-t border-gray-100">
+              <CouponCodeInput
+                onApply={handleCouponApply}
+                onRemove={handleCouponRemove}
+                appliedCoupon={appliedCoupon}
+                disabled={isUpdatingPricing}
+                currency={booking?.pricing?.currency || 'AED'}
+              />
+            </div>
+
+            {isUpdatingPricing && (
+              <div className="mt-3 flex items-center gap-2 text-sm text-gray-500">
+                <div className="w-4 h-4 border-2 border-gray-300 border-t-nilin-rose rounded-full animate-spin" />
+                <span>Updating pricing...</span>
+              </div>
+            )}
+          </div>
+
+          {/* Duplicate Charge Warning */}
+          {showDuplicateWarning && (
+            <DuplicateChargeWarning
+              className="mb-6"
+              onDismiss={() => setShowDuplicateWarning(false)}
+            />
+          )}
 
           {/* Payment Form */}
           {bookingId && (
             <div className="bg-white rounded-2xl p-6 shadow-sm">
+              {/* Payment Method Selection */}
+              <div className="mb-6">
+                <h3 className="font-semibold text-gray-900 mb-3">Payment Method</h3>
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedPaymentMethod('credit_card')}
+                    className={cn(
+                      "p-3 rounded-xl border-2 transition-all flex flex-col items-center gap-2",
+                      selectedPaymentMethod === 'credit_card'
+                        ? "border-nilin-rose bg-nilin-blush/30"
+                        : "border-gray-200 hover:border-gray-300"
+                    )}
+                  >
+                    <CreditCard className={cn(
+                      "w-5 h-5",
+                      selectedPaymentMethod === 'credit_card' ? "text-nilin-rose" : "text-gray-500"
+                    )} />
+                    <span className="text-sm font-medium">Card</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedPaymentMethod('apple_pay')}
+                    className={cn(
+                      "p-3 rounded-xl border-2 transition-all flex flex-col items-center gap-2",
+                      selectedPaymentMethod === 'apple_pay'
+                        ? "border-nilin-rose bg-nilin-blush/30"
+                        : "border-gray-200 hover:border-gray-300"
+                    )}
+                  >
+                    <svg className={cn(
+                      "w-5 h-5",
+                      selectedPaymentMethod === 'apple_pay' ? "text-nilin-rose" : "text-gray-500"
+                    )} viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09l.01-.01zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z"/>
+                    </svg>
+                    <span className="text-sm font-medium">Apple Pay</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedPaymentMethod('cash')}
+                    className={cn(
+                      "p-3 rounded-xl border-2 transition-all flex flex-col items-center gap-2",
+                      selectedPaymentMethod === 'cash'
+                        ? "border-nilin-rose bg-nilin-blush/30"
+                        : "border-gray-200 hover:border-gray-300"
+                    )}
+                  >
+                    <svg className={cn(
+                      "w-5 h-5",
+                      selectedPaymentMethod === 'cash' ? "text-nilin-rose" : "text-gray-500"
+                    )} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <rect x="2" y="6" width="20" height="12" rx="2"/>
+                      <circle cx="12" cy="12" r="3"/>
+                      <path d="M6 12h.01M18 12h.01"/>
+                    </svg>
+                    <span className="text-sm font-medium">Cash</span>
+                  </button>
+                </div>
+              </div>
+
               <StripePaymentWrapper
                 bookingId={bookingId}
-                amount={booking?.pricing?.totalAmount || 0}
+                amount={pricing.total}
                 currency={booking?.pricing?.currency || 'AED'}
+                paymentMethod={selectedPaymentMethod}
+                couponCode={couponCode}
                 onSuccess={handlePaymentSuccess}
                 onError={handlePaymentError}
                 onCancel={handleBack}

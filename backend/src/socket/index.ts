@@ -4,6 +4,7 @@ import { createAdapter } from '@socket.io/redis-adapter';
 import Redis from 'ioredis';
 import jwt from 'jsonwebtoken';
 import Joi from 'joi';
+import mongoose from 'mongoose';
 import logger from '../utils/logger';
 import { ChatSocketHandler } from './chat.handler';
 
@@ -58,10 +59,11 @@ export interface MessageReadEvent {
   readAt: Date;
 }
 
+// Note: Unified with frontend TypingEvent (uses bookingId for compatibility)
+// userName is not populated by the backend to avoid N+1 queries
 export interface TypingEvent {
-  chatRoomId: string;
+  bookingId: string;
   userId: string;
-  userName?: string;
 }
 
 export interface ServerToClientEvents {
@@ -71,7 +73,30 @@ export interface ServerToClientEvents {
   'booking:confirmed': (data: BookingEvent) => void;
   'booking:cancelled': (data: BookingEvent) => void;
   'booking:completed': (data: BookingEvent) => void;
+  'booking:accepted': (data: BookingEvent) => void;
+  'booking:rejected': (data: BookingEvent) => void;
+  'booking:started': (data: BookingEvent) => void;
+  'booking:rescheduled': (data: BookingEvent) => void;
+  'booking:no_show': (data: BookingEvent) => void;
   'booking:reminder': (data: { bookingId: string; minutesUntil: number }) => void;
+
+  // Provider location update during active booking
+  'booking:provider_location': (data: {
+    bookingId: string;
+    latitude: number;
+    longitude: number;
+    heading?: number;
+    speed?: number;
+    etaMinutes?: number;
+    distanceRemaining?: number;
+    timestamp?: Date;
+  }) => void;
+
+  // Payment events
+  'payment:completed': (data: { bookingId: string; bookingNumber: string; amount: number; currency: string; transactionId: string; paidAt: Date; customerId: string; providerId: string }) => void;
+  'payment:failed': (data: { bookingId: string; bookingNumber: string; error: string; userMessage: string; customerId: string; providerId: string }) => void;
+  'payment:refunded': (data: { bookingId: string; bookingNumber: string; amount: number; currency: string; refundedAt: Date; customerId: string }) => void;
+  'invoice:status_changed': (data: { invoiceId: string; invoiceNumber: string; status: string; previousStatus: string; userId: string }) => void;
 
   // Notification events
   'notification:new': (data: NotificationEvent) => void;
@@ -83,7 +108,7 @@ export interface ServerToClientEvents {
   // Chat events
   'chat:room_joined': (data: { chatRoomId: string }) => void;
   'chat:room_left': (data: { chatRoomId: string }) => void;
-  'chat:message:new': (data: ChatMessageEvent) => void;
+  'chat:new_message': (data: ChatMessageEvent) => void;
   'chat:message:delivered': (data: { messageId: string; chatRoomId: string; deliveredAt: Date }) => void;
   'chat:message:read': (data: MessageReadEvent) => void;
   'chat:message:deleted': (data: { chatRoomId: string; messageId: string }) => void;
@@ -108,6 +133,11 @@ export interface ServerToClientEvents {
   'service:approved': (data: { serviceId: string; providerId: string }) => void;
   'service:rejected': (data: { serviceId: string; providerId: string; reason: string }) => void;
   'service:status_changed': (data: { serviceId: string; providerId: string; serviceName: string; status: string }) => void;
+  // FIX: Added service:pending_review event for when provider submits service for review
+  'service:pending_review': (data: { serviceId: string; serviceName: string; previousStatus: string; newStatus: string; timestamp: Date }) => void;
+
+  // FIX: Added service:category_changed event for when admin changes a service category
+  'service:category_changed': (data: { serviceId: string; providerId: string; serviceName: string; oldCategory: string; newCategory: string; timestamp: Date }) => void;
 
   // Admin notification events (Provider → Admin)
   'admin:new_provider_submission': (data: { providerId: string; providerName: string; submittedAt: Date }) => void;
@@ -120,6 +150,34 @@ export interface ServerToClientEvents {
   // Review moderation events (Admin → Provider/Customer)
   'review:moderated': (data: { reviewId: string; providerId?: string; customerId?: string; action: string; rating?: number; reason?: string; timestamp: Date }) => void;
 
+  // User status events (Admin → User/Customer)
+  'user:status_changed': (data: { userId: string; status: 'active' | 'suspended' | 'banned'; reason?: string; timestamp: Date }) => void;
+  'user:account_locked': (data: { userId: string; reason: string; until?: Date; timestamp: Date }) => void;
+
+  // Booking admin update events (Admin → Customer/Provider)
+  'booking:admin_updated': (data: { bookingId: string; bookingNumber: string; status: string; updatedBy: 'admin'; reason?: string; timestamp: Date }) => void;
+
+  // Batch service operation events (Admin → Provider)
+  'services:batch_completed': (data: { providerIds: string[]; serviceIds: string[]; affectedCount: number; action: 'approved' | 'rejected'; timestamp: Date }) => void;
+
+  // Review visibility events (Admin → Provider/Customer)
+  'review:visible': (data: { reviewId: string; customerId: string; providerId?: string; rating: number; visible: boolean; timestamp: Date }) => void;
+
+  // New review event (Provider notification when customer submits review)
+  // FIX: Added bookingNumber, providerId, serviceName fields to match frontend expectations
+  'review:new': (data: { reviewId: string; bookingId: string; bookingNumber: string; providerId: string; customerId: string; customerName: string; rating: number; comment?: string; serviceName?: string; timestamp: Date }) => void;
+
+  // Review reply event (Customer notification when provider replies to their review)
+  'review:reply': (data: { reviewId: string; bookingId: string; customerId: string; providerId: string; providerName: string; reply: string; timestamp: Date }) => void;
+
+  // Ad status events (Provider notification)
+  'ad:status_changed': (data: { adId: string; providerId: string; adName: string; previousStatus: string; newStatus: string; timestamp: Date }) => void;
+  'ad:budget_exhausted': (data: { adId: string; providerId: string; adName: string; reason: 'daily' | 'total' | 'monthly'; timestamp: Date }) => void;
+  'ad:approval_status_changed': (data: { adId: string; providerId: string; adName: string; previousStatus: string; newStatus: string; notes?: string; timestamp: Date }) => void;
+
+  // Admin notification events for ads (Provider → Admin)
+  'admin:new_ad_pending': (data: { adId: string; providerId: string; providerName: string; adName: string; timestamp: Date }) => void;
+
   // Withdrawal events (Admin → Provider)
   // FIX #2: Added providerId to match frontend expectations for all withdrawal events
   'withdrawal:approved': (data: { withdrawalId: string; providerId: string; amount: number; currency: string; status: string; processedAt: string }) => void;
@@ -128,6 +186,39 @@ export interface ServerToClientEvents {
 
   // Admin notification events for withdrawals (Provider → Admin)
   'admin:new_withdrawal_request': (data: { withdrawalId: string; providerId: string; providerName: string; amount: number; currency: string; requestedAt: Date }) => void;
+
+  // Wallet events
+  'wallet:balance_updated': (data: {
+    userId: string;
+    balance: number;
+    pendingBalance: number;
+    totalEarned: number;
+    currency: string;
+    timestamp: Date;
+  }) => void;
+
+  // Earnings events
+  'earnings:credited': (data: {
+    userId: string;
+    earningsId: string;
+    providerId: string;
+    bookingId: string;
+    bookingNumber: string;
+    amount: number;
+    currency: string;
+    type: 'service' | 'tip' | 'bonus' | 'adjustment';
+    newBalance: number;
+    previousBalance: number;
+    creditedAt: Date;
+  }) => void;
+
+  // Insights update events (for real-time dashboard refresh)
+  'insights:updated': (data: {
+    providerId: string;
+    reason: 'booking_completed' | 'review_submitted' | 'withdrawal_processed' | 'booking_cancelled';
+    affectedMetrics: string[];
+    timestamp: Date;
+  }) => void;
 }
 
 export interface ClientToServerEvents {
@@ -596,7 +687,83 @@ class SocketServer {
         const decoded = jwt.verify(token, process.env.JWT_ACCESS_SECRET || process.env.JWT_SECRET || '') as {
           id: string;
           role: string;
+          tokenVersion?: number;
         };
+
+        // FIX #10: Add tokenVersion validation to match HTTP auth.middleware.ts line 75
+        // This ensures tokens are invalidated when user changes password, logs out, etc.
+        if (decoded.tokenVersion !== undefined) {
+          try {
+            const User = mongoose.model('User');
+            const user = await User.findById(decoded.id).select('+tokenVersion');
+            if (!user) {
+              logger.warn('Socket connection rejected: User not found', {
+                socketId: socket.id,
+                userId: decoded.id,
+                action: 'SOCKET_AUTH_USER_NOT_FOUND',
+              });
+              socket.emit('unauthorized');
+              return next(new Error('User not found'));
+            }
+            if (decoded.tokenVersion !== (user.tokenVersion || 1)) {
+              logger.warn('Socket connection rejected: Token version mismatch', {
+                socketId: socket.id,
+                userId: decoded.id,
+                action: 'SOCKET_AUTH_TOKEN_VERSION_INVALID',
+              });
+              socket.emit('unauthorized');
+              return next(new Error('Token has been invalidated'));
+            }
+          } catch (dbError) {
+            logger.error('Socket auth: Failed to validate token version', {
+              socketId: socket.id,
+              userId: decoded.id,
+              error: dbError instanceof Error ? dbError.message : 'Unknown error',
+              action: 'SOCKET_AUTH_DB_ERROR',
+            });
+            socket.emit('unauthorized');
+            return next(new Error('Authentication validation failed'));
+          }
+        }
+
+        // SECURITY FIX: Add provider verification status check similar to HTTP auth.middleware.ts requireProvider
+        // This prevents suspended/pending providers from receiving socket events
+        if (decoded.role === 'provider') {
+          try {
+            const ProviderProfile = mongoose.model('ProviderProfile');
+            const providerProfile = await ProviderProfile.findOne({ userId: decoded.id });
+
+            if (!providerProfile) {
+              logger.warn('Socket connection rejected: Provider profile not found', {
+                socketId: socket.id,
+                userId: decoded.id,
+                action: 'SOCKET_AUTH_PROVIDER_PROFILE_NOT_FOUND',
+              });
+              socket.emit('unauthorized');
+              return next(new Error('Provider profile not found'));
+            }
+
+            if (providerProfile.verificationStatus.overall !== 'approved') {
+              logger.warn('Socket connection rejected: Provider not verified', {
+                socketId: socket.id,
+                userId: decoded.id,
+                verificationStatus: providerProfile.verificationStatus.overall,
+                action: 'SOCKET_AUTH_PROVIDER_NOT_VERIFIED',
+              });
+              socket.emit('unauthorized');
+              return next(new Error('Provider verification required'));
+            }
+          } catch (dbError) {
+            logger.error('Socket auth: Failed to validate provider verification status', {
+              socketId: socket.id,
+              userId: decoded.id,
+              error: dbError instanceof Error ? dbError.message : 'Unknown error',
+              action: 'SOCKET_AUTH_PROVIDER_DB_ERROR',
+            });
+            socket.emit('unauthorized');
+            return next(new Error('Provider verification validation failed'));
+          }
+        }
 
         socket.userId = decoded.id;
         socket.userRole = decoded.role;
@@ -665,18 +832,35 @@ class SocketServer {
         }
       };
 
-      // Join user-specific room (with validation)
+      // Join user-specific room (with validation and authorization)
+      // SECURITY FIX: Added proper authorization verification - user can only join their own room,
+      // admin can join any user room. This prevents unauthorized access to user notifications/data.
       socket.on('join:user_room', (userId: string) => {
         const eventData = { userId };
         handleValidatedEvent<{ userId: string }>('join:user_room', eventData, (data) => {
-          if (socket.userId === data.userId || socket.userRole === 'admin') {
+          // Authorization: user can only join their own room, admin can join any room
+          const isOwnRoom = socket.userId === data.userId;
+          const isAdmin = socket.userRole === 'admin';
+
+          if (isOwnRoom || isAdmin) {
             socket.join(`user:${data.userId}`);
             logger.info('User joined their room', {
               socketId: socket.id,
-              userId: data.userId,
+              userId: socket.userId,
+              targetUserId: data.userId,
+              isOwnRoom,
+              isAdmin,
               action: 'JOIN_USER_ROOM',
             });
           } else {
+            // Log unauthorized attempt with details for security monitoring
+            logger.warn('Unauthorized attempt to join user room', {
+              socketId: socket.id,
+              socketUserId: socket.userId,
+              requestedUserId: data.userId,
+              userRole: socket.userRole,
+              action: 'JOIN_USER_ROOM_UNAUTHORIZED',
+            });
             socket.emit('error', { message: 'Not authorized to join this room' });
           }
         });
@@ -695,29 +879,73 @@ class SocketServer {
         });
       });
 
-      // Join booking room (with validation)
-      socket.on('join:booking_room', (bookingId: string) => {
+      // Join booking room (with validation and authorization)
+      socket.on('join:booking_room', async (bookingId: string) => {
         const eventData = { bookingId };
-        handleValidatedEvent<{ bookingId: string }>('join:booking_room', eventData, (data) => {
-          socket.join(`booking:${data.bookingId}`);
+        handleValidatedEvent<{ bookingId: string }>('join:booking_room', eventData, async (data) => {
+          // Authorization check: verify user is participant in the booking
+          try {
+            const Booking = mongoose.model('Booking');
+            const booking = await Booking.findById(data.bookingId).select('customerId providerId');
 
-          // Track socket in booking room
-          if (!this.bookingRooms.has(data.bookingId)) {
-            this.bookingRooms.set(data.bookingId, new Set());
+            if (!booking) {
+              socket.emit('error', { message: 'Booking not found' });
+              logger.warn('Socket join booking room failed: booking not found', {
+                socketId: socket.id,
+                bookingId: data.bookingId,
+                action: 'JOIN_BOOKING_ROOM_NOT_FOUND',
+              });
+              return;
+            }
+
+            const isCustomer = booking.customerId?.toString() === socket.userId;
+            const isProvider = booking.providerId?.toString() === socket.userId;
+            const isAdmin = socket.userRole === 'admin';
+
+            if (!isCustomer && !isProvider && !isAdmin) {
+              socket.emit('error', { message: 'Not authorized to join this booking room' });
+              logger.warn('Socket join booking room unauthorized', {
+                socketId: socket.id,
+                userId: socket.userId,
+                bookingId: data.bookingId,
+                action: 'JOIN_BOOKING_ROOM_UNAUTHORIZED',
+              });
+              return;
+            }
+
+            socket.join(`booking:${data.bookingId}`);
+
+            // Track socket in booking room
+            if (!this.bookingRooms.has(data.bookingId)) {
+              this.bookingRooms.set(data.bookingId, new Set());
+            }
+            this.bookingRooms.get(data.bookingId)?.add(socket.id);
+
+            // Track booking for socket (reverse mapping for cleanup)
+            if (!this.socketToBooking.has(socket.id)) {
+              this.socketToBooking.set(socket.id, new Set());
+            }
+            this.socketToBooking.get(socket.id)?.add(data.bookingId);
+
+            logger.info('Socket joined booking room', {
+              socketId: socket.id,
+              userId: socket.userId,
+              bookingId: data.bookingId,
+              isCustomer,
+              isProvider,
+              isAdmin,
+              action: 'JOIN_BOOKING_ROOM',
+            });
+          } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            socket.emit('error', { message: 'Failed to join booking room' });
+            logger.error('Socket join booking room error', {
+              socketId: socket.id,
+              bookingId: data.bookingId,
+              error: errorMessage,
+              action: 'JOIN_BOOKING_ROOM_ERROR',
+            });
           }
-          this.bookingRooms.get(data.bookingId)?.add(socket.id);
-
-          // Track booking for socket (reverse mapping for cleanup)
-          if (!this.socketToBooking.has(socket.id)) {
-            this.socketToBooking.set(socket.id, new Set());
-          }
-          this.socketToBooking.get(socket.id)?.add(data.bookingId);
-
-          logger.info('Socket joined booking room', {
-            socketId: socket.id,
-            bookingId: data.bookingId,
-            action: 'JOIN_BOOKING_ROOM',
-          });
         });
       });
 
@@ -920,6 +1148,12 @@ class SocketServer {
           event,
           action: 'EMIT_TO_ADMINS',
         });
+      } else {
+        // FIX: Log warning when no admins are online for critical events
+        logger.warn('No admin users online for event emission', {
+          event,
+          action: 'EMIT_TO_ADMINS_NO_ADMINS',
+        });
       }
       return emitted;
     } catch (error) {
@@ -1029,6 +1263,106 @@ class SocketServer {
       });
     }
 
+    // FIX #1: Emit specific booking:accepted event when status is 'accepted'
+    if (booking.status === 'accepted') {
+      if (booking.customerId) {
+        this.emitToUser(booking.customerId.toString(), 'booking:accepted', {
+          ...eventData,
+          userId: booking.customerId.toString(),
+        });
+      }
+      if (booking.providerId) {
+        this.emitToUser(booking.providerId.toString(), 'booking:accepted', {
+          ...eventData,
+          userId: booking.providerId.toString(),
+        });
+      }
+      logger.info('Emitted booking:accepted event', {
+        bookingId: booking._id,
+        action: 'EMIT_BOOKING_ACCEPTED',
+      });
+    }
+
+    // FIX #1: Emit specific booking:rejected event when status is 'rejected'
+    if (booking.status === 'rejected') {
+      if (booking.customerId) {
+        this.emitToUser(booking.customerId.toString(), 'booking:rejected', {
+          ...eventData,
+          userId: booking.customerId.toString(),
+        });
+      }
+      if (booking.providerId) {
+        this.emitToUser(booking.providerId.toString(), 'booking:rejected', {
+          ...eventData,
+          userId: booking.providerId.toString(),
+        });
+      }
+      logger.info('Emitted booking:rejected event', {
+        bookingId: booking._id,
+        action: 'EMIT_BOOKING_REJECTED',
+      });
+    }
+
+    // FIX #1: Emit specific booking:started event when status is 'started'
+    if (booking.status === 'started') {
+      if (booking.customerId) {
+        this.emitToUser(booking.customerId.toString(), 'booking:started', {
+          ...eventData,
+          userId: booking.customerId.toString(),
+        });
+      }
+      if (booking.providerId) {
+        this.emitToUser(booking.providerId.toString(), 'booking:started', {
+          ...eventData,
+          userId: booking.providerId.toString(),
+        });
+      }
+      logger.info('Emitted booking:started event', {
+        bookingId: booking._id,
+        action: 'EMIT_BOOKING_STARTED',
+      });
+    }
+
+    // FIX #1: Emit specific booking:rescheduled event when status is 'rescheduled'
+    if (booking.status === 'rescheduled') {
+      if (booking.customerId) {
+        this.emitToUser(booking.customerId.toString(), 'booking:rescheduled', {
+          ...eventData,
+          userId: booking.customerId.toString(),
+        });
+      }
+      if (booking.providerId) {
+        this.emitToUser(booking.providerId.toString(), 'booking:rescheduled', {
+          ...eventData,
+          userId: booking.providerId.toString(),
+        });
+      }
+      logger.info('Emitted booking:rescheduled event', {
+        bookingId: booking._id,
+        action: 'EMIT_BOOKING_RESCHEDULED',
+      });
+    }
+
+    // FIX #2: Emit specific booking:no_show event when status is 'no_show'
+    if (booking.status === 'no_show') {
+      if (booking.customerId) {
+        this.emitToUser(booking.customerId.toString(), 'booking:no_show', {
+          ...eventData,
+          userId: booking.customerId.toString(),
+        });
+      }
+      if (booking.providerId) {
+        this.emitToUser(booking.providerId.toString(), 'booking:no_show', {
+          ...eventData,
+          userId: booking.providerId.toString(),
+        });
+      }
+      logger.info('Emitted booking:no_show event', {
+        bookingId: booking._id,
+        action: 'EMIT_BOOKING_NO_SHOW',
+      });
+    }
+
     logger.info('Emitted booking status change', {
       bookingId: booking._id,
       status: booking.status,
@@ -1038,6 +1372,156 @@ class SocketServer {
     });
 
     return { customerEmitted, providerEmitted };
+  }
+
+  // Emit payment completed event
+  emitPaymentCompleted(payment: {
+    bookingId: string;
+    bookingNumber: string;
+    amount: number;
+    currency: string;
+    transactionId: string;
+    customerId: string;
+    providerId: string;
+  }): { customerEmitted: boolean; providerEmitted: boolean } {
+    const eventData = {
+      bookingId: payment.bookingId,
+      bookingNumber: payment.bookingNumber,
+      amount: payment.amount,
+      currency: payment.currency,
+      transactionId: payment.transactionId,
+      paidAt: new Date(),
+      customerId: payment.customerId,
+      providerId: payment.providerId,
+    };
+
+    let customerEmitted = false;
+    let providerEmitted = false;
+
+    // Emit to customer
+    if (payment.customerId) {
+      customerEmitted = this.emitToUser(payment.customerId, 'payment:completed', eventData);
+    }
+
+    // Emit to provider
+    if (payment.providerId) {
+      providerEmitted = this.emitToUser(payment.providerId, 'payment:completed', eventData);
+    }
+
+    logger.info('Emitted payment:completed event', {
+      bookingId: payment.bookingId,
+      transactionId: payment.transactionId,
+      customerEmitted,
+      providerEmitted,
+      action: 'EMIT_PAYMENT_COMPLETED',
+    });
+
+    return { customerEmitted, providerEmitted };
+  }
+
+  // FIX #1: Emit payment refunded event to customer
+  emitPaymentRefunded(payment: {
+    bookingId: string;
+    bookingNumber: string;
+    amount: number;
+    currency: string;
+    customerId: string;
+  }): boolean {
+    const eventData = {
+      bookingId: payment.bookingId,
+      bookingNumber: payment.bookingNumber,
+      amount: payment.amount,
+      currency: payment.currency,
+      refundedAt: new Date(),
+      customerId: payment.customerId,
+    };
+
+    const emitted = this.emitToUser(payment.customerId, 'payment:refunded', eventData);
+
+    if (emitted) {
+      logger.info('Emitted payment:refunded event', {
+        bookingId: payment.bookingId,
+        bookingNumber: payment.bookingNumber,
+        amount: payment.amount,
+        currency: payment.currency,
+        customerId: payment.customerId,
+        action: 'EMIT_PAYMENT_REFUNDED',
+      });
+    }
+
+    return emitted;
+  }
+
+  // Emit payment failed event
+  emitPaymentFailed(payment: {
+    bookingId: string;
+    bookingNumber: string;
+    error: string;
+    userMessage: string;
+    customerId: string;
+    providerId: string;
+  }): { customerEmitted: boolean; providerEmitted: boolean } {
+    const eventData = {
+      bookingId: payment.bookingId,
+      bookingNumber: payment.bookingNumber,
+      error: payment.error,
+      userMessage: payment.userMessage,
+      customerId: payment.customerId,
+      providerId: payment.providerId,
+    };
+
+    let customerEmitted = false;
+    let providerEmitted = false;
+
+    // Emit to customer
+    if (payment.customerId) {
+      customerEmitted = this.emitToUser(payment.customerId, 'payment:failed', eventData);
+    }
+
+    // Emit to provider
+    if (payment.providerId) {
+      providerEmitted = this.emitToUser(payment.providerId, 'payment:failed', eventData);
+    }
+
+    logger.info('Emitted payment:failed event', {
+      bookingId: payment.bookingId,
+      error: payment.error,
+      customerEmitted,
+      providerEmitted,
+      action: 'EMIT_PAYMENT_FAILED',
+    });
+
+    return { customerEmitted, providerEmitted };
+  }
+
+  // Emit invoice status changed event
+  emitInvoiceStatusChanged(invoice: {
+    invoiceId: string;
+    invoiceNumber: string;
+    status: string;
+    previousStatus: string;
+    userId: string;
+  }): boolean {
+    const eventData = {
+      invoiceId: invoice.invoiceId,
+      invoiceNumber: invoice.invoiceNumber,
+      status: invoice.status,
+      previousStatus: invoice.previousStatus,
+      userId: invoice.userId,
+    };
+
+    const emitted = this.emitToUser(invoice.userId, 'invoice:status_changed', eventData);
+
+    if (emitted) {
+      logger.info('Emitted invoice:status_changed event', {
+        invoiceId: invoice.invoiceId,
+        previousStatus: invoice.previousStatus,
+        newStatus: invoice.status,
+        action: 'EMIT_INVOICE_STATUS_CHANGED',
+      });
+    }
+
+    return emitted;
   }
 
   // Emit new booking request to provider
@@ -1069,6 +1553,95 @@ class SocketServer {
     }
 
     return emitted;
+  }
+
+  // Emit provider location update during active booking
+  emitProviderLocation(params: {
+    bookingId: string;
+    customerId: string;
+    providerId: string;
+    latitude: number;
+    longitude: number;
+    heading?: number;
+    speed?: number;
+    etaMinutes?: number;
+    distanceRemaining?: number;
+  }): { customerEmitted: boolean; providerEmitted: boolean } {
+    const eventData = {
+      bookingId: params.bookingId,
+      latitude: params.latitude,
+      longitude: params.longitude,
+      heading: params.heading,
+      speed: params.speed,
+      etaMinutes: params.etaMinutes,
+      distanceRemaining: params.distanceRemaining,
+      timestamp: new Date(),
+    };
+
+    let customerEmitted = false;
+    let providerEmitted = false;
+
+    // Emit to customer
+    if (params.customerId) {
+      customerEmitted = this.emitToUser(params.customerId, 'booking:provider_location', eventData);
+    }
+
+    // Emit back to provider (for confirmation)
+    if (params.providerId) {
+      providerEmitted = this.emitToUser(params.providerId, 'booking:provider_location', eventData);
+    }
+
+    if (customerEmitted || providerEmitted) {
+      logger.info('Emitted provider location update', {
+        bookingId: params.bookingId,
+        customerEmitted,
+        providerEmitted,
+        action: 'EMIT_PROVIDER_LOCATION',
+      });
+    }
+
+    return { customerEmitted, providerEmitted };
+  }
+
+  // Emit booking reminder event to customer
+  emitBookingReminder(params: {
+    bookingId: string;
+    customerId: string;
+    minutesUntil: number;
+    reminderType: string;
+    bookingNumber: string;
+  }): boolean {
+    try {
+      const eventData = {
+        bookingId: params.bookingId,
+        minutesUntil: params.minutesUntil,
+        reminderType: params.reminderType,
+        bookingNumber: params.bookingNumber,
+      };
+
+      const emitted = this.emitToUser(params.customerId, 'booking:reminder', eventData);
+
+      if (emitted) {
+        logger.info('Emitted booking reminder event', {
+          bookingId: params.bookingId,
+          customerId: params.customerId,
+          minutesUntil: params.minutesUntil,
+          reminderType: params.reminderType,
+          action: 'EMIT_BOOKING_REMINDER',
+        });
+      }
+
+      return emitted;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.error('Failed to emit booking reminder event', {
+        bookingId: params.bookingId,
+        customerId: params.customerId,
+        error: errorMessage,
+        action: 'EMIT_BOOKING_REMINDER_FAILED',
+      });
+      return false;
+    }
   }
 
   // Emit notification
@@ -1115,6 +1688,100 @@ class SocketServer {
       socketToBooking: this.socketToBooking.size,
       deadLetterQueue: this.deadLetterQueue.length,
     };
+  }
+
+  // =============================================================================
+  // Provider Status Events
+  // =============================================================================
+
+  // =============================================================================
+  // Booking Status Events (Explicit Methods)
+  // =============================================================================
+
+  // Emit booking started event to provider
+  emitBookingStarted(bookingId: string, providerId: string): boolean {
+    const eventData: BookingEvent = {
+      bookingId,
+      bookingNumber: '',
+      status: 'started',
+      userId: providerId,
+      timestamp: new Date(),
+    };
+
+    const emitted = this.emitToUser(providerId, 'booking:started', eventData);
+    if (emitted) {
+      logger.info('Emitted booking:started event', {
+        bookingId,
+        providerId,
+        action: 'EMIT_BOOKING_STARTED',
+      });
+    }
+    return emitted;
+  }
+
+  // Emit booking no-show event to provider
+  emitBookingNoShow(bookingId: string, providerId: string, customerId: string): boolean {
+    const eventData: BookingEvent = {
+      bookingId,
+      bookingNumber: '',
+      status: 'no_show',
+      userId: customerId,
+      timestamp: new Date(),
+    };
+
+    const emitted = this.emitToUser(providerId, 'booking:no_show', eventData);
+    if (emitted) {
+      logger.info('Emitted booking:no_show event to provider', {
+        bookingId,
+        providerId,
+        customerId,
+        action: 'EMIT_BOOKING_NO_SHOW_PROVIDER',
+      });
+    }
+    return emitted;
+  }
+
+  // Emit booking started event to customer
+  emitBookingStartedToCustomer(bookingId: string, customerId: string, providerId: string): boolean {
+    const eventData: BookingEvent = {
+      bookingId,
+      bookingNumber: '',
+      status: 'started',
+      userId: providerId,
+      timestamp: new Date(),
+    };
+
+    const emitted = this.emitToUser(customerId, 'booking:started', eventData);
+    if (emitted) {
+      logger.info('Emitted booking:started event to customer', {
+        bookingId,
+        customerId,
+        providerId,
+        action: 'EMIT_BOOKING_STARTED_CUSTOMER',
+      });
+    }
+    return emitted;
+  }
+
+  // Emit booking no-show event to customer
+  emitBookingNoShowToCustomer(bookingId: string, customerId: string): boolean {
+    const eventData: BookingEvent = {
+      bookingId,
+      bookingNumber: '',
+      status: 'no_show',
+      userId: customerId,
+      timestamp: new Date(),
+    };
+
+    const emitted = this.emitToUser(customerId, 'booking:no_show', eventData);
+    if (emitted) {
+      logger.info('Emitted booking:no_show event to customer', {
+        bookingId,
+        customerId,
+        action: 'EMIT_BOOKING_NO_SHOW_CUSTOMER',
+      });
+    }
+    return emitted;
   }
 
   // =============================================================================
@@ -1231,6 +1898,37 @@ class SocketServer {
     }
     if (emitted) {
       logger.info('Emitted service status changed to admins', { serviceId, providerId, serviceName, status, action: 'EMIT_SERVICE_STATUS_CHANGED' });
+    }
+    return emitted;
+  }
+
+  // FIX: Emit service pending review event to provider when they submit a service for review
+  emitServicePendingReview(providerId: string, serviceId: string, serviceName: string, previousStatus: string): boolean {
+    const emitted = this.emitToUser(providerId, 'service:pending_review', {
+      serviceId,
+      serviceName,
+      previousStatus,
+      newStatus: 'pending_review',
+      timestamp: new Date(),
+    });
+    if (emitted) {
+      logger.info('Emitted service pending review event to provider', { providerId, serviceId, serviceName, previousStatus, action: 'EMIT_SERVICE_PENDING_REVIEW' });
+    }
+    return emitted;
+  }
+
+  // FIX: Emit service category changed event to provider when admin changes a service category
+  emitServiceCategoryChanged(serviceId: string, providerId: string, serviceName: string, oldCategory: string, newCategory: string): boolean {
+    const emitted = this.emitToUser(providerId, 'service:category_changed', {
+      serviceId,
+      providerId,
+      serviceName,
+      oldCategory,
+      newCategory,
+      timestamp: new Date(),
+    });
+    if (emitted) {
+      logger.info('Emitted service category changed event to provider', { serviceId, providerId, serviceName, oldCategory, newCategory, action: 'EMIT_SERVICE_CATEGORY_CHANGED' });
     }
     return emitted;
   }
@@ -1416,6 +2114,80 @@ class SocketServer {
     return emitted;
   }
 
+  // =============================================================================
+  // Ad Status Events
+  // =============================================================================
+
+  // Emit ad status changed event to provider
+  emitAdStatusChanged(adId: string, providerId: string, adName: string, previousStatus: string, newStatus: string): boolean {
+    const emitted = this.emitToUser(providerId, 'ad:status_changed', {
+      adId,
+      providerId,
+      adName,
+      previousStatus,
+      newStatus,
+      timestamp: new Date(),
+    });
+    if (emitted) {
+      logger.info('Emitted ad status changed event', { adId, providerId, previousStatus, newStatus, action: 'EMIT_AD_STATUS_CHANGED' });
+    }
+    return emitted;
+  }
+
+  // Emit budget exhausted event to provider
+  emitAdBudgetExhausted(adId: string, providerId: string, adName: string, reason: 'daily' | 'total' | 'monthly'): boolean {
+    const emitted = this.emitToUser(providerId, 'ad:budget_exhausted', {
+      adId,
+      providerId,
+      adName,
+      reason,
+      timestamp: new Date(),
+    });
+    if (emitted) {
+      logger.info('Emitted ad budget exhausted event', { adId, providerId, reason, action: 'EMIT_AD_BUDGET_EXHAUSTED' });
+    }
+    return emitted;
+  }
+
+  // Emit ad approval status changed event to provider
+  emitAdApprovalStatusChanged(adId: string, providerId: string, adName: string, previousStatus: string, newStatus: string, notes?: string): boolean {
+    const emitted = this.emitToUser(providerId, 'ad:approval_status_changed', {
+      adId,
+      providerId,
+      adName,
+      previousStatus,
+      newStatus,
+      notes,
+      timestamp: new Date(),
+    });
+    if (emitted) {
+      logger.info('Emitted ad approval status changed event', { adId, providerId, previousStatus, newStatus, action: 'EMIT_AD_APPROVAL_STATUS_CHANGED' });
+    }
+    return emitted;
+  }
+
+  // Emit new ad pending event to admins
+  emitNewAdPending(adId: string, providerId: string, providerName: string, adName: string): boolean {
+    let emitted = false;
+    for (const socket of this.io.sockets.sockets.values()) {
+      const authSocket = socket as AuthenticatedSocket;
+      if (authSocket.userRole === 'admin') {
+        authSocket.emit('admin:new_ad_pending', {
+          adId,
+          providerId,
+          providerName,
+          adName,
+          timestamp: new Date(),
+        });
+        emitted = true;
+      }
+    }
+    if (emitted) {
+      logger.info('Emitted new ad pending event to admins', { adId, providerId, adName, action: 'EMIT_NEW_AD_PENDING' });
+    }
+    return emitted;
+  }
+
   // Emit review moderated event to provider
   emitReviewModerated(providerId: string, reviewId: string, action: string, rating: number): boolean {
     const emitted = this.emitToUser(providerId, 'review:moderated', {
@@ -1442,6 +2214,196 @@ class SocketServer {
     });
     if (emitted) {
       logger.info('Emitted review moderated event to customer', { customerId, reviewId, moderationAction: action, eventName: 'EMIT_REVIEW_MODERATED_CUSTOMER' });
+    }
+    return emitted;
+  }
+
+  // =============================================================================
+  // User Status Events
+  // =============================================================================
+
+  // Emit user status changed event (for both customers and providers)
+  emitUserStatusChanged(userId: string, status: 'active' | 'suspended' | 'banned', reason?: string): boolean {
+    const emitted = this.emitToUser(userId, 'user:status_changed', {
+      userId,
+      status,
+      reason,
+      timestamp: new Date(),
+    });
+    if (emitted) {
+      logger.info('Emitted user status changed event', { userId, status, reason, action: 'EMIT_USER_STATUS_CHANGED' });
+    }
+    return emitted;
+  }
+
+  // Emit user account locked event
+  emitUserAccountLocked(userId: string, reason: string, until?: Date): boolean {
+    const emitted = this.emitToUser(userId, 'user:account_locked', {
+      userId,
+      reason,
+      until,
+      timestamp: new Date(),
+    });
+    if (emitted) {
+      logger.info('Emitted user account locked event', { userId, reason, until, action: 'EMIT_USER_ACCOUNT_LOCKED' });
+    }
+    return emitted;
+  }
+
+  // =============================================================================
+  // Booking Admin Update Events
+  // =============================================================================
+
+  // Emit booking admin updated event to customer
+  emitBookingAdminUpdatedToCustomer(customerId: string, bookingId: string, bookingNumber: string, status: string, reason?: string): boolean {
+    const emitted = this.emitToUser(customerId, 'booking:admin_updated', {
+      bookingId,
+      bookingNumber,
+      status,
+      updatedBy: 'admin',
+      reason,
+      timestamp: new Date(),
+    });
+    if (emitted) {
+      logger.info('Emitted booking admin updated event to customer', { customerId, bookingId, status, action: 'EMIT_BOOKING_ADMIN_UPDATED' });
+    }
+    return emitted;
+  }
+
+  // Emit booking admin updated event to provider
+  emitBookingAdminUpdatedToProvider(providerId: string, bookingId: string, bookingNumber: string, status: string, reason?: string): boolean {
+    const emitted = this.emitToUser(providerId, 'booking:admin_updated', {
+      bookingId,
+      bookingNumber,
+      status,
+      updatedBy: 'admin',
+      reason,
+      timestamp: new Date(),
+    });
+    if (emitted) {
+      logger.info('Emitted booking admin updated event to provider', { providerId, bookingId, status, action: 'EMIT_BOOKING_ADMIN_UPDATED' });
+    }
+    return emitted;
+  }
+
+  // =============================================================================
+  // Batch Service Operation Events
+  // =============================================================================
+
+  // Emit batch service operation completed event to affected providers
+  // FIX: Added serviceIds to payload for better provider notification
+  emitServicesBatchCompleted(providerIds: string[], serviceIds: string[], affectedCount: number, action: 'approved' | 'rejected'): boolean {
+    let anyEmitted = false;
+    for (const providerId of providerIds) {
+      const emitted = this.emitToUser(providerId, 'services:batch_completed', {
+        providerIds,
+        serviceIds, // Include serviceIds so providers know exactly which services were affected
+        affectedCount,
+        action,
+        timestamp: new Date(),
+      });
+      if (emitted) anyEmitted = true;
+    }
+    if (anyEmitted) {
+      logger.info('Emitted batch services completed event', { providerCount: providerIds.length, serviceCount: serviceIds.length, affectedCount, action, logAction: 'EMIT_SERVICES_BATCH_COMPLETED' });
+    }
+    return anyEmitted;
+  }
+
+  // =============================================================================
+  // Review Visibility Events
+  // =============================================================================
+
+  // Emit review visible event to customer (when their review becomes public)
+  emitReviewVisibleToCustomer(customerId: string, reviewId: string, rating: number): boolean {
+    const emitted = this.emitToUser(customerId, 'review:visible', {
+      reviewId,
+      customerId,
+      rating,
+      visible: true,
+      timestamp: new Date(),
+    });
+    if (emitted) {
+      logger.info('Emitted review visible event to customer', { customerId, reviewId, action: 'EMIT_REVIEW_VISIBLE' });
+    }
+    return emitted;
+  }
+
+  // Emit review visible event to provider
+  emitReviewVisibleToProvider(providerId: string, reviewId: string, customerId: string, rating: number): boolean {
+    const emitted = this.emitToUser(providerId, 'review:visible', {
+      reviewId,
+      customerId,
+      providerId,
+      rating,
+      visible: true,
+      timestamp: new Date(),
+    });
+    if (emitted) {
+      logger.info('Emitted review visible event to provider', { providerId, reviewId, action: 'EMIT_REVIEW_VISIBLE' });
+    }
+    return emitted;
+  }
+
+  // =============================================================================
+  // New Review Events
+  // =============================================================================
+
+  // Emit new review event to provider when a customer submits a review
+  // FIX: Added bookingNumber, providerId, serviceName fields to match frontend expectations
+  emitNewReview(providerId: string, reviewId: string, bookingId: string, bookingNumber: string, customerName: string, rating: number, comment?: string, serviceName?: string): boolean {
+    const emitted = this.emitToUser(providerId, 'review:new', {
+      reviewId,
+      bookingId,
+      bookingNumber,
+      providerId, // Include providerId for frontend to identify the provider
+      customerId: '', // Not needed for provider notification, but included for completeness
+      customerName,
+      rating,
+      comment,
+      serviceName, // Include service name for context
+      timestamp: new Date(),
+    });
+    if (emitted) {
+      logger.info('Emitted new review event to provider', { providerId, reviewId, bookingId, bookingNumber, rating, action: 'EMIT_NEW_REVIEW' });
+    }
+    return emitted;
+  }
+
+  // Emit review reply event to customer when provider replies to their review
+  emitReviewReply(customerId: string, reviewId: string, bookingId: string, providerId: string, providerName: string, reply: string): boolean {
+    const emitted = this.emitToUser(customerId, 'review:reply', {
+      reviewId,
+      bookingId,
+      customerId,
+      providerId,
+      providerName,
+      reply,
+      timestamp: new Date(),
+    });
+    if (emitted) {
+      logger.info('Emitted review reply event to customer', { customerId, reviewId, bookingId, providerId, action: 'EMIT_REVIEW_REPLY' });
+    }
+    return emitted;
+  }
+
+  // =============================================================================
+  // Insights Update Events
+  // =============================================================================
+
+  // Emit insights update event to provider when relevant data changes
+  emitInsightsUpdated(providerId: string, reason: 'booking_completed' | 'review_submitted' | 'withdrawal_processed' | 'booking_cancelled', affectedMetrics: string[]): boolean {
+    const eventData = {
+      providerId,
+      reason,
+      affectedMetrics,
+      timestamp: new Date(),
+    };
+
+    const emitted = this.emitToUser(providerId, 'insights:updated', eventData);
+
+    if (emitted) {
+      logger.info('Emitted insights:updated event', { providerId, reason, affectedMetrics, action: 'EMIT_INSIGHTS_UPDATED' });
     }
     return emitted;
   }

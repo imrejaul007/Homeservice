@@ -10,11 +10,23 @@
  */
 
 import mongoose, { Document, Schema } from 'mongoose';
+import * as crypto from 'crypto';
 import Booking from '../models/booking.model';
 import User from '../models/user.model';
 import Review from '../models/review.model';
 import logger from '../utils/logger';
 import { addJob } from '../queue';
+
+/**
+ * Generate a unique incentive code using crypto.randomBytes
+ * Uses 8 bytes of cryptographically secure random data to prevent collisions
+ * under high load, combined with a timestamp suffix for additional uniqueness.
+ */
+function generateIncentiveCode(prefix: string): string {
+  const randomBytes = crypto.randomBytes(8).toString('hex').toUpperCase();
+  const timestamp = Date.now().toString(36).toUpperCase();
+  return `${prefix}${randomBytes}${timestamp}`;
+}
 
 export interface IReviewRequest extends Document {
   bookingId: mongoose.Types.ObjectId;
@@ -348,7 +360,7 @@ export async function processReviewRequests(): Promise<{
         };
 
         // Generate incentive code for photo review
-        const incentiveCode = `PHOTO${Date.now().toString(36).toUpperCase()}`;
+        const incentiveCode = generateIncentiveCode('PHOTO');
 
         // Prepare email data
         const emailData = {

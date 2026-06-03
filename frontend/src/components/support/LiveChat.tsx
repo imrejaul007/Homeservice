@@ -430,6 +430,11 @@ export const LiveChat: React.FC<LiveChatProps> = ({
       }
 
       // Start duration timer if session is active
+      // FIX #3: Clear existing interval before setting new one to prevent memory leaks
+      if (durationIntervalRef.current) {
+        clearInterval(durationIntervalRef.current);
+        durationIntervalRef.current = null;
+      }
       if (newSession.startedAt) {
         const startTime = new Date(newSession.startedAt).getTime();
         durationIntervalRef.current = setInterval(() => {
@@ -477,11 +482,17 @@ export const LiveChat: React.FC<LiveChatProps> = ({
       }
     };
 
+    // FIX #4: Clear existing poll interval before setting new one to prevent stale intervals
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+    }
+
     pollIntervalRef.current = setInterval(pollMessages, 3000);
 
     return () => {
       if (pollIntervalRef.current) {
         clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
       }
     };
   }, [session?.sessionId, chatStatus, messages.length]);

@@ -2,15 +2,27 @@ import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowLeft, Sparkles, MessageCircle, Lightbulb, Zap, Calendar, Search, Bot } from 'lucide-react';
 import { toast } from 'react-hot-toast';
+import authService from '../../services/AuthService';
+
+interface AIChatResponse {
+  success: boolean;
+  data?: {
+    response?: string;
+    message?: string;
+    conversationId?: string;
+  };
+  error?: string;
+}
 
 const AIAssistantPage: React.FC = () => {
   const [input, setInput] = useState<string>('');
+  const [isLoading, setIsLoading] = useState<boolean>(false);
   const [messages, setMessages] = useState<Array<{id: string; role: 'user' | 'assistant'; content: string; timestamp: Date}>>([
     { id: '1', role: 'assistant', content: "Hi! I'm your NILIN AI assistant. How can I help you today?", timestamp: new Date() }
   ]);
 
   const handleSendMessage = async (content: string) => {
-    if (!content.trim()) return;
+    if (!content.trim() || isLoading) return;
 
     const userMessage = {
       id: Date.now().toString(),
@@ -21,29 +33,38 @@ const AIAssistantPage: React.FC = () => {
 
     setMessages(prev => [...prev, userMessage]);
     setInput('');
+    setIsLoading(true);
 
     try {
-      const response = await fetch('/api/ai/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: content })
+      const response = await authService.post<AIChatResponse>('/ai/chat', {
+        message: content
       });
 
-      if (!response.ok) throw new Error('Failed to get response');
+      if (!response.success) {
+        throw new Error(response.error || 'Failed to get response');
+      }
 
-      const data = await response.json();
+      // Support both 'response' (backend) and 'message' (frontend expectation) fields
+      const aiResponseText = response.data?.response || response.data?.message || '';
+
+      if (!aiResponseText) {
+        throw new Error('Invalid response format from server');
+      }
 
       const assistantMessage = {
         id: (Date.now() + 1).toString(),
         role: 'assistant' as const,
-        content: data.message || "I'm sorry, I couldn't process your request.",
+        content: aiResponseText,
         timestamp: new Date()
       };
 
       setMessages(prev => [...prev, assistantMessage]);
     } catch (error) {
-      toast.error('Failed to send message');
+      console.error('AI Chat Error:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to send message');
       setMessages(prev => prev.filter(m => m.id !== userMessage.id));
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -138,7 +159,8 @@ const AIAssistantPage: React.FC = () => {
                   }
                 }}
                 placeholder="Ask me anything..."
-                className="flex-1 px-4 py-3 bg-gray-100 rounded-full outline-none focus:ring-2 focus:ring-indigo-200"
+                className="flex-1 px-4 py-3 bg-gray-100 rounded-full outline-none focus:ring-2 focus:ring-indigo-300 focus:ring-offset-2 focus:outline-none focus:border-indigo-400 transition-all"
+                aria-label="Chat message input"
               />
               <button
                 onClick={() => handleSendMessage(input)}

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import {
   X,
@@ -103,16 +103,6 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
     return categoryOptions.find(cat => cat.value === formData.category);
   }, [categoryOptions, formData.category]);
 
-
-  // Load service data when modal opens
-  useEffect(() => {
-    if (isOpen && serviceId) {
-      loadServiceData();
-    } else if (!isOpen) {
-      resetForm();
-    }
-  }, [isOpen, serviceId]);
-
   const resetForm = () => {
     setFormData({
       name: '',
@@ -129,7 +119,8 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
     setCurrentTag('');
   };
 
-  const loadServiceData = async () => {
+  // Load service data when modal opens
+  const loadServiceData = useCallback(async () => {
     if (!serviceId) return;
 
     setIsLoadingService(true);
@@ -155,17 +146,32 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
           status: service.status || 'active'
         });
       }
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('Error loading service data:', error);
-      setErrors({ load: error instanceof Error ? error.message : 'Failed to load service data' });
-      toast.error(
-        'Failed to load service',
-        error instanceof Error ? error.message : 'An error occurred'
-      );
+      // Check for 404 / service not found
+      const isNotFound = (error as { response?: { status?: number } }).response?.status === 404;
+      if (isNotFound) {
+        setErrors({ load: 'Service not found' });
+      } else {
+        setErrors({ load: error instanceof Error ? error.message : 'Failed to load service data' });
+        toast.error(
+          'Failed to load service',
+          error instanceof Error ? error.message : 'An error occurred'
+        );
+      }
     } finally {
       setIsLoadingService(false);
     }
-  };
+  }, [serviceId, toast]);
+
+  // Effect to load data when modal opens
+  useEffect(() => {
+    if (isOpen && serviceId) {
+      loadServiceData();
+    } else if (!isOpen) {
+      resetForm();
+    }
+  }, [isOpen, serviceId, loadServiceData, resetForm]);
 
   if (!isOpen) return null;
 
@@ -180,6 +186,9 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
     if (formData.duration <= 0) newErrors.duration = 'Duration must be greater than 0';
     if (formData.price.amount <= 0 && formData.price.type !== 'custom') {
       newErrors.price = 'Price must be greater than 0';
+    }
+    if (formData.tags.length === 0) {
+      newErrors.tags = 'At least one tag is required';
     }
 
     setErrors(newErrors);
@@ -241,8 +250,9 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
   };
 
   const addTag = () => {
-    if (currentTag.trim() && !formData.tags.includes(currentTag.trim())) {
-      handleInputChange('tags', [...formData.tags, currentTag.trim()]);
+    const normalizedTag = currentTag.trim().toLowerCase();
+    if (normalizedTag && !formData.tags.some(tag => tag.toLowerCase() === normalizedTag)) {
+      handleInputChange('tags', [...formData.tags, normalizedTag]);
       setCurrentTag('');
     }
   };
@@ -258,8 +268,9 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
 
     setIsLoading(true);
     try {
+      const { status: _status, ...editableFields } = formData;
       const payload = {
-        ...formData,
+        ...editableFields,
         price:
           formData.price.type === 'custom'
             ? { ...formData.price, amount: 0 }
@@ -312,9 +323,18 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
         </div>
 
         {errors.load && (
-          <div className="mx-6 mt-4 flex items-center p-4 rounded-xl bg-red-50 border border-red-200">
-            <AlertCircle className="w-5 h-5 text-red-500 mr-3 flex-shrink-0" />
-            <p className="text-sm text-red-600">{errors.load}</p>
+          <div className="mx-6 mt-4 flex items-center justify-between p-4 rounded-xl bg-red-50 border border-red-200">
+            <div className="flex items-center">
+              <AlertCircle className="w-5 h-5 text-red-500 mr-3 flex-shrink-0" />
+              <p className="text-sm text-red-600">{errors.load}</p>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              className="ml-4 px-3 py-1 rounded-lg bg-red-100 text-red-600 text-sm hover:bg-red-200 transition-colors"
+            >
+              Close
+            </button>
           </div>
         )}
 
@@ -330,27 +350,18 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
             </span>
           </p>
 
-          {/* Service Status */}
+          {/* Service Status (read-only — activation requires admin approval) */}
           <div>
             <label className="block text-sm font-medium text-nilin-charcoal mb-2">
               Status
             </label>
-            <select
-              value={formData.status}
-              onChange={(e) => handleInputChange('status', e.target.value)}
-              className="w-full px-4 py-3 rounded-xl bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all text-nilin-charcoal appearance-none cursor-pointer"
-              style={{
-                backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%236B6B6B'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E")`,
-                backgroundRepeat: 'no-repeat',
-                backgroundPosition: 'right 12px center',
-                backgroundSize: '20px'
-              }}
-            >
-              <option value="active">Active</option>
-              <option value="inactive">Inactive</option>
-              <option value="draft">Draft</option>
-              <option value="pending_review">Pending Review</option>
-            </select>
+            <div className="px-4 py-3 rounded-xl bg-nilin-muted/50 border border-nilin-border text-sm text-nilin-charcoal capitalize">
+              {formData.status.replace('_', ' ')}
+            </div>
+            <p className="mt-1.5 text-xs text-nilin-warmGray">
+              Status changes require admin approval. Use the toggle on the services list to activate or
+              deactivate approved services.
+            </p>
           </div>
 
           {/* Basic Information */}

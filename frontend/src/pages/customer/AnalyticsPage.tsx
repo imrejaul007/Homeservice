@@ -72,21 +72,19 @@ const AnalyticsPage: React.FC = () => {
     ? Math.max(...analytics.monthlyBookings.map(d => d.bookings))
     : 1;
 
-  // Stats to display
+  // Stats to display - using NILIN theme colors
   const stats = [
     {
       label: 'Total Bookings',
       value: analytics?.totalBookings?.toString() || '0',
       icon: Calendar,
-      color: 'blue',
-      bgColor: 'bg-blue-100',
-      textColor: 'text-blue-600',
+      bgColor: 'bg-nilin-blush',
+      textColor: 'text-nilin-coral',
     },
     {
       label: 'Total Spent',
       value: formatCurrency(analytics?.totalSpent || 0),
       icon: DollarSign,
-      color: 'green',
       bgColor: 'bg-green-100',
       textColor: 'text-green-600',
     },
@@ -94,17 +92,15 @@ const AnalyticsPage: React.FC = () => {
       label: 'Avg Rating',
       value: analytics?.averageRating?.toFixed(1) || '0.0',
       icon: Star,
-      color: 'yellow',
-      bgColor: 'bg-yellow-100',
-      textColor: 'text-yellow-600',
+      bgColor: 'bg-nilin-peach',
+      textColor: 'text-nilin-coral',
     },
     {
       label: 'Hours Booked',
       value: (analytics?.totalHours || 0).toString(),
       icon: Clock,
-      color: 'purple',
-      bgColor: 'bg-purple-100',
-      textColor: 'text-purple-600',
+      bgColor: 'bg-nilin-blush',
+      textColor: 'text-nilin-primary',
     },
   ];
 
@@ -154,8 +150,8 @@ const AnalyticsPage: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-gray-50 pb-20">
-      {/* Header */}
-      <div className="bg-gradient-to-br from-emerald-600 to-teal-500 text-white p-6">
+      {/* Header - NILIN theme */}
+      <div className="bg-gradient-to-br from-nilin-primary to-nilin-coral text-white p-6">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-4">
             <Link to="/customer/profile" className="p-2 -ml-2 hover:bg-white/10 rounded-full">

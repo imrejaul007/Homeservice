@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -32,6 +32,22 @@ import type { Wallet as WalletType, WalletTransaction, EarningsSummary } from '.
 import { socketService } from '../../services/socket';
 import { formatPrice } from '../../utils/currency';
 import { EmptyState } from '../../components/common/EmptyState';
+
+// Security: HTML entity escaping to prevent XSS
+const escapeHtml = (text: string): string => {
+  const htmlEntities: Record<string, string> = {
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  };
+  return text.replace(/[&<>"']/g, (char) => htmlEntities[char]);
+};
+
+// Withdrawal limits configuration
+const MAX_WITHDRAWAL_AMOUNT = 10000; // Maximum single withdrawal amount
+const MINIMUM_BALANCE_RESERVE = 10; // Minimum balance to maintain after withdrawal
 
 interface Transaction {
   id: string;
@@ -78,6 +94,12 @@ const ProviderEarningsPage: React.FC = () => {
   const [totalTransactions, setTotalTransactions] = useState(0);
   const limit = 10;
 
+  // Use ref to track currentPage without causing re-renders in useCallback dependencies
+  const currentPageRef = useRef(currentPage);
+  useEffect(() => {
+    currentPageRef.current = currentPage;
+  }, [currentPage]);
+
   // Withdrawal modal state
   const [showWithdrawModal, setShowWithdrawModal] = useState(false);
   const [withdrawalForm, setWithdrawalForm] = useState<WithdrawalForm>({
@@ -91,6 +113,18 @@ const ProviderEarningsPage: React.FC = () => {
   const [withdrawalError, setWithdrawalError] = useState<string | null>(null);
   const [withdrawalSuccess, setWithdrawalSuccess] = useState(false);
 
+  // Ref to track timeout ID for cleanup on unmount
+  const withdrawalTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (withdrawalTimeoutRef.current) {
+        clearTimeout(withdrawalTimeoutRef.current);
+      }
+    };
+  }, []);
+
   // Redirect if not a provider
   useEffect(() => {
     if (user?.role !== 'provider') {
@@ -99,23 +133,19 @@ const ProviderEarningsPage: React.FC = () => {
   }, [user, navigate]);
 
   // Map backend transaction type to frontend type
+  // Handles all WalletTransaction.referenceType values:
+  // booking, refund, bonus, payout, topup, commission
   const mapTransactionType = (transaction: WalletTransaction): Transaction['type'] => {
-    switch (transaction.referenceType) {
-      case 'booking':
-        return 'earning';
-      case 'payout':
-        return 'withdrawal';
-      case 'refund':
-        return 'refund';
-      case 'commission':
-        return 'fee';
-      case 'bonus':
-        return 'bonus';
-      case 'topup':
-        return 'topup';
-      default:
-        return transaction.type === 'credit' ? 'earning' : 'withdrawal';
-    }
+    const typeMap: Record<WalletTransaction['referenceType'], Transaction['type']> = {
+      booking: 'earning',
+      payout: 'withdrawal',
+      refund: 'refund',
+      commission: 'fee',
+      bonus: 'bonus',
+      topup: 'topup',
+    };
+
+    return typeMap[transaction.referenceType] ?? (transaction.type === 'credit' ? 'earning' : 'withdrawal');
   };
 
   // Map API transaction to frontend transaction
@@ -129,50 +159,65 @@ const ProviderEarningsPage: React.FC = () => {
     bookingId: apiTransaction.referenceType === 'booking' ? apiTransaction.reference : undefined,
   });
 
-  // Fetch all data
-  const fetchData = useCallback(async (showRefreshLoader = false) => {
+  // Fetch all data - accepts page as parameter to avoid stale closure
+  const fetchData = useCallback(async (showRefreshLoader = false, page?: number) => {
     if (showRefreshLoader) {
       setIsRefreshing(true);
     }
     setError(null);
 
     try {
-      // Fetch wallet, transactions, and summaries in parallel
-      const [walletRes, transactionsRes, weeklyRes, monthlyRes] = await Promise.all([
+      // Use provided page or fall back to currentPageRef for stable reference
+      const fetchPage = page ?? currentPageRef.current;
+
+      // Fetch wallet, transactions, and summaries in parallel with individual error tracking
+      const [walletRes, transactionsRes, weeklyRes, monthlyRes] = await Promise.allSettled([
         walletApi.getWallet(),
-        walletApi.getTransactions({ page: currentPage, limit }),
+        walletApi.getTransactions({ page: fetchPage, limit }),
         walletApi.getEarningsSummary('week'),
         walletApi.getEarningsSummary('month'),
       ]);
 
-      if (walletRes.success) {
-        setWallet(walletRes.data);
+      // Handle wallet response independently
+      if (walletRes.status === 'fulfilled' && walletRes.value.success) {
+        setWallet(walletRes.value.data);
+      } else if (walletRes.status === 'rejected') {
+        console.error('Failed to fetch wallet:', walletRes.reason);
       }
 
-      if (transactionsRes.success) {
-        setTransactions(transactionsRes.data.transactions.map(mapTransaction));
-        setTotalPages(transactionsRes.data.pages);
-        setTotalTransactions(transactionsRes.data.total);
+      // Handle transactions response independently
+      if (transactionsRes.status === 'fulfilled' && transactionsRes.value.success) {
+        setTransactions(transactionsRes.value.data.transactions.map(mapTransaction));
+        setTotalPages(transactionsRes.value.data.pages);
+        setTotalTransactions(transactionsRes.value.data.total);
+      } else if (transactionsRes.status === 'rejected') {
+        console.error('Failed to fetch transactions:', transactionsRes.reason);
       }
 
-      if (weeklyRes.success) {
-        setWeeklySummary(weeklyRes.data);
+      // Handle weekly summary response independently
+      if (weeklyRes.status === 'fulfilled' && weeklyRes.value.success) {
+        setWeeklySummary(weeklyRes.value.data);
+      } else if (weeklyRes.status === 'rejected') {
+        console.error('Failed to fetch weekly summary:', weeklyRes.reason);
       }
 
-      if (monthlyRes.success) {
-        setMonthlySummary(monthlyRes.data);
+      // Handle monthly summary response independently
+      if (monthlyRes.status === 'fulfilled' && monthlyRes.value.success) {
+        setMonthlySummary(monthlyRes.value.data);
+      } else if (monthlyRes.status === 'rejected') {
+        console.error('Failed to fetch monthly summary:', monthlyRes.reason);
       }
     } catch (err: any) {
       console.error('Failed to fetch wallet data:', err);
       setError({
-        message: err.response?.data?.message || err.message || 'Failed to load wallet data',
+        message: err.response?.data?.message || err.message || err.toString() || 'Failed to load wallet data',
         code: err.response?.data?.code,
       });
     } finally {
       setIsLoading(false);
       setIsRefreshing(false);
     }
-  }, [currentPage]);
+  }, []);
 
   // Initial fetch and refetch when page changes
   // FIX: Combined into single useEffect to prevent double fetch
@@ -197,13 +242,24 @@ const ProviderEarningsPage: React.FC = () => {
       fetchData(true);
     });
 
+    // Listen for booking completed (real-time earnings update)
+    // FIX: Replaced dead payment:completed subscription with booking:completed
+    // payment:completed is never emitted by backend - booking:completed indicates earnings credited
+    const unsubBookingCompleted = socketService.on('booking:completed', (data) => {
+      // Only refresh if this booking is for this provider
+      if (data.userId === user?._id) {
+        fetchData(true);
+      }
+    });
+
     // Cleanup on unmount
     return () => {
       unsubWithdrawalApproved();
       unsubWithdrawalRejected();
       unsubBookingConfirmed();
+      unsubBookingCompleted();
     };
-  }, [fetchData]);
+  }, [fetchData, user?._id]);
 
   // Filter transactions
   const filteredTransactions = transactions.filter((txn) => {
@@ -257,8 +313,11 @@ const ProviderEarningsPage: React.FC = () => {
         setWithdrawalSuccess(true);
         // Refresh data after successful withdrawal
         await fetchData(true);
-        // Close modal after delay
-        setTimeout(() => {
+        // Close modal after delay - store timeout ID for cleanup
+        if (withdrawalTimeoutRef.current) {
+          clearTimeout(withdrawalTimeoutRef.current);
+        }
+        withdrawalTimeoutRef.current = setTimeout(() => {
           setShowWithdrawModal(false);
           setWithdrawalSuccess(false);
           setWithdrawalForm({
@@ -268,6 +327,7 @@ const ProviderEarningsPage: React.FC = () => {
             iban: '',
             accountHolder: '',
           });
+          withdrawalTimeoutRef.current = null;
         }, 2000);
       }
     } catch (err: any) {
@@ -277,15 +337,25 @@ const ProviderEarningsPage: React.FC = () => {
     }
   };
 
+  // Escape CSV field - handles commas, quotes, and newlines
+  const escapeCsvField = (field: string): string => {
+    const stringField = String(field);
+    // If field contains comma, quote, or newline, wrap in quotes and escape internal quotes
+    if (stringField.includes(',') || stringField.includes('"') || stringField.includes('\n') || stringField.includes('\r')) {
+      return `"${stringField.replace(/"/g, '""')}"`;
+    }
+    return stringField;
+  };
+
   // Handle export
   const handleExport = () => {
     const headers = ['Date', 'Type', 'Description', 'Amount', 'Status'];
     const rows = filteredTransactions.map((txn) => [
-      txn.date.toLocaleDateString(),
-      txn.type,
-      txn.description,
-      txn.amount.toString(),
-      txn.status,
+      escapeCsvField(txn.date.toLocaleDateString()),
+      escapeCsvField(txn.type),
+      escapeCsvField(txn.description),
+      escapeCsvField(txn.amount.toString()),
+      escapeCsvField(txn.status),
     ]);
     const csv = [headers, ...rows].map((row) => row.join(',')).join('\n');
 
@@ -615,6 +685,7 @@ const ProviderEarningsPage: React.FC = () => {
                 <select
                   value={filter}
                   onChange={(e) => setFilter(e.target.value as typeof filter)}
+                  aria-label="Filter transactions"
                   className="px-3 py-1.5 rounded-nilin border border-nilin-border text-sm text-nilin-charcoal focus:outline-none focus:border-nilin-coral bg-white"
                 >
                   <option value="all">All Transactions</option>
@@ -638,7 +709,16 @@ const ProviderEarningsPage: React.FC = () => {
                   {filteredTransactions.map((transaction) => (
                     <div
                       key={transaction.id}
-                      className="flex items-center justify-between p-4 bg-nilin-muted/30 rounded-nilin hover:bg-nilin-muted/50 transition-colors"
+                      tabIndex={0}
+                      role="row"
+                      className="flex items-center justify-between p-4 bg-nilin-muted/30 rounded-nilin hover:bg-nilin-muted/50 transition-colors cursor-pointer"
+                      aria-label={`Transaction: ${transaction.description}, Amount: ${transaction.amount > 0 ? '+' : ''}${transaction.amount}, Status: ${transaction.status}`}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          // Transaction detail expansion can be added here if needed
+                        }
+                      }}
                     >
                       <div className="flex items-center gap-4">
                         <div className={`p-2 rounded-full ${
@@ -717,10 +797,15 @@ const ProviderEarningsPage: React.FC = () => {
 
       {/* Withdraw Modal */}
       {showWithdrawModal && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div
+          className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="withdraw-modal-title"
+        >
           <div className="bg-white rounded-nilin-lg max-w-md w-full p-6 shadow-xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-6">
-              <h2 className="text-xl font-serif text-nilin-charcoal">Withdraw Funds</h2>
+              <h2 id="withdraw-modal-title" className="text-xl font-serif text-nilin-charcoal">Withdraw Funds</h2>
               <button
                 onClick={() => {
                   setShowWithdrawModal(false);

@@ -101,17 +101,28 @@ const StarRating: React.FC<StarRatingProps> = ({
     lg: 'w-8 h-8',
   };
 
+  const ratingLabels = ['', 'Poor', 'Fair', 'Good', 'Very Good', 'Excellent'];
+
   return (
-    <div className="flex items-center gap-1">
+    <div
+      role="radiogroup"
+      aria-label="Rating"
+      className="flex items-center gap-1"
+    >
       {[1, 2, 3, 4, 5].map((star) => (
         <button
           key={star}
           type="button"
+          role="radio"
+          aria-checked={star === value}
+          aria-label={`${star} star${star !== 1 ? 's' : ''} - ${ratingLabels[star]}`}
           disabled={readonly}
+          tabIndex={readonly ? -1 : star === value || (value === 0 && star === 1) ? 0 : -1}
           onClick={() => !readonly && onChange(star)}
           onMouseEnter={() => !readonly && setHoverValue(star)}
           onMouseLeave={() => !readonly && setHoverValue(null)}
-          className={`${readonly ? 'cursor-default' : 'cursor-pointer hover:scale-110'} transition-transform`}
+          onFocus={() => !readonly && setHoverValue(star)}
+          className={`${readonly ? 'cursor-default' : 'cursor-pointer hover:scale-110'} transition-transform focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 rounded`}
         >
           <Star
             className={`${sizeClasses[size]} ${
@@ -239,16 +250,20 @@ export const ReviewDraft: React.FC<ReviewDraftProps> = ({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [showExpirationWarning, setShowExpirationWarning] = useState(false);
+  const [showPhotoUrlModal, setShowPhotoUrlModal] = useState(false);
+  const [photoUrlInput, setPhotoUrlInput] = useState('');
+  const [photoUrlError, setPhotoUrlError] = useState<string | null>(null);
 
   const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
   const commentRef = useRef<HTMLTextAreaElement>(null);
+  const handleSaveRef = useRef<(() => Promise<void>) | null>(null);
 
   // Check completeness
   const isComplete = rating > 0 && comment.trim().length >= minCommentLength;
 
   // Auto-save effect
   useEffect(() => {
-    if (hasUnsavedChanges && !isSaving) {
+    if (hasUnsavedChanges && !isSaving && handleSaveRef.current) {
       // Clear existing timer
       if (autoSaveTimerRef.current) {
         clearTimeout(autoSaveTimerRef.current);
@@ -256,7 +271,7 @@ export const ReviewDraft: React.FC<ReviewDraftProps> = ({
 
       // Set new timer
       autoSaveTimerRef.current = setTimeout(() => {
-        handleSave();
+        handleSaveRef.current?.();
       }, autoSaveInterval);
     }
 
@@ -265,7 +280,7 @@ export const ReviewDraft: React.FC<ReviewDraftProps> = ({
         clearTimeout(autoSaveTimerRef.current);
       }
     };
-  }, [hasUnsavedChanges, autoSaveInterval]);
+  }, [hasUnsavedChanges, isSaving, autoSaveInterval]);
 
   // Track changes
   const handleChange = useCallback(() => {
@@ -299,12 +314,17 @@ export const ReviewDraft: React.FC<ReviewDraftProps> = ({
       } else {
         setSaveError(result.error || 'Failed to save draft');
       }
-    } catch (error) {
+    } catch {
       setSaveError('An unexpected error occurred');
     } finally {
       setIsSaving(false);
     }
-  }, [rating, title, comment, photos, onSave]);
+  }, [rating, title, comment, photos, onSave, isSaving]);
+
+  // Keep ref updated with latest handleSave
+  useEffect(() => {
+    handleSaveRef.current = handleSave;
+  }, [handleSave]);
 
   // Submit handler
   const handleSubmit = useCallback(async () => {

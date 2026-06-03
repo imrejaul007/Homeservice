@@ -86,6 +86,28 @@ export async function chat(req: Request, res: Response): Promise<void> {
       conversation = existingConv;
     } else if (existingConv && existingConv.userId !== userId) {
       // User is trying to access another user's conversation
+      // Structured audit event for security team review (issue #10)
+      const auditEvent = {
+        timestamp: new Date().toISOString(),
+        type: 'SECURITY_IDOR_DETECTED',
+        severity: 'HIGH',
+        context: 'AIController',
+        action: 'IDOR_CHAT_ATTEMPT',
+        details: {
+          attemptedUserId: userId,
+          targetConversationId: conversationId,
+          conversationOwnerId: existingConv.userId,
+          ip: req.ip || req.connection.remoteAddress || 'unknown',
+          userAgent: req.get('User-Agent') || 'unknown',
+          path: req.path,
+          method: req.method,
+        },
+        outcome: 'BLOCKED',
+        responseCode: 403,
+      };
+
+      // Log both as structured audit event and traditional log
+      logger.warn('Security: IDOR Attempt Detected', auditEvent);
       logger.warn('IDOR Attempt: User tried to access another user conversation', {
         context: 'AIController',
         action: 'IDOR_CHAT_ATTEMPT',
@@ -146,7 +168,8 @@ export async function chat(req: Request, res: Response): Promise<void> {
   res.json({
     success: true,
     data: {
-      response: aiResponse,
+      message: aiResponse, // FIX #5 & #20: Changed from 'response' to 'message' to match frontend expectation
+      response: aiResponse, // Keep 'response' for backward compatibility
       conversationId: conversation.id,
       messages: conversation.messages,
     },
@@ -174,13 +197,28 @@ export async function getConversations(req: Request, res: Response): Promise<voi
   const user = (req as unknown as { user: { _id: { toString: () => string } } }).user;
   const userId = user._id.toString();
 
-  const userConversations = Array.from(conversations.values())
+  // Issue #4 fix: Add pagination with limit/offset parameters (default: limit=20, offset=0)
+  const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
+  const offset = parseInt(req.query.offset as string) || 0;
+
+  const allUserConversations = Array.from(conversations.values())
     .filter(conv => conv.userId === userId)
     .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
 
+  const total = allUserConversations.length;
+  const userConversations = allUserConversations.slice(offset, offset + limit);
+
   res.json({
     success: true,
-    data: userConversations,
+    data: {
+      conversations: userConversations,
+      pagination: {
+        limit,
+        offset,
+        total,
+        hasMore: offset + limit < total
+      }
+    }
   });
 }
 
@@ -197,9 +235,13 @@ export async function deleteConversation(req: Request, res: Response): Promise<v
 
   conversations.delete(conversationId);
 
+  // Issue #5 fix: Standardize response format to { success: boolean, data: any }
   res.json({
     success: true,
-    message: 'Conversation deleted',
+    data: {
+      deleted: true,
+      conversationId
+    }
   });
 }
 

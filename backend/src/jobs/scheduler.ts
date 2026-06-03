@@ -260,11 +260,14 @@ async function processPendingWithdrawals(): Promise<void> {
 async function sendBookingReminders(): Promise<void> {
   try {
     const now = new Date();
+    const { getBookingReminderHoursBefore } = await import('../services/platformEmailTemplate.service');
+    const { getSettings } = await import('../services/settings.service');
+    const settings = await getSettings();
+    const primaryHours = getBookingReminderHoursBefore(settings);
 
-    // Reminders to send
     const reminderWindows = [
-      { hours: 24, label: '24-hour' },
-      { hours: 2, label: '2-hour' }
+      { hours: primaryHours, label: `${primaryHours}-hour` },
+      { hours: 2, label: '2-hour' },
     ];
 
     for (const window of reminderWindows) {
@@ -457,6 +460,17 @@ export function initializeScheduledJobs(): void {
   );
   scheduledTasks.push(pointsExpiryTask);
   logger.info(`Points expiry scheduled: first day of every month at midnight (cron: 0 0 1 * *, tz: ${CRON_TIMEZONE})`);
+
+  const platformBackupTask = cron.schedule(
+    '0 2 * * *',
+    async () => {
+      const { executePlatformBackupJob } = await import('./platformBackup.job');
+      await withLock('lock:scheduler:platform_backup', 'PlatformBackupJob', executePlatformBackupJob);
+    },
+    { timezone: CRON_TIMEZONE }
+  );
+  scheduledTasks.push(platformBackupTask);
+  logger.info(`Platform backup scheduled: daily at 2 AM (cron: 0 2 * * *, tz: ${CRON_TIMEZONE})`);
 
   // Run stale booking check immediately on startup (after a short delay to let server initialize)
   setTimeout(async () => {

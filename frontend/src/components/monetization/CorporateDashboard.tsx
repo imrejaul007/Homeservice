@@ -53,7 +53,7 @@ interface Invoice {
   invoiceNumber: string;
   totalAmount: number;
   status: 'pending' | 'paid' | 'overdue';
-  dueDate: Date;
+  dueDate: string;
   period: string;
 }
 
@@ -99,12 +99,12 @@ const CorporateDashboard: React.FC<CorporateDashboardProps> = ({
     }).format(price);
   };
 
-  const formatDate = (date: Date) => {
+  const formatDate = (date: Date | string) => {
     return new Intl.DateTimeFormat('en-AE', {
       day: 'numeric',
       month: 'short',
       year: 'numeric',
-    }).format(date);
+    }).format(new Date(date));
   };
 
   const statusColors: Record<AccountStatus, { bg: string; text: string }> = {
@@ -410,7 +410,7 @@ const CorporateDashboard: React.FC<CorporateDashboardProps> = ({
             <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
               <p className="text-sm text-nilin-gray">Next Payment Due</p>
               <p className="text-2xl font-bold text-amber-600">
-                {invoices.filter(i => i.status === 'pending').sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime())[0]
+                {invoices.filter(i => i.status === 'pending').sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())[0]
                   ? formatDate(invoices.filter(i => i.status === 'pending')[0].dueDate)
                   : 'N/A'}
               </p>

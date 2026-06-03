@@ -49,14 +49,14 @@ const CustomerStatsPage: React.FC = () => {
   };
 
   useEffect(() => {
-    getCustomerBookings({ limit: 100 });
+    getCustomerBookings({ limit: 100, period: selectedPeriod });
     fetchLoyaltyStatus();
-  }, []);
+  }, [selectedPeriod]);
 
   const fetchLoyaltyStatus = async () => {
     try {
       const response = await loyaltyApi.getStatus();
-      setLoyaltyStatus(response.data);
+      setLoyaltyStatus(response?.data ?? null);
     } catch {
       // Silent failure - loyalty status will not display
       toast.error('Failed to load loyalty status');
@@ -213,7 +213,7 @@ const CustomerStatsPage: React.FC = () => {
             <div className="flex items-center gap-3 mb-2">
               <Sparkles className="h-7 w-7 text-nilin-charcoal/60" />
               <h1 className="text-2xl md:text-3xl font-serif text-nilin-charcoal">
-                {getGreeting()}, {user?.firstName || 'there'}!
+                {getGreeting()}, {user?.name?.split(' ')[0] || 'there'}!
               </h1>
             </div>
             <p className="text-nilin-warmGray text-base">

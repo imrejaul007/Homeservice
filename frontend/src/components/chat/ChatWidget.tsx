@@ -3,7 +3,7 @@ import { cn } from '../../lib/utils';
 import { ChatWindow } from './ChatWindow';
 import { Badge } from '../common/Badge';
 import { chatApi, ChatMessage, ChatRoom, ChatRoomListItem } from '../../services/chatApi';
-import { socketService } from '../../services/SocketService';
+import { socketService } from '../../services/socket';
 
 // =============================================================================
 // Types
@@ -78,70 +78,69 @@ export function ChatWidget({
 
     // Subscribe to new messages
     const unsubscribeNewMessage = socketService.on('message:new', (data) => {
-      if (data.bookingId) {
-        // Update chat room with new message
-        setChatRooms((prev) => {
-          const updatedRooms = prev.map((room) => {
-            const roomId = room._id || (room as unknown as { id: string }).id;
-            if (roomId === data.bookingId) {
-              return {
-                ...room,
-                lastMessage: {
-                  content: data.message,
-                  senderName: 'User',
-                  createdAt: new Date().toISOString(),
-                },
-                unreadCount: (room.unreadCount || 0) + 1,
-              };
-            }
-            return room;
-          });
-          // Sort by last message time
-          return updatedRooms.sort((a, b) => {
-            const aTime = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
-            const bTime = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
-            return bTime - aTime;
-          });
+      // Update chat room with new message
+      setChatRooms((prev) => {
+        const updatedRooms = prev.map((room) => {
+          // Match by booking ID (this is the correct property for MessageEvent)
+          const matchesBooking = room.bookingId && room.bookingId === data.bookingId;
+          if (matchesBooking) {
+            return {
+              ...room,
+              lastMessage: {
+                content: data.message,
+                senderName: 'User',
+                createdAt: new Date().toISOString(),
+              },
+              unreadCount: (room.unreadCount || 0) + 1,
+            };
+          }
+          return room;
         });
-
-        // Update unread count
-        setUnreadCount((prev) => {
-          const newCount = prev + 1;
-          onUnreadCountChange?.(newCount);
-          return newCount;
+        // Sort by last message time
+        return updatedRooms.sort((a, b) => {
+          const aTime = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
+          const bTime = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
+          return bTime - aTime;
         });
+      });
 
-        // Notify about new message
-        if (onNewMessage) {
-          onNewMessage({
-            _id: '',
-            chatRoomId: data.bookingId,
-            senderId: data.senderId,
-            receiverId: '',
-            content: data.message,
-            type: 'text',
-            status: 'sent',
-            createdAt: new Date().toISOString(),
-          });
-        }
+      // Update unread count
+      setUnreadCount((prev) => {
+        const newCount = prev + 1;
+        onUnreadCountChange?.(newCount);
+        return newCount;
+      });
+
+      // Notify about new message
+      if (onNewMessage) {
+        onNewMessage({
+          _id: '',
+          chatRoomId: data.bookingId,
+          senderId: data.senderId,
+          receiverId: '',
+          content: data.message,
+          type: 'text',
+          status: 'sent',
+          createdAt: new Date().toISOString(),
+        });
       }
     });
 
     // Subscribe to message read status changes
     const unsubscribeRead = socketService.on('message:read', (data) => {
-      if (data.bookingId) {
-        setChatRooms((prev) =>
-          prev.map((room) => {
-            const roomId = room._id || (room as unknown as { id: string }).id;
-            return roomId === data.bookingId ? { ...room, unreadCount: 0 } : room;
-          })
-        );
-        setUnreadCount((prev) => {
-          const newCount = Math.max(0, prev - 1);
-          onUnreadCountChange?.(newCount);
-          return newCount;
-        });
-      }
+      setChatRooms((prev) =>
+        prev.map((room) => {
+          // Match by booking ID or room ID
+          const matchesRoom = data.roomId && (room._id || (room as unknown as { id: string }).id) === data.roomId;
+          const matchesBooking = room.bookingId && data.bookingId && room.bookingId === data.bookingId;
+          return (matchesRoom || matchesBooking) ? { ...room, unreadCount: 0 } : room;
+        })
+      );
+      setUnreadCount((prev) => {
+        const newCount = Math.max(0, prev - 1);
+        onUnreadCountChange?.(newCount);
+        return newCount;
+      });
     });
 
     return () => {
@@ -157,7 +156,7 @@ export function ChatWidget({
     // Refresh every 30 seconds
     const interval = setInterval(fetchChatRooms, 30000);
     return () => clearInterval(interval);
-  }, [fetchChatRooms]);
+  }, [fetchChatRooms, userId]);
 
   // Handle click outside to minimize
   useEffect(() => {

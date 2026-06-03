@@ -1,10 +1,16 @@
 import { Request, Response } from 'express';
+import mongoose from 'mongoose';
 import ProviderProfile from '../models/providerProfile.model';
 import User from '../models/user.model';
 import Booking from '../models/booking.model';
 import { asyncHandler } from '../utils/asyncHandler';
 import { REGIONS } from '../services/region.service';
 import logger from '../utils/logger';
+
+// MongoDB ObjectId validator
+const isValidObjectId = (id: string): boolean => {
+  return mongoose.Types.ObjectId.isValid(id);
+};
 
 // Helper function to get provider's timezone
 async function getProviderTimezone(providerId: string): Promise<string> {
@@ -49,6 +55,77 @@ async function getProviderTimezone(providerId: string): Promise<string> {
   }
 
   return 'UTC'; // Default fallback
+}
+
+/**
+ * FIX: Issue #3 - Timezone Calculation Incomplete
+ * Get accurate timezone offset using Intl API with proper DST handling.
+ */
+function getTimezoneOffset(timezone: string): number {
+  if (!timezone || typeof timezone !== 'string') {
+    return 0;
+  }
+
+  try {
+    // Use Intl.DateTimeFormat to get accurate offset for the current moment
+    const now = new Date();
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      timeZoneName: 'shortOffset'
+    });
+
+    const parts = formatter.formatToParts(now);
+    const offsetString = parts.find(p => p.type === 'timeZoneName')?.value || 'UTC';
+
+    // Common offset abbreviations
+    const offsetMap: Record<string, number> = {
+      'GMT': 0, 'UTC': 0, 'GST': 4, 'AST': 3, 'IST': 5.5,
+      'BST': 1, 'CET': 1, 'CEST': 2, 'WEST': 1, 'WET': 0,
+      'EST': -5, 'EDT': -4, 'CST': -6, 'CDT': -5,
+      'MST': -7, 'MDT': -6, 'PST': -8, 'PDT': -7,
+      'JST': 9, 'KST': 9, 'CST_CHINA': 8, 'HKT': 8, 'SGT': 8, 'AEST': 10, 'AEDT': 11,
+    };
+
+    // Check if offsetString matches a known abbreviation
+    if (offsetMap[offsetString] !== undefined) {
+      return offsetMap[offsetString] * 60 * 60 * 1000;
+    }
+
+    // Parse numeric offset from string like "GMT+4" or "GMT-5:30"
+    const offsetMatch = offsetString.match(/GMT([+-])(\d{1,2})(?::(\d{2}))?/);
+    if (offsetMatch) {
+      const sign = offsetMatch[1] === '+' ? 1 : -1;
+      const hours = parseInt(offsetMatch[2], 10);
+      const minutes = offsetMatch[3] ? parseInt(offsetMatch[3], 10) : 0;
+      return sign * (hours * 60 + minutes) * 60 * 1000;
+    }
+
+    // Fallback: try to calculate from IANA timezone
+    const targetFormatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+    });
+
+    const targetParts = targetFormatter.formatToParts(now);
+    const getPart = (type: string): number => {
+      const value = targetParts.find(p => p.type === type)?.value || '0';
+      return parseInt(value, 10);
+    };
+
+    const targetYear = getPart('year');
+    const targetMonth = getPart('month') - 1;
+    const targetDay = getPart('day');
+    const targetHour = getPart('hour');
+    const targetMinute = getPart('minute');
+    const targetSecond = getPart('second');
+
+    const targetDate = Date.UTC(targetYear, targetMonth, targetDay, targetHour, targetMinute, targetSecond);
+    return targetDate - now.getTime();
+
+  } catch {
+    return 0;
+  }
 }
 
 // Transform old availability format to new provider profile format
@@ -175,7 +252,8 @@ export const getProviderAvailability = asyncHandler(async (req: Request, res: Re
     _id: providerProfile._id,
     providerId: providerProfile.userId,
     weeklySchedule: transformToLegacyFormat(providerProfile.availability.schedule),
-    dateOverrides: providerProfile.availability.exceptions.map(exception => ({
+    dateOverrides: providerProfile.availability.exceptions.map((exception, idx) => ({
+      _id: exception._id?.toString() || `override_${idx}`,
       date: exception.date,
       isAvailable: exception.type !== 'unavailable',
       reason: exception.reason,
@@ -256,7 +334,8 @@ export const updateWeeklySchedule = asyncHandler(async (req: Request, res: Respo
     _id: updatedProfile!._id,
     providerId: updatedProfile!.userId,
     weeklySchedule: transformToLegacyFormat(updatedProfile!.availability.schedule),
-    dateOverrides: updatedProfile!.availability.exceptions.map(exception => ({
+    dateOverrides: updatedProfile!.availability.exceptions.map((exception, idx) => ({
+      _id: exception._id?.toString() || `override_${idx}`,
       date: exception.date,
       isAvailable: exception.type !== 'unavailable',
       reason: exception.reason,
@@ -318,12 +397,18 @@ export const addDateOverride = asyncHandler(async (req: Request, res: Response) 
     exception => normalizeDateString(exception.date) !== normalizedInputDate
   );
 
-  providerProfile.availability.exceptions.push({
+  // FIX: Add unique overrideId for reliable removal
+  const newException: any = {
     date: new Date(date),
     type: isAvailable === false ? 'unavailable' : 'custom_hours',
     reason: reason || (isAvailable === false ? 'Unavailable' : 'Custom hours'),
     notes: req.body.notes || undefined
-  });
+  };
+
+  // Generate a unique override ID
+  newException._id = new mongoose.Types.ObjectId();
+
+  providerProfile.availability.exceptions.push(newException);
 
   providerProfile = await ProviderProfile.findByIdAndUpdate(
     providerProfile._id,
@@ -344,7 +429,8 @@ export const addDateOverride = asyncHandler(async (req: Request, res: Response) 
     _id: providerProfile._id,
     providerId: providerProfile.userId,
     weeklySchedule: transformToLegacyFormat(providerProfile.availability.schedule),
-    dateOverrides: providerProfile.availability.exceptions.map(exception => ({
+    dateOverrides: providerProfile.availability.exceptions.map((exception, idx) => ({
+      _id: exception._id?.toString() || `override_${idx}`,
       date: exception.date,
       isAvailable: exception.type !== 'unavailable',
       reason: exception.reason,
@@ -374,7 +460,16 @@ export const removeDateOverride = asyncHandler(async (req: Request, res: Respons
     });
   }
 
-  const { date } = req.params;
+  // FIX: Issue #5 - removeDateOverride by Date Only
+  // Support both override ID (preferred) and date (legacy fallback)
+  const { overrideId, date } = req.query as { overrideId?: string; date?: string };
+
+  if (!overrideId && !date) {
+    return res.status(400).json({
+      success: false,
+      message: 'Either overrideId or date is required'
+    });
+  }
 
   let providerProfile = await ProviderProfile.findOne({ userId: req.user?._id });
 
@@ -385,20 +480,48 @@ export const removeDateOverride = asyncHandler(async (req: Request, res: Respons
     });
   }
 
-  // Normalize date to YYYY-MM-DD for comparison (handle both formats)
-  const normalizeDateString = (d: Date): string => {
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  };
+  let removed = false;
 
-  // Handle both "2024-01-15" and "2024-01-15T00:00:00.000Z" formats from params
-  const normalizedParamDate = date.split('T')[0];
+  if (overrideId) {
+    // Remove by override ID (preferred method - unique)
+    const originalLength = providerProfile.availability.exceptions.length;
+    providerProfile.availability.exceptions = providerProfile.availability.exceptions.filter(
+      exception => (exception as any)._id?.toString() !== overrideId
+    );
+    removed = providerProfile.availability.exceptions.length < originalLength;
 
-  providerProfile.availability.exceptions = providerProfile.availability.exceptions.filter(
-    exception => normalizeDateString(exception.date) !== normalizedParamDate
-  );
+    if (!removed) {
+      return res.status(404).json({
+        success: false,
+        message: 'Override not found'
+      });
+    }
+  } else if (date) {
+    // Legacy fallback: remove by date (may remove multiple overrides on same date)
+    // Normalize date to YYYY-MM-DD for comparison (handle both formats)
+    const normalizeDateString = (d: Date): string => {
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+
+    // Handle both "2024-01-15" and "2024-01-15T00:00:00.000Z" formats from params
+    const normalizedParamDate = date.split('T')[0];
+
+    const originalLength = providerProfile.availability.exceptions.length;
+    providerProfile.availability.exceptions = providerProfile.availability.exceptions.filter(
+      exception => normalizeDateString(exception.date) !== normalizedParamDate
+    );
+    removed = providerProfile.availability.exceptions.length < originalLength;
+
+    if (!removed) {
+      return res.status(404).json({
+        success: false,
+        message: 'No override found for this date'
+      });
+    }
+  }
 
   providerProfile = await ProviderProfile.findByIdAndUpdate(
     providerProfile._id,
@@ -419,7 +542,8 @@ export const removeDateOverride = asyncHandler(async (req: Request, res: Respons
     _id: providerProfile._id,
     providerId: providerProfile.userId,
     weeklySchedule: transformToLegacyFormat(providerProfile.availability.schedule),
-    dateOverrides: providerProfile.availability.exceptions.map(exception => ({
+    dateOverrides: providerProfile.availability.exceptions.map((exception, idx) => ({
+      _id: (exception as any)._id || `override_${idx}`,
       date: exception.date,
       isAvailable: exception.type !== 'unavailable',
       reason: exception.reason,
@@ -615,7 +739,8 @@ export const removeBlockedPeriod = asyncHandler(async (req: Request, res: Respon
 
 export const getProviderAvailableSlots = asyncHandler(async (req: Request, res: Response) => {
   const { providerId } = req.params;
-  const { date, duration = '60', timezone: clientTimezone } = req.query;
+  // FIX: Issue #2 - Add serviceId for per-service availability
+  const { date, duration = '60', timezone: clientTimezone, serviceId } = req.query;
 
   if (!providerId) {
     return res.status(400).json({
@@ -631,7 +756,7 @@ export const getProviderAvailableSlots = asyncHandler(async (req: Request, res: 
     });
   }
 
-  // FIX: Get provider's timezone for consistent slot calculations
+  // FIX: Issue #3 - Get provider's timezone for consistent slot calculations
   const providerTimezone = await getProviderTimezone(providerId);
   const requestDateStr = date as string;
 
@@ -657,7 +782,14 @@ export const getProviderAvailableSlots = asyncHandler(async (req: Request, res: 
     });
   }
 
-  const daySchedule = providerProfile.availability.schedule[dayOfWeek as keyof typeof providerProfile.availability.schedule];
+  // FIX: Issue #2 - Get schedule for specific service or fall back to global schedule
+  let schedule = providerProfile.availability.schedule;
+  if (serviceId && providerProfile.availability.serviceSchedules?.[serviceId as string]) {
+    schedule = providerProfile.availability.serviceSchedules[serviceId as string];
+    logger.debug('Using service-specific schedule', { providerId, serviceId });
+  }
+
+  const daySchedule = schedule[dayOfWeek as keyof typeof schedule];
 
   if (!daySchedule?.isAvailable || !daySchedule.timeSlots) {
     return res.json({
@@ -694,14 +826,23 @@ export const getProviderAvailableSlots = asyncHandler(async (req: Request, res: 
   endOfDay.setHours(23, 59, 59, 999);
   const endOfDayUtc = new Date(endOfDay.getTime() - tzOffset);
 
-  const existingBookings = await Booking.find({
+  // FIX: Issue #4 - Real-Time Slot Blocking
+  // Query bookings, optionally filtered by serviceId
+  const bookingQuery: any = {
     providerId,
     scheduledDate: {
       $gte: startOfDayUtc,
       $lte: endOfDayUtc
     },
     status: { $in: ['pending', 'confirmed', 'in_progress'] }
-  });
+  };
+
+  // Add service filter if checking per-service availability
+  if (serviceId) {
+    bookingQuery.serviceId = serviceId;
+  }
+
+  const existingBookings = await Booking.find(bookingQuery);
 
   const availableSlots: string[] = [];
   const slotDuration = parseInt(duration as string, 10);
@@ -791,66 +932,6 @@ export const getProviderAvailableSlots = asyncHandler(async (req: Request, res: 
     data: { slots: availableSlots, timezone: providerTimezone }
   });
 });
-
-/**
- * Get timezone offset in milliseconds for a given timezone string
- * Returns the offset that should be ADDED to UTC to get local time in the target timezone
- */
-function getTimezoneOffset(timezone: string): number {
-  // Common timezone offsets in milliseconds
-  const timezoneOffsets: Record<string, number> = {
-    'UTC': 0,
-    'GMT': 0,
-    'UAE': 4 * 60 * 60 * 1000,        // Dubai, Abu Dhabi
-    'Asia/Dubai': 4 * 60 * 60 * 1000,
-    'Asia/Abu_Dhabi': 4 * 60 * 60 * 1000,
-    'Asia/Kolkata': 5.5 * 60 * 60 * 1000, // India
-    'IST': 5.5 * 60 * 60 * 1000,
-    'Europe/London': 0,
-    'GMT+1': 1 * 60 * 60 * 1000,
-    'Europe/Paris': 1 * 60 * 60 * 1000,
-    'Europe/Berlin': 1 * 60 * 60 * 1000,
-    'US/Eastern': -5 * 60 * 60 * 1000,
-    'US/Pacific': -8 * 60 * 60 * 1000,
-  };
-
-  if (timezoneOffsets[timezone] !== undefined) {
-    return timezoneOffsets[timezone];
-  }
-
-  // Try to calculate from IANA timezone using Intl API
-  try {
-    const formatter = new Intl.DateTimeFormat('en-US', {
-      timeZone: timezone,
-      year: 'numeric',
-      month: 'numeric',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: 'numeric',
-      second: 'numeric',
-      hour12: false
-    });
-
-    // Get current time in target timezone
-    const parts = formatter.formatToParts(new Date());
-    const getPart = (type: string) => parseInt(parts.find(p => p.type === type)?.value || '0', 10);
-
-    const tzYear = getPart('year');
-    const tzMonth = getPart('month') - 1;
-    const tzDay = getPart('day');
-    const tzHour = getPart('hour');
-    const tzMinute = getPart('minute');
-    const tzSecond = getPart('second');
-
-    const tzDate = new Date(Date.UTC(tzYear, tzMonth, tzDay, tzHour, tzMinute, tzSecond));
-    const localDate = new Date();
-
-    return tzDate.getTime() - localDate.getTime();
-  } catch {
-    // Default to UTC+4 (UAE timezone)
-    return 4 * 60 * 60 * 1000;
-  }
-}
 
 export const checkTimeSlotAvailability = asyncHandler(async (req: Request, res: Response) => {
   const { providerId } = req.params;

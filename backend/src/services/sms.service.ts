@@ -5,6 +5,8 @@ import { SmsDLQ } from '../models/smsDlq.model';
 import { withRetry, retryConfigs, addToDeadLetterQueue } from '../utils/retry.util';
 import logger from '../utils/logger';
 import { ApiError, ERROR_CODES } from '../utils/ApiError';
+import { getTwilioTransportConfig } from './platformSmsTransport.service';
+import { getPlatformPolicySync, isChannelEnabledByPlatform } from './platformSettingsPolicy.service';
 
 // ============================================
 // Twilio Configuration
@@ -132,7 +134,16 @@ export class SmsService {
    * Send an SMS message with retry logic
    */
   async send(phoneNumber: string, message: string, metadata?: Record<string, any>): Promise<{ success: boolean; messageSid?: string; error?: string }> {
-    if (!twilioConfig) {
+    if (!isChannelEnabledByPlatform('sms', getPlatformPolicySync())) {
+      logger.debug('Platform SMS notifications disabled — skipping', {
+        phoneNumber: maskPhoneNumber(phoneNumber),
+        action: 'PLATFORM_SMS_SKIPPED',
+      });
+      return { success: false, error: 'SMS notifications disabled' };
+    }
+
+    const twilioRuntime = (await getTwilioTransportConfig()) ?? twilioConfig;
+    if (!twilioRuntime) {
       logger.debug('Twilio not configured - skipping SMS', {
         context: 'SmsService',
         action: 'TWILIO_NOT_CONFIGURED',
@@ -165,9 +176,9 @@ export class SmsService {
 
     const result = await withRetry(
       async () => {
-        const twilioMessage = await twilioConfig.client.messages.create({
+        const twilioMessage = await twilioRuntime.client.messages.create({
           body: message,
-          from: twilioConfig.phoneNumber,
+          from: twilioRuntime.phoneNumber,
           to: cleanedPhone,
           // Enable delivery status callbacks
           statusCallback: `${process.env.API_BASE_URL || process.env.BASE_URL}/api/v1/webhooks/twilio/status`,

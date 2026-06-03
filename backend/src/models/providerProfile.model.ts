@@ -203,7 +203,24 @@ export interface IProviderProfile extends Document {
         }>;
       };
     };
+    // FIX: Issue #2 - Per-Service Availability
+    // Optional per-service schedules that override the global schedule
+    serviceSchedules?: {
+      [serviceId: string]: {
+        [key: string]: {
+          isAvailable: boolean;
+          timeSlots: Array<{
+            startTime: string;
+            endTime: string;
+            isBooked: boolean;
+            maxBookings?: number;
+            currentBookings: number;
+          }>;
+        };
+      };
+    };
     exceptions: Array<{
+      _id?: mongoose.Types.ObjectId; // FIX: Issue #5 - Add unique ID for reliable removal
       date: Date;
       type: 'unavailable' | 'custom_hours' | 'special_pricing';
       reason?: string;
@@ -263,6 +280,7 @@ export interface IProviderProfile extends Document {
       1: number;
     };
     recentReviews: Array<{
+      _id: mongoose.Types.ObjectId;
       customerId: mongoose.Types.ObjectId;
       bookingId: mongoose.Types.ObjectId;
       serviceId?: mongoose.Types.ObjectId;
@@ -430,7 +448,7 @@ export interface IProviderProfile extends Document {
   
   // Verification status
   verificationStatus: {
-    overall: 'pending' | 'in_progress' | 'approved' | 'rejected' | 'suspended';
+    overall: 'pending' | 'in_progress' | 'approved' | 'verified' | 'rejected' | 'suspended';
     identity: {
       status: 'pending' | 'approved' | 'rejected';
       submittedAt?: Date;
@@ -482,6 +500,9 @@ export interface IProviderProfile extends Document {
       showPhoneNumber: boolean;
       showEmail: boolean;
     };
+    reviewDisplaySettings?: {
+      showPendingOnReviewsPage: boolean;
+    };
   };
 
   // Audit fields
@@ -501,7 +522,7 @@ export interface IProviderProfileModel extends Model<IProviderProfile> {
   findInServiceArea(lat: number, lng: number, maxDistance: number): Promise<IProviderProfile[]>;
   recalculateBookingStats(userId: string | mongoose.Types.ObjectId): Promise<void>;
   recalculateRevenueStats(userId: string | mongoose.Types.ObjectId): Promise<void>;
-  recalculateReviewsData(userId: string | mongoose.Types.ObjectId): Promise<void>;
+  recalculateReviewsData(userId: string | mongoose.Types.ObjectId, tenantId?: mongoose.Types.ObjectId): Promise<void>;
   recalculateAllAnalytics(userId: string | mongoose.Types.ObjectId): Promise<void>;
 }
 
@@ -798,7 +819,86 @@ const providerProfileSchema = new Schema<IProviderProfile>(
           }]
         }
       },
+      // FIX: Issue #2 - Per-Service Availability
+      // Optional per-service schedules that override the global schedule
+      serviceSchedules: {
+        type: Map,
+        of: {
+          monday: {
+            isAvailable: { type: Boolean, default: false },
+            timeSlots: [{
+              startTime: String,
+              endTime: String,
+              isBooked: { type: Boolean, default: false },
+              maxBookings: { type: Number, default: 1 },
+              currentBookings: { type: Number, default: 0 }
+            }]
+          },
+          tuesday: {
+            isAvailable: { type: Boolean, default: false },
+            timeSlots: [{
+              startTime: String,
+              endTime: String,
+              isBooked: { type: Boolean, default: false },
+              maxBookings: { type: Number, default: 1 },
+              currentBookings: { type: Number, default: 0 }
+            }]
+          },
+          wednesday: {
+            isAvailable: { type: Boolean, default: false },
+            timeSlots: [{
+              startTime: String,
+              endTime: String,
+              isBooked: { type: Boolean, default: false },
+              maxBookings: { type: Number, default: 1 },
+              currentBookings: { type: Number, default: 0 }
+            }]
+          },
+          thursday: {
+            isAvailable: { type: Boolean, default: false },
+            timeSlots: [{
+              startTime: String,
+              endTime: String,
+              isBooked: { type: Boolean, default: false },
+              maxBookings: { type: Number, default: 1 },
+              currentBookings: { type: Number, default: 0 }
+            }]
+          },
+          friday: {
+            isAvailable: { type: Boolean, default: false },
+            timeSlots: [{
+              startTime: String,
+              endTime: String,
+              isBooked: { type: Boolean, default: false },
+              maxBookings: { type: Number, default: 1 },
+              currentBookings: { type: Number, default: 0 }
+            }]
+          },
+          saturday: {
+            isAvailable: { type: Boolean, default: false },
+            timeSlots: [{
+              startTime: String,
+              endTime: String,
+              isBooked: { type: Boolean, default: false },
+              maxBookings: { type: Number, default: 1 },
+              currentBookings: { type: Number, default: 0 }
+            }]
+          },
+          sunday: {
+            isAvailable: { type: Boolean, default: false },
+            timeSlots: [{
+              startTime: String,
+              endTime: String,
+              isBooked: { type: Boolean, default: false },
+              maxBookings: { type: Number, default: 1 },
+              currentBookings: { type: Number, default: 0 }
+            }]
+          }
+        },
+        default: undefined
+      },
       exceptions: [{
+        _id: { type: Schema.Types.ObjectId, auto: true }, // FIX: Issue #5 - Unique ID for reliable removal
         date: { type: Date, required: true },
         type: { type: String, enum: ['unavailable', 'custom_hours', 'special_pricing'], required: true },
         reason: String,
@@ -869,8 +969,8 @@ const providerProfileSchema = new Schema<IProviderProfile>(
         isVerified: { type: Boolean, default: false },
         helpfulVotes: { type: Number, default: 0 },
         response: {
-          text: String,
-          timestamp: Date
+          content: String,
+          createdAt: Date
         },
         createdAt: { type: Date, default: Date.now }
       }],
@@ -1021,7 +1121,7 @@ const providerProfileSchema = new Schema<IProviderProfile>(
     verificationStatus: {
       overall: {
         type: String,
-        enum: ['pending', 'in_progress', 'approved', 'rejected', 'suspended'],
+        enum: ['pending', 'in_progress', 'approved', 'verified', 'rejected', 'suspended'],
         default: 'pending'
       },
       identity: {
@@ -1073,6 +1173,9 @@ const providerProfileSchema = new Schema<IProviderProfile>(
         showExactLocation: { type: Boolean, default: false },
         showPhoneNumber: { type: Boolean, default: true },
         showEmail: { type: Boolean, default: false }
+      },
+      reviewDisplaySettings: {
+        showPendingOnReviewsPage: { type: Boolean, default: true }
       }
     },
     
@@ -1482,16 +1585,27 @@ ProviderProfile.recalculateRevenueStats = async function(userId: string | mongoo
 /**
  * Recalculate and update reviews data from actual Review documents.
  * Call this after reviews are created, updated, or deleted.
+ * @param userId - The provider's user ID
+ * @param tenantId - Optional tenant ID for multi-tenant isolation. If provided, only reviews from this tenant are counted.
  */
-ProviderProfile.recalculateReviewsData = async function(userId: string | mongoose.Types.ObjectId): Promise<void> {
+ProviderProfile.recalculateReviewsData = async function(userId: string | mongoose.Types.ObjectId, tenantId?: mongoose.Types.ObjectId): Promise<void> {
   const Review = mongoose.model('Review');
+
+  // Build match conditions with tenant isolation if tenantId is provided
+  const matchConditions: Record<string, any> = {
+    revieweeId: new mongoose.Types.ObjectId(userId.toString()),
+    reviewerType: 'customer',
+    isHidden: false
+  };
+
+  // FIX: Add tenant isolation to prevent cross-tenant data leakage in multi-tenant mode
+  if (tenantId) {
+    matchConditions.tenantId = tenantId;
+  }
 
   const reviews = await Review.aggregate([
     {
-      $match: {
-        revieweeId: new mongoose.Types.ObjectId(userId.toString()),
-        reviewerType: 'customer'
-      }
+      $match: matchConditions
     },
     {
       $group: {
@@ -1519,15 +1633,22 @@ ProviderProfile.recalculateReviewsData = async function(userId: string | mongoos
 
   // Get recent reviews - limit to 20 max for pagination support
   // This prevents unbounded document growth from storing too many reviews
-  const recentReviews = await Review.find({
+  const recentReviewQuery: Record<string, any> = {
     revieweeId: userId,
     reviewerType: 'customer',
     isHidden: false
-  })
+  };
+
+  // FIX: Add tenant isolation to recent reviews query
+  if (tenantId) {
+    recentReviewQuery.tenantId = tenantId;
+  }
+
+  const recentReviews = await Review.find(recentReviewQuery)
     .sort({ createdAt: -1 })
     .limit(20)
     .populate('reviewerId', 'firstName lastName avatar')
-    .select('reviewerId bookingId rating title comment photos isVerified helpfulVotes response createdAt');
+    .select('reviewerId bookingId rating title comment photos isVerified helpfulVotes response createdAt _id');
 
   await this.updateOne(
     { userId },
@@ -1543,6 +1664,7 @@ ProviderProfile.recalculateReviewsData = async function(userId: string | mongoos
           1: stats.rating1
         },
         'reviewsData.recentReviews': recentReviews.map(r => ({
+          _id: r._id,
           customerId: r.reviewerId?._id || r.reviewerId,
           bookingId: r.bookingId,
           rating: r.rating,

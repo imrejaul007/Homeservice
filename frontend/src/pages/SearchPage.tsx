@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import NavigationHeader from '../components/layout/NavigationHeader';
 import Footer from '../components/layout/Footer';
 import ServiceCard from '../components/customer/ServiceCard';
 import type { Service } from '../components/customer/ServiceCard';
 import { searchApi } from '../services/searchApi';
-import { SlidersHorizontal, X, ChevronLeft, ChevronRight, Search, Star } from 'lucide-react';
+import { SlidersHorizontal, X, ChevronLeft, ChevronRight, Search, Star, Calendar } from 'lucide-react';
 import { useCategories } from '../hooks/useCategories';
 import { PageErrorBoundary } from '../components/common/PageErrorBoundary';
 import BottomSheet from '../components/mobile/BottomSheet';
@@ -20,6 +20,7 @@ interface Pagination {
 
 const SearchPage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
   const [services, setServices] = useState<Service[]>([]);
   const [loading, setLoading] = useState(true);
   const [showMobileFilters, setShowMobileFilters] = useState(false);
@@ -32,9 +33,18 @@ const SearchPage: React.FC = () => {
   const [priceRange, setPriceRange] = useState<[number, number]>([0, 10000]);
   const [maxPriceLimit, setMaxPriceLimit] = useState<number>(10000);
   const [minRating, setMinRating] = useState<number>(0);
-  const [sortBy, setSortBy] = useState<string>('popularity');
+  const [sortBy, setSortBy] = useState<string>('popular');
 
   const { categories: apiCategories } = useCategories();
+
+  // Handle Book Now from search results
+  const handleBookNow = (service: Service) => {
+    const serviceId = service._id || service.id;
+    if (serviceId) {
+      console.log('[SearchPage] Booking service:', service.name);
+      navigate(`/book/${serviceId}`, { state: { service } });
+    }
+  };
 
   const categoryList = useMemo(() => {
     return apiCategories.map(cat => ({ value: cat.slug || cat.name, label: cat.name }));
@@ -243,7 +253,7 @@ const SearchPage: React.FC = () => {
             onChange={(e) => setSortBy(e.target.value)}
             className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-nilin-primary/20"
           >
-            <option value="popularity">Most Popular</option>
+            <option value="popular">Most Popular</option>
             <option value="price">Price: Low to High</option>
             <option value="price_desc">Price: High to Low</option>
             <option value="rating">Highest Rated</option>
@@ -262,7 +272,13 @@ const SearchPage: React.FC = () => {
           <>
             <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
               {services.map((service) => (
-                <ServiceCard key={service._id} service={service} />
+                <ServiceCard
+                  key={service._id}
+                  service={service}
+                  variant="default"
+                  onBookNow={handleBookNow}
+                  showBookNow={false}
+                />
               ))}
             </div>
 

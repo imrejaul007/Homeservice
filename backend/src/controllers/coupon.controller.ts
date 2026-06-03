@@ -90,6 +90,18 @@ export const getAllCoupons = asyncHandler(async (req: Request, res: Response) =>
     filter.type = type;
   }
 
+  const status = req.query.status as string | undefined;
+  const now = new Date();
+  if (status === 'expired') {
+    filter.validUntil = { $lt: now };
+  } else if (status === 'scheduled') {
+    filter.validFrom = { $gt: now };
+  } else if (status === 'live') {
+    filter.isActive = true;
+    filter.validFrom = { $lte: now };
+    filter.validUntil = { $gte: now };
+  }
+
   // Pagination
   const pageNum = parseInt(page as string, 10);
   const limitNum = Math.min(parseInt(limit as string, 10), 100);
@@ -143,14 +155,29 @@ export const createCoupon = asyncHandler(async (req: Request, res: Response) => 
     throw ApiError.conflict('Coupon code already exists', ERROR_CODES.DUPLICATE_ENTRY);
   }
 
+  const {
+    usageLimit,
+    minOrderAmount,
+    applicableServices,
+    applicableCategories,
+    ...rest
+  } = value;
+
+  const serviceIds: string[] = applicableServices || [];
+  const categoryIds: string[] = applicableCategories || [];
+
   const coupon = new Coupon({
-    ...value,
-    maxUses: value.usageLimit,
-    maxUsesPerUser: value.maxUsesPerUser,
+    ...rest,
+    minOrderValue: minOrderAmount ?? 0,
+    maxUses: usageLimit,
+    maxUsesPerUser: value.maxUsesPerUser ?? 1,
     currentUses: 0,
     usedBy: [],
-    applicableServices: value.applicableServices || [],
-    applicableCategories: value.applicableCategories || [],
+    targetServices: serviceIds.map((id: string) => new mongoose.Types.ObjectId(id)),
+    targetCategories: categoryIds.map((id: string) => new mongoose.Types.ObjectId(id)),
+    targetType: serviceIds.length > 0 ? 'specific_services' : 'all',
+    applicableServices: serviceIds,
+    applicableCategories: categoryIds,
     createdBy: (req as any).user._id,
   });
 
@@ -226,14 +253,31 @@ export const updateCoupon = asyncHandler(async (req: Request, res: Response) => 
     }
   }
 
-  // Map usageLimit to maxUses if provided
+  const updatePayload: Record<string, unknown> = { ...value };
+
   if (value.usageLimit !== undefined) {
-    value.maxUses = value.usageLimit;
+    updatePayload.maxUses = value.usageLimit;
+    delete updatePayload.usageLimit;
+  }
+  if (value.minOrderAmount !== undefined) {
+    updatePayload.minOrderValue = value.minOrderAmount;
+    delete updatePayload.minOrderAmount;
+  }
+  if (value.applicableServices !== undefined) {
+    const serviceIds: string[] = value.applicableServices || [];
+    updatePayload.targetServices = serviceIds.map((sid: string) => new mongoose.Types.ObjectId(sid));
+    updatePayload.targetType = serviceIds.length > 0 ? 'specific_services' : 'all';
+    updatePayload.applicableServices = serviceIds;
+  }
+  if (value.applicableCategories !== undefined) {
+    const categoryIds: string[] = value.applicableCategories || [];
+    updatePayload.targetCategories = categoryIds.map((cid: string) => new mongoose.Types.ObjectId(cid));
+    updatePayload.applicableCategories = categoryIds;
   }
 
   const coupon = await Coupon.findByIdAndUpdate(
     id,
-    { $set: value },
+    { $set: updatePayload },
     { new: true, runValidators: true }
   ).populate('createdBy', 'firstName lastName email');
 

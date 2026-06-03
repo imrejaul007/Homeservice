@@ -284,7 +284,11 @@ export const EarningsForecast: React.FC<EarningsForecastProps> = ({
 
   // Process data for chart
   const chartData = useMemo(() => {
-    return data.data.map((d) => ({
+    const sourceData = data?.data;
+    if (!sourceData || !Array.isArray(sourceData)) {
+      return [];
+    }
+    return sourceData.map((d) => ({
       ...d,
       date: new Date(d.date).toLocaleDateString('en-US', {
         month: 'short',
@@ -295,7 +299,7 @@ export const EarningsForecast: React.FC<EarningsForecastProps> = ({
         day: 'numeric',
       }),
     }));
-  }, [data.data]);
+  }, [data?.data]);
 
   // Separate actual and projected data
   const actualData = chartData.filter((d) => d.actual !== undefined);
@@ -499,6 +503,7 @@ export const EarningsForecast: React.FC<EarningsForecastProps> = ({
                 x={actualData[actualData.length - 1]?.date}
                 stroke="#B5B0AB"
                 strokeDasharray="3 3"
+                aria-label="End of actual data"
               />
             </AreaChart>
           ) : (

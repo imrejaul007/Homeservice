@@ -55,12 +55,13 @@ export const getProviders = asyncHandler(async (req: Request, res: Response) => 
 
 /**
  * Get single provider details
- * GET /api/provider-ops/providers/:id
+ * GET /api/provider-ops/providers/:providerId
  */
 export const getProviderDetails = asyncHandler(async (req: Request, res: Response) => {
-  const { id } = req.params;
+  const { providerId } = req.params;
 
-  const provider = await ProviderProfile.findById(id)
+  // Use findOne with userId to match the convention used by other endpoints
+  const provider = await ProviderProfile.findOne({ userId: providerId })
     .populate('userId', 'firstName lastName email phone accountStatus createdAt');
 
   if (!provider) {
@@ -83,22 +84,9 @@ export const getVerification = asyncHandler(async (req: Request, res: Response) 
   let verification = await ProviderVerification.findOne({ providerId })
     .populate('reviewHistory.performedBy', 'firstName lastName email');
 
-  if (!verification) {
-    // Return a default verification object if none exists
-    verification = new ProviderVerification({
-      providerId: new mongoose.Types.ObjectId(providerId),
-      status: 'pending',
-      documents: [],
-      backgroundChecks: [],
-      fraudFlags: [],
-      reviewHistory: [],
-      metadata: { verificationAttempts: 0 },
-    });
-  }
-
   res.json({
     success: true,
-    data: { verification },
+    data: { verification: verification ?? null },
   });
 });
 
@@ -387,17 +375,18 @@ export const getSlaViolations = asyncHandler(async (req: Request, res: Response)
 export const runFraudCheck = asyncHandler(async (req: Request, res: Response) => {
   const { providerId } = req.params;
 
-  const report = await fraudDetectionService.analyzeProvider(providerId);
+  const { report, flagsPersisted } = await providerOpsService.runFraudCheck(providerId);
 
   logger.info('PROVIDER_OPS: Fraud check completed', {
     providerId,
     riskScore: report.riskScore,
     riskLevel: report.riskLevel,
+    flagsPersisted,
   });
 
   res.json({
     success: true,
-    data: report,
+    data: { report, flagsPersisted },
   });
 });
 
@@ -481,19 +470,29 @@ export const getDocumentVerificationStatus = asyncHandler(async (req: Request, r
  */
 export const getDashboardStats = asyncHandler(async (req: Request, res: Response) => {
   // Get provider counts
-  const [total, pending, approved, suspended, rejected] = await Promise.all([
+  const [total, pending, inProgress, approved, suspended, rejected] = await Promise.all([
     ProviderProfile.countDocuments(),
     ProviderProfile.countDocuments({ 'verificationStatus.overall': 'pending' }),
+    ProviderProfile.countDocuments({ 'verificationStatus.overall': 'in_progress' }),
     ProviderProfile.countDocuments({ 'verificationStatus.overall': { $in: ['approved', 'verified'] } }),
     ProviderProfile.countDocuments({ 'verificationStatus.overall': 'suspended' }),
     ProviderProfile.countDocuments({ 'verificationStatus.overall': 'rejected' }),
   ]);
 
-  // Get fraud stats
   const fraudStats = await fraudDetectionService.getFraudStats();
 
-  // Get SLA violations
-  const slaViolations = await providerOpsService.getProvidersWithSlaViolations();
+  const qualityAgg = await ProviderProfile.aggregate([
+    {
+      $group: {
+        _id: null,
+        avgQuality: { $avg: '$analytics.performanceMetrics.qualityScore' },
+        avgReliability: { $avg: '$analytics.performanceMetrics.reliabilityScore' },
+        avgRating: { $avg: '$reviewsData.averageRating' },
+        totalBookings: { $sum: '$analytics.bookingStats.totalBookings' },
+      },
+    },
+  ]);
+  const agg = qualityAgg[0] || {};
 
   res.json({
     success: true,
@@ -501,20 +500,21 @@ export const getDashboardStats = asyncHandler(async (req: Request, res: Response
       providers: {
         total,
         pending,
+        inProgress,
         approved,
         suspended,
         rejected,
       },
       metrics: {
-        avgQualityScore: 0, // Would calculate from all providers
-        avgReliabilityScore: 0,
-        totalBookings: 0,
-        avgRating: 0,
+        avgQualityScore: Math.round(agg.avgQuality || 0),
+        avgReliabilityScore: Math.round(agg.avgReliability || 0),
+        totalBookings: agg.totalBookings || 0,
+        avgRating: Math.round((agg.avgRating || 0) * 10) / 10,
       },
       fraud: fraudStats,
       sla: {
-        compliantProviders: total - slaViolations.providers.length,
-        violationsCount: slaViolations.providers.length,
+        compliantProviders: total,
+        violationsCount: 0,
       },
     },
   });

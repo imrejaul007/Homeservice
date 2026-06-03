@@ -5,6 +5,8 @@ import {
   createService,
   updateService,
   deleteService,
+  restoreService,
+  getDeletedServices,
   toggleServiceStatus,
   getServiceAnalytics,
   getOverviewAnalytics,
@@ -13,7 +15,9 @@ import {
   getProviderVerification,
   uploadVerificationDocument,
   submitVerification,
+  recordBackgroundCheckConsent,
   getPortfolioItems,
+  getPortfolioItemById,
   createPortfolioItem,
   updatePortfolioItem,
   deletePortfolioItem,
@@ -21,6 +25,7 @@ import {
   removePortfolioImage,
   getProviderSettings,
   updateProviderSettings,
+  getProviderReviews,
 } from '../controllers/provider.controller';
 import { authenticate, requireProviderAccount } from '../middleware/auth.middleware';
 import { validateProviderRole } from '../middleware/validation.middleware';
@@ -67,12 +72,18 @@ router.get('/services/:id', validateServiceId, getServiceById);
 router.put('/services/:id', validateServiceId, validateServiceUpdate, updateService);
 router.delete('/services/:id', validateServiceId, deleteService);
 router.patch('/services/:id/status', validateServiceId, toggleServiceStatus);
+router.patch('/services/:id/toggle-status', validateServiceId, toggleServiceStatus);
+router.patch('/services/:id/restore', validateServiceId, restoreService);
 router.get('/services/:id/analytics', validateServiceId, getServiceAnalytics);
+
+// Soft delete routes (trash management)
+router.get('/services/trash', getDeletedServices);
 
 // Provider Onboarding Routes (no rate limiting for these as they are lightweight)
 router.get('/onboarding', getProviderOnboardingStatus);
 router.get('/verification', getProviderVerification);
 router.post('/verification/documents', uploadVerificationDocument);
+router.post('/verification/consent', recordBackgroundCheckConsent);
 router.post('/verification/submit', submitVerification);
 
 // Provider Settings Routes
@@ -82,6 +93,7 @@ router.patch('/settings', updateProviderSettings);
 // Portfolio Management Routes
 router.get('/portfolio', getPortfolioItems);
 router.post('/portfolio', uploadPortfolioMultiple, createPortfolioItem);
+router.get('/portfolio/:itemId', getPortfolioItemById);
 router.put('/portfolio/:itemId', updatePortfolioItem);
 router.delete('/portfolio/:itemId', deletePortfolioItem);
 router.patch('/portfolio/:itemId/images', uploadPortfolioMultiple, addPortfolioImage);
@@ -156,44 +168,8 @@ router.patch('/profile', asyncHandler(async (req, res) => {
   });
 }));
 
-// Provider reviews route (GET /provider/reviews - get own received reviews)
-router.get('/reviews', asyncHandler(async (req, res) => {
-  const providerProfile = await ProviderProfile.findOne({ userId: (req.user as IUser)._id });
-
-  if (!providerProfile) {
-    throw new ApiError(404, 'Provider profile not found');
-  }
-
-  const page = parseInt(req.query.page as string) || 1;
-  const limit = parseInt(req.query.limit as string) || 20;
-  const skip = (page - 1) * limit;
-
-  const Review = (req as any).modelMap?.get('Review') as typeof import('../models/review.model').default | undefined;
-  const ReviewModel = Review || require('../models/review.model').default;
-
-  const [reviews, total] = await Promise.all([
-    ReviewModel.find({ providerId: providerProfile._id })
-      .populate('customerId', 'firstName lastName avatar')
-      .populate('serviceId', 'name')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit),
-    ReviewModel.countDocuments({ providerId: providerProfile._id })
-  ]);
-
-  res.json({
-    success: true,
-    data: {
-      reviews,
-      pagination: {
-        page,
-        limit,
-        total,
-        pages: Math.ceil(total / limit)
-      }
-    }
-  });
-}));
+// Provider reviews (canonical)
+router.get('/reviews', getProviderReviews);
 
 // Operations Dashboard Routes (requires admin)
 router.use('/ops', providerOpsRoutes);

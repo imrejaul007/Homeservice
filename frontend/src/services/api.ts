@@ -232,16 +232,16 @@ api.interceptors.response.use(
   async (error: AxiosError) => {
     const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean; _retryCount?: number };
 
-    // Log unexpected errors (skip noisy 404s from optional dashboard resources)
+    // Log ALL errors for debugging including 404s
     const status = error.response?.status;
-    if (status !== 404) {
-      console.error('API Error:', {
-        url: originalRequest?.url,
-        status,
-        message: error.message,
-        correlationId: originalRequest?.headers?.['X-Correlation-ID'],
-      });
-    }
+    console.error('[API ERROR]', {
+      url: originalRequest?.url,
+      status,
+      statusText: error.response?.statusText,
+      message: error.message,
+      responseData: error.response?.data,
+      correlationId: originalRequest?.headers?.['X-Correlation-ID'],
+    });
 
     // Handle network errors with retry
     if (!error.response && shouldRetry(error)) {
@@ -251,6 +251,17 @@ api.interceptors.response.use(
       if (retryCount <= MAX_RETRIES) {
         console.log(`Retrying request (${retryCount}/${MAX_RETRIES})...`);
         return retryRequest(originalRequest, retryCount);
+      }
+    }
+
+    // Maintenance mode — redirect non-admins to maintenance page
+    if (error.response?.status === 503) {
+      const data = error.response.data as { maintenanceMode?: boolean };
+      if (data?.maintenanceMode && typeof window !== 'undefined') {
+        const path = window.location.pathname;
+        if (!path.startsWith('/admin') && path !== '/maintenance' && path !== '/login') {
+          window.location.href = '/maintenance';
+        }
       }
     }
 

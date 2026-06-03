@@ -1,12 +1,21 @@
 import { Router, Request, Response } from 'express';
-import { authenticate, requireRole } from '../middleware/auth.middleware';
+import { authenticate, requireRole, createRateLimit } from '../middleware/auth.middleware';
 import { chat, getConversations, getConversation, deleteConversation } from '../controllers/ai.controller';
+import { IAAgent, IAAgentCategory, IAAgentType, IAAgentStatus } from '../models/iaAgent.model';
+import Joi from 'joi';
 import logger from '../utils/logger';
 import { asyncHandler } from '../utils/asyncHandler';
 import mongoose from 'mongoose';
 
 const router = Router();
 // Note: Individual routes below have explicit authenticate middleware for security clarity
+
+// AI Chat rate limiter - prevent abuse of AI chat endpoint (issue #8)
+const aiLimiter = createRateLimit(
+  1 * 60 * 1000, // 1 minute
+  20, // 20 messages per minute - reasonable for chat
+  'Too many chat requests, please slow down'
+);
 
 // Validation helper for MongoDB ObjectId
 const isValidObjectId = (id: string): boolean => mongoose.Types.ObjectId.isValid(id);
@@ -179,14 +188,27 @@ router.get('/insights', authenticate, requireRole('admin'), async (_req: Request
  * GET /api/ai/provider/:id/score
  * Calculates real provider score from performance metrics
  * @access Provider (own) or Admin
+ *
+ * Issue #3 fix: Stricter role validation - provider can only access their own score
+ * Admin can access any provider's score.
  */
 router.get('/provider/:id/score', authenticate, requireRole(['admin', 'provider']), async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
+
+    // Issue #3 fix: Add explicit ObjectId format validation for :id parameter
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid provider ID format'
+      });
+    }
+
     const user = (req as any).user;
 
-    // Ownership check: only allow access to own data or admin
-    if (user.role !== 'admin' && user._id.toString() !== id) {
+    // Issue #3 fix: Stricter ownership check
+    // Admin can view any provider's score, but providers can only view their own
+    if (user.role === 'provider' && user._id.toString() !== id) {
       return res.status(403).json({
         success: false,
         message: 'Access denied. You can only view your own score.'
@@ -195,9 +217,31 @@ router.get('/provider/:id/score', authenticate, requireRole(['admin', 'provider'
 
     const { Booking, ProviderProfile } = await getModels();
 
-    // Get provider's bookings
-    const bookings = await Booking.find({ providerId: id });
-    const totalBookings = bookings.length;
+    // FIX #8: Use aggregation pipeline instead of fetching all bookings and filtering in memory
+    const bookingStats = await Booking.aggregate([
+      { $match: { providerId: new mongoose.Types.ObjectId(id) } },
+      {
+        $group: {
+          _id: null,
+          totalBookings: { $sum: 1 },
+          completedBookings: {
+            $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] }
+          },
+          respondedBookings: {
+            $sum: {
+              $cond: [
+                { $in: ['$status', ['confirmed', 'completed']] },
+                1,
+                0
+              ]
+            }
+          }
+        }
+      }
+    ]);
+
+    const stats = bookingStats[0] || { totalBookings: 0, completedBookings: 0, respondedBookings: 0 };
+    const totalBookings = stats.totalBookings;
 
     // Get provider profile for reviews
     const providerProfile = await ProviderProfile.findOne({ userId: id });
@@ -224,26 +268,35 @@ router.get('/provider/:id/score', authenticate, requireRole(['admin', 'provider'
       return;
     }
 
-    // Calculate completion rate (30% weight)
-    const completedBookings = bookings.filter((b: any) => b.status === 'completed').length;
+    // FIX #8: Use aggregation pipeline for activity calculation instead of in-memory filtering
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+    const activityStats = await Booking.aggregate([
+      {
+        $match: {
+          providerId: new mongoose.Types.ObjectId(id),
+          createdAt: { $gte: thirtyDaysAgo }
+        }
+      },
+      {
+        $count: 'recentBookings'
+      }
+    ]);
+
+    const recentBookings = activityStats[0]?.recentBookings || 0;
+
+    // Calculate completion rate (30% weight) using aggregated stats
     const completionRate = totalBookings > 0
-      ? (completedBookings / totalBookings) * 100
+      ? (stats.completedBookings / totalBookings) * 100
       : 0;
 
-    // Calculate response rate (20% weight) - based on booking acceptance
-    const respondedBookings = bookings.filter((b: any) =>
-      b.status === 'confirmed' || b.status === 'completed'
-    );
+    // Calculate response rate (20% weight) - based on booking acceptance using aggregated stats
     const responseRate = totalBookings > 0
-      ? (respondedBookings.length / totalBookings) * 100
+      ? (stats.respondedBookings / totalBookings) * 100
       : 0;
 
     // Activity level (10% weight) - bookings in last 30 days
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    const recentBookings = bookings.filter((b: any) =>
-      new Date(b.createdAt) >= thirtyDaysAgo
-    ).length;
     const activityLevel = Math.min((recentBookings / 10) * 100, 100);
 
     // Calculate weighted score
@@ -325,9 +378,24 @@ router.get('/user/:id/churn-risk', authenticate, requireRole('admin'), async (re
       return;
     }
 
-    const bookings = await Booking.find({ customerId: id })
-      .sort({ createdAt: -1 });
-    const totalBookings = bookings.length;
+    // FIX #9: Use aggregation pipeline instead of fetching all bookings and filtering in memory
+    const bookingsAggregation = await Booking.aggregate([
+      { $match: { customerId: new mongoose.Types.ObjectId(id) } },
+      { $sort: { createdAt: -1 } },
+      {
+        $group: {
+          _id: null,
+          bookings: { $push: { createdAt: '$createdAt', status: '$status' } },
+          totalBookings: { $sum: 1 },
+          lastBooking: { $first: '$createdAt' },
+          firstBooking: { $last: '$createdAt' }
+        }
+      }
+    ]);
+
+    const aggregation = bookingsAggregation[0];
+    const bookings = aggregation?.bookings || [];
+    const totalBookings = aggregation?.totalBookings || 0;
 
     // No bookings = high churn risk
     if (totalBookings === 0) {
@@ -347,16 +415,18 @@ router.get('/user/:id/churn-risk', authenticate, requireRole('admin'), async (re
       return;
     }
 
+    // FIX #9: Use aggregated data for calculations instead of in-memory filtering
+    const lastBookingDate = aggregation.lastBooking;
+    const firstBookingDate = aggregation.firstBooking;
+
     // Calculate days since last booking
-    const lastBooking = bookings[0];
-    const daysSinceLastBooking = lastBooking
-      ? Math.floor((Date.now() - new Date(lastBooking.createdAt).getTime()) / (1000 * 60 * 60 * 24))
+    const daysSinceLastBooking = lastBookingDate
+      ? Math.floor((Date.now() - new Date(lastBookingDate).getTime()) / (1000 * 60 * 60 * 24))
       : 999;
 
     // Calculate booking frequency
-    const firstBooking = bookings[bookings.length - 1];
-    const daysSinceFirstBooking = firstBooking
-      ? Math.floor((Date.now() - new Date(firstBooking.createdAt).getTime()) / (1000 * 60 * 60 * 24))
+    const daysSinceFirstBooking = firstBookingDate
+      ? Math.floor((Date.now() - new Date(firstBookingDate).getTime()) / (1000 * 60 * 60 * 24))
       : 0;
     const averageDaysBetweenBookings = daysSinceFirstBooking / Math.max(totalBookings - 1, 1);
 
@@ -419,7 +489,7 @@ router.get('/user/:id/churn-risk', authenticate, requireRole('admin'), async (re
         riskScore: Math.round(riskScore * 100) / 100,
         riskLevel,
         factors,
-        lastBookingDate: lastBooking?.createdAt,
+        lastBookingDate: lastBookingDate,
         daysSinceLastBooking,
         totalBookings,
         recommendation
@@ -445,8 +515,8 @@ router.get('/user/:id/churn-risk', authenticate, requireRole('admin'), async (re
 
 // Send message to AI assistant
 // @access Authenticated users
-// @security Input validation, message length limits, conversation ownership check
-router.post('/chat', authenticate, asyncHandler(async (req: Request, res: Response) => {
+// @security Input validation, message length limits, conversation ownership check, rate limiting
+router.post('/chat', aiLimiter, authenticate, asyncHandler(async (req: Request, res: Response) => {
   // Validate request body
   const message = req.body.message;
   if (!message || typeof message !== 'string') {
@@ -541,5 +611,371 @@ router.delete('/conversations/:conversationId', authenticate, (req: Request, res
   // Controller verifies ownership before deletion
   return deleteConversation(req, res);
 });
+
+// ============================================
+// IA Agent CRUD Routes
+// Admin-only endpoints for managing AI agents
+// ============================================
+
+// Validation schemas for IA Agent endpoints
+const createAgentSchema = Joi.object({
+  name: Joi.string().required().min(1).max(100),
+  description: Joi.string().required().max(500),
+  category: Joi.string().valid(...Object.values(IAAgentCategory)).required(),
+  type: Joi.string().valid(...Object.values(IAAgentType)).required(),
+  instructions: Joi.string().required().max(10000),
+  configuration: Joi.object({
+    model: Joi.string(),
+    temperature: Joi.number().min(0).max(2),
+    maxTokens: Joi.number().min(1),
+    topP: Joi.number().min(0).max(1),
+    frequencyPenalty: Joi.number().min(0).max(2),
+    presencePenalty: Joi.number().min(0).max(2),
+    stopSequences: Joi.array().items(Joi.string()),
+    systemPrompt: Joi.string(),
+    contextWindow: Joi.number(),
+    streaming: Joi.boolean(),
+  }),
+  knowledgeBase: Joi.array().items(
+    Joi.object({
+      title: Joi.string().required(),
+      content: Joi.string().required(),
+      source: Joi.string(),
+      metadata: Joi.object(),
+    })
+  ),
+});
+
+const updateAgentSchema = Joi.object({
+  name: Joi.string().min(1).max(100),
+  description: Joi.string().max(500),
+  category: Joi.string().valid(...Object.values(IAAgentCategory)),
+  type: Joi.string().valid(...Object.values(IAAgentType)),
+  instructions: Joi.string().max(10000),
+  configuration: Joi.object({
+    model: Joi.string(),
+    temperature: Joi.number().min(0).max(2),
+    maxTokens: Joi.number().min(1),
+    topP: Joi.number().min(0).max(1),
+    frequencyPenalty: Joi.number().min(0).max(2),
+    presencePenalty: Joi.number().min(0).max(2),
+    stopSequences: Joi.array().items(Joi.string()),
+    systemPrompt: Joi.string(),
+    contextWindow: Joi.number(),
+    streaming: Joi.boolean(),
+  }),
+  knowledgeBase: Joi.array().items(
+    Joi.object({
+      id: Joi.string(),
+      title: Joi.string().required(),
+      content: Joi.string().required(),
+      source: Joi.string(),
+      metadata: Joi.object(),
+    })
+  ),
+  isActive: Joi.boolean(),
+  status: Joi.string().valid(...Object.values(IAAgentStatus)),
+}).min(1);
+
+/**
+ * List all IA Agents
+ * GET /api/ai/agents
+ * @access Admin
+ */
+router.get('/agents', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
+  try {
+    const { page = 1, limit = 20, status, category, type, search } = req.query;
+
+    const filter: Record<string, unknown> = {};
+
+    if (status) {
+      filter.status = status;
+    }
+    if (category) {
+      filter.category = category;
+    }
+    if (type) {
+      filter.type = type;
+    }
+    if (search) {
+      filter.$or = [
+        { name: { $regex: String(search), $options: 'i' } },
+        { description: { $regex: String(search), $options: 'i' } },
+      ];
+    }
+
+    const pageNum = Number(page);
+    const limitNum = Math.min(Number(limit), 100);
+    const skip = (pageNum - 1) * limitNum;
+
+    const [agents, total] = await Promise.all([
+      IAAgent.find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limitNum)
+        .lean(),
+      IAAgent.countDocuments(filter),
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        agents,
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total,
+          pages: Math.ceil(total / limitNum),
+        },
+      },
+    });
+  } catch (error) {
+    logger.error('List Agents Error', {
+      context: 'AIRoutes',
+      action: 'LIST_AGENTS_ERROR',
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
+}));
+
+/**
+ * Get single IA Agent by ID
+ * GET /api/ai/agents/:id
+ * @access Admin
+ */
+router.get('/agents/:id', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+
+  if (!isValidObjectId(id)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid agent ID format',
+    });
+  }
+
+  const agent = await IAAgent.findById(id).lean();
+
+  if (!agent) {
+    return res.status(404).json({
+      success: false,
+      message: 'Agent not found',
+    });
+  }
+
+  return res.json({
+    success: true,
+    data: agent,
+  });
+}));
+
+/**
+ * Create new IA Agent
+ * POST /api/ai/agents
+ * @access Admin
+ */
+router.post('/agents', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
+  const { error, value } = createAgentSchema.validate(req.body);
+
+  if (error) {
+    return res.status(400).json({
+      success: false,
+      message: error.details[0].message,
+    });
+  }
+
+  const user = (req as any).user;
+
+  // Process knowledge base entries with IDs
+  const knowledgeBase = (value.knowledgeBase || []).map((entry: any) => ({
+    id: new mongoose.Types.ObjectId().toString(),
+    title: entry.title,
+    content: entry.content,
+    source: entry.source,
+    metadata: entry.metadata,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  }));
+
+  const agent = new IAAgent({
+    ...value,
+    createdBy: user._id,
+    knowledgeBase,
+  });
+
+  await agent.save();
+
+  logger.info('Agent Created', {
+    context: 'AIRoutes',
+    action: 'CREATE_AGENT',
+    agentId: agent._id.toString(),
+    agentName: agent.name,
+    createdBy: user._id.toString(),
+  });
+
+  return res.status(201).json({
+    success: true,
+    data: agent,
+  });
+}));
+
+/**
+ * Update IA Agent
+ * PUT /api/ai/agents/:id
+ * @access Admin
+ */
+router.put('/agents/:id', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+
+  if (!isValidObjectId(id)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid agent ID format',
+    });
+  }
+
+  const { error, value } = updateAgentSchema.validate(req.body);
+
+  if (error) {
+    return res.status(400).json({
+      success: false,
+      message: error.details[0].message,
+    });
+  }
+
+  // Process knowledge base entries
+  if (value.knowledgeBase) {
+    value.knowledgeBase = value.knowledgeBase.map((entry: any) => ({
+      ...entry,
+      id: entry.id || new mongoose.Types.ObjectId().toString(),
+      createdAt: entry.createdAt || new Date(),
+      updatedAt: new Date(),
+    }));
+  }
+
+  const agent = await IAAgent.findByIdAndUpdate(
+    id,
+    { $set: value },
+    { new: true, runValidators: true }
+  ).lean();
+
+  if (!agent) {
+    return res.status(404).json({
+      success: false,
+      message: 'Agent not found',
+    });
+  }
+
+  logger.info('Agent Updated', {
+    context: 'AIRoutes',
+    action: 'UPDATE_AGENT',
+    agentId: id,
+    updatedFields: Object.keys(value),
+  });
+
+  return res.json({
+    success: true,
+    data: agent,
+  });
+}));
+
+/**
+ * Delete IA Agent
+ * DELETE /api/ai/agents/:id
+ * @access Admin
+ */
+router.delete('/agents/:id', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+
+  if (!isValidObjectId(id)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid agent ID format',
+    });
+  }
+
+  const agent = await IAAgent.findByIdAndDelete(id);
+
+  if (!agent) {
+    return res.status(404).json({
+      success: false,
+      message: 'Agent not found',
+    });
+  }
+
+  logger.info('Agent Deleted', {
+    context: 'AIRoutes',
+    action: 'DELETE_AGENT',
+    agentId: id,
+    agentName: agent.name,
+  });
+
+  return res.json({
+    success: true,
+    message: 'Agent deleted successfully',
+  });
+}));
+
+/**
+ * Deploy IA Agent
+ * POST /api/ai/agents/:id/deploy
+ * @access Admin
+ */
+router.post('/agents/:id/deploy', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+
+  if (!isValidObjectId(id)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid agent ID format',
+    });
+  }
+
+  const agent = await IAAgent.findById(id);
+
+  if (!agent) {
+    return res.status(404).json({
+      success: false,
+      message: 'Agent not found',
+    });
+  }
+
+  // Validate agent is ready for deployment
+  if (!agent.instructions || agent.instructions.trim().length === 0) {
+    return res.status(400).json({
+      success: false,
+      message: 'Agent must have instructions before deployment',
+    });
+  }
+
+  if (!agent.name || agent.name.trim().length === 0) {
+    return res.status(400).json({
+      success: false,
+      message: 'Agent must have a name before deployment',
+    });
+  }
+
+  // Check current status
+  const currentStatus = agent.status;
+
+  // Deploy agent - triggers pre-save hook to set deployedAt and increment version
+  await agent.deploy();
+
+  logger.info('Agent Deployed', {
+    context: 'AIRoutes',
+    action: 'DEPLOY_AGENT',
+    agentId: id,
+    agentName: agent.name,
+    previousStatus: currentStatus,
+    newStatus: agent.status,
+    version: agent.version,
+  });
+
+  return res.json({
+    success: true,
+    data: agent,
+    message: `Agent deployed successfully. Version: ${agent.version}`,
+  });
+}));
 
 export default router;
