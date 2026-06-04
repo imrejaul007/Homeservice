@@ -330,18 +330,7 @@ export const EmptyStateSkeleton: React.FC<EmptyStateSkeletonProps> = ({
 );
 
 // =============================================================================
-// Exports
+// Default Export
 // =============================================================================
 
-export {
-  DashboardSkeleton,
-  StatsRowSkeleton,
-  QuickActionsSkeleton,
-  ServiceListSkeleton,
-  ServiceGridSkeleton,
-  PromoCardsSkeleton,
-  BookingListSkeleton,
-  ProfileSkeleton,
-  EmptyStateSkeleton,
-};
 export default DashboardSkeleton;

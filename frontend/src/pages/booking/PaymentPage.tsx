@@ -403,7 +403,7 @@ const PaymentPage: React.FC = () => {
                 amount={pricing.total}
                 currency={booking?.pricing?.currency || 'AED'}
                 paymentMethod={selectedPaymentMethod}
-                couponCode={couponCode}
+                couponCode={appliedCoupon?.code}
                 onSuccess={handlePaymentSuccess}
                 onError={handlePaymentError}
                 onCancel={handleBack}

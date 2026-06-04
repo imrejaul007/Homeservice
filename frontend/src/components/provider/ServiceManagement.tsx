@@ -228,7 +228,7 @@ const selectClass =
   'w-full bg-white border border-nilin-border rounded-nilin px-4 py-2.5 text-nilin-charcoal font-sans transition-all focus:outline-none focus:ring-2 focus:ring-nilin-coral/30 focus:border-nilin-coral appearance-none cursor-pointer';
 
 // Stable ref pattern: always points to latest callback without causing effect re-runs
-function useCallbackRef<T extends (...args: never[]) => unknown>(callback: T): React.MutableRefObject<T> {
+function useCallbackRef<T extends (...args: Parameters<T>) => ReturnType<T>>(callback: T): React.MutableRefObject<T> {
   const callbackRef = useRef(callback);
   callbackRef.current = callback;
   return callbackRef;
@@ -237,7 +237,6 @@ function useCallbackRef<T extends (...args: never[]) => unknown>(callback: T): R
 const ServiceManagement: React.FC = () => {
   const { user, tokens, isAuthenticated } = useAuthStore();
   const toast = useToastActions();
-  const toastRef = useCallbackRef(toast);
 
   const userRole = user?.role;
   const isProvider = isAuthenticated && userRole === 'provider' && !!tokens?.accessToken;
@@ -376,7 +375,7 @@ const ServiceManagement: React.FC = () => {
       } catch (err) {
         console.error('Error fetching services:', err);
         setError(err instanceof Error ? err.message : 'Failed to fetch services');
-        toastRef.current.error(
+        toast.error(
           'Failed to load services',
           err instanceof Error ? err.message : 'An error occurred'
         );
@@ -437,7 +436,7 @@ const ServiceManagement: React.FC = () => {
       }
     } catch (err) {
       console.error('Error fetching overview stats:', err);
-      toastRef.current.error(
+      toast.error(
         'Failed to load overview',
         err instanceof Error ? err.message : 'An error occurred'
       );
@@ -489,7 +488,7 @@ const ServiceManagement: React.FC = () => {
 
     const unsubServiceApproved = socketService.onServiceApproved(() => {
       if (isMountedRef.current) {
-        toastRef.current.success('Service Approved', 'Your service has been approved and is now active.');
+        toast.success('Service Approved', 'Your service has been approved and is now active.');
         void fetchServicesRef.current(1, false);
         void fetchOverviewStatsRef.current();
       }
@@ -497,7 +496,7 @@ const ServiceManagement: React.FC = () => {
 
     const unsubServiceRejected = socketService.onServiceRejected((data) => {
       if (isMountedRef.current) {
-        toastRef.current.error('Service Rejected', data.reason || 'Your service was not approved.');
+        toast.error('Service Rejected', data.reason || 'Your service was not approved.');
         void fetchServicesRef.current(1, false);
         void fetchOverviewStatsRef.current();
       }

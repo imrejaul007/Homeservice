@@ -326,7 +326,7 @@ const ProviderDashboard: React.FC = () => {
     if (rejected && rejected.providerId === user?.id) {
       toast.error(`Your application was rejected: ${rejected.reason}`);
       if (rejected.canAppeal) {
-        toast('You can submit an appeal from your verification page.');
+        toast.success('You can submit an appeal from your verification page.');
       }
     }
   }, [rejected, user?.id, toast]);
@@ -336,7 +336,7 @@ const ProviderDashboard: React.FC = () => {
     if (suspended && suspended.providerId === user?.id) {
       toast.error(`Your account has been suspended: ${suspended.reason}`);
       if (suspended.until) {
-        toast(`Suspension will end on ${new Date(suspended.until).toLocaleDateString()}`);
+        toast.success(`Suspension will end on ${new Date(suspended.until).toLocaleDateString()}`);
       }
       refreshProviderProfile();
     }
@@ -569,7 +569,7 @@ const ProviderDashboard: React.FC = () => {
     0;
   const completedBookings =
     analytics?.bookingStats?.completedThisMonth ??
-    providerProfile?.analytics?.bookingStats?.completedBookings ??
+    providerProfile?.analytics?.bookings ??
     0;
   const averageRating =
     providerProfile?.ratings?.average ??

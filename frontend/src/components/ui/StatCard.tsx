@@ -191,7 +191,7 @@ interface StatCardGridProps {
 }
 
 // Helper to get Tailwind grid column classes
-const getGridClasses = (columns: StatCardGridProps['columns'] = {}) => {
+const getGridClasses = (columns: StatCardGridProps['columns'] = { default: 1 }) => {
   const { default: def = 1, sm, md, lg } = columns;
 
   const classes: string[] = [];

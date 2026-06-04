@@ -70,9 +70,9 @@ const ProviderRegistration: React.FC = () => {
       clearErrors();
       await registerProvider({
         firstName: data.firstName, lastName: data.lastName, email: data.email,
-        password: data.password, confirmPassword: data.confirmPassword, role: 'provider',
+        password: data.password, confirmPassword: data.confirmPassword, role: 'provider' as const,
         phone: data.phone, businessName: data.businessName, serviceCategories: data.serviceCategories,
-        agreeToTerms: data.agreeToTerms, agreeToPrivacy: data.agreeToPrivacy,
+        agreeToTermsAndPrivacy: data.agreeToTerms && data.agreeToPrivacy,
       });
       setIsSuccess(true);
     } catch {

@@ -113,8 +113,8 @@ redis:
 # ServiceAccount
 serviceAccount:
   create: true
-  annotations: {}
-    # example: iam.gke.io/gcp-service-account: nilin@project.iam.gserviceaccount.com
+  annotations:
+    iam.gke.io/gcp-service-account: IAM_REZUL007
 
 # NetworkPolicies
 networkPolicies:

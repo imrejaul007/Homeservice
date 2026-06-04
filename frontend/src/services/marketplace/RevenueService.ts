@@ -144,7 +144,7 @@ export const useRevenueStore = create<RevenueState>()(
               amount: t.amount,
               reason: t.description || t.reference || 'Transaction',
               bookingId: t.referenceType === 'booking' ? t.reference : undefined,
-              createdAt: t.createdAt || new Date().toISOString(),
+              createdAt: (t.createdAt instanceof Date ? t.createdAt.toISOString() : t.createdAt) || new Date().toISOString(),
             }));
           }
 
@@ -191,7 +191,7 @@ export const useRevenueStore = create<RevenueState>()(
             amount: t.amount,
             reason: t.description,
             bookingId: t.referenceType === 'booking' ? t.reference : undefined,
-            createdAt: t.createdAt,
+            createdAt: t.createdAt instanceof Date ? t.createdAt.toISOString() : t.createdAt,
           }));
 
           // Update wallet with transactions

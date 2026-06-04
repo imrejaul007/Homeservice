@@ -24,7 +24,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { toast } from 'sonner';
+import { toast } from 'react-hot-toast';
 import { bookingService } from '../../services/BookingService';
 import { socketService } from '../../services/socket';
 
@@ -669,7 +669,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
           dateFrom: new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).toISOString(),
           dateTo: new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).toISOString(),
           limit: 100,
-        }, abortController.signal);
+        });
 
         // Check if component is still mounted before updating state
         if (!isMountedRef.current) return;
@@ -723,21 +723,20 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
       if (response.success && response.data?.blockedPeriods) {
         // Map API blocked periods to calendar format
         // The API returns { date: string, reason?: string } for each blocked day
-        const mappedBlockedTimes = response.data.blockedPeriods
-          .map((period: ApiBlockedPeriod) => {
-            // Validate date before parsing to prevent invalid dates
-            const parsedDate = new Date(period.date);
-            if (isNaN(parsedDate.getTime())) {
-              console.warn('[CalendarView] Invalid blocked period date:', period.date);
-              return null;
-            }
-            return {
-              start: parsedDate,
-              end: new Date(parsedDate.getFullYear(), parsedDate.getMonth(), parsedDate.getDate(), 23, 59, 59, 999),
-              reason: period.reason,
-            };
-          })
-          .filter((bt): bt is { start: Date; end: Date; reason?: string } => bt !== null);
+        const mappedBlockedTimes: Array<{ start: Date; end: Date; reason?: string }> = [];
+        for (const period of response.data.blockedPeriods) {
+          // Validate date before parsing to prevent invalid dates
+          const parsedDate = new Date(period.date);
+          if (isNaN(parsedDate.getTime())) {
+            console.warn('[CalendarView] Invalid blocked period date:', period.date);
+            continue;
+          }
+          mappedBlockedTimes.push({
+            start: parsedDate,
+            end: new Date(parsedDate.getFullYear(), parsedDate.getMonth(), parsedDate.getDate(), 23, 59, 59, 999),
+            reason: period.reason,
+          });
+        }
         setBlockedTimes(mappedBlockedTimes);
       }
     } catch (err) {
@@ -857,7 +856,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
             ? { ...booking, status: 'cancelled' as BookingStatus }
             : booking
         ));
-        toast.warning('Customer did not show up for booking');
+        toast.error('Customer did not show up for booking');
       }
     });
     unsubscribers.push(() => socketService.off('booking:no_show', unsubNoShow));

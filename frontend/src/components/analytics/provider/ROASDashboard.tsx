@@ -12,7 +12,7 @@ import {
 } from 'recharts';
 import { Target, TrendingUp, Loader, DollarSign, MousePointer, Users, Calendar } from 'lucide-react';
 import { motion } from 'framer-motion';
-import { analyticsApi, ROASData, ROASStats, CampaignData } from '../../../services/analyticsApi';
+import { analyticsApi, ROASData, ROASStats, CampaignData, ROASMetricsData } from '../../../services/analyticsApi';
 
 interface ROASDashboardProps {
   providerId?: string;

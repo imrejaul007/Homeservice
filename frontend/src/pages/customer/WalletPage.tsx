@@ -37,7 +37,7 @@ const WalletPage: React.FC = () => {
           type: t.type,
           amount: t.amount,
           description: t.description,
-          createdAt: t.createdAt,
+          createdAt: t.updatedAt as string,
           icon: t.referenceType === 'bonus' || t.referenceType === 'refund' ? 'gift' : t.type === 'credit' ? 'trending' : 'card',
         }));
         setTransactions(mappedTransactions);

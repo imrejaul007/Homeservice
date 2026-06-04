@@ -4,7 +4,7 @@ import authService from './AuthService';
 // BOOKING TYPES & INTERFACES
 // ==========================================
 // Types imported from shared types file to ensure consistency across services
-export type {
+import type {
   Booking,
   BookingLocation,
   BookingCustomerInfo,
@@ -31,6 +31,35 @@ export type {
   UpdateBookingData,
   GetBookingsOptions,
 } from '../types/booking.types';
+
+// Re-export types for external use
+export type {
+  Booking,
+  BookingLocation,
+  BookingCustomerInfo,
+  BookingAddOn,
+  CreateBookingData,
+  CreateGuestBookingData,
+  GuestInfo,
+  BookingMessage,
+  BookingAcceptData,
+  BookingCompleteData,
+  BookingCancelData,
+  BookingFilters,
+  BookingResponse,
+  BookingTrackingData,
+  ProviderAvailability,
+  AvailabilitySettingsUpdate,
+  AvailableSlot,
+  BlockTimePeriodData,
+  ProviderBookingsStats,
+  RescheduleBookingData,
+  BookingStatus,
+  PaymentStatus,
+  BookingPricing,
+  UpdateBookingData,
+  GetBookingsOptions,
+};
 
 /**
  * Booking Service - Complete booking lifecycle management
@@ -265,7 +294,6 @@ class BookingService {
         totalAmount: booking.pricing?.totalAmount ?? booking.pricing?.total ?? 0,
         total: booking.pricing?.totalAmount ?? booking.pricing?.total ?? 0, // @deprecated Use 'totalAmount' instead
         currency: booking.pricing?.currency ?? 'AED',
-        couponDiscount: booking.pricing?.couponDiscount,
       },
 
       // Service Info (populated)
@@ -469,6 +497,23 @@ class BookingService {
       return response as BookingResponse<{ booking: Booking }>;
     } catch (error) {
       throw new Error(error instanceof Error ? error.message : 'Failed to reject booking');
+    }
+  }
+
+  /**
+   * Decline a booking (alias for rejectBooking)
+   * Used by CalendarView.tsx and other components
+   */
+  async declineBooking(bookingId: string, reason?: string): Promise<BookingResponse<{ booking: Booking }>> {
+    try {
+      const response = await authService.post<any>(`/bookings/${bookingId}/decline`, { reason });
+      // Transform the booking if it exists
+      if (response?.data?.booking) {
+        response.data.booking = this.transformBooking(response.data.booking);
+      }
+      return response as BookingResponse<{ booking: Booking }>;
+    } catch (error) {
+      throw new Error(error instanceof Error ? error.message : 'Failed to decline booking');
     }
   }
 
@@ -862,6 +907,7 @@ class BookingService {
       completed: 'text-green-600 bg-green-100',
       cancelled: 'text-red-600 bg-red-100',
       no_show: 'text-orange-600 bg-orange-100',
+      refunded: 'text-teal-600 bg-teal-100',
     };
     return colors[status] || 'text-gray-600 bg-gray-100';
   }
@@ -877,6 +923,7 @@ class BookingService {
       completed: 'Completed',
       cancelled: 'Cancelled',
       no_show: 'No Show',
+      refunded: 'Refunded',
     };
     return labels[status] || status;
   }

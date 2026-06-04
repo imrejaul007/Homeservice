@@ -90,8 +90,8 @@ export const ProviderHealthScore: React.FC<ProviderHealthScoreProps> = ({
         // Fetch provider-specific health score
         const response = await providerOpsApi.getProviderMetrics(providerId);
 
-        if (response.success && response.data) {
-          const metrics = response.data;
+        if (response.success && response.data?.metrics) {
+          const metrics = response.data.metrics;
           // Calculate overall score from metrics
           const qualityScore = metrics.qualityScore || 0;
           const reliabilityScore = metrics.reliabilityScore || 0;
@@ -106,8 +106,8 @@ export const ProviderHealthScore: React.FC<ProviderHealthScoreProps> = ({
           setData({
             overallScore,
             breakdown: {
-              responseTime: metrics.avgResponseTime || 0,
-              completionRate: (metrics.completedBookings / Math.max(metrics.totalBookings, 1)) * 100,
+              responseTime: Math.round(metrics.avgResponseTime || 0),
+              completionRate: Math.round((metrics.completedBookings / Math.max(metrics.totalBookings, 1)) * 100),
               rating: (metrics.avgRating || 0) * 20, // Convert to percentage
               earningsGrowth: 80, // Default since not in metrics
               compliance: qualityScore,

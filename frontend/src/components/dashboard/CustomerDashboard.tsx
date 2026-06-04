@@ -794,19 +794,23 @@ const CustomerDashboard: React.FC = () => {
       if (dashboardResponse.status === 'fulfilled') {
         const data = dashboardResponse.value;
         setDashboardData(data);
+        const favoritesData = favoritesResponse.status === 'fulfilled' ? favoritesResponse.value.data : null;
+        const favoritesList = Array.isArray(favoritesData) ? favoritesData : favoritesData?.favorites;
         setBookingStats({
           upcoming: data.upcomingBookings?.length || 0,
           completed: data.stats?.completedBookings || 0,
           totalSpent: data.stats?.totalSpent || 0,
-          favorites: favoritesResponse.status === 'fulfilled' ? (favoritesResponse.value.data?.length || 0) : 0,
+          favorites: favoritesList?.length || 0,
           active: data.stats?.activeBookings || 0,
           inProgress: data.stats?.inProgressBookings || 0,
         });
       } else {
         console.error('Dashboard API error:', dashboardResponse.reason);
+        const favData = favoritesResponse.status === 'fulfilled' ? favoritesResponse.value.data : null;
+        const favList = Array.isArray(favData) ? favData : favData?.favorites;
         setBookingStats(prev => ({
           ...prev,
-          favorites: favoritesResponse.status === 'fulfilled' ? (favoritesResponse.value.data?.length || 0) : 0
+          favorites: favList?.length || 0
         }));
       }
 
@@ -817,7 +821,9 @@ const CustomerDashboard: React.FC = () => {
 
       // Handle favorites count
       if (favoritesResponse.status === 'fulfilled') {
-        setFavoritesCount(favoritesResponse.value.data?.length || 0);
+        const favData = favoritesResponse.value.data;
+        const favList = Array.isArray(favData) ? favData : favData?.favorites;
+        setFavoritesCount(favList?.length || 0);
       }
 
     } catch (err) {

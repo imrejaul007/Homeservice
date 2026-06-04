@@ -75,7 +75,7 @@ interface ApiErrorResponse {
   success?: boolean;
   message?: string;
   error?: string;
-  errors?: Array<{ field?: string; message: string }>;
+  errors?: Array<{ field: string; message: string }>;
 }
 
 /**

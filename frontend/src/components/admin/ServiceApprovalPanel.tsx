@@ -115,8 +115,10 @@ export function ServiceApprovalPanel({ onServiceUpdated, defaultVisible = false 
         toast.success(`Service ${action === 'approve' ? 'approved' : 'rejected'} successfully`);
         await fetchPendingServices();
         onServiceUpdated?.();
-      } else {
+      } else if ('error' in response) {
         toast.error(response.error || `Failed to ${action} service`);
+      } else {
+        toast.error(`Failed to ${action} service`);
       }
     } catch (error) {
       console.error(`Error ${action}ing service:`, error);
@@ -140,8 +142,10 @@ export function ServiceApprovalPanel({ onServiceUpdated, defaultVisible = false 
         await fetchPendingServices();
         setSelectedServices(new Set());
         onServiceUpdated?.();
-      } else {
+      } else if ('error' in response) {
         toast.error(response.error || `Failed to ${action} services`);
+      } else {
+        toast.error(`Failed to ${action} services`);
       }
     } catch (error) {
       console.error(`Error in bulk ${action}:`, error);

@@ -39,7 +39,7 @@ const SearchPage: React.FC = () => {
 
   // Handle Book Now from search results
   const handleBookNow = (service: Service) => {
-    const serviceId = service._id || service.id;
+    const serviceId = service._id;
     if (serviceId) {
       console.log('[SearchPage] Booking service:', service.name);
       navigate(`/book/${serviceId}`, { state: { service } });

@@ -291,9 +291,7 @@ export const ProviderListPanel: React.FC<ProviderListPanelProps> = ({
           <tbody className="divide-y divide-nilin-border/60">
             {providers.map((provider) => {
               const quality = provider.analytics?.performanceMetrics?.qualityScore;
-              const reliability =
-                provider.analytics?.performanceMetrics?.reliabilityScore ??
-                provider.analytics?.performanceMetrics?.punctualityScore;
+              const reliability = provider.analytics?.performanceMetrics?.punctualityScore;
               const city = provider.locationInfo?.primaryAddress?.city;
               const completed = provider.analytics?.bookingStats?.completedBookings ?? 0;
               const total = provider.analytics?.bookingStats?.totalBookings ?? 0;

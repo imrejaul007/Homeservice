@@ -151,12 +151,14 @@ const InsightsDashboard: React.FC = () => {
     });
     unsubscribers.push(unsubInsightsUpdated);
 
-    // Listen for booking:completed events
-    const unsubBookingCompleted = socketService.onBookingCompleted(() => {
-      console.log('Booking completed event');
-      fetchData('silent');
+    // Listen for booking status changes (including completed)
+    const unsubBookingStatus = socketService.onBookingStatusChanged((data) => {
+      if (data.status === 'completed') {
+        console.log('Booking completed event');
+        fetchData('silent');
+      }
     });
-    unsubscribers.push(unsubBookingCompleted);
+    unsubscribers.push(unsubBookingStatus);
 
     // Listen for new review events
     const unsubReviewReceived = socketService.onReviewReceived(() => {

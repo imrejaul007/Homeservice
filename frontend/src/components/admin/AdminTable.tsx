@@ -154,7 +154,7 @@ export function AdminTable<T extends Record<string, unknown>>({
                     )}
                   >
                     {column.render
-                      ? column.render(row[column.key], row)
+                      ? column.render(row[column.key] as T[keyof T], row)
                       : String(row[column.key] ?? '')}
                   </td>
                 ))}

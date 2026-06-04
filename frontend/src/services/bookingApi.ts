@@ -4,6 +4,21 @@ import { api } from './api';
 // BOOKING TYPES
 // ============================================
 // Types imported from shared types file to ensure consistency across services
+import type {
+  Booking,
+  BookingLocation,
+  BookingCustomerInfo,
+  BookingAddOn,
+  BookingPricing,
+  BookingStatus,
+  PaymentStatus,
+  CreateBookingData,
+  UpdateBookingData,
+  GetBookingsOptions,
+  BookingFilters,
+} from '../types/booking.types';
+
+// Re-export helper functions and types from shared types
 export type {
   Booking,
   BookingLocation,
@@ -18,7 +33,6 @@ export type {
   BookingFilters,
 } from '../types/booking.types';
 
-// Re-export helper functions from shared types
 export { normalizeBooking, formatBookingStatus } from '../types/booking.types';
 
 // ============================================
@@ -119,7 +133,7 @@ export interface BookingApi {
   /**
    * Validate a coupon code
    */
-  validateCoupon: (code: string, bookingId: string) => Promise<{
+  validateCoupon: (code: string, orderValue: number, serviceId?: string) => Promise<{
     valid: boolean;
     code: string;
     discountType?: 'fixed' | 'percentage';
@@ -452,32 +466,6 @@ export const bookingApi: BookingApi = {
 // ============================================
 // HELPER FUNCTIONS
 // ============================================
-
-/**
- * Normalize booking data (handles _id vs id inconsistencies)
- */
-export function normalizeBooking(booking: Booking): Booking {
-  return {
-    ...booking,
-    _id: booking._id || booking.id,
-  };
-}
-
-/**
- * Format booking status for display
- */
-export function formatBookingStatus(status: BookingStatus): string {
-  const statusLabels: Record<BookingStatus, string> = {
-    pending: 'Pending',
-    confirmed: 'Confirmed',
-    in_progress: 'In Progress',
-    completed: 'Completed',
-    cancelled: 'Cancelled',
-    no_show: 'No Show',
-    refunded: 'Refunded',
-  };
-  return statusLabels[status] || status;
-}
 
 // Note: canCancelBooking and canRescheduleBooking are now consolidated in BookingService.ts
 // to maintain a single source of truth with the 24-hour cancellation rule

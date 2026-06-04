@@ -534,9 +534,4 @@ export const ProviderCard: React.FC<ProviderCardProps> = ({
 // Exports
 // =============================================================================
 
-export {
-  ServiceCard,
-  CompactServiceCard,
-  ProviderCard,
-};
 export default ServiceCard;

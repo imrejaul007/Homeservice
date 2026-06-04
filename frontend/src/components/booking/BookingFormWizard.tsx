@@ -573,8 +573,7 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
           await getAvailableSlots(providerId, {
             date: formData.scheduledDate,
             duration: formData.selectedDuration || service.duration,
-            serviceId: service._id,
-          });
+          } as Parameters<typeof getAvailableSlots>[1]);
         } finally {
           setIsFetchingSlots(false);
         }

@@ -89,6 +89,11 @@ export interface CustomerProfile {
     tier: string;
     benefits: string[];
   };
+  // Add ratings property for average rating given by customer
+  ratings?: {
+    averageRatingGiven: number;
+    totalRatingsGiven: number;
+  };
 }
 
 export interface ProviderProfile {
@@ -176,6 +181,8 @@ export interface AuthError {
   message: string;
   code: string;
   field?: string;
+  status?: number;
+  data?: Record<string, unknown>;
 }
 
 export interface AuthState {

@@ -22,7 +22,7 @@ import {
   Phone,
   MessageSquare,
 } from 'lucide-react';
-import { format, parseISO, isToday, isTomorrow, addDays } from 'date-fns';
+import { format, isToday, isTomorrow } from 'date-fns';
 import { toast } from 'react-hot-toast';
 import type { Booking, BookingStatus } from '../../types/booking.types';
 import { useBookingStore } from '../../stores/bookingStore';
@@ -95,7 +95,7 @@ const STATUS_CONFIG: Record<
 
 const formatBookingDate = (dateStr: string): string => {
   try {
-    const date = parseISO(dateStr);
+    const date = new Date(dateStr);
     if (isToday(date)) return 'Today';
     if (isTomorrow(date)) return 'Tomorrow';
     return format(date, 'EEE, MMM d');
@@ -109,7 +109,7 @@ const canCancelBooking = (booking: Booking): boolean => {
   if (!cancelableStatuses.includes(booking.status)) return false;
 
   try {
-    const bookingDate = parseISO(booking.scheduledDate);
+    const bookingDate = new Date(booking.scheduledDate);
     const now = new Date();
     const hoursUntilBooking =
       (bookingDate.getTime() - now.getTime()) / (1000 * 60 * 60);
@@ -122,18 +122,18 @@ const canCancelBooking = (booking: Booking): boolean => {
 const getTimeUntilBooking = (dateStr: string, timeStr: string): string => {
   try {
     const now = new Date();
-    const [hours, minutes] = timeStr.split(':').map(Number);
-    const bookingDate = parseISO(dateStr);
-    bookingDate.setHours(hours, minutes, 0, 0);
+    const [hoursStr, minutesStr] = timeStr.split(':').map(Number);
+    const bookingDate = new Date(dateStr);
+    bookingDate.setHours(hoursStr, minutesStr, 0, 0);
 
     const diffMs = bookingDate.getTime() - now.getTime();
     if (diffMs < 0) return 'Started';
 
     const days = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-    const hours = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+    const hoursRemaining = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
 
-    if (days > 0) return `${days}d ${hours}h`;
-    if (hours > 0) return `${hours}h`;
+    if (days > 0) return `${days}d ${hoursRemaining}h`;
+    if (hoursRemaining > 0) return `${hoursRemaining}h`;
     const mins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
     return `${mins}m`;
   } catch {

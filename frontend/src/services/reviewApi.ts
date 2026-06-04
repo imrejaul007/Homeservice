@@ -3,14 +3,10 @@
 export {
   reviewsApi,
   default,
+  ReviewsApiError,
 } from './reviewsApi';
 
 export type {
   Review,
   ProviderReviewScope,
-  ReviewsApiError,
-} from './reviewsApi';
-
-export {
-  ReviewsApiError,
 } from './reviewsApi';

@@ -10,7 +10,7 @@ export { GradientButton } from './GradientButton';
 export { SectionHeading } from './SectionHeading';
 export { StatusBadge } from './StatusBadge';
 export { MobileBottomNav } from './MobileBottomNav';
-export { OptimizedImage } from './OptimizedImage';
+export { default as OptimizedImage } from './OptimizedImage';
 export { ImageCard } from './ImageCard';
 export { TrustBadge } from './TrustBadge';
 

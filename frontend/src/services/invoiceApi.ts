@@ -40,6 +40,8 @@ export interface Invoice {
   totalAmount: number;
   currency: string;
   dueDate: string;
+  period?: string;
+  paymentMethod?: string;
   paidAt?: string;
   sentAt?: string;
   notes?: string;

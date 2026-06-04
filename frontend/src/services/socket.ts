@@ -133,6 +133,27 @@ export interface ServerToClientEvents {
   /** Booking was completed */
   'booking:completed': (data: BookingEvent) => void;
 
+  /** Provider is en route to booking location */
+  'booking:en_route': (data: BookingEvent) => void;
+
+  /** Provider arrived at booking location */
+  'booking:arrived': (data: BookingEvent) => void;
+
+  /** Service started by provider */
+  'booking:started': (data: BookingEvent) => void;
+
+  /** Customer did not show up for booking */
+  'booking:no_show': (data: BookingEvent) => void;
+
+  /** Booking was accepted by provider */
+  'booking:accepted': (data: BookingEvent) => void;
+
+  /** Booking was rejected by provider */
+  'booking:rejected': (data: BookingEvent) => void;
+
+  /** Booking was rescheduled */
+  'booking:rescheduled': (data: BookingEvent) => void;
+
   /** Booking reminder notification */
   'booking:reminder': (data: { bookingId: string; minutesUntil: number }) => void;
 
@@ -314,6 +335,28 @@ export interface ServerToClientEvents {
     status: string;
     updatedBy: 'admin';
     reason?: string;
+    timestamp: Date;
+  }) => void;
+
+  // FIX: Add type definitions for missing events
+  /** Review reply from provider */
+  'review:reply': (data: {
+    reviewId: string;
+    bookingId: string;
+    reply: string;
+    timestamp: Date;
+  }) => void;
+
+  /** Payment failed */
+  'payment:failed': (data: {
+    bookingId: string;
+    reason: string;
+    timestamp: Date;
+  }) => void;
+
+  /** Insights updated */
+  'insights:updated': (data: {
+    providerId: string;
     timestamp: Date;
   }) => void;
 
@@ -1261,6 +1304,21 @@ class SocketService {
       // Forward to generic status_changed for unified handling
       this.notifyListeners('booking:status_changed', data);
       this.notifyListeners('booking:completed', data);
+    });
+
+    this.socket.on('booking:en_route', (data) => {
+      this.notifyListeners('booking:status_changed', data);
+      this.notifyListeners('booking:en_route', data);
+    });
+
+    this.socket.on('booking:arrived', (data) => {
+      this.notifyListeners('booking:status_changed', data);
+      this.notifyListeners('booking:arrived', data);
+    });
+
+    this.socket.on('booking:started', (data) => {
+      this.notifyListeners('booking:status_changed', data);
+      this.notifyListeners('booking:started', data);
     });
 
     // FIX: Add listeners for specific booking status events

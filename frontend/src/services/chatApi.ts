@@ -29,6 +29,7 @@ export interface ChatMessage {
   id?: string;
   roomId?: string;
   chatRoomId?: string;
+  bookingId?: string;
   senderId: string | { _id: string; firstName: string; lastName: string; avatar?: string };
   receiverId: string;
   senderName?: string;
@@ -488,7 +489,7 @@ export function normalizeMessage(message: ChatMessage): ChatMessage {
     roomId: message.roomId || message.chatRoomId,
     chatRoomId: message.chatRoomId || message.roomId,
     // Include bookingId if present
-    bookingId: (message as unknown as { bookingId?: string }).bookingId,
+    bookingId: 'bookingId' in message ? message.bookingId : undefined,
     senderId: senderId,
     receiverId: message.receiverId,
     senderName: message.senderName || (sender ? `${sender.firstName} ${sender.lastName}` : undefined),

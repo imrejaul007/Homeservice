@@ -85,11 +85,7 @@ function exportProvidersCsv(providers: ProviderWithUser[]) {
     p.verificationStatus?.overall || '',
     p.locationInfo?.primaryAddress?.city || '',
     String(p.analytics?.performanceMetrics?.qualityScore ?? ''),
-    String(
-      p.analytics?.performanceMetrics?.reliabilityScore ??
-        p.analytics?.performanceMetrics?.punctualityScore ??
-        ''
-    ),
+    String(p.analytics?.performanceMetrics?.punctualityScore ?? ''),
     String(p.reviewsData?.averageRating ?? ''),
     String(p.reviewsData?.totalReviews ?? 0),
   ]);
@@ -1354,10 +1350,15 @@ const ProviderManagement: React.FC = () => {
   };
 
   // Handlers
+  const getUserId = (provider: ProviderWithUser): string => {
+    const uid = provider.userId;
+    if (typeof uid === 'string') return uid;
+    return uid?._id ?? '';
+  };
+
   const handleSelectProvider = (provider: ProviderWithUser) => {
     setSelectedProvider(provider);
-    const userId = provider.userId?._id || provider.userId;
-    fetchProviderDetails(userId);
+    fetchProviderDetails(getUserId(provider));
   };
 
   const handlePageChange = (page: number) => {
@@ -1366,7 +1367,7 @@ const ProviderManagement: React.FC = () => {
 
   const handleApprove = async (provider: ProviderWithUser) => {
     try {
-      const userId = provider.userId?._id || provider.userId;
+      const userId = getUserId(provider);
       await providerOpsApi.approveProvider(userId);
       toast.success('Provider approved successfully');
       fetchProviders();
@@ -1380,7 +1381,7 @@ const ProviderManagement: React.FC = () => {
 
   const handleReject = async (provider: ProviderWithUser, reason: string, notes: string) => {
     try {
-      const userId = provider.userId?._id || provider.userId;
+      const userId = getUserId(provider);
       await providerOpsApi.rejectProvider(userId, reason, notes);
       toast.success('Provider rejected successfully');
       fetchProviders();
@@ -1394,7 +1395,7 @@ const ProviderManagement: React.FC = () => {
 
   const handleSuspend = async (provider: ProviderWithUser, reason: string) => {
     try {
-      const userId = provider.userId?._id || provider.userId;
+      const userId = getUserId(provider);
       await providerOpsApi.suspendProvider(userId, reason, 'temporary');
       toast.success('Provider suspended successfully');
       fetchProviders();
@@ -1408,7 +1409,7 @@ const ProviderManagement: React.FC = () => {
 
   const handleReactivate = async (provider: ProviderWithUser) => {
     try {
-      const userId = provider.userId?._id || provider.userId;
+      const userId = getUserId(provider);
       await providerOpsApi.reactivateProvider(userId);
       toast.success('Provider reactivated successfully');
       fetchProviders();
@@ -1427,7 +1428,7 @@ const ProviderManagement: React.FC = () => {
     notes?: string
   ) => {
     try {
-      const userId = provider.userId?._id || provider.userId;
+      const userId = getUserId(provider);
       await providerOpsApi.verifyDocument(userId, docId, verified, notes);
       toast.success(`Document ${verified ? 'verified' : 'rejected'} successfully`);
       fetchProviderDetails(userId);
@@ -1439,7 +1440,7 @@ const ProviderManagement: React.FC = () => {
 
   const handleRunFraudCheck = async (provider: ProviderWithUser) => {
     try {
-      const userId = provider.userId?._id || provider.userId;
+      const userId = getUserId(provider);
       const res = await providerOpsApi.runFraudCheck(userId);
       const { report, flagsPersisted } = res.data;
       setLastFraudReport({
@@ -1465,7 +1466,7 @@ const ProviderManagement: React.FC = () => {
     resolution: string
   ) => {
     try {
-      const userId = provider.userId?._id || provider.userId;
+      const userId = getUserId(provider);
       await providerOpsApi.resolveFraudFlag(userId, flagId, resolution);
       toast.success('Fraud flag resolved');
       fetchProviderDetails(userId);

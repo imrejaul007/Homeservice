@@ -102,7 +102,7 @@ const PackagesSection: React.FC<PackagesSectionProps> = ({
 
   const getSavingsPercentage = (pkg: ServicePackage): number => {
     const originalPrice = pkg.pricing?.originalPrice ?? 0;
-    const currentPrice = pkg.pricing?.currentPrice ?? pkg.pricing?.total ?? 0;
+    const currentPrice = pkg.pricing?.currentPrice ?? 0;
     if (originalPrice <= 0) return 0;
     return Math.round(((originalPrice - currentPrice) / originalPrice) * 100);
   };
@@ -239,7 +239,7 @@ const PackagesSection: React.FC<PackagesSectionProps> = ({
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {packages.map((pkg, index) => {
             const savings = getSavingsPercentage(pkg);
-            const displayPrice = pkg.pricing?.currentPrice ?? pkg.pricing?.total ?? 0;
+            const displayPrice = pkg.pricing?.currentPrice ?? 0;
             const originalPrice = pkg.pricing?.originalPrice ?? 0;
             const currency = pkg.pricing?.currency || 'AED';
 
@@ -287,7 +287,7 @@ const PackagesSection: React.FC<PackagesSectionProps> = ({
                   {/* Duration Badge */}
                   <div className="absolute bottom-3 left-3 px-2.5 py-1 bg-black/60 backdrop-blur-sm text-white rounded-full text-xs font-medium flex items-center gap-1">
                     <Clock className="w-3 h-3" />
-                    {pkg.duration?.formatted || pkg.duration || 'N/A'}
+                    {typeof pkg.duration === 'string' ? pkg.duration : pkg.duration?.formatted ?? 'N/A'}
                   </div>
                 </div>
 

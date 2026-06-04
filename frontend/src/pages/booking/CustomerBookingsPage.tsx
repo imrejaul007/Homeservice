@@ -155,6 +155,11 @@ const CustomerBookingsPage: React.FC = () => {
                       key={booking._id}
                       booking={{
                         _id: booking._id,
+                        bookingNumber: booking.bookingNumber || '',
+                        serviceId: booking.serviceId || booking.service?._id || '',
+                        estimatedDuration: booking.estimatedDuration || 0,
+                        createdAt: booking.createdAt || booking.scheduledDate,
+                        updatedAt: booking.updatedAt || booking.createdAt || booking.scheduledDate,
                         service: {
                           _id: booking.service?._id || '',
                           title: booking.service?.name || 'Service',
@@ -171,6 +176,7 @@ const CustomerBookingsPage: React.FC = () => {
                         scheduledTime: booking.scheduledTime,
                         status: booking.status,
                         totalPrice: booking.pricing?.totalAmount || booking.pricing?.total || 0,
+                        paymentStatus: booking.paymentStatus || 'pending',
                         location: booking.location?.address ? {
                           address: `${booking.location.address.street || ''}, ${booking.location.address.city || ''}`
                         } : undefined,

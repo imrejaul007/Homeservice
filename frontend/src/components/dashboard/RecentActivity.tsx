@@ -19,7 +19,7 @@ import {
   Loader2,
   ChevronRight,
 } from 'lucide-react';
-import { formatDistanceToNow, parseISO } from 'date-fns';
+import { formatDistanceToNow } from 'date-fns/formatDistanceToNow';
 import { useAuthStore } from '../../stores/authStore';
 
 // =============================================================================
@@ -331,7 +331,7 @@ const RecentActivity: React.FC<RecentActivityProps> = ({
 
   const formatTimestamp = (timestamp: string): string => {
     try {
-      return formatDistanceToNow(parseISO(timestamp), { addSuffix: true });
+      return formatDistanceToNow(new Date(timestamp), { addSuffix: true });
     } catch {
       return 'Recently';
     }

@@ -88,7 +88,7 @@ const CategoryPage: React.FC = () => {
     navigate(`/service/${slug}/${subcategorySlug}`);
   };
 
-  const displayConfig = (category.metadata?.displayConfig || {}) as any;
+  const displayConfig = (category.metadata as any)?.displayConfig || {};
   const tagline = displayConfig.tagline || 'Premium services, handpicked by NILIN';
   const heroImage = CATEGORY_IMAGES[slug || '']?.hero || 'https://images.unsplash.com/photo-1560066984-138dadb4c035?w=1400&q=80&fit=crop';
 

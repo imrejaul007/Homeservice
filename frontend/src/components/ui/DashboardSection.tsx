@@ -248,7 +248,7 @@ export const DashboardSection: React.FC<DashboardSectionProps> = ({
 interface QuickActionsGridProps {
   children: React.ReactNode;
   columns?: {
-    default: number;
+    default?: number;
     sm?: number;
     md?: number;
   };
@@ -355,9 +355,4 @@ export const PromoCard: React.FC<PromoCardProps> = ({
 // Exports
 // =============================================================================
 
-export {
-  DashboardSectionHeader,
-  DashboardCard,
-  QuickActionsGrid,
-};
 export default DashboardSection;

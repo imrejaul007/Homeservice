@@ -16,6 +16,8 @@ export function serviceAreasToStrings(areas: unknown): string[] {
 
 export interface ServiceLocationValue {
   label: string;
+  type?: string;
+  emirate?: string;
   formattedAddress?: string;
   street?: string;
   city?: string;

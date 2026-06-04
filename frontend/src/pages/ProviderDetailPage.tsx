@@ -569,7 +569,7 @@ const ProviderDetailPage: React.FC = () => {
                     <ServiceCard
                       key={service._id}
                       service={service}
-                      providerId={provider.id}
+                      providerId={provider._id}
                       onBook={() => navigate(`/book/${service._id}`)}
                       onViewDetails={() => navigate(`/services/${service._id}`)}
                     />

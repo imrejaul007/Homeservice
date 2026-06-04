@@ -26,7 +26,7 @@ interface Provider {
 }
 
 interface FeaturedProvider {
-  id: string;
+  _id: string;
   firstName: string;
   lastName: string;
   businessName: string;
@@ -188,7 +188,7 @@ const NoProvidersAvailable: React.FC<{
 
 // Transform featured provider to match Provider interface
 const transformFeaturedProvider = (provider: FeaturedProvider): Provider => ({
-  id: provider.id,
+  id: provider._id,
   firstName: provider.firstName,
   lastName: provider.lastName,
   businessName: provider.businessName,

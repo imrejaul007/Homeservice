@@ -18,7 +18,7 @@ import NavigationHeader from '../components/layout/NavigationHeader';
 import Footer from '../components/layout/Footer';
 import Breadcrumb from '../components/common/Breadcrumb';
 import Button from '../components/common/Button';
-import { apiClient } from '../services/api/client';
+import { api as apiClient } from '../services/api';
 import { useAuthStore } from '../stores/authStore';
 
 interface Package {

@@ -283,8 +283,13 @@ export function useFeaturedProviders(limit?: number): UseFeaturedProvidersState 
     setState(prev => ({ ...prev, isLoading: true, error: null }));
     try {
       const response = await providerApi.getFeaturedProviders(limit);
+      // Normalize providers to ensure each has an 'id' property (API returns '_id')
+      const normalizedProviders = response.data.providers.map((p: any) => ({
+        ...p,
+        id: p.id ?? p._id,
+      }));
       setState({
-        providers: response.data.providers,
+        providers: normalizedProviders,
         isLoading: false,
         error: null,
       });

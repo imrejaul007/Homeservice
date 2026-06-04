@@ -4,7 +4,7 @@ import { Calendar, Clock, MapPin, User, Phone, MoreVertical, Eye, Edit, X } from
 import { Booking } from '../../services/BookingService';
 
 // Adapter interface for component-specific display fields
-interface BookingCardBooking extends Omit<Booking, 'service' | 'provider' | 'customer' | 'location'> {
+interface BookingCardBooking extends Omit<Booking, 'service' | 'provider' | 'customer' | 'location' | 'pricing'> {
   service: {
     _id: string;
     name?: string;

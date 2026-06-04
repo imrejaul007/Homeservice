@@ -49,7 +49,7 @@ const CustomerStatsPage: React.FC = () => {
   };
 
   useEffect(() => {
-    getCustomerBookings({ limit: 100, period: selectedPeriod });
+    getCustomerBookings({ limit: 100 });
     fetchLoyaltyStatus();
   }, [selectedPeriod]);
 

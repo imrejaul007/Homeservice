@@ -50,7 +50,7 @@ const StarRating: React.FC<{ rating: number; size?: number }> = ({ rating, size 
 );
 
 const statusStyles: Record<
-  ReviewModerationStatus,
+  string,
   { bg: string; text: string; label: string }
 > = {
   all: { bg: 'bg-gray-100', text: 'text-gray-700', label: 'All' },
@@ -61,7 +61,7 @@ const statusStyles: Record<
   hidden: { bg: 'bg-slate-100', text: 'text-slate-600', label: 'Hidden' },
 };
 
-const StatusBadge: React.FC<{ status: ReviewModerationStatus }> = ({ status }) => {
+const StatusBadge: React.FC<{ status: ReviewModerationStatus | 'all' }> = ({ status }) => {
   const { bg, text, label } = statusStyles[status] || statusStyles.pending;
   return (
     <span className={cn('px-2.5 py-0.5 rounded-full text-xs font-medium capitalize', bg, text)}>
