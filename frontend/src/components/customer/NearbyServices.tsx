@@ -398,7 +398,7 @@ export const NearbyServices: React.FC<NearbyServicesProps> = ({
     if (onServiceClick) {
       onServiceClick(service);
     } else {
-      navigate(`/service/${service._id}`);
+      navigate(`/services/${service._id}`);
     }
   }, [navigate, onServiceClick]);
 

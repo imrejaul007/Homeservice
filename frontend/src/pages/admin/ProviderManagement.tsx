@@ -36,6 +36,7 @@ import {
   X,
   Download,
   CheckSquare,
+  Square,
   Clock3,
   ShieldCheck,
   ShieldAlert,
@@ -45,6 +46,9 @@ import {
   Globe,
   Zap,
   Layers,
+  UserCheck,
+  ChevronDown,
+  Loader2,
 } from 'lucide-react';
 import providerOpsApi from '../../services/providerOpsApi';
 import type {
@@ -1218,6 +1222,113 @@ const ProviderManagement: React.FC = () => {
     rejected: 0,
   });
 
+  // Bulk selection state
+  const [selectedProviders, setSelectedProviders] = useState<Set<string>>(new Set());
+  const [bulkActionLoading, setBulkActionLoading] = useState(false);
+  const [showBulkActions, setShowBulkActions] = useState(false);
+  const [verificationFilter, setVerificationFilter] = useState<'all' | 'verified' | 'unverified' | 'pending'>('all');
+
+  // Bulk action handlers
+  const getSelectedProviderIds = (): string[] => {
+    return Array.from(selectedProviders).map(id => {
+      const provider = providers.find(p => (typeof p.userId === 'object' ? p.userId?._id : p.userId) === id);
+      return provider ? (typeof provider.userId === 'object' ? provider.userId?._id : provider.userId) : id;
+    }).filter(Boolean);
+  };
+
+  const toggleProviderSelection = (provider: ProviderWithUser) => {
+    const userId = typeof provider.userId === 'object' ? provider.userId?._id : provider.userId;
+    if (!userId) return;
+
+    const newSelected = new Set(selectedProviders);
+    if (newSelected.has(userId)) {
+      newSelected.delete(userId);
+    } else {
+      newSelected.add(userId);
+    }
+    setSelectedProviders(newSelected);
+    setShowBulkActions(newSelected.size > 0);
+  };
+
+  const toggleAllSelection = () => {
+    if (selectedProviders.size === providers.length) {
+      setSelectedProviders(new Set());
+      setShowBulkActions(false);
+    } else {
+      const allIds = providers.map(p => typeof p.userId === 'object' ? p.userId?._id : p.userId).filter(Boolean);
+      setSelectedProviders(new Set(allIds));
+      setShowBulkActions(true);
+    }
+  };
+
+  const handleBulkSuspend = async () => {
+    const providerIds = getSelectedProviderIds();
+    if (providerIds.length === 0) return;
+
+    setBulkActionLoading(true);
+    try {
+      await Promise.all(
+        providerIds.map(id => providerOpsApi.suspendProvider(id, 'Bulk suspension by admin', 'temporary'))
+      );
+      toast.success(`Suspended ${providerIds.length} provider(s)`);
+      setSelectedProviders(new Set());
+      setShowBulkActions(false);
+      fetchProviders();
+      fetchDashboardStats();
+    } catch (error) {
+      toast.error('Failed to suspend some providers');
+    } finally {
+      setBulkActionLoading(false);
+    }
+  };
+
+  const handleBulkActivate = async () => {
+    const providerIds = getSelectedProviderIds();
+    if (providerIds.length === 0) return;
+
+    setBulkActionLoading(true);
+    try {
+      await Promise.all(
+        providerIds.map(id => providerOpsApi.reactivateProvider(id, 'Bulk activation by admin'))
+      );
+      toast.success(`Activated ${providerIds.length} provider(s)`);
+      setSelectedProviders(new Set());
+      setShowBulkActions(false);
+      fetchProviders();
+      fetchDashboardStats();
+    } catch (error) {
+      toast.error('Failed to activate some providers');
+    } finally {
+      setBulkActionLoading(false);
+    }
+  };
+
+  const handleBulkVerify = async () => {
+    const providerIds = getSelectedProviderIds();
+    if (providerIds.length === 0) return;
+
+    setBulkActionLoading(true);
+    try {
+      await Promise.all(
+        providerIds.map(id => providerOpsApi.approveProvider(id, 'Bulk verification by admin'))
+      );
+      toast.success(`Verified ${providerIds.length} provider(s)`);
+      setSelectedProviders(new Set());
+      setShowBulkActions(false);
+      fetchProviders();
+      fetchDashboardStats();
+    } catch (error) {
+      toast.error('Failed to verify some providers');
+    } finally {
+      setBulkActionLoading(false);
+    }
+  };
+
+  const clearSelection = () => {
+    setSelectedProviders(new Set());
+    setShowBulkActions(false);
+  };
+
   useEffect(() => {
     const tab = searchParams.get('tab');
     if (tab && VALID_TABS.has(tab) && tab !== 'all') {
@@ -1249,7 +1360,6 @@ const ProviderManagement: React.FC = () => {
         rejected: p.rejected,
       });
     } catch (error) {
-      console.error('Failed to fetch provider stats:', error);
       toast.error('Failed to load provider statistics');
     }
   }, []);
@@ -1265,7 +1375,6 @@ const ProviderManagement: React.FC = () => {
       setProviders(response.data.providers);
       setPagination(response.data.pagination);
     } catch (error) {
-      console.error('Failed to fetch providers:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to fetch providers. Please try again.');
     } finally {
       setIsLoading(false);
@@ -1304,7 +1413,6 @@ const ProviderManagement: React.FC = () => {
       setFraudFlags(fraudRes.data.flags ?? []);
       setFraudRiskLevel(fraudRes.data.riskLevel ?? 'unknown');
     } catch (error) {
-      console.error('Failed to fetch provider details:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to fetch provider details. Please try again.');
     } finally {
       if (fetchId === detailFetchId.current) {
@@ -1374,7 +1482,6 @@ const ProviderManagement: React.FC = () => {
       fetchDashboardStats();
       setSelectedProvider(null);
     } catch (error) {
-      console.error('Failed to approve provider:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to approve provider. Please try again.');
     }
   };
@@ -1388,7 +1495,6 @@ const ProviderManagement: React.FC = () => {
       fetchDashboardStats();
       setSelectedProvider(null);
     } catch (error) {
-      console.error('Failed to reject provider:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to reject provider. Please try again.');
     }
   };
@@ -1402,7 +1508,6 @@ const ProviderManagement: React.FC = () => {
       fetchDashboardStats();
       setSelectedProvider(null);
     } catch (error) {
-      console.error('Failed to suspend provider:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to suspend provider. Please try again.');
     }
   };
@@ -1416,7 +1521,6 @@ const ProviderManagement: React.FC = () => {
       fetchDashboardStats();
       setSelectedProvider(null);
     } catch (error) {
-      console.error('Failed to reactivate provider:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to reactivate provider. Please try again.');
     }
   };
@@ -1433,7 +1537,6 @@ const ProviderManagement: React.FC = () => {
       toast.success(`Document ${verified ? 'verified' : 'rejected'} successfully`);
       fetchProviderDetails(userId);
     } catch (error) {
-      console.error('Failed to verify document:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to verify document. Please try again.');
     }
   };
@@ -1455,7 +1558,6 @@ const ProviderManagement: React.FC = () => {
       fetchProviders();
       fetchDashboardStats();
     } catch (error) {
-      console.error('Failed to run fraud check:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to run fraud check. Please try again.');
     }
   };
@@ -1471,7 +1573,6 @@ const ProviderManagement: React.FC = () => {
       toast.success('Fraud flag resolved');
       fetchProviderDetails(userId);
     } catch (error) {
-      console.error('Failed to resolve fraud flag:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to resolve fraud flag.');
     }
   };
@@ -1600,8 +1701,81 @@ const ProviderManagement: React.FC = () => {
                       <option value="name">Name</option>
                     </select>
                   </div>
+                  <div>
+                    <label className="block text-xs font-medium text-nilin-warmGray mb-1">Verification status</label>
+                    <select
+                      value={verificationFilter}
+                      onChange={(e) => setVerificationFilter(e.target.value as any)}
+                      className="w-full px-3 py-2 text-sm border border-nilin-border rounded-lg focus:ring-2 focus:ring-nilin-coral/25"
+                    >
+                      <option value="all">All</option>
+                      <option value="verified">Verified</option>
+                      <option value="unverified">Unverified</option>
+                      <option value="pending">Pending</option>
+                    </select>
+                  </div>
                 </div>
               )}
+            </div>
+
+            {/* Bulk Actions Bar */}
+            {showBulkActions && (
+              <div className="flex items-center justify-between px-4 py-3 bg-nilin-coral/5 border-b border-nilin-coral/20">
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={clearSelection}
+                    className="p-1.5 rounded-lg hover:bg-nilin-coral/10 transition-colors"
+                    title="Clear selection"
+                  >
+                    <X className="w-4 h-4 text-nilin-coral" />
+                  </button>
+                  <span className="text-sm font-medium text-nilin-charcoal">
+                    {selectedProviders.size} provider{selectedProviders.size !== 1 ? 's' : ''} selected
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleBulkVerify}
+                    disabled={bulkActionLoading}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+                  >
+                    {bulkActionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <UserCheck className="w-4 h-4" />}
+                    Verify
+                  </button>
+                  <button
+                    onClick={handleBulkActivate}
+                    disabled={bulkActionLoading}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-sky-600 text-white text-sm font-medium rounded-lg hover:bg-sky-700 disabled:opacity-50 transition-colors"
+                  >
+                    {bulkActionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
+                    Activate
+                  </button>
+                  <button
+                    onClick={handleBulkSuspend}
+                    disabled={bulkActionLoading}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 text-white text-sm font-medium rounded-lg hover:bg-amber-700 disabled:opacity-50 transition-colors"
+                  >
+                    {bulkActionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Ban className="w-4 h-4" />}
+                    Suspend
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Select All Row */}
+            <div className="flex items-center gap-3 px-4 py-2 bg-gray-50 border-b border-gray-200">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={selectedProviders.size === providers.length && providers.length > 0}
+                  onChange={toggleAllSelection}
+                  className="w-4 h-4 text-nilin-coral rounded border-gray-300 focus:ring-nilin-coral"
+                />
+                <span className="text-sm text-gray-600">Select all on this page</span>
+              </label>
+              <span className="text-xs text-gray-400">
+                {selectedProviders.size > 0 && `(${selectedProviders.size} of ${providers.length} selected)`}
+              </span>
             </div>
 
             <ProviderListPanel

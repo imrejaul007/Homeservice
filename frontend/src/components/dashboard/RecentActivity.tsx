@@ -21,6 +21,8 @@ import {
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns/formatDistanceToNow';
 import { useAuthStore } from '../../stores/authStore';
+import { customerDashboardApi } from '../../services/customerDashboardApi';
+import { escapeHtml } from '../../lib/security';
 
 // =============================================================================
 // Types
@@ -231,7 +233,10 @@ const mapBackendTypeToFrontend = (
 /**
  * Transforms backend activity item to frontend Activity format.
  */
-const transformBackendActivity = (item: BackendActivityItem): Activity => {
+const transformBackendActivity = (
+  item: BackendActivityItem,
+  index: number
+): Activity => {
   const frontendType = mapBackendTypeToFrontend(item.type, item.action);
 
   // Handle metadata transformation
@@ -245,8 +250,13 @@ const transformBackendActivity = (item: BackendActivityItem): Activity => {
     if (item.metadata.bookingNumber) metadata.bookingNumber = String(item.metadata.bookingNumber);
   }
 
+  // Generate stable fallback ID: combine available fields with index
+  // This prevents React re-render issues when _id is missing from API
+  const stableId = item._id?.toString()
+    || `activity-${item.type}-${item.action}-${item.timestamp}-${index}`;
+
   return {
-    _id: item._id?.toString() || Math.random().toString(),
+    _id: stableId,
     type: frontendType,
     title: item.action,
     description: item.description,
@@ -266,47 +276,89 @@ const RecentActivity: React.FC<RecentActivityProps> = ({
   showViewAll = true,
 }) => {
   const navigate = useNavigate();
-  const { user, tokens } = useAuthStore();
+  const { user, isAuthenticated } = useAuthStore();
   const [activities, setActivities] = useState<Activity[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isFetching, setIsFetching] = useState(false);
 
-  const fetchActivities = useCallback(async () => {
+  const fetchActivities = useCallback(async (signal?: AbortSignal) => {
+    // Guard: Check authentication before making API call
+    if (!isAuthenticated) {
+      if (!signal?.aborted) {
+        setError('Please log in to view your activities.');
+        setIsLoading(false);
+      }
+      return;
+    }
+
+    // Race condition guard: prevent concurrent requests
+    if (isFetching) {
+      return;
+    }
+    setIsFetching(true);
+
     try {
       setError(null);
-      // Fetch from real API
-      const response = await fetch(`/api/dashboard/activity?limit=${limit}`, {
-        headers: { Authorization: `Bearer ${tokens?.accessToken}` }
-      });
+      // Fetch from real API using the service layer with cancellation support
+      const data = await customerDashboardApi.getActivityFeed(limit, signal);
 
-      if (response.ok) {
-        const data = await response.json();
-        if (data.success && data.data) {
-          // Transform backend data to frontend format using proper type mapping
-          const transformedActivities: Activity[] = data.data.map(
-            (item: BackendActivityItem) => transformBackendActivity(item)
-          );
-          setActivities(transformedActivities);
-          return;
-        }
+      // Check if request was cancelled before updating state
+      if (signal?.aborted) {
+        return;
       }
 
-      // API returned no data - show empty state
-      setError('Failed to load activities. Please try again.');
+      if (data && Array.isArray(data)) {
+        // Transform backend data to frontend format using proper type mapping
+        const transformedActivities: Activity[] = data.map(
+          (item: BackendActivityItem, index: number) => transformBackendActivity(item, index)
+        );
+        setActivities(transformedActivities);
+      }
     } catch (err) {
+      // Ignore abort errors - they are expected when component unmounts
+      if (signal?.aborted) {
+        return;
+      }
+
       console.error('Activity fetch failed:', err);
-      setError('Failed to load activities. Please check your connection.');
+
+      // Handle specific error types with appropriate messages
+      const errorMessage = ((): string => {
+        // Check for 401 Unauthorized
+        if (
+          err &&
+          typeof err === 'object' &&
+          'response' in err &&
+          (err as { response?: { status?: number } }).response?.status === 401
+        ) {
+          return 'Your session has expired. Please log in again.';
+        }
+        // Use the error message from the API service if available
+        return err instanceof Error ? err.message : 'Failed to load activities. Please try again.';
+      })();
+
+      setError(errorMessage);
     } finally {
-      setIsLoading(false);
+      if (!signal?.aborted) {
+        setIsLoading(false);
+        setIsFetching(false);
+      }
     }
-  }, [limit]);
+  }, [limit, isAuthenticated, isFetching]);
 
   useEffect(() => {
-    fetchActivities();
+    const controller = new AbortController();
+    fetchActivities(controller.signal);
+    return () => controller.abort();
   }, [fetchActivities]);
 
   const handleRefresh = async () => {
+    // Race condition guard: ignore if request already in-flight
+    if (isFetching) {
+      return;
+    }
     setIsRefreshing(true);
     await fetchActivities();
     setIsRefreshing(false);
@@ -485,10 +537,10 @@ const RecentActivity: React.FC<RecentActivityProps> = ({
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
                         <h3 className="font-sans font-medium text-nilin-charcoal text-sm">
-                          {activity.title}
+                          {escapeHtml(activity.title)}
                         </h3>
                         <p className="text-xs text-nilin-warmGray mt-0.5 line-clamp-2">
-                          {activity.description}
+                          {escapeHtml(activity.description)}
                         </p>
 
                         {/* Additional Info */}

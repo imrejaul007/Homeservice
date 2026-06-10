@@ -16,11 +16,15 @@ export interface IBundleService {
   quantity: number;
   originalPrice: number;
   description?: string;
+  duration?: number; // Duration in minutes for time slot calculations
 }
 
 export interface IBundle extends Document {
   // Tenant
   tenantId?: mongoose.Types.ObjectId;
+
+  // Provider (who created the bundle)
+  providerId?: mongoose.Types.ObjectId;
 
   // Bundle Info
   name: string;
@@ -33,15 +37,24 @@ export interface IBundle extends Document {
   bundlePrice: number;
   savingsAmount: number;
   savingsPercentage: number;
+  currency: string;
 
   // Validity
   validFrom: Date;
   validUntil: Date;
+  validityPeriodDays?: number;
 
   // Limits
   maxRedemptions?: number;
   redemptionsUsed: number;
   maxPurchasesPerCustomer?: number;
+
+  // Booking Stats
+  bookingCount: number;
+
+  // Approval Status
+  status: 'pending' | 'approved' | 'rejected';
+  rejectionReason?: string;
 
   // Status
   isActive: boolean;
@@ -100,6 +113,11 @@ const bundleServiceSchema = new Schema<IBundleService>(
     description: {
       type: String,
     },
+    duration: {
+      type: Number,
+      min: 0,
+      default: 60, // Default 60 minutes
+    },
   },
   { _id: false }
 );
@@ -110,6 +128,13 @@ const bundleSchema = new Schema<IBundle>(
     tenantId: {
       type: Schema.Types.ObjectId,
       ref: 'Tenant',
+      index: true
+    },
+
+    // Provider (who created the bundle)
+    providerId: {
+      type: Schema.Types.ObjectId,
+      ref: 'User',
       index: true
     },
 
@@ -163,6 +188,11 @@ const bundleSchema = new Schema<IBundle>(
       min: 0,
       max: 100,
     },
+    currency: {
+      type: String,
+      default: 'AED',
+      maxlength: [3, 'Currency code cannot exceed 3 characters'],
+    },
 
     // Validity
     validFrom: {
@@ -172,6 +202,10 @@ const bundleSchema = new Schema<IBundle>(
     validUntil: {
       type: Date,
       required: [true, 'Valid until date is required'],
+    },
+    validityPeriodDays: {
+      type: Number,
+      min: 1,
     },
 
     // Limits
@@ -187,6 +221,25 @@ const bundleSchema = new Schema<IBundle>(
     maxPurchasesPerCustomer: {
       type: Number,
       min: 1,
+    },
+
+    // Booking Stats
+    bookingCount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    // Approval Status
+    status: {
+      type: String,
+      enum: ['pending', 'approved', 'rejected'],
+      default: 'pending',
+      index: true,
+    },
+    rejectionReason: {
+      type: String,
+      maxlength: [500, 'Rejection reason cannot exceed 500 characters'],
     },
 
     // Status
@@ -271,6 +324,8 @@ bundleSchema.index({ tenantId: 1, categoryId: 1, isActive: 1 });
 bundleSchema.index({ tenantId: 1, validFrom: 1, validUntil: 1 });
 bundleSchema.index({ tenantId: 1, isFeatured: 1, isActive: 1 });
 bundleSchema.index({ 'services.serviceId': 1 });
+bundleSchema.index({ providerId: 1, status: 1 });
+bundleSchema.index({ tenantId: 1, status: 1, isActive: 1 });
 
 // Geospatial index for location-based queries (if needed)
 // bundleSchema.index({ 'location.coordinates': '2dsphere' });
@@ -313,6 +368,7 @@ bundleSchema.pre('save', function (next) {
 bundleSchema.methods.isValid = function (): boolean {
   const now = new Date();
   return (
+    this.status === 'approved' &&
     this.isActive &&
     this.redemptionsUsed < (this.maxRedemptions || Infinity) &&
     this.validFrom <= now &&
@@ -340,6 +396,7 @@ bundleSchema.statics.findActiveBundles = function (
 ) {
   const now = new Date();
   const query: Record<string, unknown> = {
+    status: 'approved',
     isActive: true,
     validFrom: { $lte: now },
     validUntil: { $gte: now },
@@ -355,6 +412,7 @@ bundleSchema.statics.findActiveBundles = function (
 bundleSchema.statics.findFeaturedBundles = function (limit: number = 10) {
   const now = new Date();
   return this.find({
+    status: 'approved',
     isActive: true,
     isFeatured: true,
     validFrom: { $lte: now },

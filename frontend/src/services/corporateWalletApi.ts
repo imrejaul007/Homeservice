@@ -1,4 +1,83 @@
 import { api } from './api';
+import type { BillingCycle } from '../types/subscription.types';
+
+// ============================================
+// Custom Error Class
+// ============================================
+
+export class CorporateWalletApiError extends Error {
+  constructor(
+    message: string,
+    public code: string,
+    public statusCode?: number,
+    public originalError?: unknown
+  ) {
+    super(message);
+    this.name = 'CorporateWalletApiError';
+  }
+}
+
+const handleApiError = (error: unknown, fallbackMessage: string): never => {
+  if (error && typeof error === 'object' && 'response' in error) {
+    const axiosError = error as { response?: { status?: number; data?: { message?: string } } };
+    const statusCode = axiosError.response?.status;
+    const message = axiosError.response?.data?.message || fallbackMessage;
+
+    if (statusCode === 401) {
+      throw new CorporateWalletApiError(
+        'Your session has expired. Please log in again.',
+        'AUTH_EXPIRED',
+        statusCode,
+        error
+      );
+    }
+    if (statusCode === 403) {
+      throw new CorporateWalletApiError(
+        'You do not have permission to access this feature.',
+        'FORBIDDEN',
+        statusCode,
+        error
+      );
+    }
+    if (statusCode === 404) {
+      throw new CorporateWalletApiError(
+        'Corporate wallet not found.',
+        'NOT_FOUND',
+        statusCode,
+        error
+      );
+    }
+    if (statusCode === 429) {
+      throw new CorporateWalletApiError(
+        'Too many requests. Please try again later.',
+        'RATE_LIMITED',
+        statusCode,
+        error
+      );
+    }
+    if (statusCode && statusCode >= 500) {
+      throw new CorporateWalletApiError(
+        'Server error. Please try again later.',
+        'SERVER_ERROR',
+        statusCode,
+        error
+      );
+    }
+
+    throw new CorporateWalletApiError(message, 'API_ERROR', statusCode, error);
+  }
+
+  if (error && typeof error === 'object' && 'request' in error) {
+    throw new CorporateWalletApiError(
+      'Network error. Please check your connection.',
+      'NETWORK_ERROR',
+      undefined,
+      error
+    );
+  }
+
+  throw new CorporateWalletApiError(fallbackMessage, 'UNKNOWN_ERROR', undefined, error);
+};
 
 // ============================================
 // Types
@@ -18,7 +97,7 @@ export interface CorporateWallet {
   totalSpent: number;
   totalSpentThisMonth: number;
   status: 'active' | 'suspended' | 'frozen' | 'closed';
-  billingCycle: 'monthly' | 'quarterly' | 'annually';
+  billingCycle: BillingCycle;
   billingDay: number;
   nextBillingDate: string;
 }
@@ -84,8 +163,12 @@ export const corporateWalletApi = {
    * Get corporate wallet details
    */
   getWallet: async (): Promise<CorporateWalletResponse> => {
-    const response = await api.get('/corporate-wallet/wallet');
-    return response.data.data;
+    try {
+      const response = await api.get('/corporate-wallet/wallet');
+      return response.data.data;
+    } catch (error) {
+      handleApiError(error, 'Failed to load corporate wallet details.');
+    }
   },
 
   /**
@@ -98,34 +181,46 @@ export const corporateWalletApi = {
     startDate?: string;
     endDate?: string;
   }): Promise<TransactionHistoryResponse> => {
-    const params = new URLSearchParams();
-    if (options?.page) params.append('page', options.page.toString());
-    if (options?.limit) params.append('limit', options.limit.toString());
-    if (options?.type) params.append('type', options.type);
-    if (options?.startDate) params.append('startDate', options.startDate);
-    if (options?.endDate) params.append('endDate', options.endDate);
+    try {
+      const params = new URLSearchParams();
+      if (options?.page) params.append('page', options.page.toString());
+      if (options?.limit) params.append('limit', options.limit.toString());
+      if (options?.type) params.append('type', options.type);
+      if (options?.startDate) params.append('startDate', options.startDate);
+      if (options?.endDate) params.append('endDate', options.endDate);
 
-    const queryString = params.toString();
-    const url = queryString ? `/corporate-wallet/transactions?${queryString}` : '/corporate-wallet/transactions';
+      const queryString = params.toString();
+      const url = queryString ? `/corporate-wallet/transactions?${queryString}` : '/corporate-wallet/transactions';
 
-    const response = await api.get(url);
-    return response.data.data;
+      const response = await api.get(url);
+      return response.data.data;
+    } catch (error) {
+      handleApiError(error, 'Failed to load transaction history.');
+    }
   },
 
   /**
    * Get employee spending breakdown
    */
   getSpending: async (): Promise<SpendingResponse> => {
-    const response = await api.get('/corporate-wallet/spending');
-    return response.data.data;
+    try {
+      const response = await api.get('/corporate-wallet/spending');
+      return response.data.data;
+    } catch (error) {
+      handleApiError(error, 'Failed to load employee spending data.');
+    }
   },
 
   /**
    * Get spending by category
    */
   getBreakdown: async (): Promise<BreakdownResponse> => {
-    const response = await api.get('/corporate-wallet/breakdown');
-    return response.data.data;
+    try {
+      const response = await api.get('/corporate-wallet/breakdown');
+      return response.data.data;
+    } catch (error) {
+      handleApiError(error, 'Failed to load spending breakdown.');
+    }
   },
 
   /**
@@ -135,11 +230,15 @@ export const corporateWalletApi = {
     requestedLimit: number,
     reason: string
   ): Promise<{ success: boolean; message?: string; data?: { requestId: string } }> => {
-    const response = await api.post('/corporate-wallet/request-increase', {
-      requestedLimit,
-      reason,
-    });
-    return response.data;
+    try {
+      const response = await api.post('/corporate-wallet/request-increase', {
+        requestedLimit,
+        reason,
+      });
+      return response.data;
+    } catch (error) {
+      handleApiError(error, 'Failed to submit limit increase request.');
+    }
   },
 };
 

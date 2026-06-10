@@ -2,7 +2,10 @@ import mongoose, { Document, Schema, Model } from 'mongoose';
 
 export interface ICustomerProfile extends Document {
   userId: mongoose.Types.ObjectId;
-  
+
+  // Stripe integration
+  stripeCustomerId?: string;
+
   preferences: {
     categories: string[];
     maxDistance: number;
@@ -60,6 +63,17 @@ export interface ICustomerProfile extends Document {
   
   favoriteProviders: Array<{
     providerId: mongoose.Types.ObjectId;
+    addedAt: Date;
+    category?: string;
+    notes?: string;
+  }>;
+
+  favoritePackages: Array<{
+    packageId: mongoose.Types.ObjectId;
+    packageName: string;
+    packagePrice: number;
+    providerId: mongoose.Types.ObjectId;
+    providerName: string;
     addedAt: Date;
     category?: string;
     notes?: string;
@@ -167,7 +181,13 @@ const customerProfileSchema = new Schema<ICustomerProfile>(
       unique: true,
       index: true
     },
-    
+
+    stripeCustomerId: {
+      type: String,
+      sparse: true,
+      index: true
+    },
+
     preferences: {
       categories: [String],
       maxDistance: { 
@@ -196,8 +216,8 @@ const customerProfileSchema = new Schema<ICustomerProfile>(
     },
     
     addresses: [{
-      label: { 
-        type: String, 
+      label: {
+        type: String,
         required: true,
         maxlength: 50
       },
@@ -208,12 +228,12 @@ const customerProfileSchema = new Schema<ICustomerProfile>(
       },
       street: { type: String, required: true },
       city: { type: String, required: true },
-      state: { type: String, required: true },
-      zipCode: { type: String, required: true },
+      state: { type: String, default: '' },
+      zipCode: { type: String, default: '' },
       country: { type: String, default: 'US' },
       coordinates: {
         type: { type: String, enum: ['Point'], default: 'Point' },
-        coordinates: { type: [Number], required: true } // [longitude, latitude]
+        coordinates: { type: [Number], default: [0, 0] } // [longitude, latitude]
       },
       isDefault: { type: Boolean, default: false },
       instructions: String,
@@ -256,6 +276,34 @@ const customerProfileSchema = new Schema<ICustomerProfile>(
       providerId: {
         type: Schema.Types.ObjectId,
         ref: 'User',
+        required: true
+      },
+      addedAt: { type: Date, default: Date.now },
+      category: String,
+      notes: String
+    }],
+
+    favoritePackages: [{
+      packageId: {
+        type: Schema.Types.ObjectId,
+        ref: 'Service',
+        required: true
+      },
+      packageName: {
+        type: String,
+        required: true
+      },
+      packagePrice: {
+        type: Number,
+        required: true
+      },
+      providerId: {
+        type: Schema.Types.ObjectId,
+        ref: 'User',
+        required: true
+      },
+      providerName: {
+        type: String,
         required: true
       },
       addedAt: { type: Date, default: Date.now },
@@ -363,6 +411,7 @@ const customerProfileSchema = new Schema<ICustomerProfile>(
 // Indexes for performance (userId already has index from unique: true)
 customerProfileSchema.index({ 'addresses.coordinates': '2dsphere' });
 customerProfileSchema.index({ 'favoriteProviders.providerId': 1 });
+customerProfileSchema.index({ 'favoritePackages.packageId': 1 });
 customerProfileSchema.index({ isActive: 1, isDeleted: 1 });
 customerProfileSchema.index({ 'bookingHistory.totalBookings': -1 });
 customerProfileSchema.index({ 'preferences.categories': 1 });

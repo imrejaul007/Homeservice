@@ -185,4 +185,10 @@ export const EventTypes = {
   POINTS_EARNED: 'loyalty.points_earned',
   POINTS_REDEEMED: 'loyalty.points_redeemed',
   TIER_CHANGED: 'loyalty.tier_changed',
+
+  // FIX: Offer events
+  OFFER_VIEWED: 'offer.viewed',
+  OFFER_CLAIMED: 'offer.claimed',
+  OFFER_REDEEMED: 'offer.redeemed',
+  OFFER_EXPIRED: 'offer.expired',
 } as const;

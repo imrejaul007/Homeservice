@@ -14,8 +14,13 @@ interface UseProviderState {
   error: string | null;
 }
 
-// Cache TTL for provider data (5 minutes)
-const PROVIDER_CACHE_TTL = 5 * 60 * 1000;
+// Cache TTL for provider data (2 minutes)
+const PROVIDER_CACHE_TTL = 2 * 60 * 1000;
+
+/** Bust cached provider profile (e.g. after provider updates their profile) */
+export function invalidateProviderCache(id: string): void {
+  cacheManager.delete(`provider:${id}`);
+}
 
 export function useProvider(id: string | undefined): UseProviderState & { refetch: () => Promise<void> } {
   const [state, setState] = useState<UseProviderState>({
@@ -45,10 +50,13 @@ export function useProvider(id: string | undefined): UseProviderState & { refetc
     setState(prev => ({ ...prev, isLoading: true, error: null }));
     try {
       const response = await providerApi.getProviderById(id);
-      // Cache the result for 5 minutes
-      cacheManager.set(cacheKey, response.data.provider, PROVIDER_CACHE_TTL);
+      const normalizedProvider = {
+        ...response.data.provider,
+        _id: response.data.provider._id ?? (response.data.provider as { id?: string }).id ?? id,
+      };
+      cacheManager.set(cacheKey, normalizedProvider, PROVIDER_CACHE_TTL);
       setState({
-        provider: response.data.provider,
+        provider: normalizedProvider,
         isLoading: false,
         error: null,
       });

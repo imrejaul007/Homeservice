@@ -321,6 +321,36 @@ export const hasMarketingConsent = async (userId: string): Promise<boolean> => {
 };
 
 /**
+ * Check which consents are outdated (granted but version behind current policy)
+ * Uses single query to fetch all consents, then processes in memory
+ */
+export const hasOutdatedConsents = async (
+  userId: string,
+  consentTypes: ConsentType[]
+): Promise<ConsentType[]> => {
+  const consents = await getUserConsents(userId);
+  const consentMap = new Map<ConsentType, IConsent>();
+
+  // Build map of latest consent per type (by timestamp)
+  for (const consent of consents) {
+    const existing = consentMap.get(consent.type);
+    if (!existing || consent.timestamp > existing.timestamp) {
+      consentMap.set(consent.type, consent);
+    }
+  }
+
+  const outdated: ConsentType[] = [];
+  for (const type of consentTypes) {
+    const consent = consentMap.get(type);
+    if (consent && consent.granted && consent.version !== CONSENT_VERSIONS[type]) {
+      outdated.push(type);
+    }
+  }
+
+  return outdated;
+};
+
+/**
  * Check if cookie consent is given
  */
 export const hasCookieConsent = async (userId: string): Promise<boolean> => {
@@ -478,6 +508,7 @@ export default {
   getConsentSummary,
   hasValidConsent,
   hasAllRequiredConsents,
+  hasOutdatedConsents,
   hasMarketingConsent,
   hasCookieConsent,
   getConsentHistory,

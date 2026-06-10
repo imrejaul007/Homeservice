@@ -12,7 +12,7 @@ import { ApiError, ERROR_CODES } from './ApiError';
  * Throws if no tenant context available
  */
 export function getTenantId(req: Request): string {
-  const tenantId = req.tenantId || (req as any).user?.tenantId;
+  const tenantId = (req as any).tenantId || (req as any).user?.tenantId;
 
   if (!tenantId) {
     throw ApiError.unauthorized('TENANT_CONTEXT_MISSING: No tenant context in request', ERROR_CODES.UNAUTHORIZED);
@@ -25,7 +25,7 @@ export function getTenantId(req: Request): string {
  * Get tenant ID or return undefined (for admin/system operations)
  */
 export function getTenantIdOptional(req: Request): string | undefined {
-  return req.tenantId || (req as any).user?.tenantId;
+  return (req as any).tenantId || (req as any).user?.tenantId;
 }
 
 /**

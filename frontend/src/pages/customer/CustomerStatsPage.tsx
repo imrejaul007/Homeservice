@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Calendar,
@@ -24,6 +24,7 @@ import { useBookingStore } from '../../stores/bookingStore';
 import { useAuthStore } from '../../stores/authStore';
 import { loyaltyApi, type LoyaltyStatus } from '../../services/loyaltyApi';
 import { toast } from 'react-hot-toast';
+import { logger } from '../../utils/logger';
 
 interface StatCard {
   title: string;
@@ -40,6 +41,8 @@ const CustomerStatsPage: React.FC = () => {
 
   const [selectedPeriod, setSelectedPeriod] = useState<'week' | 'month' | 'year'>('month');
   const [loyaltyStatus, setLoyaltyStatus] = useState<LoyaltyStatus | null>(null);
+  const [loyaltyError, setLoyaltyError] = useState<string | null>(null);
+  const requestIdRef = useRef(0);
 
   const getGreeting = () => {
     const hour = new Date().getHours();
@@ -49,15 +52,18 @@ const CustomerStatsPage: React.FC = () => {
   };
 
   useEffect(() => {
+    const currentRequestId = ++requestIdRef.current;
     getCustomerBookings({ limit: 100 });
-    fetchLoyaltyStatus();
+    fetchLoyaltyStatus(currentRequestId);
   }, [selectedPeriod]);
 
-  const fetchLoyaltyStatus = async () => {
+  const fetchLoyaltyStatus = async (requestId: number) => {
     try {
       const response = await loyaltyApi.getStatus();
+      if (requestId !== requestIdRef.current) return; // Ignore stale response
       setLoyaltyStatus(response?.data ?? null);
     } catch {
+      if (requestId !== requestIdRef.current) return; // Ignore stale error
       // Silent failure - loyalty status will not display
       toast.error('Failed to load loyalty status');
     }

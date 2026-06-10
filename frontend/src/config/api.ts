@@ -1,5 +1,8 @@
 // API Configuration
-export const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+// Uses getApiUrl() for proper mobile detection and fallback
+import { getApiUrl } from '../lib/getApiUrl';
+
+export const API_BASE_URL = getApiUrl();
 
 export const API_ENDPOINTS = {
   // Authentication
@@ -14,6 +17,7 @@ export const API_ENDPOINTS = {
   // Search & Services
   search: {
     services: '/search/services',
+    providers: '/search/providers',
     suggestions: '/search/suggestions',
     trending: '/search/trending',
     filters: '/search/filters',

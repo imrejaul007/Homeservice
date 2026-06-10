@@ -4,6 +4,13 @@
  */
 
 import Joi from 'joi';
+import { LocationType } from '../interfaces/service.interface';
+
+/**
+ * Standard location types for booking validation
+ * Exported for use across all booking schemas
+ */
+export const LOCATION_TYPES: LocationType[] = ['at_home', 'at_provider', 'at_hotel', 'hotel', 'customer_address'];
 
 /**
  * Password complexity requirements
@@ -128,7 +135,7 @@ export const bookingInputSchema = Joi.object({
 
   providerId: Joi.string()
     .pattern(OBJECT_ID_PATTERN)
-    .required()
+    .optional()
     .messages({
       'string.pattern.base': 'Invalid provider ID format',
     }),
@@ -148,7 +155,7 @@ export const bookingInputSchema = Joi.object({
     }),
 
   locationType: Joi.string()
-    .valid('at_home', 'at_provider', 'at_hotel')
+    .valid(...LOCATION_TYPES)
     .optional(),
 
   selectedDuration: Joi.number().integer().min(15).max(480).optional(),
@@ -307,6 +314,7 @@ export default {
   PHONE_PATTERN,
   OBJECT_ID_PATTERN,
   IDEMPOTENCY_KEY_PATTERN,
+  LOCATION_TYPES,
   customerRegistrationSchema,
   loginSchema,
   bookingInputSchema,

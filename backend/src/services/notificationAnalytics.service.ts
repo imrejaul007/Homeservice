@@ -293,7 +293,7 @@ export class NotificationAnalyticsService {
     try {
       const redisClient = (cache as any).client;
       if (redisClient) {
-        await redisClient.setex(cacheKey, ANALYTICS_CACHE_KEY, JSON.stringify(analytics));
+        await redisClient.setex(cacheKey, ANALYTICS_TTL_SECONDS, JSON.stringify(analytics));
       }
     } catch (error) {
       logger.warn('Failed to cache analytics', {
@@ -329,7 +329,6 @@ export class NotificationAnalyticsService {
       email: { sent: 0, delivered: 0, clicked: 0, viewed: 0, rate: 0 },
       sms: { sent: 0, delivered: 0, clicked: 0, viewed: 0, rate: 0 },
       push: { sent: 0, delivered: 0, clicked: 0, viewed: 0, rate: 0 },
-      inApp: { sent: 0, delivered: 0, clicked: 0, viewed: 0, rate: 0 },
     };
 
     const byType: Record<string, TypeAnalytics> = {};
@@ -344,10 +343,10 @@ export class NotificationAnalyticsService {
       const channels = notification.channels;
       if (channels) {
         if (channels.inApp?.sent) {
-          byChannel.inApp.sent++;
+          byChannel.in_app.sent++;
           totalSent++;
           if (channels.inApp?.read) {
-            byChannel.inApp.viewed++;
+            byChannel.in_app.viewed++;
             totalViewed++;
           }
         }
@@ -625,7 +624,11 @@ export class NotificationAnalyticsService {
     try {
       const redisClient = (cache as any).client;
       if (redisClient) {
-        const keys = await redisClient.keys(`${ANALYTICS_CACHE_KEY}*`);
+        const stream = redisClient.scanStream({ match: `${ANALYTICS_CACHE_KEY}*`, count: 100 });
+        const keys: string[] = [];
+        for await (const result of stream) {
+          keys.push(...result);
+        }
         if (keys.length > 0) {
           await redisClient.del(...keys);
         }

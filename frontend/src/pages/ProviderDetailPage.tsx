@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -12,24 +12,24 @@ import {
   Share2,
   ChevronRight,
   ChevronLeft,
-  SlidersHorizontal,
   Award,
   Briefcase,
-  Users,
-  ThumbsUp,
   User,
   Scissors,
-  Sparkles
+  Sparkles,
+  X,
 } from 'lucide-react';
+import toast from 'react-hot-toast';
 import NavigationHeader from '../components/layout/NavigationHeader';
 import Footer from '../components/layout/Footer';
+import ServiceReviews from '../components/service/ServiceReviews';
+import { ShareModal } from '../components/common/ShareModal';
 import { useProvider } from '../hooks/useProvider';
 import { useAuthStore } from '../stores/authStore';
 import { favoritesApi } from '../services/favoritesApi';
 import { CATEGORY_IMAGES, SUBCATEGORY_IMAGES } from '../constants/images';
-import type { Provider, ProviderService, ProviderReview, PortfolioItem, Certification } from '../types/provider';
+import type { ProviderService, Certification } from '../types/provider';
 
-// Generate a consistent gradient from name
 const getAvatarColor = (name: string): string => {
   const colors = [
     'from-indigo-500 to-purple-500',
@@ -52,11 +52,9 @@ const getInitials = (name: string): string => {
   return name.substring(0, 2).toUpperCase();
 };
 
-// Get image for a service based on its category/subcategory
 const getServiceImage = (service: ProviderService): string | null => {
   if (service.images && service.images.length > 0) return service.images[0];
 
-  // Try subcategory images
   const catSlug = service.category?.toLowerCase().replace(/\s+&\s+/g, '-').replace(/\s+/g, '-');
   const subSlug = service.subcategory?.toLowerCase().replace(/\s+&\s+/g, '-').replace(/\s+/g, '-');
 
@@ -69,10 +67,8 @@ const getServiceImage = (service: ProviderService): string | null => {
   return null;
 };
 
-// Service Card Component
 const ServiceCard: React.FC<{
   service: ProviderService;
-  providerId: string;
   onBook: () => void;
   onViewDetails: () => void;
 }> = ({ service, onBook, onViewDetails }) => {
@@ -105,7 +101,6 @@ const ServiceCard: React.FC<{
             Featured
           </span>
         )}
-        {/* Hover overlay */}
         <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors flex items-center justify-center">
           <span className="opacity-0 group-hover:opacity-100 transition-opacity bg-white/90 backdrop-blur-sm px-3 py-1.5 rounded-full text-sm font-medium text-gray-700 shadow-sm">
             View Details
@@ -141,62 +136,6 @@ const ServiceCard: React.FC<{
   );
 };
 
-// Review Card Component
-const ReviewCard: React.FC<{
-  review: ProviderReview;
-}> = ({ review }) => {
-  const reviewerInitial = review.isVerified ? 'V' : 'C';
-
-  return (
-    <div className="bg-white rounded-2xl border border-gray-100 p-5">
-      <div className="flex items-start gap-4">
-        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-nilin-primary to-purple-500 flex items-center justify-center flex-shrink-0">
-          <span className="text-white font-semibold text-sm">{reviewerInitial}</span>
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center justify-between mb-1">
-            <div className="flex items-center gap-2">
-              <h4 className="font-semibold text-gray-900 text-sm">
-                {review.isVerified ? 'Verified Customer' : 'Customer'}
-              </h4>
-              {review.isVerified && (
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
-              )}
-            </div>
-            <span className="text-xs text-gray-400">
-              {new Date(review.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-            </span>
-          </div>
-          <div className="flex items-center gap-0.5 mb-2">
-            {[...Array(5)].map((_, i) => (
-              <Star
-                key={i}
-                className={`w-3.5 h-3.5 ${i < review.rating ? 'text-amber-400 fill-amber-400' : 'text-gray-200'}`}
-              />
-            ))}
-            {review.title && (
-              <span className="text-sm text-gray-600 font-medium ml-2">{review.title}</span>
-            )}
-          </div>
-          <p className="text-gray-600 text-sm leading-relaxed">{review.comment}</p>
-          {review.response && (
-            <div className="mt-3 ml-3 pl-3 border-l-2 border-nilin-primary/30">
-              <p className="text-sm text-gray-500">
-                <strong className="text-gray-700">Provider Response:</strong> {review.response.text}
-              </p>
-            </div>
-          )}
-          <button className="flex items-center gap-1.5 mt-3 text-xs text-gray-400 hover:text-nilin-primary transition-colors">
-            <ThumbsUp className="w-3.5 h-3.5" />
-            <span>Helpful</span>
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-// Certification Card Component
 const CertificationCard: React.FC<{
   certification: Certification;
 }> = ({ certification }) => (
@@ -216,7 +155,6 @@ const CertificationCard: React.FC<{
   </div>
 );
 
-// Loading Skeleton
 const LoadingSkeleton: React.FC = () => (
   <div className="min-h-screen bg-white">
     <NavigationHeader />
@@ -254,7 +192,6 @@ const LoadingSkeleton: React.FC = () => (
   </div>
 );
 
-// Error State
 const ErrorState: React.FC<{ message: string; onBack: () => void }> = ({ message, onBack }) => (
   <div className="min-h-screen bg-white">
     <NavigationHeader />
@@ -274,7 +211,6 @@ const ErrorState: React.FC<{ message: string; onBack: () => void }> = ({ message
   </div>
 );
 
-// Helper function to calculate experience
 const calculateExperience = (establishedDate?: string, memberSince?: string): string => {
   const date = establishedDate || memberSince;
   if (!date) return 'New';
@@ -288,9 +224,10 @@ const calculateExperience = (establishedDate?: string, memberSince?: string): st
 
 const formatResponseTime = (minutes?: number): string => {
   if (!minutes) return 'Quick responder';
-  if (minutes < 60) return `Replies in < ${minutes} min`;
-  if (minutes < 1440) return `Replies in < ${Math.round(minutes / 60)}h`;
-  return `Replies in < ${Math.round(minutes / 1440)}d`;
+  const rounded = Math.round(minutes);
+  if (rounded < 60) return `Replies in < ${rounded} min`;
+  if (rounded < 1440) return `Replies in < ${Math.round(rounded / 60)}h`;
+  return `Replies in < ${Math.round(rounded / 1440)}d`;
 };
 
 const ProviderDetailPage: React.FC = () => {
@@ -300,12 +237,19 @@ const ProviderDetailPage: React.FC = () => {
   const [showAllServices, setShowAllServices] = useState(false);
   const [isFavorite, setIsFavorite] = useState(false);
   const [isTogglingFavorite, setIsTogglingFavorite] = useState(false);
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [showServicePicker, setShowServicePicker] = useState(false);
+  const [reviewStats, setReviewStats] = useState<{ total: number; averageRating: number } | null>(null);
   const galleryRef = useRef<HTMLDivElement>(null);
+  const reviewsRef = useRef<HTMLDivElement>(null);
 
   const { provider, isLoading, error } = useProvider(id);
   const { isAuthenticated } = useAuthStore();
 
-  // Check if provider is favorited on mount
+  const handleReviewStatsLoaded = useCallback((stats: { total: number; averageRating: number }) => {
+    setReviewStats(stats);
+  }, []);
+
   useEffect(() => {
     if (id && isAuthenticated) {
       favoritesApi.checkFavorite(id)
@@ -327,15 +271,51 @@ const ProviderDetailPage: React.FC = () => {
       if (isFavorite) {
         await favoritesApi.removeFavorite(id);
         setIsFavorite(false);
+        toast.success('Removed from favorites');
       } else {
         await favoritesApi.addFavorite(id);
         setIsFavorite(true);
+        toast.success('Added to favorites');
       }
     } catch (err) {
       console.error('Failed to toggle favorite:', err);
+      toast.error('Failed to update favorites. Please try again.');
     } finally {
       setIsTogglingFavorite(false);
     }
+  };
+
+  const handleMessage = () => {
+    if (!isAuthenticated) {
+      navigate('/login', { state: { returnTo: `/provider/${id}` } });
+      return;
+    }
+    if (!id || !provider) return;
+    const displayName = provider.businessName || `${provider.firstName} ${provider.lastName}`;
+    const providerName = encodeURIComponent(displayName);
+    navigate(`/customer/messages/new?providerId=${id}&providerName=${providerName}`);
+  };
+
+  const handleShare = () => {
+    setShowShareModal(true);
+  };
+
+  const handleBookService = (serviceId: string) => {
+    setShowServicePicker(false);
+    navigate(`/book/${serviceId}`);
+  };
+
+  const handleBookNow = () => {
+    if (!provider || provider.services.length === 0) return;
+    if (provider.services.length === 1) {
+      handleBookService(provider.services[0]._id);
+    } else {
+      setShowServicePicker(true);
+    }
+  };
+
+  const scrollToReviews = () => {
+    reviewsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
   if (isLoading) return <LoadingSkeleton />;
@@ -351,8 +331,11 @@ const ProviderDetailPage: React.FC = () => {
   const displayName = provider.businessName || `${provider.firstName} ${provider.lastName}`;
   const initials = getInitials(displayName);
   const avatarColor = getAvatarColor(displayName);
+  const providerId = provider._id || (provider as { id?: string }).id || id!;
 
-  // Filter services
+  const displayRating = reviewStats?.averageRating ?? provider.reviewsData?.averageRating ?? 0;
+  const displayReviewCount = reviewStats?.total ?? provider.reviewsData?.totalReviews ?? 0;
+
   const filteredServices = selectedFilter === 'all'
     ? provider.services
     : selectedFilter === 'popular'
@@ -373,7 +356,6 @@ const ProviderDetailPage: React.FC = () => {
 
   const galleryImages = provider.portfolio?.featured?.flatMap(item => item.images) || [];
 
-  // Stats - only show meaningful ones
   const stats = [];
   if (provider.stats?.completionRate && provider.stats.completionRate > 0) {
     stats.push({ value: `${provider.stats.completionRate}%`, label: 'Completion' });
@@ -384,14 +366,18 @@ const ProviderDetailPage: React.FC = () => {
   if (provider.stats?.totalBookings && provider.stats.totalBookings > 0) {
     stats.push({ value: `${provider.stats.totalBookings}+`, label: 'Bookings' });
   }
-  // Always show at least services count and rating
   if (stats.length === 0) {
     stats.push({ value: `${provider.services.length}`, label: 'Services' });
-    if (provider.reviewsData?.averageRating && provider.reviewsData.averageRating > 0) {
-      stats.push({ value: provider.reviewsData.averageRating.toFixed(1), label: 'Rating' });
+    if (displayRating > 0) {
+      stats.push({ value: displayRating.toFixed(1), label: 'Rating' });
     }
     stats.push({ value: calculateExperience(provider.establishedDate, provider.memberSince), label: 'Experience' });
   }
+
+  const statsGridClass =
+    stats.length === 1 ? 'grid-cols-1' :
+    stats.length === 2 ? 'grid-cols-2' :
+    'grid-cols-3';
 
   return (
     <div className="min-h-screen bg-white flex flex-col">
@@ -410,7 +396,6 @@ const ProviderDetailPage: React.FC = () => {
         )}
         <div className="absolute inset-0 bg-gradient-to-t from-black/50 via-black/20 to-transparent" />
 
-        {/* Back */}
         <button
           onClick={() => navigate(-1)}
           className="absolute top-4 left-4 flex items-center gap-2 px-3 py-2 bg-white/90 backdrop-blur-sm rounded-full text-gray-900 hover:bg-white transition-colors shadow-sm"
@@ -419,7 +404,6 @@ const ProviderDetailPage: React.FC = () => {
           <span className="font-medium text-sm hidden sm:inline">Back</span>
         </button>
 
-        {/* Actions */}
         <div className="absolute top-4 right-4 flex items-center gap-2">
           <button
             onClick={handleToggleFavorite}
@@ -430,7 +414,10 @@ const ProviderDetailPage: React.FC = () => {
           >
             <Heart className={`w-4 h-4 ${isFavorite ? 'fill-current' : ''}`} />
           </button>
-          <button className="p-2 bg-white/90 backdrop-blur-sm rounded-full text-gray-600 hover:bg-white transition-colors shadow-sm">
+          <button
+            onClick={handleShare}
+            className="p-2 bg-white/90 backdrop-blur-sm rounded-full text-gray-600 hover:bg-white transition-colors shadow-sm"
+          >
             <Share2 className="w-4 h-4" />
           </button>
         </div>
@@ -440,7 +427,6 @@ const ProviderDetailPage: React.FC = () => {
       <div className="max-w-6xl mx-auto px-4 -mt-14 relative z-10 w-full">
         <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-5 md:p-7">
           <div className="flex flex-col md:flex-row md:items-start gap-5">
-            {/* Avatar */}
             <div className="relative -mt-14 md:-mt-18 mx-auto md:mx-0 flex-shrink-0">
               {provider.profilePhoto ? (
                 <img
@@ -460,7 +446,6 @@ const ProviderDetailPage: React.FC = () => {
               )}
             </div>
 
-            {/* Info */}
             <div className="flex-1 text-center md:text-left min-w-0">
               <div className="flex flex-col md:flex-row md:items-center gap-2 md:gap-3 mb-1">
                 <h1 className="text-xl md:text-2xl font-bold text-gray-900 truncate">{displayName}</h1>
@@ -475,18 +460,17 @@ const ProviderDetailPage: React.FC = () => {
                 <p className="text-gray-500 text-sm mb-3">{provider.tagline}</p>
               )}
 
-              {/* Meta row */}
               <div className="flex flex-wrap items-center justify-center md:justify-start gap-3 text-sm">
-                {(provider.reviewsData?.averageRating ?? 0) > 0 && (
-                  <div className="flex items-center gap-1">
+                {displayRating > 0 && (
+                  <button
+                    type="button"
+                    onClick={scrollToReviews}
+                    className="flex items-center gap-1 hover:opacity-80 transition-opacity"
+                  >
                     <Star className="w-4 h-4 text-amber-400 fill-amber-400" />
-                    <span className="font-bold text-gray-900">
-                      {provider.reviewsData?.averageRating?.toFixed(1)}
-                    </span>
-                    <span className="text-gray-400">
-                      ({provider.reviewsData?.totalReviews || 0})
-                    </span>
-                  </div>
+                    <span className="font-bold text-gray-900">{displayRating.toFixed(1)}</span>
+                    <span className="text-gray-400">({displayReviewCount})</span>
+                  </button>
                 )}
                 {provider.location && (
                   <div className="flex items-center gap-1 text-gray-500">
@@ -505,27 +489,26 @@ const ProviderDetailPage: React.FC = () => {
               </div>
             </div>
 
-            {/* CTA Buttons - Desktop */}
             <div className="hidden md:flex flex-col gap-2 flex-shrink-0">
               <button
-                onClick={() => {
-                  if (provider.services.length > 0) navigate(`/book/${provider.services[0]._id}`);
-                }}
+                onClick={handleBookNow}
                 disabled={provider.services.length === 0}
                 className="px-7 py-2.5 bg-nilin-accent text-white font-semibold rounded-full hover:bg-pink-600 transition-colors disabled:opacity-50 shadow-sm"
               >
                 Book Now
               </button>
-              <button className="px-7 py-2.5 border border-gray-200 text-gray-700 font-medium rounded-full hover:bg-gray-50 transition-colors flex items-center justify-center gap-2">
+              <button
+                onClick={handleMessage}
+                className="px-7 py-2.5 border border-gray-200 text-gray-700 font-medium rounded-full hover:bg-gray-50 transition-colors flex items-center justify-center gap-2"
+              >
                 <MessageCircle className="w-4 h-4" />
                 Message
               </button>
             </div>
           </div>
 
-          {/* Stats */}
           {stats.length > 0 && (
-            <div className={`grid grid-cols-${Math.min(stats.length, 3)} gap-4 mt-5 pt-5 border-t border-gray-100`}>
+            <div className={`grid ${statsGridClass} gap-4 mt-5 pt-5 border-t border-gray-100`}>
               {stats.map((stat, idx) => (
                 <div key={idx} className="text-center">
                   <div className="text-xl font-bold text-gray-900">{stat.value}</div>
@@ -540,7 +523,6 @@ const ProviderDetailPage: React.FC = () => {
       {/* Main Content */}
       <div className="max-w-6xl mx-auto px-4 py-8 w-full flex-1">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Left Column */}
           <div className="lg:col-span-2 space-y-8">
             {/* Services Section */}
             <section>
@@ -569,7 +551,6 @@ const ProviderDetailPage: React.FC = () => {
                     <ServiceCard
                       key={service._id}
                       service={service}
-                      providerId={provider._id}
                       onBook={() => navigate(`/book/${service._id}`)}
                       onViewDetails={() => navigate(`/services/${service._id}`)}
                     />
@@ -629,60 +610,32 @@ const ProviderDetailPage: React.FC = () => {
               </section>
             )}
 
-            {/* Reviews Section */}
-            <section>
+            {/* Reviews Section — live API via ServiceReviews */}
+            <section ref={reviewsRef}>
               <div className="flex items-center justify-between mb-5">
                 <h2 className="text-lg font-bold text-gray-900">
-                  Reviews ({provider.reviewsData?.totalReviews || 0})
+                  Reviews ({displayReviewCount})
                 </h2>
-                {provider.reviewsData && provider.reviewsData.totalReviews > 0 && (
-                  <button className="text-sm text-nilin-primary font-semibold hover:underline">
+                {displayReviewCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={scrollToReviews}
+                    className="text-sm text-nilin-primary font-semibold hover:underline"
+                  >
                     See all
                   </button>
                 )}
               </div>
-
-              {/* Rating summary */}
-              {provider.reviewsData && provider.reviewsData.averageRating > 0 && (
-                <div className="flex items-center gap-4 mb-5 p-4 bg-gray-50 rounded-2xl">
-                  <div className="text-center">
-                    <div className="text-3xl font-bold text-gray-900">
-                      {provider.reviewsData.averageRating.toFixed(1)}
-                    </div>
-                    <div className="flex items-center gap-0.5 mt-1">
-                      {[1, 2, 3, 4, 5].map((s) => (
-                        <Star
-                          key={s}
-                          className={`w-3.5 h-3.5 ${s <= Math.round(provider.reviewsData!.averageRating) ? 'text-amber-400 fill-amber-400' : 'text-gray-200'}`}
-                        />
-                      ))}
-                    </div>
-                    <div className="text-xs text-gray-400 mt-1">
-                      {provider.reviewsData.totalReviews} reviews
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {provider.reviewsData?.recentReviews && provider.reviewsData.recentReviews.length > 0 ? (
-                <div className="space-y-3">
-                  {provider.reviewsData.recentReviews.map((review, idx) => (
-                    <ReviewCard key={idx} review={review} />
-                  ))}
-                </div>
-              ) : (
-                <div className="text-center py-10 bg-gray-50 rounded-2xl">
-                  <Star className="w-10 h-10 text-gray-300 mx-auto mb-3" />
-                  <p className="text-gray-500 text-sm font-medium">No reviews yet</p>
-                  <p className="text-xs text-gray-400 mt-1">Be the first to review this provider!</p>
-                </div>
-              )}
+              <ServiceReviews
+                providerId={providerId}
+                embedded
+                onStatsLoaded={handleReviewStatsLoaded}
+              />
             </section>
           </div>
 
           {/* Right Column - Sidebar */}
           <div className="space-y-5">
-            {/* About */}
             <div className="bg-white rounded-2xl border border-gray-100 p-5">
               <h3 className="font-bold text-gray-900 mb-3 text-sm uppercase tracking-wide">About</h3>
               <p className="text-gray-600 text-sm leading-relaxed">
@@ -710,7 +663,6 @@ const ProviderDetailPage: React.FC = () => {
               )}
             </div>
 
-            {/* Specializations */}
             {provider.specializations && provider.specializations.length > 0 && (
               <div className="bg-white rounded-2xl border border-gray-100 p-5">
                 <h3 className="font-bold text-gray-900 mb-3 text-sm uppercase tracking-wide">Specializations</h3>
@@ -724,7 +676,6 @@ const ProviderDetailPage: React.FC = () => {
               </div>
             )}
 
-            {/* Certifications */}
             {provider.portfolio?.certifications && provider.portfolio.certifications.length > 0 && (
               <div className="bg-white rounded-2xl border border-gray-100 p-5">
                 <h3 className="font-bold text-gray-900 mb-3 text-sm uppercase tracking-wide">Certifications</h3>
@@ -736,7 +687,6 @@ const ProviderDetailPage: React.FC = () => {
               </div>
             )}
 
-            {/* Awards */}
             {provider.portfolio?.awards && provider.portfolio.awards.length > 0 && (
               <div className="bg-white rounded-2xl border border-gray-100 p-5">
                 <h3 className="font-bold text-gray-900 mb-3 text-sm uppercase tracking-wide">Awards</h3>
@@ -754,7 +704,6 @@ const ProviderDetailPage: React.FC = () => {
               </div>
             )}
 
-            {/* Verifications */}
             {provider.verificationBadges && provider.verificationBadges.length > 0 && (
               <div className="bg-white rounded-2xl border border-gray-100 p-5">
                 <h3 className="font-bold text-gray-900 mb-3 text-sm uppercase tracking-wide">Verifications</h3>
@@ -776,7 +725,6 @@ const ProviderDetailPage: React.FC = () => {
               </div>
             )}
 
-            {/* Availability CTA */}
             <div className="bg-gradient-to-br from-nilin-primary/5 to-purple-50 rounded-2xl border border-nilin-primary/10 p-5">
               <h3 className="font-bold text-gray-900 mb-3 text-sm uppercase tracking-wide">Availability</h3>
               {provider.availability?.instantBooking && (
@@ -789,9 +737,7 @@ const ProviderDetailPage: React.FC = () => {
                 Book up to {provider.availability?.advanceBookingDays || 30} days in advance
               </p>
               <button
-                onClick={() => {
-                  if (provider.services.length > 0) navigate(`/book/${provider.services[0]._id}`);
-                }}
+                onClick={handleBookNow}
                 disabled={provider.services.length === 0}
                 className="w-full py-2.5 bg-nilin-primary text-white font-semibold rounded-full hover:bg-nilin-primary-dark transition-colors disabled:opacity-50 text-sm"
               >
@@ -805,13 +751,14 @@ const ProviderDetailPage: React.FC = () => {
       {/* Mobile Fixed CTA */}
       <div className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-sm border-t border-gray-100 p-3 md:hidden z-50">
         <div className="flex items-center gap-3 max-w-lg mx-auto">
-          <button className="p-2.5 border border-gray-200 rounded-full hover:bg-gray-50 transition-colors">
+          <button
+            onClick={handleMessage}
+            className="p-2.5 border border-gray-200 rounded-full hover:bg-gray-50 transition-colors"
+          >
             <MessageCircle className="w-5 h-5 text-gray-600" />
           </button>
           <button
-            onClick={() => {
-              if (provider.services.length > 0) navigate(`/book/${provider.services[0]._id}`);
-            }}
+            onClick={handleBookNow}
             disabled={provider.services.length === 0}
             className="flex-1 py-2.5 bg-nilin-accent text-white font-semibold rounded-full hover:bg-pink-600 transition-colors disabled:opacity-50 shadow-sm"
           >
@@ -819,6 +766,49 @@ const ProviderDetailPage: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {/* Service Picker Modal */}
+      {showServicePicker && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4 bg-black/50">
+          <div className="bg-white rounded-2xl w-full max-w-md max-h-[80vh] overflow-hidden shadow-xl">
+            <div className="flex items-center justify-between p-4 border-b border-gray-100">
+              <h3 className="font-bold text-gray-900">Choose a Service</h3>
+              <button
+                onClick={() => setShowServicePicker(false)}
+                className="p-1 rounded-full hover:bg-gray-100 transition-colors"
+              >
+                <X className="w-5 h-5 text-gray-500" />
+              </button>
+            </div>
+            <div className="overflow-y-auto max-h-[60vh] p-4 space-y-2">
+              {provider.services.map(service => (
+                <button
+                  key={service._id}
+                  onClick={() => handleBookService(service._id)}
+                  className="w-full flex items-center justify-between p-4 rounded-xl border border-gray-100 hover:border-nilin-primary/30 hover:bg-nilin-primary/5 transition-colors text-left"
+                >
+                  <div>
+                    <p className="font-medium text-gray-900">{service.name}</p>
+                    <p className="text-sm text-gray-500">{service.duration} mins</p>
+                  </div>
+                  <span className="font-bold text-gray-900">AED {service.price.amount}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <ShareModal
+        isOpen={showShareModal}
+        onClose={() => setShowShareModal(false)}
+        title={displayName}
+        description={provider.tagline || provider.bio}
+        url={typeof window !== 'undefined' ? `${window.location.origin}/provider/${providerId}` : undefined}
+        image={provider.profilePhoto}
+        itemType="provider"
+        itemId={providerId}
+      />
 
       <div className="pb-20 md:pb-0">
         <Footer />

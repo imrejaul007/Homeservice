@@ -38,6 +38,8 @@ import {
 import { AdminPageShell } from '../../components/admin/AdminPageShell';
 import { Skeleton } from '../../components/common/Skeleton';
 import { ServiceApprovalPanel } from '../../components/admin/ServiceApprovalPanel';
+import { ErrorBoundary } from '../../components/common/ErrorBoundary';
+import { PageErrorBoundary } from '../../components/common/PageErrorBoundary';
 import { toast } from 'react-hot-toast';
 import { useAuthStore } from '../../stores/authStore';
 import authService from '../../services/AuthService';
@@ -55,13 +57,16 @@ interface DashboardStats {
   activeIncidents: number;
 }
 
-/** Response shape from GET /admin/stats */
+/** Response shape from GET /admin/stats
+ * NOTE: Backend may return either 'monthlyRevenue' or 'revenue' field
+ * Frontend normalizes both using: data.monthlyRevenue ?? data.revenue ?? 0
+ */
 interface AdminStatsResponse {
   totalUsers?: number;
   activeProviders?: number;
   todayBookings?: number;
-  monthlyRevenue?: number;
-  revenue?: number;
+  monthlyRevenue?: number;  // Primary field (backend uses this)
+  revenue?: number;          // Fallback field (for compatibility)
   pendingVerifications?: number;
   activeIncidents?: number;
   customers?: { total?: number };
@@ -234,7 +239,7 @@ function normalizeFunnelResponse(payload: unknown): FunnelData | null {
     const search = f.searches ?? f.search ?? 0;
     const service_view = f.bookingStarts ?? f.service_view ?? 0;
     const booking_request = f.bookings ?? f.booking_request ?? 0;
-    const booking_confirmed = f.bookings ?? f.booking_confirmed ?? 0;
+    const booking_confirmed = f.booking_confirmed ?? 0;
     const booking_completed = f.completions ?? f.booking_completed ?? 0;
     const overall = f.conversion ?? f.completionRate ?? 0;
 
@@ -493,8 +498,7 @@ export function AdminDashboard() {
 
       setLastUpdated(new Date());
       if (showRefresh) toast.success('Dashboard updated');
-    } catch (error) {
-      console.error('Failed to fetch dashboard data:', error);
+    } catch {
       toast.error('Failed to refresh dashboard');
     } finally {
       setLoading(false);
@@ -525,12 +529,14 @@ export function AdminDashboard() {
     );
 
     unsubscribers.push(
-      socketService.onNewServicePending((data) => {
+      socketService.onNewServicePending((data: any) => {
+        const serviceId = data.serviceId || data._id;
+        const serviceName = data.serviceName || data.name;
         setNotifications((prev) => [
           {
-            id: `service-${data.serviceId}-${Date.now()}`,
+            id: `service-${serviceId}-${Date.now()}`,
             type: 'service',
-            message: `New pending service: ${data.serviceName}`,
+            message: `New pending service: ${serviceName}`,
             timestamp: new Date(),
           },
           ...prev,
@@ -567,7 +573,9 @@ export function AdminDashboard() {
       })
     );
 
-    socketService.connect().catch(() => {});
+    socketService.connect().catch((error) => {
+      console.warn('Socket connection failed:', error);
+    });
 
     return () => unsubscribers.forEach((unsub) => unsub());
   }, []);
@@ -670,6 +678,7 @@ export function AdminDashboard() {
   }
 
   return (
+    <PageErrorBoundary pageName="AdminDashboard">
     <AdminPageShell
       wideLayout
       title="Operations Dashboard"
@@ -1072,6 +1081,7 @@ export function AdminDashboard() {
           </div>
       </div>
     </AdminPageShell>
+    </PageErrorBoundary>
   );
 }
 

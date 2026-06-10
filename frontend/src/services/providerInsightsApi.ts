@@ -1,10 +1,81 @@
 import { api } from './api';
+import { AxiosError } from 'axios';
+
+/**
+ * Retry configuration
+ */
+const RETRY_CONFIG = {
+  maxRetries: 3,
+  initialDelayMs: 1000,
+  maxDelayMs: 5000,
+};
+
+function getRetryDelay(attempt: number): number {
+  const delay = Math.min(
+    RETRY_CONFIG.initialDelayMs * Math.pow(2, attempt),
+    RETRY_CONFIG.maxDelayMs
+  );
+  return Math.floor(delay + (delay * 0.25 * Math.random()));
+}
+
+function isRetryableError(error: unknown): boolean {
+  if (error instanceof AxiosError) {
+    if (!error.response) return true;
+    if (error.response.status >= 500) return true;
+    if (error.code === 'ECONNABORTED') return true;
+  }
+  return false;
+}
+
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  options: { maxRetries?: number; context?: string } = {}
+): Promise<T> {
+  const maxRetries = options.maxRetries ?? RETRY_CONFIG.maxRetries;
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      if (attempt >= maxRetries || !isRetryableError(error)) {
+        throw error;
+      }
+      const delay = getRetryDelay(attempt);
+      console.warn(`[Retry] ${options.context || 'Operation'} failed (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${delay}ms...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+
+  throw lastError;
+}
 
 // ============================================
 // TYPES & INTERFACES
 // ============================================
 
+/**
+ * Valid period values for provider insights
+ * Backend accepts: 'week' | 'month' | 'quarter' | 'year'
+ * Client should always use these exact values
+ */
 export type Period = 'week' | 'month' | 'quarter' | 'year';
+
+/**
+ * Valid period values (for validation)
+ */
+const VALID_PERIODS: Period[] = ['week', 'month', 'quarter', 'year'];
+
+/**
+ * Normalize period input to valid period value
+ * Falls back to 'month' for invalid inputs
+ */
+export function normalizePeriod(period: string | undefined): Period {
+  if (!period) return 'month';
+  const normalized = period.toLowerCase() as Period;
+  return VALID_PERIODS.includes(normalized) ? normalized : 'month';
+}
 export type InsightType = 'performance' | 'revenue' | 'scheduling' | 'customer';
 export type ImpactLevel = 'high' | 'medium' | 'low';
 export type RiskLevel = 'low' | 'medium' | 'high' | 'critical';
@@ -260,48 +331,86 @@ class ProviderInsightsApiService {
   private baseUrl = '/provider';
 
   // ============================================
+  // Period Normalization
+  // ============================================
+
+  /**
+   * Normalize period parameter to backend-compatible format
+   * Handles variations like '7d' vs 'week', '30d' vs 'month', etc.
+   */
+  private normalizePeriod(period: Period | string): string {
+    // Map of frontend period values to backend expected values
+    const periodMap: Record<string, string> = {
+      // Standard period values
+      'week': 'week',
+      'month': 'month',
+      'quarter': 'quarter',
+      'year': 'year',
+      // Short variants (if any)
+      '7d': 'week',
+      '30d': 'month',
+      '90d': 'quarter',
+      '365d': 'year',
+      // Numeric values
+      '7': 'week',
+      '30': 'month',
+      '90': 'quarter',
+      '365': 'year',
+    };
+
+    const normalized = periodMap[period.toLowerCase()];
+    return normalized || 'month'; // Default to 'month' if not recognized
+  }
+
+  // ============================================
   // PROVIDER INSIGHTS
   // ============================================
 
   async getInsights(period: Period = 'month'): Promise<ProviderInsightsData> {
+    const normalizedPeriod = this.normalizePeriod(period);
     const response = await api.get(`${this.baseUrl}/insights`, {
-      params: { period },
+      params: { period: normalizedPeriod },
     });
     // FIX: Backend returns ProviderInsightsData directly in response.data.data
     return response.data.data;
   }
 
   async getPerformance(period: Period = 'month'): Promise<PerformanceMetrics> {
+    const normalizedPeriod = this.normalizePeriod(period);
     const response = await api.get(`${this.baseUrl}/insights/performance`, {
-      params: { period },
+      params: { period: normalizedPeriod },
     });
     return response.data.data.metrics;
   }
 
   async getRevenue(period: Period = 'month'): Promise<RevenueMetrics> {
+    const normalizedPeriod = this.normalizePeriod(period);
     const response = await api.get(`${this.baseUrl}/insights/revenue`, {
-      params: { period },
+      params: { period: normalizedPeriod },
     });
     return response.data.data.metrics;
   }
 
   async getSatisfaction(period: Period = 'month'): Promise<CustomerSatisfactionMetrics> {
+    const normalizedPeriod = this.normalizePeriod(period);
     const response = await api.get(`${this.baseUrl}/insights/satisfaction`, {
-      params: { period },
+      params: { period: normalizedPeriod },
     });
     return response.data.data.metrics;
   }
 
   async getTrends(period: Period = 'month'): Promise<BookingTrend[]> {
+    const normalizedPeriod = this.normalizePeriod(period);
     const response = await api.get(`${this.baseUrl}/insights/trends`, {
-      params: { period },
+      params: { period: normalizedPeriod },
     });
     return response.data.data.trends;
   }
 
   async generateInsights(period: Period = 'month'): Promise<ProviderInsight[]> {
+    const normalizedPeriod = this.normalizePeriod(period);
     const response = await api.get(`${this.baseUrl}/insights/generate`, {
-      params: { period },
+      params: { period: normalizedPeriod },
     });
     return response.data.data.insights;
   }
@@ -372,8 +481,9 @@ class ProviderInsightsApiService {
   }
 
   async getCancellationStats(period: Period = 'month'): Promise<ProviderCancellationStats> {
+    const normalizedPeriod = this.normalizePeriod(period);
     const response = await api.get(`${this.baseUrl}/cancellations/stats`, {
-      params: { period },
+      params: { period: normalizedPeriod },
     });
     return response.data.data.stats;
   }

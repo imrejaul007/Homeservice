@@ -268,7 +268,7 @@ const PhotoThumbnail: React.FC<PhotoThumbnailProps> = ({
 // =============================================================================
 
 interface PhotoGalleryModalProps {
-  photos: PhotoReviewItem[];
+  photos: PhotoReviewItem[] | ReviewPhoto[];
   initialIndex?: number;
   open: boolean;
   onClose: () => void;
@@ -284,6 +284,7 @@ const PhotoGalleryModal: React.FC<PhotoGalleryModalProps> = ({
   const [isZoomed, setIsZoomed] = useState(false);
 
   const currentPhoto = photos[currentIndex];
+  const currentPhotoItem = currentPhoto as PhotoReviewItem | undefined;
 
   const goNext = useCallback(() => {
     setCurrentIndex((prev) => (prev + 1) % photos.length);
@@ -322,7 +323,7 @@ const PhotoGalleryModal: React.FC<PhotoGalleryModalProps> = ({
               {currentPhoto.type === 'before' ? 'Before' : 'After'}
             </Badge>
           )}
-          {currentPhoto.verified && (
+          {currentPhotoItem?.verified && (
             <Badge variant="success" size="sm" className="bg-white/20 text-white border-0">
               <CheckCircle className="h-3 w-3 mr-1" />
               Verified
@@ -370,13 +371,13 @@ const PhotoGalleryModal: React.FC<PhotoGalleryModalProps> = ({
           onClick={() => setIsZoomed(!isZoomed)}
         >
           <img
-            src={currentPhoto.url}
-            alt={currentPhoto.caption || 'Review photo'}
+            src={'url' in currentPhoto ? currentPhoto.url : currentPhoto.preview}
+            alt={'caption' in currentPhoto && currentPhoto.caption || 'Review photo'}
             className="max-h-[80vh] max-w-full object-contain"
           />
 
           {/* Caption */}
-          {currentPhoto.caption && (
+          {'caption' in currentPhoto && currentPhoto.caption && (
             <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent p-4">
               <p className="text-white text-sm">{currentPhoto.caption}</p>
             </div>
@@ -702,7 +703,7 @@ export const PhotoReview: React.FC<PhotoReviewProps> = ({
 
       {/* Photo Gallery Modal */}
       <PhotoGalleryModal
-        photos={initialPhotos}
+        photos={photos}  // FIX: Use current photos state instead of initialPhotos
         open={galleryOpen}
         onClose={() => setGalleryOpen(false)}
         initialIndex={galleryIndex}

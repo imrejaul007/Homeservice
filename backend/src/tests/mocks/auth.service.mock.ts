@@ -57,7 +57,7 @@ export const generateTokens = (user: any) => {
  */
 export const createTestCustomer = async (overrides = {}) => {
   const email = `customer_${Date.now()}_${Math.random().toString(36).substring(7)}@test.com`;
-  const hashedPassword = await bcrypt.hash('Test@123456', 12);
+  const hashedPassword = await bcrypt.hash('SecurePass@123', 12);
 
   const userData = {
     firstName: 'Test',
@@ -92,7 +92,7 @@ export const createTestCustomer = async (overrides = {}) => {
   };
 
   const user = new User(userData);
-  await user.save();
+  await user.save({ validateBeforeSave: false });
 
   const profile = new CustomerProfile({
     userId: user._id,
@@ -124,7 +124,7 @@ export const createTestCustomer = async (overrides = {}) => {
  */
 export const createTestProvider = async (overrides = {}) => {
   const email = `provider_${Date.now()}_${Math.random().toString(36).substring(7)}@test.com`;
-  const hashedPassword = await bcrypt.hash('Test@123456', 12);
+  const hashedPassword = await bcrypt.hash('SecurePass@123', 12);
 
   const userData = {
     firstName: 'Test',
@@ -150,7 +150,7 @@ export const createTestProvider = async (overrides = {}) => {
   };
 
   const user = new User(userData);
-  await user.save();
+  await user.save({ validateBeforeSave: false });
 
   const profile = new ProviderProfile({
     userId: user._id,
@@ -201,7 +201,7 @@ export const createTestProvider = async (overrides = {}) => {
  */
 export const createTestAdmin = async (overrides = {}) => {
   const email = `admin_${Date.now()}_${Math.random().toString(36).substring(7)}@test.com`;
-  const hashedPassword = await bcrypt.hash('Test@123456', 12);
+  const hashedPassword = await bcrypt.hash('SecurePass@123', 12);
 
   const userData = {
     firstName: 'Test',
@@ -219,7 +219,7 @@ export const createTestAdmin = async (overrides = {}) => {
   };
 
   const user = new User(userData);
-  await user.save();
+  await user.save({ validateBeforeSave: false });
 
   const tokens = generateTokens(user);
 

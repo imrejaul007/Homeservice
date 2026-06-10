@@ -18,7 +18,7 @@ import {
   CheckCircle2,
   XCircle,
 } from 'lucide-react';
-import { packageApi, type ServicePackage } from '../../services/packageApi';
+import { packageApi, type ServicePackage, normalizeFeatures, isFeatureIncluded, getFeatureText } from '../../services/packageApi';
 
 interface PackagesSectionProps {
   limit?: number;
@@ -312,7 +312,7 @@ const PackagesSection: React.FC<PackagesSectionProps> = ({
 
                   {/* Features Preview */}
                   <div className="space-y-1.5 mb-4">
-                    {(pkg.features ?? []).slice(0, 3).map((feature, idx) => (
+                    {normalizeFeatures(pkg.features).slice(0, 3).map((feature, idx) => (
                       <div key={idx} className="flex items-center gap-2 text-xs text-gray-600">
                         {feature.included ? (
                           <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0" />
@@ -324,9 +324,9 @@ const PackagesSection: React.FC<PackagesSectionProps> = ({
                         </span>
                       </div>
                     ))}
-                    {(pkg.features?.length ?? 0) > 3 && (
+                    {(normalizeFeatures(pkg.features).length ?? 0) > 3 && (
                       <span className="text-xs text-nilin-coral font-medium">
-                        +{(pkg.features?.length ?? 0) - 3} more
+                        +{normalizeFeatures(pkg.features).length - 3} more
                       </span>
                     )}
                   </div>

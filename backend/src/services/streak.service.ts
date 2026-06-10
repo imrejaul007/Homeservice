@@ -58,7 +58,7 @@ export const getStreak = async (userId: string): Promise<StreakData> => {
 
   return {
     currentStreak,
-    longestStreak: loyaltySystem.longestStreak || 0,
+    longestStreak: (user as any).loyaltySystem?.longestStreak || loyaltySystem.longestStreak || 0,
     lastCheckIn: lastCheckIn,
     totalCheckIns: streakHistory.length,
     streakHistory: streakHistory.slice(-30),
@@ -119,12 +119,12 @@ export const checkIn = async (userId: string): Promise<CheckInResult> => {
   const streakBonus = Math.min(currentStreak * 2, 50);
   pointsEarned = basePoints + streakBonus;
 
-  // Update user
+  // Update user - persist longestStreak to loyaltySystem for O(1) retrieval
   (user as any).loyaltySystem = {
     ...loyaltySystem,
     streakDays: currentStreak,
     lastStreakDate: now,
-    longestStreak: Math.max(loyaltySystem.longestStreak || 0, currentStreak),
+    longestStreak: Math.max((user as any).loyaltySystem?.longestStreak || loyaltySystem.longestStreak || 0, currentStreak),
     totalPoints: (loyaltySystem.totalPoints || 0) + pointsEarned,
   };
 

@@ -10,145 +10,16 @@ import logger from '../utils/logger';
 import { hashRecoveryCodes } from '../services/auth/2fa.service';
 import { twoFactorVerifyLimiter } from '../middleware/rateLimiter';
 import { IUser } from '../models/user.model';
-
-// ============================================
-// Validation Schemas
-// ============================================
-
-// Password complexity pattern: uppercase, lowercase, number, special char
-const PASSWORD_COMPLEXITY = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{12,}$/;
-
-const customerRegistrationSchema = Joi.object({
-  firstName: Joi.string().required(),
-  lastName: Joi.string().required(),
-  email: Joi.string().email().required(),
-  password: Joi.string().min(12).pattern(PASSWORD_COMPLEXITY).required().messages({
-    'string.min': 'Password must be at least 12 characters long',
-    'string.pattern.base': 'Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character',
-  }),
-  phone: Joi.string().pattern(/^[\+]?[(]?[\d\s\-\(\)]{10,}$/).required(),
-  dateOfBirth: Joi.string(),
-  gender: Joi.string(),
-  address: Joi.object({
-    street: Joi.string().allow('', null).optional(),
-    city: Joi.string().allow('', null).optional(),
-    state: Joi.string().allow('', null).optional(),
-    zipCode: Joi.string().allow('', null).optional(),
-    country: Joi.string().allow('', null).optional(),
-    // Accept coordinates in ANY format - don't validate structure, just accept what comes
-    // The service layer will normalize it to GeoJSON
-    coordinates: Joi.any().optional(),
-  }).optional(), // Address itself is optional
-  communicationPreferences: Joi.object({
-    email: Joi.object({
-      marketing: Joi.boolean(),
-      bookingUpdates: Joi.boolean(),
-      reminders: Joi.boolean(),
-      newsletters: Joi.boolean(),
-      promotions: Joi.boolean(),
-    }),
-    sms: Joi.object({
-      bookingUpdates: Joi.boolean(),
-      reminders: Joi.boolean(),
-      promotions: Joi.boolean(),
-    }),
-    push: Joi.object({
-      bookingUpdates: Joi.boolean(),
-      reminders: Joi.boolean(),
-      newMessages: Joi.boolean(),
-      promotions: Joi.boolean(),
-    }),
-    language: Joi.string(),
-    timezone: Joi.string(),
-    currency: Joi.string(),
-  }),
-  referralCode: Joi.string(),
-  agreeToTermsAndPrivacy: Joi.alternatives().try(
-    Joi.boolean().valid(true),
-    Joi.string().valid('true')
-  ).required(),
-});
-
-const providerRegistrationSchema = Joi.object({
-  firstName: Joi.string().required(),
-  lastName: Joi.string().required(),
-  email: Joi.string().email().required(),
-  password: Joi.string().min(12).pattern(PASSWORD_COMPLEXITY).required().messages({
-    'string.min': 'Password must be at least 12 characters long',
-    'string.pattern.base': 'Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character',
-  }),
-  phone: Joi.string(),
-  dateOfBirth: Joi.string(),
-  businessInfo: Joi.object({
-    businessName: Joi.string().required(),
-    businessType: Joi.string(),
-    description: Joi.string(),
-    tagline: Joi.string(),
-    website: Joi.string(),
-    establishedDate: Joi.string(),
-    serviceRadius: Joi.number(),
-  }).required(),
-  locationInfo: Joi.object({
-    primaryAddress: Joi.object({
-      street: Joi.string(),
-      city: Joi.string(),
-      state: Joi.string(),
-      zipCode: Joi.string(),
-      country: Joi.string(),
-      coordinates: Joi.object({
-        lat: Joi.number(),
-        lng: Joi.number(),
-      }),
-    }).required(),
-    mobileService: Joi.boolean(),
-    hasFixedLocation: Joi.boolean(),
-  }).required(),
-  services: Joi.array().items(
-    Joi.object({
-      name: Joi.string().required(),
-      category: Joi.string().required(),
-      subcategory: Joi.string(),
-      description: Joi.string(),
-      duration: Joi.number().required(),
-      price: Joi.object({
-        amount: Joi.number().required(),
-        currency: Joi.string(),
-        type: Joi.string(),
-      }).required(),
-      tags: Joi.array().items(Joi.string()),
-    })
-  ).min(1).required(),
-});
-
-const loginSchema = Joi.object({
-  email: Joi.string().email().required(),
-  password: Joi.string().required(),
-  rememberMe: Joi.boolean().default(false),
-});
-
-const changePasswordSchema = Joi.object({
-  currentPassword: Joi.string().required(),
-  newPassword: Joi.string().min(12).pattern(PASSWORD_COMPLEXITY).required().messages({
-    'string.min': 'Password must be at least 12 characters long',
-    'string.pattern.base': 'Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character',
-  }),
-});
-
-const resetPasswordSchema = Joi.object({
-  token: Joi.string().required(),
-  password: Joi.string().min(12).pattern(PASSWORD_COMPLEXITY).required().messages({
-    'string.min': 'Password must be at least 12 characters long',
-    'string.pattern.base': 'Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character',
-  }),
-});
-
-const verifyEmailSchema = Joi.object({
-  token: Joi.string().required(),
-});
-
-const resendVerificationSchema = Joi.object({
-  email: Joi.string().email().required(),
-});
+import {
+  customerRegistrationSchema,
+  providerRegistrationSchema,
+  loginSchema,
+  changePasswordSchema,
+  resetPasswordSchema,
+  emailVerificationSchema,
+  resendVerificationSchema,
+  passwordSchema,
+} from '../validation/auth.validation';
 
 // ============================================
 // Cookie Options
@@ -270,11 +141,8 @@ export const registerAdmin = asyncHandler(async (req: Request, res: Response) =>
     firstName: Joi.string().required(),
     lastName: Joi.string().required(),
     email: Joi.string().email().required(),
-    password: Joi.string().min(12).pattern(PASSWORD_COMPLEXITY).required().messages({
-      'string.min': 'Password must be at least 12 characters long',
-      'string.pattern.base': 'Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character',
-    }),
-    phone: Joi.string(),
+    password: passwordSchema,
+    phone: Joi.string().allow('', null).optional(),
   });
 
   const { error, value } = adminSchema.validate(req.body);
@@ -570,13 +438,13 @@ export const refreshToken = asyncHandler(async (req: Request, res: Response) => 
 // ============================================
 
 export const logout = asyncHandler(async (req: Request, res: Response) => {
-  const user = req.user as any;
+  const authUser = req.user as any;
   const refreshToken = req.cookies?.refreshToken;
   const currentToken = req.headers.authorization?.replace('Bearer ', '');
 
-  if (user?._id) {
+  if (authUser?._id) {
     const User = (await import('../models/user.model')).default;
-    const userDoc = await User.findById(user._id);
+    const userDoc = await User.findById(authUser._id);
 
     if (userDoc) {
       // Remove the current session
@@ -607,7 +475,7 @@ export const logout = asyncHandler(async (req: Request, res: Response) => {
 
       logger.info('User logged out', {
         action: 'USER_LOGOUT',
-        userId: user._id.toString(),
+        userId: authUser._id.toString(),
       });
     }
   }
@@ -711,8 +579,10 @@ export const resetPassword = asyncHandler(async (req: Request, res: Response) =>
 
   const result = await authService.resetPassword(value.token, value.password);
 
-  // Set refresh token cookie
-  res.cookie('refreshToken', result.accessToken, getCookieOptions(30 * 24 * 60 * 60 * 1000));
+  // Set refresh token cookie (if available in result)
+  if ((result as any).refreshToken) {
+    res.cookie('refreshToken', (result as any).refreshToken, getCookieOptions(30 * 24 * 60 * 60 * 1000));
+  }
 
   res.json({
     success: true,
@@ -751,7 +621,7 @@ export const changePassword = asyncHandler(async (req: Request, res: Response) =
 // ============================================
 
 export const verifyEmail = asyncHandler(async (req: Request, res: Response) => {
-  const { error, value } = verifyEmailSchema.validate(req.body);
+  const { error, value } = emailVerificationSchema.validate(req.body);
   if (error) {
     throw new ApiError(400, error.details[0].message);
   }
@@ -803,12 +673,40 @@ export const updateProfile = asyncHandler(async (req: Request, res: Response) =>
 });
 
 // ============================================
+// Email Unsubscribe (public)
+// ============================================
+
+export const processEmailUnsubscribe = asyncHandler(async (req: Request, res: Response) => {
+  const token = req.query.token as string;
+
+  if (!token) {
+    throw new ApiError(400, 'Unsubscribe token is required');
+  }
+
+  const { processUnsubscribeToken } = await import('../services/email.service');
+  const result = await processUnsubscribeToken(token);
+
+  if (!result.success) {
+    throw new ApiError(400, result.error || 'Invalid unsubscribe token');
+  }
+
+  res.json({
+    success: true,
+    message: `You have been unsubscribed from ${result.emailType} emails`,
+    data: {
+      emailType: result.emailType,
+    },
+  });
+});
+
+// ============================================
 // Upload Profile Image
 // ============================================
 
 export const uploadProfileImage = asyncHandler(async (req: Request, res: Response) => {
   const user = req.user as any;
-  const file = req.file;
+  const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
+  const file = files?.avatar?.[0];
 
   if (!file) {
     throw new ApiError(400, 'No image file provided');
@@ -1363,11 +1261,8 @@ export const acceptAdminInvite = asyncHandler(async (req: Request, res: Response
     token: Joi.string().required(),
     firstName: Joi.string().required(),
     lastName: Joi.string().required(),
-    password: Joi.string().min(12).pattern(PASSWORD_COMPLEXITY).required().messages({
-      'string.min': 'Password must be at least 12 characters long',
-      'string.pattern.base': 'Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character',
-    }),
-    phone: Joi.string().allow(''),
+    password: passwordSchema,
+    phone: Joi.string().allow('', null).optional(),
   });
 
   const { error, value } = schema.validate(req.body);
@@ -1509,6 +1404,7 @@ export default {
   resendVerificationEmail,
   updateProfile,
   uploadProfileImage,
+  processEmailUnsubscribe,
   exportUserData,
   deleteAccount,
   getLoginHistory,

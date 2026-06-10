@@ -445,7 +445,6 @@ const CustomerDetailModal: React.FC<{
       setCustomer(detail);
       setTrustScoreBreakdown(breakdown);
     } catch (error) {
-      console.error('Failed to load customer:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to load customer details');
     } finally {
       setLoading(false);
@@ -463,7 +462,6 @@ const CustomerDetailModal: React.FC<{
       await loadCustomerData();
       onRefresh();
     } catch (error) {
-      console.error('Failed to add flag:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to add abuse flag');
     } finally {
       setActionLoading(false);
@@ -477,7 +475,6 @@ const CustomerDetailModal: React.FC<{
       await loadCustomerData();
       onRefresh();
     } catch (error) {
-      console.error('Failed to resolve flag:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to resolve flag');
     } finally {
       setActionLoading(false);
@@ -494,7 +491,6 @@ const CustomerDetailModal: React.FC<{
       await loadCustomerData();
       onRefresh();
     } catch (error) {
-      console.error('Failed to block customer:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to block customer');
     } finally {
       setActionLoading(false);
@@ -509,7 +505,6 @@ const CustomerDetailModal: React.FC<{
       await loadCustomerData();
       onRefresh();
     } catch (error) {
-      console.error('Failed to unblock customer:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to unblock customer');
     } finally {
       setActionLoading(false);
@@ -525,7 +520,6 @@ const CustomerDetailModal: React.FC<{
       await loadCustomerData();
       onRefresh();
     } catch (error) {
-      console.error('Failed to refresh trust score:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to refresh trust score');
     } finally {
       setActionLoading(false);
@@ -1010,7 +1004,7 @@ const CustomerManagement: React.FC = () => {
     if (selectedUserIds.size === customers.length) {
       setSelectedUserIds(new Set());
     } else {
-      setSelectedUserIds(new Set(customers.map((c) => c.user.id)));
+      setSelectedUserIds(new Set(customers.map((c) => c.user._id || (c.user as any).id)));
     }
   };
 
@@ -1032,7 +1026,6 @@ const CustomerManagement: React.FC = () => {
         toast.error(result.failed?.length ? `Failed to update ${result.failed.length} accounts` : 'Bulk action failed');
       }
     } catch (error) {
-      console.error('Bulk action failed:', error);
       toast.error(error instanceof Error ? error.message : 'Bulk action failed. Please try again.');
     } finally {
       setBulkActionLoading(false);
@@ -1049,7 +1042,6 @@ const CustomerManagement: React.FC = () => {
         role: 'customer',
       });
     } catch (error) {
-      console.error('Export failed:', error);
       toast.error(error instanceof Error ? error.message : 'Export failed. Please try again.');
     }
   };
@@ -1068,7 +1060,6 @@ const CustomerManagement: React.FC = () => {
       setPagination({ page: result.page, pages: result.pages, total: result.total });
       setStats(result.stats as DashboardStats);
     } catch (error) {
-      console.error('Failed to load customers:', error);
       toast.error('Failed to load customers. Please refresh the page.');
     } finally {
       setLoading(false);
@@ -1089,8 +1080,7 @@ const CustomerManagement: React.FC = () => {
             }
           : dashboardStats
       );
-    } catch (error) {
-      console.error('Failed to load stats:', error);
+    } catch {
       toast.error('Failed to load statistics');
     }
   }, []);

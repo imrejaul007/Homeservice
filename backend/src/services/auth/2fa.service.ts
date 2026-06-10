@@ -50,6 +50,10 @@ const ENCRYPTION_CONFIG = {
   keyLength: 32,
   ivLength: 16,
   authTagLength: 16,
+  // PBKDF2 iterations - NIST 2023 recommends 120,000+ minimum, 310,000+ for security-conscious apps
+  pbkdf2Iterations: parseInt(process.env.TWO_FA_PBKDF2_ITERATIONS || '310000'),
+  // PBKDF2 algorithm - sha256 or sha512 (sha256 is default per NIST recommendations)
+  pbkdf2Algorithm: (process.env.TWO_FA_PBKDF2_ALGORITHM || 'sha256') as 'sha256' | 'sha512',
 };
 
 /**
@@ -242,13 +246,14 @@ export function encryptSecret(secret: string): string {
     throw ApiError.internal('Two-factor authentication is not properly configured');
   }
 
-  // Derive a proper key from the environment variable
+  // Derive a proper key from the environment variable using PBKDF2
+  // NIST 2023 recommends 120,000+ iterations minimum
   const key = crypto.pbkdf2Sync(
     encryptionKey,
     '2fa-salt',
-    100000,
+    ENCRYPTION_CONFIG.pbkdf2Iterations,
     ENCRYPTION_CONFIG.keyLength,
-    'sha256'
+    ENCRYPTION_CONFIG.pbkdf2Algorithm
   );
 
   // Generate random IV
@@ -296,13 +301,13 @@ export function decryptSecret(encryptedSecret: string): string {
     throw ApiError.internal('Two-factor authentication is not properly configured');
   }
 
-  // Derive the same key
+  // Derive the same key using PBKDF2 with configured iterations
   const key = crypto.pbkdf2Sync(
     encryptionKey,
     '2fa-salt',
-    100000,
+    ENCRYPTION_CONFIG.pbkdf2Iterations,
     ENCRYPTION_CONFIG.keyLength,
-    'sha256'
+    ENCRYPTION_CONFIG.pbkdf2Algorithm
   );
 
   // Decode from base64
@@ -428,6 +433,8 @@ export function get2FAConfig(): Record<string, any> {
     digits: TOTP_CONFIG.digits,
     recoveryCodeCount: TOTP_CONFIG.recoveryCodeCount,
     recoveryCodeLength: TOTP_CONFIG.recoveryCodeLength,
+    pbkdf2Iterations: ENCRYPTION_CONFIG.pbkdf2Iterations,
+    pbkdf2Algorithm: ENCRYPTION_CONFIG.pbkdf2Algorithm,
   };
 }
 

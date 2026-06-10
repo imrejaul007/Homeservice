@@ -225,28 +225,31 @@ export const getCategoryStats = asyncHandler(async (_req: Request, res: Response
     .select('name slug icon color')
     .sort({ sortOrder: 1 });
 
-  // Get service counts for each category
-  const categoryStats = await Promise.all(
-    categories.map(async (cat) => {
-      const count = await Service.countDocuments({
-        $or: [
-          { category: cat.name },
-          { categoryId: cat._id }
-        ],
-        isActive: true,
-        status: 'active'
-      });
+  // Get all service counts in a single aggregation (fixes N+1 query issue)
+  const [categoryNameCounts, categoryIdCounts] = await Promise.all([
+    Service.aggregate([
+      { $match: { isActive: true, status: 'active' } },
+      { $group: { _id: '$category', count: { $sum: 1 } } }
+    ]),
+    Service.aggregate([
+      { $match: { isActive: true, status: 'active', categoryId: { $exists: true } } },
+      { $group: { _id: '$categoryId', count: { $sum: 1 } } }
+    ])
+  ]);
 
-      return {
-        _id: cat._id,
-        name: cat.name,
-        slug: cat.slug,
-        icon: cat.icon,
-        color: cat.color,
-        serviceCount: count
-      };
-    })
-  );
+  // Build count map from both category name and categoryId
+  const countMap = new Map<string, number>();
+  categoryNameCounts.forEach(c => countMap.set(c._id, (countMap.get(c._id) || 0) + c.count));
+  categoryIdCounts.forEach(c => countMap.set(c._id.toString(), (countMap.get(c._id.toString()) || 0) + c.count));
+
+  const categoryStats = categories.map(cat => ({
+    _id: cat._id,
+    name: cat.name,
+    slug: cat.slug,
+    icon: cat.icon,
+    color: cat.color,
+    serviceCount: countMap.get(cat.name) || countMap.get(cat._id.toString()) || 0
+  }));
 
   res.json({
     success: true,

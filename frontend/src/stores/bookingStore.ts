@@ -16,10 +16,46 @@ import type {
   BookingCancelData,
   BookingMessage,
   AvailabilitySettingsUpdate
-} from '../services/BookingService';
+} from '../types/booking.types';
 
 // Default timeout for optimistic update operations (30 seconds)
 const OPTIMISTIC_UPDATE_TIMEOUT_MS = 30000;
+
+/**
+ * Parse a date from backend (MongoDB Date) or frontend (ISO string)
+ * Backend returns: Date object from MongoDB or ISO string
+ * Frontend expects: string (YYYY-MM-DD) or Date object
+ * This utility ensures consistent date handling across the app
+ */
+function parseBookingDate(dateValue: string | Date | undefined | null): Date | null {
+  if (!dateValue) return null;
+  if (dateValue instanceof Date) return dateValue;
+  if (typeof dateValue === 'string') {
+    const parsed = new Date(dateValue);
+    return isNaN(parsed.getTime()) ? null : parsed;
+  }
+  return null;
+}
+
+/**
+ * Format a Date object to YYYY-MM-DD string for backend API
+ */
+function formatDateForApi(date: Date | string): string {
+  if (typeof date === 'string') {
+    // Already a string, check if it's already in YYYY-MM-DD format
+    if (/^\d{4}-\d{2}-\d{2}$/.test(date)) return date;
+    // Try parsing and reformatting
+    const parsed = new Date(date);
+    if (!isNaN(parsed.getTime())) {
+      return parsed.toISOString().split('T')[0];
+    }
+    return date;
+  }
+  if (date instanceof Date) {
+    return date.toISOString().split('T')[0];
+  }
+  return '';
+}
 
 /**
  * Creates a timeout race promise that rejects if the operation takes too long.
@@ -53,6 +89,7 @@ export interface BookingState {
   // Availability data
   providerAvailability: ProviderAvailability | null;
   availableSlots: AvailableSlot[];
+  minBookingAdvanceHours: number;
 
   // UI state
   isLoading: boolean;
@@ -110,6 +147,7 @@ export interface BookingState {
     date: string;
     duration: number;
     days?: number;
+    serviceId?: string;
   }) => Promise<void>;
   checkSlotAvailability: (providerId: string, params: {
     date: string;
@@ -176,6 +214,7 @@ export const useBookingStore = create<BookingState>()(
       currentBooking: null,
       providerAvailability: null,
       availableSlots: [],
+      minBookingAdvanceHours: 4,
       isLoading: false,
       isSubmitting: false,
       errors: [],
@@ -193,21 +232,41 @@ export const useBookingStore = create<BookingState>()(
             state.errors = [];
           });
 
+          console.log('[bookingStore] createBooking request', {
+            serviceId: data.serviceId,
+            providerId: data.providerId || '(auto-assign)',
+            scheduledDate: data.scheduledDate,
+            scheduledTime: data.scheduledTime,
+          });
+
           const response = await bookingService.createBooking(data);
-          const booking = response.data.booking;
+          const booking = response.data?.booking;
+
+          if (!booking?._id) {
+            console.error('[bookingStore] createBooking missing booking in response', response);
+            throw new Error('Invalid booking response from server');
+          }
+
+          if (response.data?.isDuplicate) {
+            booking.isDuplicate = true;
+          }
 
           set((state) => {
-            state.customerBookings.unshift(booking);
+            if (!response.data?.isDuplicate) {
+              state.customerBookings.unshift(booking);
+            }
             state.currentBooking = booking;
             state.isSubmitting = false;
           });
 
           return booking;
         } catch (error) {
+          const message = error instanceof Error ? error.message : 'Failed to create booking';
+          console.error('[bookingStore] createBooking failed', { message, error });
           set((state) => {
             state.isSubmitting = false;
             state.errors = [{
-              message: error instanceof Error ? error.message : 'Failed to create booking',
+              message,
               code: 'CREATE_BOOKING_ERROR'
             }];
           });
@@ -1021,6 +1080,9 @@ export const useBookingStore = create<BookingState>()(
 
           set((state) => {
             state.availableSlots = response.data.slots;
+            if (typeof response.data.minBookingAdvanceHours === 'number') {
+              state.minBookingAdvanceHours = response.data.minBookingAdvanceHours;
+            }
             state.isLoading = false;
           });
         } catch (error) {

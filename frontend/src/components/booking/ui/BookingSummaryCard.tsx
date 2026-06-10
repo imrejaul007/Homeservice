@@ -10,6 +10,8 @@ interface BookingSummaryCardProps {
   locationType: 'at_home' | 'hotel';
   price: number;
   currency?: string;
+  discountAmount?: number;
+  discountCode?: string;
 }
 
 const BookingSummaryCard: React.FC<BookingSummaryCardProps> = ({
@@ -19,7 +21,9 @@ const BookingSummaryCard: React.FC<BookingSummaryCardProps> = ({
   duration,
   locationType,
   price,
-  currency = 'AED'
+  currency = 'AED',
+  discountAmount,
+  discountCode,
 }) => {
   // Format date to display
   const formatDate = (dateStr: string) => {
@@ -89,10 +93,30 @@ const BookingSummaryCard: React.FC<BookingSummaryCardProps> = ({
 
       {/* Price */}
       <div className="pt-3">
-        <div className="flex justify-between items-center">
-          <span className="text-nilin-warmGray">Total service price:</span>
-          <span className="text-lg font-bold text-nilin-coral">{formatPrice(price)}</span>
-        </div>
+        {discountAmount && discountAmount > 0 ? (
+          <>
+            <div className="flex justify-between items-center">
+              <span className="text-nilin-warmGray">Original price:</span>
+              <span className="text-sm text-nilin-warmGray line-through">{formatPrice(price)}</span>
+            </div>
+            <div className="flex justify-between items-center mt-1">
+              <span className="text-nilin-warmGray">Discount:</span>
+              <span className="text-sm text-green-600 font-medium">-{formatPrice(discountAmount)}</span>
+            </div>
+            <div className="flex justify-between items-center mt-2 pt-2 border-t border-nilin-border">
+              <span className="text-nilin-charcoal font-medium">Final price:</span>
+              <span className="text-lg font-bold text-nilin-coral">{formatPrice(Math.max(0, price - discountAmount))}</span>
+            </div>
+            {discountCode && (
+              <p className="text-xs text-green-600 mt-1">Code: {discountCode} applied</p>
+            )}
+          </>
+        ) : (
+          <div className="flex justify-between items-center">
+            <span className="text-nilin-warmGray">Total service price:</span>
+            <span className="text-lg font-bold text-nilin-coral">{formatPrice(price)}</span>
+          </div>
+        )}
         <p className="text-xs text-nilin-lightGray mt-2 card-nilin p-2 rounded-lg transition-all duration-300">
           No charges will be made now. Payment is processed only after the service is completed.
         </p>

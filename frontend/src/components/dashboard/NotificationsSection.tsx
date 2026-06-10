@@ -26,6 +26,8 @@ import { notificationApi, type Notification } from '../../services/notificationA
 import { cn } from '../../lib/utils';
 import { FadeSection } from '../ui/FadeSection';
 import Button from '../common/Button';
+import { useSocketEvent } from '../../hooks/useSocket';
+import type { NotificationEvent } from '../../services/socket';
 
 // =============================================================================
 // Types
@@ -35,6 +37,7 @@ interface NotificationsSectionProps {
   limit?: number;
   showViewAll?: boolean;
   className?: string;
+  userRole?: 'customer' | 'provider' | 'admin';
 }
 
 interface NotificationItem {
@@ -125,11 +128,17 @@ const formatTime = (dateString: string): string => {
 /**
  * Get navigation path based on notification data
  */
-const getNotificationPath = (notification: NotificationItem): string => {
+const getNotificationPath = (
+  notification: NotificationItem,
+  userRole: 'customer' | 'provider' | 'admin' = 'customer'
+): string => {
   const data = notification.data || {};
+  const isProvider = userRole === 'provider';
 
   if (data.bookingId) {
-    return `/bookings/${data.bookingId}`;
+    return isProvider
+      ? `/provider/bookings/${data.bookingId}`
+      : `/customer/bookings/${data.bookingId}`;
   }
   if (data.serviceId) {
     return `/services/${data.serviceId}`;
@@ -138,7 +147,7 @@ const getNotificationPath = (notification: NotificationItem): string => {
     return `/provider/${data.providerId}`;
   }
   if (data.reviewId) {
-    return `/reviews/${data.reviewId}`;
+    return `/customer/reviews`;
   }
 
   // Fallback based on type
@@ -146,13 +155,13 @@ const getNotificationPath = (notification: NotificationItem): string => {
     case 'booking':
       return '/customer/bookings';
     case 'payment':
-      return '/customer/payments';
+      return '/customer/payment-methods';
     case 'review':
       return '/customer/reviews';
     case 'promotion':
       return '/search';
     default:
-      return '/notifications';
+      return '/customer/notifications';
   }
 };
 
@@ -303,7 +312,8 @@ const NotificationItemComponent: React.FC<NotificationItemProps> = ({
 const NotificationsSection: React.FC<NotificationsSectionProps> = ({
   limit = 5,
   showViewAll = true,
-  className = ''
+  className = '',
+  userRole = 'customer',
 }) => {
   const navigate = useNavigate();
 
@@ -358,6 +368,24 @@ const NotificationsSection: React.FC<NotificationsSectionProps> = ({
     fetchNotifications();
   }, [fetchNotifications]);
 
+  // Socket listener for real-time notifications
+  useSocketEvent('notification:new', (data: NotificationEvent) => {
+    const newNotification: NotificationItem = {
+      _id: data.id,
+      type: data.type as NotificationItem['type'],
+      title: data.title,
+      message: data.message,
+      isRead: data.read ?? false,
+      data: data.data as Record<string, any> || {},
+      createdAt: data.timestamp instanceof Date ? data.timestamp.toISOString() : String(data.timestamp),
+    };
+
+    setNotifications(prev => [newNotification, ...prev]);
+    if (!newNotification.isRead) {
+      setUnreadCount(prev => prev + 1);
+    }
+  });
+
   // Mark single notification as read
   const handleMarkAsRead = useCallback(async (notificationId: string) => {
     try {
@@ -398,7 +426,7 @@ const NotificationsSection: React.FC<NotificationsSectionProps> = ({
     }
 
     // Navigate to relevant page
-    const path = getNotificationPath(notification);
+    const path = getNotificationPath(notification, userRole);
     navigate(path);
   }, [handleMarkAsRead, navigate]);
 
@@ -462,7 +490,7 @@ const NotificationsSection: React.FC<NotificationsSectionProps> = ({
           {/* View all button */}
           {showViewAll && (
             <button
-              onClick={() => navigate('/notifications')}
+              onClick={() => navigate('/customer/notifications')}
               className="flex items-center gap-1 text-sm font-medium text-nilin-coral
                          hover:text-nilin-rose transition-colors group"
             >

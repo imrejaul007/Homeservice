@@ -1,10 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import NavigationHeader from '../components/layout/NavigationHeader';
 import Footer from '../components/layout/Footer';
 import Breadcrumb from '../components/common/Breadcrumb';
 import { useAuthStore } from '../stores/authStore';
-import { offerService } from '../services/offerService';
+import { offerService, type ServiceSummary } from '../services/offerService';
 import { toast } from 'react-hot-toast';
 import {
   Sparkles,
@@ -18,18 +18,9 @@ import {
   Search,
   ChevronRight
 } from 'lucide-react';
+import { getOfferUsageLabel } from '../utils/offerDisplay';
 
-interface ServiceSummary {
-  _id: string;
-  name: string;
-  category?: { name: string };
-  subcategory?: { name: string };
-  shortDescription?: string;
-  price: { amount: number; currency: string };
-  duration: number;
-  rating?: { average: number; count: number };
-  thumbnail?: string;
-}
+// FIX: Use ServiceSummary from offerService (removed duplicate definition)
 
 interface OfferDetail {
   _id: string;
@@ -46,21 +37,34 @@ interface OfferDetail {
   minOrderValue: number;
   applicableServices?: string[];
   applicableCategories?: string[];
+  hasActiveClaim?: boolean;
+  isClaimed?: boolean;
+  isFullyRedeemed?: boolean;
+  remainingUses?: number;
+  maxUsesPerUser?: number;
+  appliedCount?: number;
 }
 
 const OfferDetailPage: React.FC = () => {
   const { offerId } = useParams<{ offerId: string }>();
   const navigate = useNavigate();
-  const { isAuthenticated, tokens } = useAuthStore();
+  const { isAuthenticated } = useAuthStore();
   const [offer, setOffer] = useState<OfferDetail | null>(null);
   const [services, setServices] = useState<ServiceSummary[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isClaiming, setIsClaiming] = useState(false);
   const [isClaimed, setIsClaimed] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
-
+  const [currentTime, setCurrentTime] = useState<number>(Date.now());
   useEffect(() => {
     loadOfferData();
+
+    // FIX: Update countdown timer every second
+    const timer = setInterval(() => {
+      setCurrentTime(Date.now());
+    }, 1000);
+
+    return () => clearInterval(timer);
   }, [offerId]);
 
   const loadOfferData = async () => {
@@ -72,23 +76,44 @@ const OfferDetailPage: React.FC = () => {
       const offerData = await offerService.getOfferById(offerId);
       if (offerData) {
         setOffer(offerData);
+        setIsClaimed(Boolean(offerData.hasActiveClaim));
 
-        // If offer has linked services, load them
+        // FIX: Track offer view for analytics
+        offerService.trackOfferView(offerId).catch(err => {
+          console.warn('Failed to track offer view:', err);
+        });
+
+        // FIX: If offer has linked services (already populated), use them directly
+        // applicableServices comes with full service objects from backend
         if (offerData.applicableServices && offerData.applicableServices.length > 0) {
-          await loadLinkedServices(offerData.applicableServices);
+          // Check if it's already an array of service objects (has _id and name) or just IDs
+          const firstItem = offerData.applicableServices[0];
+          if (firstItem && typeof firstItem === 'object' && firstItem._id) {
+            // Already populated with service objects - use directly
+            setServices(offerData.applicableServices);
+          } else {
+            // It's an array of IDs - fetch the services
+            await loadLinkedServices(offerData.applicableServices);
+          }
         }
 
-        // If offer has linked categories, load services by category
+        // FIX: If offer has linked categories, load services by category
         if (offerData.applicableCategories && offerData.applicableCategories.length > 0) {
-          await loadServicesByCategory(offerData.applicableCategories);
+          // Check if it's already an array of category objects or just IDs
+          const firstItem = offerData.applicableCategories[0];
+          if (firstItem && typeof firstItem === 'object' && firstItem._id) {
+            // Already populated with category objects - fetch services by category
+            await loadServicesByCategory(offerData.applicableCategories);
+          } else {
+            // It's an array of IDs - fetch services
+            const categoryIds = offerData.applicableCategories.filter((id: any) => typeof id === 'string');
+            if (categoryIds.length > 0) {
+              await loadServicesByCategory(categoryIds);
+            }
+          }
         }
 
-        // Check if already claimed
-        if (isAuthenticated) {
-          const claims = await offerService.getMyClaims();
-          const claimed = claims.some(c => c.offer?._id === offerId || c.offerId === offerId);
-          setIsClaimed(claimed);
-        }
+        // Claim status comes from offer payload (hasActiveClaim) when authenticated
       }
     } catch (error) {
       console.error('Failed to load offer:', error);
@@ -100,48 +125,35 @@ const OfferDetailPage: React.FC = () => {
 
   const loadLinkedServices = async (serviceIds: string[]) => {
     try {
-      const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
-      const token = tokens?.accessToken || '';
-
-      const servicesData = await Promise.all(
-        serviceIds.map(id =>
-          fetch(`${API_URL}/services/${id}`, {
-            headers: { Authorization: `Bearer ${token}` }
-          }).then(res => res.json())
-        )
-      );
-
-      const loadedServices = servicesData
-        .filter(data => data.success)
-        .map(data => data.data?.service || data.data);
-
-      setServices(prev => [...prev, ...loadedServices]);
+      // FIX: Use public batch endpoint instead of admin endpoint
+      const linkedServices = await offerService.getServicesByIds(serviceIds);
+      if (linkedServices.length > 0) {
+        setServices(prev => [...prev, ...linkedServices]);
+      }
     } catch (error) {
       console.error('Failed to load services:', error);
     }
   };
 
   const loadServicesByCategory = async (categoryIds: string[]) => {
+    if (!categoryIds || categoryIds.length === 0) return;
+
     try {
-      const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
-      const token = tokens?.accessToken || '';
+      // FIX: Use public category endpoint instead of admin endpoint
+      // Load services for each category
+      const allCategoryServices: ServiceSummary[] = [];
+      for (const categoryId of categoryIds) {
+        const categoryServices = await offerService.getServicesByCategory(categoryId);
+        allCategoryServices.push(...categoryServices);
+      }
 
-      const servicesData = await Promise.all(
-        categoryIds.map(id =>
-          fetch(`${API_URL}/services?category=${id}&limit=10`, {
-            headers: { Authorization: `Bearer ${token}` }
-          }).then(res => res.json())
-        )
-      );
-
-      const loadedServices = servicesData
-        .flatMap(data => data.success ? (data.data?.services || data.data || []) : []);
-
-      setServices(prev => {
-        const existingIds = new Set(prev.map(s => s._id));
-        const newServices = loadedServices.filter((s: ServiceSummary) => !existingIds.has(s._id));
-        return [...prev, ...newServices];
-      });
+      if (allCategoryServices.length > 0) {
+        setServices(prev => {
+          const existingIds = new Set(prev.map(s => s._id));
+          const newServices = allCategoryServices.filter((s: ServiceSummary) => !existingIds.has(s._id));
+          return [...prev, ...newServices];
+        });
+      }
     } catch (error) {
       console.error('Failed to load services by category:', error);
     }
@@ -149,7 +161,7 @@ const OfferDetailPage: React.FC = () => {
 
   const handleClaimOffer = async () => {
     if (!isAuthenticated) {
-      toast.error('Please sign in to claim this offer');
+      toast.success('Please sign in to claim this offer');
       navigate('/login');
       return;
     }
@@ -160,13 +172,40 @@ const OfferDetailPage: React.FC = () => {
     try {
       const result = await offerService.claimOffer(offerId);
       if (result.success) {
-        toast.success(result.message || 'Offer claimed successfully!');
+        toast.success(result.message || 'Offer claimed! Redirecting to booking...');
         setIsClaimed(true);
+        setOffer((prev) => prev ? { ...prev, hasActiveClaim: true, isClaimed: true } : prev);
+
+        // Prepare offer data to pass to booking wizard
+        const offerData = {
+          couponCode: result.couponCode || offer?.code,
+          offerId: offerId,
+          offerDetails: offer ? {
+            code: offer.code,
+            title: offer.displayTitle || offer.title,
+            type: offer.type,
+            value: offer.value,
+            maxDiscount: offer.maxDiscount,
+          } : undefined
+        };
+
+        // If offer has linked services, navigate to first service with offer pre-loaded
+        if (services.length > 0) {
+          navigate(`/book/${services[0]._id}`, {
+            state: offerData
+          });
+        } else {
+          // No linked services - navigate to search to find applicable services
+          toast.success('Browse services to use your offer!');
+          navigate('/search', {
+            state: { ...offerData, filterByOffer: true }
+          });
+        }
       } else {
         toast.error(result.message || 'Failed to claim offer');
       }
-    } catch (error) {
-      toast.error('Failed to claim offer');
+    } catch (error: any) {
+      toast.error('Failed to claim offer: ' + (error?.message || 'Unknown error'));
     } finally {
       setIsClaiming(false);
     }
@@ -192,6 +231,17 @@ const OfferDetailPage: React.FC = () => {
     } else {
       navigate('/search');
     }
+  };
+
+  // FIX: Calculate countdown for urgency display
+  const calculateCountdown = (endDate: string | Date) => {
+    const end = new Date(endDate).getTime();
+    const total = Math.max(0, end - currentTime);
+    const days = Math.floor(total / (1000 * 60 * 60 * 24));
+    const hours = Math.floor((total % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+    const minutes = Math.floor((total % (1000 * 60 * 60)) / (1000 * 60));
+    const seconds = Math.floor((total % (1000 * 60)) / 1000);
+    return { days, hours, minutes, seconds, total };
   };
 
   const getGradientClass = (gradient?: string): string => {
@@ -302,6 +352,23 @@ const OfferDetailPage: React.FC = () => {
                 Min. order AED {offer.minOrderValue}
               </div>
             )}
+            {/* FIX: Add countdown timer for urgency */}
+            {offer.validUntil && (() => {
+              const countdown = calculateCountdown(offer.validUntil!);
+              if (countdown.total <= 0) return null;
+              return (
+                <div className={`flex items-center gap-1 ${countdown.days < 1 ? 'text-yellow-200 animate-pulse' : ''}`}>
+                  <Clock className="w-4 h-4" />
+                  <span>
+                    {countdown.days > 0
+                      ? `${countdown.days}d ${countdown.hours}h ${countdown.minutes}m remaining`
+                      : countdown.hours > 0
+                      ? `${countdown.hours}h ${countdown.minutes}m remaining`
+                      : `${countdown.minutes}m remaining`}
+                  </span>
+                </div>
+              );
+            })()}
           </div>
         </div>
 
@@ -310,26 +377,39 @@ const OfferDetailPage: React.FC = () => {
           <div className="flex flex-col md:flex-row items-center justify-between gap-4">
             <div>
               <h2 className="text-xl font-serif text-nilin-charcoal mb-1">
-                {isClaimed ? 'Offer Claimed!' : 'Ready to save?'}
+                {offer.isFullyRedeemed
+                  ? 'Usage limit reached'
+                  : isClaimed
+                    ? 'Offer Claimed!'
+                    : 'Ready to save?'}
               </h2>
               <p className="text-nilin-warmGray">
-                {isClaimed
-                  ? 'Use this offer on your next booking. Browse services below.'
-                  : 'Claim this offer to use on your next booking'}
+                {offer.isFullyRedeemed
+                  ? 'You have used this offer the maximum number of times on your account.'
+                  : isClaimed
+                    ? 'Use this offer on your next booking. Browse services below.'
+                    : 'Claim this offer to use on your next booking'}
               </p>
+              {getOfferUsageLabel(offer) && (
+                <p className="text-sm text-nilin-coral mt-2 font-medium">{getOfferUsageLabel(offer)}</p>
+              )}
             </div>
             <button
               onClick={isClaimed ? handleBrowseServices : handleClaimOffer}
-              disabled={isClaiming}
+              disabled={isClaiming || Boolean(offer.isFullyRedeemed)}
               className={`px-8 py-3 rounded-xl font-semibold transition-all flex items-center gap-2 ${
-                isClaimed
+                offer.isFullyRedeemed
+                  ? 'bg-gray-100 text-gray-500 cursor-not-allowed'
+                  : isClaimed
                   ? 'bg-green-100 text-green-700 hover:bg-green-200'
                   : isClaiming
                   ? 'bg-gray-100 text-gray-500 cursor-not-allowed'
                   : 'bg-gradient-to-r from-nilin-rose to-nilin-coral text-white hover:opacity-90 shadow-nilin'
               }`}
             >
-              {isClaimed ? (
+              {offer.isFullyRedeemed ? (
+                <>Limit reached</>
+              ) : isClaimed ? (
                 <>
                   <Search className="w-5 h-5" />
                   Browse Services

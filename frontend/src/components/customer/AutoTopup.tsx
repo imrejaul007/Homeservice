@@ -20,18 +20,11 @@ import {
 import { cn } from '../../lib/utils';
 import { formatCurrency } from '../../utils/formatting';
 import { autoTopupApi, type AutoTopupConfig, type AutoTopupLog, type AutoTopupPreview } from '../../services/autoTopupApi';
+import { customerApi, type PaymentMethod } from '../../services/customerApi';
 
 interface AutoTopupProps {
   compact?: boolean;
   onConfigChange?: () => void;
-}
-
-interface PaymentMethodOption {
-  id: string;
-  type: 'card' | 'bank_account' | 'wallet';
-  last4?: string;
-  brand?: string;
-  isDefault?: boolean;
 }
 
 export const AutoTopup: React.FC<AutoTopupProps> = ({
@@ -51,15 +44,10 @@ export const AutoTopup: React.FC<AutoTopupProps> = ({
   const [enabled, setEnabled] = useState(false);
   const [thresholdAmount, setThresholdAmount] = useState(50);
   const [topupAmount, setTopupAmount] = useState(100);
-  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethodOption | null>(null);
+  const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethod | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
-
-  // Mock payment methods (in production, fetch from payment API)
-  const paymentMethods: PaymentMethodOption[] = [
-    { id: 'pm_1', type: 'card', last4: '4242', brand: 'Visa', isDefault: true },
-    { id: 'pm_2', type: 'card', last4: '5555', brand: 'Mastercard' },
-  ];
 
   // Fetch data
   const fetchData = useCallback(async (refresh = false) => {
@@ -71,26 +59,28 @@ export const AutoTopup: React.FC<AutoTopupProps> = ({
     setError(null);
 
     try {
-      const [configData, previewData, historyData] = await Promise.all([
+      const [configData, previewData, historyData, paymentMethodsData] = await Promise.all([
         autoTopupApi.getConfig(),
         autoTopupApi.preview(),
         autoTopupApi.getHistory({ limit: 10 }),
+        customerApi.getPaymentMethods(),
       ]);
 
       setConfig(configData.config);
       setPreview(previewData);
       setLogs(historyData.logs);
+      setPaymentMethods(paymentMethodsData.data.paymentMethods);
 
       if (configData.config) {
         setEnabled(configData.config.enabled);
         setThresholdAmount(configData.config.thresholdAmount);
         setTopupAmount(configData.config.topupAmount);
-        const defaultMethod = paymentMethods.find(
-          (pm) => pm.id === configData.config?.paymentMethodId
+        const defaultMethod = paymentMethodsData.data.paymentMethods.find(
+          (pm) => pm._id === configData.config?.paymentMethodId
         );
-        setSelectedPaymentMethod(defaultMethod || paymentMethods[0]);
+        setSelectedPaymentMethod(defaultMethod || paymentMethodsData.data.paymentMethods.find((pm) => pm.isDefault) || paymentMethodsData.data.paymentMethods[0] || null);
       } else {
-        setSelectedPaymentMethod(paymentMethods.find((pm) => pm.isDefault) || paymentMethods[0]);
+        setSelectedPaymentMethod(paymentMethodsData.data.paymentMethods.find((pm) => pm.isDefault) || paymentMethodsData.data.paymentMethods[0] || null);
       }
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to load auto-topup data';
@@ -111,17 +101,25 @@ export const AutoTopup: React.FC<AutoTopupProps> = ({
 
     setSaving(true);
     try {
+      // Map payment method type to the expected type
+      const paymentType = selectedPaymentMethod.type === 'card' || selectedPaymentMethod.type === 'apple_pay' || selectedPaymentMethod.type === 'google_pay'
+        ? 'card' as const
+        : selectedPaymentMethod.type === 'cash'
+        ? 'wallet' as const
+        : 'bank_account' as const;
+
       await autoTopupApi.updateConfig({
         enabled,
         thresholdAmount,
         topupAmount,
-        paymentMethodId: selectedPaymentMethod.id,
-        paymentMethodType: selectedPaymentMethod.type,
+        paymentMethodId: selectedPaymentMethod._id,
+        paymentMethodType: paymentType,
         paymentMethodLast4: selectedPaymentMethod.last4,
         paymentMethodBrand: selectedPaymentMethod.brand,
         maxAutoTopupsPerMonth: 5,
         maxAutoTopupAmount: 500,
-      });
+        autoTopupsThisMonth: config?.autoTopupsThisMonth || 0,
+      } as any);
 
       onConfigChange?.();
       setShowSettings(false);
@@ -355,7 +353,7 @@ export const AutoTopup: React.FC<AutoTopupProps> = ({
           <div className="bg-white rounded-xl p-4 shadow-sm">
             <p className="text-xs text-nilin-warmGray">This Month</p>
             <p className="text-lg font-bold text-nilin-charcoal mt-1">
-              {config.maxAutoTopupsPerMonth - (config as any).autoTopupsThisMonth || 0}
+              {config.maxAutoTopupsPerMonth - config.autoTopupsThisMonth || 0}
             </p>
             <p className="text-xs text-nilin-warmGray">topups left</p>
           </div>
@@ -516,31 +514,35 @@ export const AutoTopup: React.FC<AutoTopupProps> = ({
                   Payment Method
                 </label>
                 <div className="space-y-2">
-                  {paymentMethods.map((pm) => (
-                    <button
-                      key={pm.id}
-                      onClick={() => setSelectedPaymentMethod(pm)}
-                      className={cn(
-                        'w-full p-4 rounded-xl border-2 transition-colors flex items-center gap-3',
-                        selectedPaymentMethod?.id === pm.id
-                          ? 'border-nilin-coral bg-nilin-coral/5'
-                          : 'border-gray-200 hover:border-gray-300'
-                      )}
-                    >
-                      <CreditCard className="w-5 h-5 text-gray-500" />
-                      <div className="flex-1 text-left">
-                        <p className="font-medium text-nilin-charcoal">
-                          {pm.brand} **** {pm.last4}
-                        </p>
-                        {pm.isDefault && (
-                          <p className="text-xs text-nilin-warmGray">Default</p>
+                  {paymentMethods.length === 0 ? (
+                    <p className="text-nilin-warmGray text-center py-4">No payment methods found</p>
+                  ) : (
+                    paymentMethods.map((pm) => (
+                      <button
+                        key={pm._id}
+                        onClick={() => setSelectedPaymentMethod(pm)}
+                        className={cn(
+                          'w-full p-4 rounded-xl border-2 transition-colors flex items-center gap-3',
+                          selectedPaymentMethod?._id === pm._id
+                            ? 'border-nilin-coral bg-nilin-coral/5'
+                            : 'border-gray-200 hover:border-gray-300'
                         )}
-                      </div>
-                      {selectedPaymentMethod?.id === pm.id && (
-                        <Check className="w-5 h-5 text-nilin-coral" />
-                      )}
-                    </button>
-                  ))}
+                      >
+                        <CreditCard className="w-5 h-5 text-gray-500" />
+                        <div className="flex-1 text-left">
+                          <p className="font-medium text-nilin-charcoal">
+                            {pm.brand} **** {pm.last4}
+                          </p>
+                          {pm.isDefault && (
+                            <p className="text-xs text-nilin-warmGray">Default</p>
+                          )}
+                        </div>
+                        {selectedPaymentMethod?._id === pm._id && (
+                          <Check className="w-5 h-5 text-nilin-coral" />
+                        )}
+                      </button>
+                    ))
+                  )}
                 </div>
               </div>
 

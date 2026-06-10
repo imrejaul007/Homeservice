@@ -25,11 +25,24 @@ export interface ICoupon extends Document {
   validUntil: Date;
   isActive: boolean;
 
+  // FIX: Approval workflow status
+  status: 'draft' | 'pending_review' | 'approved' | 'published' | 'archived';
+  // FIX: Archive tracking
+  archivedAt?: Date;
+  // FIX: Clone tracking
+  clonedFrom?: mongoose.Types.ObjectId;
+
   // Targeting
-  targetType?: 'all' | 'new_users' | 'specific_users' | 'specific_services' | 'first_booking';
+  targetType?: 'all' | 'new_users' | 'specific_users' | 'specific_services' | 'first_booking' | 'specific_providers';
   targetUsers?: mongoose.Types.ObjectId[];
   targetServices?: mongoose.Types.ObjectId[];
   targetCategories?: mongoose.Types.ObjectId[];
+  targetProviders?: mongoose.Types.ObjectId[]; // Provider-specific offers
+
+  // Day/Time Restrictions
+  validDays?: string[]; // ['monday', 'tuesday', ...]
+  validTimeStart?: string; // '09:00' in HH:mm format
+  validTimeEnd?: string; // '18:00' in HH:mm format
 
   // Description
   title: string;
@@ -44,11 +57,15 @@ export interface ICoupon extends Document {
   featured?: boolean;
   claimExpiresInDays?: number;
 
+  // FIX: View tracking for analytics
+  viewCount?: number;
+
   // Tracking
   usedBy: Array<{
     userId: mongoose.Types.ObjectId;
     usedAt: Date;
-    orderId: string;
+    orderId?: string;
+    bookingId?: mongoose.Types.ObjectId;
   }>;
 
   // Limits
@@ -140,9 +157,24 @@ const couponSchema = new Schema<ICoupon>(
       type: Boolean,
       default: true,
     },
+    // FIX: Approval workflow status
+    status: {
+      type: String,
+      enum: ['draft', 'pending_review', 'approved', 'published', 'archived'],
+      default: 'draft',
+    },
+    // FIX: Archive tracking
+    archivedAt: {
+      type: Date,
+    },
+    // FIX: Clone tracking
+    clonedFrom: {
+      type: Schema.Types.ObjectId,
+      ref: 'Coupon',
+    },
     targetType: {
       type: String,
-      enum: ['all', 'new_users', 'specific_users', 'specific_services', 'first_booking'],
+      enum: ['all', 'new_users', 'specific_users', 'specific_services', 'first_booking', 'specific_providers'],
       default: 'all',
     },
     targetUsers: [{
@@ -157,6 +189,23 @@ const couponSchema = new Schema<ICoupon>(
       type: Schema.Types.ObjectId,
       ref: 'ServiceCategory',
     }],
+    targetProviders: [{
+      type: Schema.Types.ObjectId,
+      ref: 'User',
+    }],
+    // Day/Time Restrictions
+    validDays: [{
+      type: String,
+      enum: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'],
+    }],
+    validTimeStart: {
+      type: String,
+      match: /^([01]\d|2[0-3]):([0-5]\d)$/, // HH:mm format
+    },
+    validTimeEnd: {
+      type: String,
+      match: /^([01]\d|2[0-3]):([0-5]\d)$/, // HH:mm format
+    },
     title: {
       type: String,
       required: true,
@@ -195,10 +244,17 @@ const couponSchema = new Schema<ICoupon>(
       default: 30,
       min: 1,
     },
+    // FIX: View tracking for analytics
+    viewCount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
     usedBy: [{
       userId: { type: Schema.Types.ObjectId, ref: 'User' },
       usedAt: { type: Date, default: Date.now },
       orderId: String,
+      bookingId: { type: Schema.Types.ObjectId, ref: 'Booking' },
     }],
     applicableServices: [{
       type: String,
@@ -215,18 +271,26 @@ const couponSchema = new Schema<ICoupon>(
 );
 
 // Check if coupon is valid
+// FIX: Use UTC for consistent timezone handling
 couponSchema.methods.isValid = function(): { valid: boolean; reason?: string } {
   const now = new Date();
+  // FIX: Add 5-minute grace period to prevent edge-case failures
+  const gracePeriodMs = 5 * 60 * 1000;
 
   if (!this.isActive) {
     return { valid: false, reason: 'Coupon is inactive' };
   }
 
-  if (now < this.validFrom) {
+  // FIX: Use timezone-aware comparison
+  const validFrom = new Date(this.validFrom);
+  const validUntil = new Date(this.validUntil);
+
+  if (now < validFrom) {
     return { valid: false, reason: 'Coupon is not yet valid' };
   }
 
-  if (now > this.validUntil) {
+  // Apply grace period for expiry
+  if (validUntil.getTime() + gracePeriodMs < now.getTime()) {
     return { valid: false, reason: 'Coupon has expired' };
   }
 
@@ -253,6 +317,16 @@ couponSchema.pre('save', function(next) {
     this.currentUses = this.usedBy.length;
   }
   next();
+});
+
+// FIX: Pre-find hook to auto-exclude soft-deleted records
+// This ensures soft-deleted coupons are never returned in queries
+couponSchema.pre(['find', 'findOne', 'findOneAndUpdate', 'findOneAndDelete'], function() {
+  // Only add filter if not explicitly searching for deleted records
+  const query = this.getQuery();
+  if (query.isDeleted === undefined) {
+    this.where({ isDeleted: { $ne: true } });
+  }
 });
 
 // Calculate discount
@@ -335,8 +409,17 @@ couponSchema.index({ targetUsers: 1, isActive: 1 });
 // FIX: Add index for target service coupons
 couponSchema.index({ targetServices: 1, isActive: 1 });
 
+// FIX: Add index for target provider coupons
+couponSchema.index({ targetProviders: 1, isActive: 1 });
+
+// FIX: Add index for day restrictions
+couponSchema.index({ validDays: 1, isActive: 1 });
+
 // FIX: Add index for featured coupons on homepage
 couponSchema.index({ featured: 1, isActive: 1, validUntil: 1 });
+
+// FIX: Add index for approval workflow status
+couponSchema.index({ status: 1, isActive: 1 });
 
 // Partial index for active non-expired coupons (MongoDB 3.2+)
 // Note: code already has index from field definition above

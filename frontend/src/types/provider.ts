@@ -1,5 +1,11 @@
 // Provider Types for Public API
 
+// ==========================================
+// VERIFICATION STATUS TYPE (Phase 1: Infrastructure)
+// ==========================================
+
+export type VerificationStatus = 'pending' | 'in_review' | 'approved' | 'rejected';
+
 export interface ProviderService {
   _id: string;
   name: string;

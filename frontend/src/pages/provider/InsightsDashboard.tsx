@@ -22,6 +22,8 @@ import { useAuthStore } from '../../stores/authStore';
 import { socketService } from '../../services/socket';
 import { CompetitivePosition } from '../../components/analytics/provider/CompetitivePosition';
 import { ServiceProfitability } from '../../components/analytics/provider/ServiceProfitability';
+import { PageErrorBoundary } from '../../components/common/PageErrorBoundary';
+import toast from 'react-hot-toast';
 
 // Icon components
 const TrendingUpIcon = () => (
@@ -95,43 +97,97 @@ const InsightsDashboard: React.FC = () => {
   const [optimizationTips, setOptimizationTips] = useState<RevenueOptimizationTip[]>([]);
   const [preventionRecommendations, setPreventionRecommendations] = useState<PreventionRecommendation[]>([]);
 
-  // Polling ref for cleanup
+  // Polling state
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const pollingCountRef = useRef(0);
+  const MAX_POLL_COUNT = 10; // Maximum polling cycles before pause
+  const POLL_INTERVAL = 60000; // 60 seconds
+  const [connectionStatus, setConnectionStatus] = useState<'connected' | 'polling' | 'paused'>('connected');
 
   const fetchData = async (refreshMode: 'loading' | 'refreshing' | 'silent' = 'loading') => {
     if (refreshMode === 'refreshing') setRefreshing(true);
     else if (refreshMode === 'loading') setLoading(true);
     // 'silent' mode: no loading indicators shown
 
-    try {
-      const [
-        insightsData,
-        scheduleData,
-        cancellationData,
-        upcomingCancellationsData,
-        tipsData,
-        preventionData,
-      ] = await Promise.all([
-        providerInsightsApi.getInsights(period),
-        providerInsightsApi.getOptimalSchedule(),
-        providerInsightsApi.getCancellationStats(period),
-        providerInsightsApi.getUpcomingCancellations(7),
-        providerInsightsApi.getOptimizationTips(),
-        providerInsightsApi.getPreventionRecommendations(),
-      ]);
+    // Retry configuration
+    const MAX_RETRIES = 2;
+    const RETRY_DELAY = 2000;
+    let retryCount = 0;
 
-      setInsights(insightsData);
-      setScheduleOptimization(scheduleData);
-      setCancellationStats(cancellationData);
-      setUpcomingCancellations(upcomingCancellationsData);
-      setOptimizationTips(tipsData);
-      setPreventionRecommendations(preventionData);
-    } catch (error) {
-      console.error('Failed to fetch insights data:', error);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
+    const attemptFetch = async (): Promise<boolean> => {
+      try {
+        const results = await Promise.allSettled([
+          providerInsightsApi.getInsights(period),
+          providerInsightsApi.getOptimalSchedule(),
+          providerInsightsApi.getCancellationStats(period),
+          providerInsightsApi.getUpcomingCancellations(7),
+          providerInsightsApi.getOptimizationTips(),
+          providerInsightsApi.getPreventionRecommendations(),
+        ]);
+
+        // Update state for successful fetches (partial data display)
+        const [insightsResult, scheduleResult, cancellationResult,
+               upcomingResult, tipsResult, preventionResult] = results;
+
+        if (insightsResult.status === 'fulfilled') {
+          setInsights(insightsResult.value);
+        } else {
+          console.warn('Failed to fetch insights:', insightsResult.reason);
+        }
+
+        if (scheduleResult.status === 'fulfilled') {
+          setScheduleOptimization(scheduleResult.value);
+        } else {
+          console.warn('Failed to fetch schedule data:', scheduleResult.reason);
+        }
+
+        if (cancellationResult.status === 'fulfilled') {
+          setCancellationStats(cancellationResult.value);
+        } else {
+          console.warn('Failed to fetch cancellation stats:', cancellationResult.reason);
+        }
+
+        if (upcomingResult.status === 'fulfilled') {
+          setUpcomingCancellations(upcomingResult.value);
+        } else {
+          console.warn('Failed to fetch upcoming cancellations:', upcomingResult.reason);
+        }
+
+        if (tipsResult.status === 'fulfilled') {
+          setOptimizationTips(tipsResult.value);
+        } else {
+          console.warn('Failed to fetch optimization tips:', tipsResult.reason);
+        }
+
+        if (preventionResult.status === 'fulfilled') {
+          setPreventionRecommendations(preventionResult.value);
+        } else {
+          console.warn('Failed to fetch prevention recommendations:', preventionResult.reason);
+        }
+
+        // Check if at least some data was fetched
+        const successCount = results.filter(r => r.status === 'fulfilled').length;
+        return successCount > 0;
+      } catch (error) {
+        console.error('Fetch attempt failed:', error);
+        return false;
+      }
+    };
+
+    // Try with retries
+    let success = await attemptFetch();
+    while (!success && retryCount < MAX_RETRIES) {
+      retryCount++;
+      console.log(`Retrying fetch (${retryCount}/${MAX_RETRIES})...`);
+      await new Promise(resolve => setTimeout(resolve, RETRY_DELAY * retryCount));
+      success = await attemptFetch();
     }
+
+    // Reset polling count on successful fetch
+    pollingCountRef.current = 0;
+    setConnectionStatus('connected');
+    setLoading(false);
+    setRefreshing(false);
   };
 
   useEffect(() => {
@@ -174,11 +230,24 @@ const InsightsDashboard: React.FC = () => {
     });
     unsubscribers.push(unsubWithdrawalApproved);
 
-    // Setup polling as fallback (every 60 seconds)
+    // Setup polling as fallback (every 60 seconds) with limits
     pollingIntervalRef.current = setInterval(() => {
+      // Check polling limit
+      if (pollingCountRef.current >= MAX_POLL_COUNT) {
+        console.log('Polling paused: max count reached');
+        setConnectionStatus('paused');
+        if (pollingIntervalRef.current) {
+          clearInterval(pollingIntervalRef.current);
+          pollingIntervalRef.current = null;
+        }
+        return;
+      }
+
       console.log('Polling for insights update');
+      setConnectionStatus('polling');
+      pollingCountRef.current++;
       fetchData('silent');
-    }, 60000);
+    }, POLL_INTERVAL);
 
     return () => {
       // Cleanup socket listeners
@@ -407,8 +476,12 @@ const InsightsDashboard: React.FC = () => {
 
         {/* Competitive Position & Service Profitability */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <CompetitivePosition providerId={user?._id} />
-          <ServiceProfitability providerId={user?._id} timeRange="30d" />
+          <PageErrorBoundary pageName="CompetitivePosition">
+            <CompetitivePosition providerId={user?._id} />
+          </PageErrorBoundary>
+          <PageErrorBoundary pageName="ServiceProfitability">
+            <ServiceProfitability providerId={user?._id} timeRange="30d" />
+          </PageErrorBoundary>
         </div>
 
         {/* Revenue Chart Placeholder */}

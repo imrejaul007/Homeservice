@@ -143,6 +143,7 @@ export const linkCorporateAccount = async (
 
 /**
  * Get corporate wallet for user
+ * Security: Only the employee who owns the wallet or an admin can access it
  */
 export const getCorporateWallet = async (
   userId: string,
@@ -150,6 +151,22 @@ export const getCorporateWallet = async (
 ): Promise<CorporateWalletEntry | null> => {
   const tenantId = req ? getTenantIdOptional(req) : undefined;
   const isAdmin = req ? isAdminOrSystem(req) : false;
+
+  // IDOR fix: Get the authenticated user from request to verify authorization
+  const authenticatedUserId = req?.user?.id || req?.user?._id?.toString();
+
+  // Authorization check: user can only access their own wallet unless they are admin
+  // Non-admin users must use their own authenticated ID to query the wallet
+  if (!isAdmin) {
+    if (!authenticatedUserId) {
+      logger.warn('IDOR attempt blocked: no authenticated user found', {
+        action: 'CORPORATE_WALLET_IDOR_BLOCKED',
+      });
+      return null;
+    }
+    // Always use authenticated user's ID for non-admin requests
+    userId = authenticatedUserId;
+  }
 
   const query: Record<string, unknown> = { employeeId: userId, status: { $ne: 'closed' } };
   if (!isAdmin && tenantId) {
@@ -376,8 +393,9 @@ const updateSpendingTracking = async (
       },
       { upsert: true, new: true }
     );
-  } catch (error) {
-    logger.error('Failed to update spending tracking', { walletId, employeeId });
+  } catch (error: any) {
+    logger.error('Failed to update spending tracking', { walletId, employeeId, error: error.message });
+    throw new Error(`Failed to update spending tracking: ${error.message}`);
   }
 };
 
@@ -537,7 +555,7 @@ export const getSpendingBreakdown = async (
       error: error.message,
       action: 'CORPORATE_BREAKDOWN_ERROR',
     });
-    return [];
+    throw new Error(`Failed to retrieve spending breakdown: ${error.message}`);
   }
 };
 
@@ -551,14 +569,57 @@ export const requestLimitIncrease = async (
   req?: Request
 ): Promise<{ success: boolean; requestId?: string; error?: string }> => {
   try {
+    // Validation: requestedLimit must be a positive number
+    if (!requestedLimit || typeof requestedLimit !== 'number' || requestedLimit <= 0) {
+      return { success: false, error: 'Requested limit must be a positive number' };
+    }
+
+    // Validation: reason must be present and have reasonable length
+    if (!reason || typeof reason !== 'string') {
+      return { success: false, error: 'A reason is required for the limit increase request' };
+    }
+
+    const reasonTrimmed = reason.trim();
+    if (reasonTrimmed.length < 10) {
+      return { success: false, error: 'Reason must be at least 10 characters long' };
+    }
+
+    if (reasonTrimmed.length > 1000) {
+      return { success: false, error: 'Reason must not exceed 1000 characters' };
+    }
+
+    // Fetch wallet to get current credit limit
+    const wallet = await CorporateWallet.findById(walletId);
+    if (!wallet) {
+      return { success: false, error: 'Corporate wallet not found' };
+    }
+
+    const currentLimit = wallet.creditLimit || 0;
+
+    // Validation: requested limit must not exceed 10x current limit (prevent abuse)
+    const maxAllowedLimit = currentLimit * 10;
+    if (requestedLimit > maxAllowedLimit) {
+      return {
+        success: false,
+        error: `Requested limit cannot exceed 10x the current limit (${maxAllowedLimit.toLocaleString()}). Please contact support for higher increases.`
+      };
+    }
+
+    // Validation: requested limit should be greater than current limit
+    if (requestedLimit <= currentLimit) {
+      return { success: false, error: 'Requested limit must be greater than current credit limit' };
+    }
+
     // In production, this would create a ticket for admin review
     const requestId = `limit_req_${randomUUID()}`;
 
     logger.info('Limit increase requested', {
       walletId,
       requestId,
+      currentLimit,
       requestedLimit,
-      reason,
+      increasePercentage: Math.round((requestedLimit / currentLimit - 1) * 100),
+      reasonLength: reasonTrimmed.length,
       action: 'CORPORATE_LIMIT_INCREASE_REQUESTED',
     });
 

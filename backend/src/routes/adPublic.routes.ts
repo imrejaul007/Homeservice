@@ -36,6 +36,10 @@ router.get('/categories', getTargetingCategories);
  */
 router.get('/feed', getPublicAdFeed);
 
+// ============================================
+// ROUTES WITH :id - Specific routes BEFORE parameterized /:id
+// ============================================
+
 /**
  * POST /api/ads/public/:id/impression
  */

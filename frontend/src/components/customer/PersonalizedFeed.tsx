@@ -325,7 +325,7 @@ export const PersonalizedFeed: React.FC<PersonalizedFeedProps> = ({
     if (onServiceClick) {
       onServiceClick(service);
     } else {
-      navigate(`/service/${service._id}`);
+      navigate(`/services/${service._id}`);
     }
   }, [navigate, onServiceClick, trackClick]);
 

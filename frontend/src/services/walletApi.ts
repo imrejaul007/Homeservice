@@ -1,4 +1,4 @@
-import axios, { AxiosError } from 'axios';
+import axios, { AxiosInstance, AxiosError } from 'axios';
 import { API_BASE_URL } from '@/config/api';
 import { secureStorage } from '@/lib/security';
 
@@ -13,32 +13,34 @@ export class WalletApiError extends Error {
   }
 }
 
-const api = axios.create({
-  baseURL: `${API_BASE_URL}/provider`,
-  withCredentials: true,
-});
+function createWalletClient(prefix: 'customer' | 'provider'): AxiosInstance {
+  const client = axios.create({
+    baseURL: `${API_BASE_URL}/${prefix}`,
+    withCredentials: true,
+  });
 
-// Add auth token interceptor
-api.interceptors.request.use((config) => {
-  const stored = secureStorage.getItem('auth-storage');
-  if (stored) {
-    try {
-      const parsed = JSON.parse(stored);
-      const token = parsed?.state?.tokens?.accessToken;
-      if (token) {
-        config.headers.Authorization = `Bearer ${token}`;
-      }
-    } catch (e) {
-      if (process.env.NODE_ENV === 'development') {
-        console.warn('[WalletApi] Failed to parse auth storage:', e);
+  client.interceptors.request.use((config) => {
+    const stored = secureStorage.getItem('auth-storage');
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored);
+        const token = parsed?.state?.tokens?.accessToken;
+        if (token) {
+          config.headers.Authorization = `Bearer ${token}`;
+        }
+      } catch (e) {
+        if (process.env.NODE_ENV === 'development') {
+          console.warn('[WalletApi] Failed to parse auth storage:', e);
+        }
       }
     }
-  }
-  return config;
-});
+    return config;
+  });
+
+  return client;
+}
 
 // Note: Backend returns Date objects that serialize to ISO strings in JSON
-// Frontend accepts both Date (backend response) and string (JSON serialization)
 export interface WalletTransaction {
   id: string;
   type: 'credit' | 'debit';
@@ -51,9 +53,8 @@ export interface WalletTransaction {
   metadata?: Record<string, unknown>;
   updatedAt: string | Date;
   createdAt: string | Date;
-  // Audit fields from backend model
-  processedBy?: string; // Admin/system that processed (mongoose ObjectId as string)
-  reason?: string; // Reason for transaction
+  processedBy?: string;
+  reason?: string;
 }
 
 export interface Wallet {
@@ -68,6 +69,7 @@ export interface Wallet {
 export interface EarningsSummary {
   period: 'week' | 'month' | 'year';
   earnings: number;
+  creditsAdded?: number;
   withdrawals: number;
   netEarnings: number;
   transactionCount: number;
@@ -111,16 +113,38 @@ interface AddMoneyResponse {
   data: {
     transactionId: string;
     newBalance: number;
+    pendingBalance?: number;
+    amount?: number;
+  };
+}
+
+interface TopUpIntentResponse {
+  success: boolean;
+  data: {
+    clientSecret: string;
+    paymentIntentId: string;
+    amount: number;
+    currency: string;
+    simulated?: boolean;
+  };
+}
+
+interface DeductCreditsResponse {
+  success: boolean;
+  message?: string;
+  data: {
+    transactionId: string;
+    newBalance: number;
+    amount: number;
   };
 }
 
 class WalletApiService {
-  /**
-   * Get wallet balance and summary
-   */
+  constructor(private readonly api: AxiosInstance) {}
+
   async getWallet(): Promise<WalletResponse> {
     try {
-      const response = await api.get('/wallet');
+      const response = await this.api.get('/wallet');
       return response.data;
     } catch (error) {
       if (error instanceof AxiosError) {
@@ -134,9 +158,6 @@ class WalletApiService {
     }
   }
 
-  /**
-   * Get wallet transactions
-   */
   async getTransactions(options?: {
     page?: number;
     limit?: number;
@@ -151,7 +172,7 @@ class WalletApiService {
       const queryString = params.toString();
       const url = queryString ? `/earnings/transactions?${queryString}` : '/earnings/transactions';
 
-      const response = await api.get(url);
+      const response = await this.api.get(url);
       return response.data;
     } catch (error) {
       if (error instanceof AxiosError) {
@@ -165,12 +186,9 @@ class WalletApiService {
     }
   }
 
-  /**
-   * Get earnings summary
-   */
   async getEarningsSummary(period: 'week' | 'month' | 'year' = 'month'): Promise<EarningsSummaryResponse> {
     try {
-      const response = await api.get(`/earnings/summary?period=${period}`);
+      const response = await this.api.get(`/earnings/summary?period=${period}`);
       return response.data;
     } catch (error) {
       if (error instanceof AxiosError) {
@@ -184,9 +202,6 @@ class WalletApiService {
     }
   }
 
-  /**
-   * Request withdrawal
-   */
   async requestWithdrawal(data: {
     amount: number;
     bankAccount: {
@@ -196,21 +211,56 @@ class WalletApiService {
       accountHolder: string;
     };
   }): Promise<WithdrawalResponse> {
-    const response = await api.post('/withdraw', data);
+    const response = await this.api.post('/withdraw', data);
     return response.data;
   }
 
-  /**
-   * Add money to wallet (top up)
-   */
+  async createTopUpIntent(data: {
+    amount: number;
+    idempotencyKey?: string;
+  }): Promise<TopUpIntentResponse> {
+    const response = await this.api.post('/add-money/intent', data);
+    return response.data;
+  }
+
   async addMoney(data: {
     amount: number;
-    idempotencyKey: string;
+    paymentIntentId?: string;
+    idempotencyKey?: string;
   }): Promise<AddMoneyResponse> {
-    const response = await api.post('/add-money', data);
+    const response = await this.api.post('/add-money', data);
     return response.data;
+  }
+
+  async deductCredits(data: {
+    amount: number;
+    reason: string;
+    reference?: string;
+    referenceType?: 'booking' | 'refund' | 'commission' | 'fee' | 'penalty' | 'other';
+    idempotencyKey?: string;
+  }): Promise<DeductCreditsResponse> {
+    try {
+      const response = await this.api.post('/deduct', data);
+      return response.data;
+    } catch (error) {
+      if (error instanceof AxiosError) {
+        throw new WalletApiError(
+          error.response?.data?.message || 'Failed to deduct credits',
+          error.response?.status,
+          'DEDUCT_CREDITS_ERROR'
+        );
+      }
+      throw new WalletApiError('Network error while deducting credits', undefined, 'NETWORK_ERROR');
+    }
   }
 }
 
-export const walletApi = new WalletApiService();
-export default walletApi;
+/** Customer wallet (GET /api/customer/wallet) */
+export const customerWalletApi = new WalletApiService(createWalletClient('customer'));
+
+/** Provider wallet (GET /api/provider/wallet) */
+export const providerWalletApi = new WalletApiService(createWalletClient('provider'));
+
+/** @deprecated Use customerWalletApi or providerWalletApi explicitly */
+export const walletApi = customerWalletApi;
+export default customerWalletApi;

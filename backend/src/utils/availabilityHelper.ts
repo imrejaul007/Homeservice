@@ -1,6 +1,7 @@
 import mongoose, { ClientSession } from 'mongoose';
 import ProviderProfile from '../models/providerProfile.model';
 import Booking from '../models/booking.model';
+import { getEffectiveBufferMinutes, getPlatformPolicySync } from '../services/platformSettingsPolicy.service';
 import logger from './logger';
 
 interface ValidateSlotParams {
@@ -154,9 +155,84 @@ function getScheduleForService(
   return providerProfile.availability?.schedule;
 }
 
-function timeToMinutes(time: string): number {
+export function timeToMinutes(time: string): number {
   const [h, m] = time.split(':').map(Number);
   return h * 60 + m;
+}
+
+export function minutesToTime(minutes: number): string {
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+}
+
+export interface SlotBlock {
+  startTime: string;
+  endTime: string;
+  isBooked?: boolean;
+  currentBookings?: number;
+  maxBookings?: number;
+}
+
+/** Merge adjacent schedule blocks so 30-min cells become bookable windows for long services. */
+export function mergeConsecutiveRanges(blocks: SlotBlock[]): Array<{ startMin: number; endMin: number }> {
+  const eligible = blocks
+    .filter(
+      (b) =>
+        b.startTime &&
+        b.endTime &&
+        !b.isBooked &&
+        (b.currentBookings ?? 0) < (b.maxBookings ?? 1)
+    )
+    .map((b) => ({
+      startMin: timeToMinutes(b.startTime),
+      endMin: timeToMinutes(b.endTime),
+    }))
+    .sort((a, b) => a.startMin - b.startMin);
+
+  const ranges: Array<{ startMin: number; endMin: number }> = [];
+  for (const block of eligible) {
+    const last = ranges[ranges.length - 1];
+    if (last && last.endMin === block.startMin) {
+      last.endMin = block.endMin;
+    } else {
+      ranges.push({ ...block });
+    }
+  }
+  return ranges;
+}
+
+export function generateBookableTimesFromRanges(
+  ranges: Array<{ startMin: number; endMin: number }>,
+  durationMinutes: number,
+  stepMinutes = 30
+): string[] {
+  const slots: string[] = [];
+  for (const range of ranges) {
+    for (let m = range.startMin; m + durationMinutes <= range.endMin; m += stepMinutes) {
+      slots.push(minutesToTime(m));
+    }
+  }
+  return slots;
+}
+
+/** Check if a booking window fits inside merged provider schedule ranges. */
+export function isRequestedTimeWithinSchedule(
+  timeSlots: SlotBlock[],
+  startMinutes: number,
+  endMinutes: number
+): boolean {
+  const merged = mergeConsecutiveRanges(timeSlots);
+  return merged.some(
+    (range) => startMinutes >= range.startMin && endMinutes <= range.endMin
+  );
+}
+
+function normalizeDateString(scheduledDate: string | Date): string {
+  if (typeof scheduledDate === 'string') {
+    return scheduledDate.split('T')[0];
+  }
+  return scheduledDate.toISOString().split('T')[0];
 }
 
 export async function validateProviderSlotAvailability({
@@ -168,12 +244,15 @@ export async function validateProviderSlotAvailability({
   serviceId,
   session
 }: ValidateSlotParams): Promise<ValidateSlotResult> {
-  const providerProfile = await ProviderProfile.findOne({ userId: providerId });
+  const providerObjectId = mongoose.Types.ObjectId.isValid(providerId)
+    ? new mongoose.Types.ObjectId(providerId)
+    : providerId;
+  const providerProfile = await ProviderProfile.findOne({ userId: providerObjectId });
 
-  // Use provider's buffer time if not explicitly provided
-  const effectiveBufferTime = bufferTimeMinutes > 0
-    ? bufferTimeMinutes
-    : (providerProfile?.availability?.bufferTime || 0);
+  const effectiveBufferTime =
+    bufferTimeMinutes > 0
+      ? bufferTimeMinutes
+      : getEffectiveBufferMinutes(providerProfile?.availability?.bufferTime);
 
   if (!providerProfile?.availability?.schedule) {
     return {
@@ -184,8 +263,8 @@ export async function validateProviderSlotAvailability({
     };
   }
 
-  const requestedDate = new Date(scheduledDate);
-  const dayOfWeek = DAYS_OF_WEEK[requestedDate.getDay()];
+  const dateString = normalizeDateString(scheduledDate);
+  const dayOfWeek = DAYS_OF_WEEK[new Date(`${dateString}T12:00:00`).getDay()];
 
   // FIX: Issue #2 - Per-Service Availability
   // Get the schedule for the specific service, or fall back to global schedule
@@ -203,7 +282,6 @@ export async function validateProviderSlotAvailability({
   }
 
   // Check date exceptions (these apply globally, not per-service)
-  const dateString = requestedDate.toISOString().split('T')[0];
   const dateException = providerProfile.availability.exceptions?.find(
     (ex: any) => ex.date && new Date(ex.date).toISOString().split('T')[0] === dateString
   );
@@ -221,36 +299,56 @@ export async function validateProviderSlotAvailability({
   const requestedMinutes = timeToMinutes(scheduledTime);
   const requestedEndMinutes = requestedMinutes + serviceDurationMinutes + effectiveBufferTime;
 
-  const isWithinTimeSlot = daySchedule.timeSlots.some((slot: any) => {
-    if (!slot.startTime || !slot.endTime) return false;
-    if (slot.isBooked) return false;
-    if (slot.maxBookings && slot.currentBookings >= slot.maxBookings) return false;
-
-    const slotStart = timeToMinutes(slot.startTime);
-    const slotEnd = timeToMinutes(slot.endTime);
-    return requestedMinutes >= slotStart && requestedEndMinutes <= slotEnd;
-  });
+  const isWithinTimeSlot = isRequestedTimeWithinSchedule(
+    daySchedule.timeSlots,
+    requestedMinutes,
+    requestedEndMinutes
+  );
 
   // Filter past slots for today - FIX: Use timezone-aware comparison
   const now = new Date();
   const todayString = now.toISOString().split('T')[0];
   const isToday = dateString === todayString;
 
+  const bookingPolicy = getPlatformPolicySync();
+  const minAdvanceMinutes = bookingPolicy.minBookingAdvanceHours * 60;
+  const advanceMessage = `Bookings must be scheduled at least ${bookingPolicy.minBookingAdvanceHours} hours in advance`;
+
   if (isToday) {
     const currentMinutes = now.getHours() * 60 + now.getMinutes();
-    const bufferMinutes = 60; // 1 hour minimum buffer for same-day bookings
-    if (requestedMinutes < currentMinutes + bufferMinutes) {
+    if (requestedMinutes < currentMinutes + minAdvanceMinutes) {
       return {
         isValid: false,
-        errorMessage: 'This time slot is no longer available for today',
+        errorMessage: advanceMessage,
         errorCode: 'PAST_SLOT',
-        availableSlots: generateAvailableSlots(daySchedule.timeSlots, serviceDurationMinutes, currentMinutes + bufferMinutes, isToday, effectiveBufferTime)
+        availableSlots: generateAvailableSlots(daySchedule.timeSlots, serviceDurationMinutes, currentMinutes + minAdvanceMinutes, isToday, effectiveBufferTime)
       };
     }
   }
 
+  // Enforce advance policy for any date (e.g. late-night booking for early next morning)
+  const requestedDateObj = new Date(`${dateString}T${scheduledTime}:00`);
+  const [reqHours, reqMinutes] = scheduledTime.split(':').map(Number);
+  requestedDateObj.setHours(reqHours, reqMinutes, 0, 0);
+  const hoursUntil =
+    (requestedDateObj.getTime() - now.getTime()) / (1000 * 60 * 60);
+  if (hoursUntil < bookingPolicy.minBookingAdvanceHours) {
+    return {
+      isValid: false,
+      errorMessage: advanceMessage,
+      errorCode: 'PAST_SLOT',
+      availableSlots: generateAvailableSlots(
+        daySchedule.timeSlots,
+        serviceDurationMinutes,
+        isToday ? now.getHours() * 60 + now.getMinutes() + minAdvanceMinutes : 0,
+        isToday,
+        effectiveBufferTime
+      ),
+    };
+  }
+
   if (!isWithinTimeSlot) {
-    const minCutoff = isToday ? (now.getHours() * 60 + now.getMinutes() + 60) : 0;
+    const minCutoff = isToday ? (now.getHours() * 60 + now.getMinutes() + minAdvanceMinutes) : 0;
     return {
       isValid: false,
       errorMessage: 'Provider is not available at the requested time' + (serviceId ? ' for this service' : ''),
@@ -261,20 +359,17 @@ export async function validateProviderSlotAvailability({
 
   // FIX: Issue #4 - Real-Time Slot Blocking
   // Use atomic findOneAndUpdate with status check to prevent race conditions
+  const dayStart = new Date(`${dateString}T00:00:00`);
+  const dayEnd = new Date(`${dateString}T23:59:59`);
   const slotLockQuery: any = {
     providerId,
     scheduledDate: {
-      $gte: new Date(requestedDate.setHours(0, 0, 0, 0)),
-      $lte: new Date(requestedDate.setHours(23, 59, 59, 999))
+      $gte: dayStart,
+      $lte: dayEnd,
     },
     scheduledTime: scheduledTime,
     status: { $in: ['pending', 'confirmed', 'in_progress'] }
   };
-
-  // Add service filter if checking per-service
-  if (serviceId) {
-    slotLockQuery.serviceId = serviceId;
-  }
 
   const conflictingBooking = session
     ? await Booking.findOne(slotLockQuery).session(session)
@@ -290,10 +385,8 @@ export async function validateProviderSlotAvailability({
   }
 
   // Secondary check for overlapping bookings (buffer time considerations)
-  const startOfDay = new Date(requestedDate);
-  startOfDay.setHours(0, 0, 0, 0);
-  const endOfDay = new Date(requestedDate);
-  endOfDay.setHours(23, 59, 59, 999);
+  const startOfDay = new Date(`${dateString}T00:00:00`);
+  const endOfDay = new Date(`${dateString}T23:59:59`);
 
   // Use session if provided (for transaction support) to ensure read-your-writes consistency
   const bookingQuery: any = {
@@ -324,6 +417,100 @@ export async function validateProviderSlotAvailability({
   return { isValid: true };
 }
 
+/**
+ * Returns bookable start times for a provider on a date, using the same overlap
+ * rules as validateProviderSlotAvailability (all services on the calendar).
+ */
+export async function getProviderBookableSlots({
+  providerId,
+  scheduledDate,
+  serviceDurationMinutes,
+  serviceId,
+}: {
+  providerId: string;
+  scheduledDate: string | Date;
+  serviceDurationMinutes: number;
+  serviceId?: string;
+}): Promise<{ slots: string[]; minBookingAdvanceHours: number }> {
+  const bookingPolicy = getPlatformPolicySync();
+  const dateString = normalizeDateString(scheduledDate);
+  const providerObjectId = mongoose.Types.ObjectId.isValid(providerId)
+    ? new mongoose.Types.ObjectId(providerId)
+    : providerId;
+  const providerProfile = await ProviderProfile.findOne({ userId: providerObjectId });
+
+  if (!providerProfile?.availability?.schedule) {
+    return { slots: [], minBookingAdvanceHours: bookingPolicy.minBookingAdvanceHours };
+  }
+
+  const effectiveBufferTime = getEffectiveBufferMinutes(providerProfile.availability?.bufferTime);
+  const dayOfWeek = DAYS_OF_WEEK[new Date(`${dateString}T12:00:00`).getDay()];
+  const schedule = getScheduleForService(providerProfile, serviceId);
+  const daySchedule = schedule?.[dayOfWeek as keyof typeof schedule];
+
+  if (!daySchedule?.isAvailable || !daySchedule.timeSlots?.length) {
+    return { slots: [], minBookingAdvanceHours: bookingPolicy.minBookingAdvanceHours };
+  }
+
+  const dateException = providerProfile.availability.exceptions?.find(
+    (ex: { date?: Date; type?: string }) =>
+      ex.date && new Date(ex.date).toISOString().split('T')[0] === dateString
+  );
+  if (dateException?.type === 'unavailable') {
+    return { slots: [], minBookingAdvanceHours: bookingPolicy.minBookingAdvanceHours };
+  }
+
+  const mergedRanges = mergeConsecutiveRanges(daySchedule.timeSlots);
+  const candidateTimes = generateBookableTimesFromRanges(mergedRanges, serviceDurationMinutes, 30);
+  const now = new Date();
+
+  const startOfDay = new Date(`${dateString}T00:00:00`);
+  const endOfDay = new Date(`${dateString}T23:59:59`);
+  const existingBookings = await Booking.find({
+    providerId,
+    scheduledDate: { $gte: startOfDay, $lte: endOfDay },
+    status: { $in: ['pending', 'confirmed', 'in_progress'] },
+    deletedAt: { $exists: false },
+  });
+
+  const availableSlots: string[] = [];
+
+  for (const timeString of candidateTimes) {
+    const requestedMinutes = timeToMinutes(timeString);
+    const requestedEndMinutes = requestedMinutes + serviceDurationMinutes + effectiveBufferTime;
+
+    const requestedDateObj = new Date(`${dateString}T${timeString}:00`);
+    const [reqHours, reqMinutes] = timeString.split(':').map(Number);
+    requestedDateObj.setHours(reqHours, reqMinutes, 0, 0);
+    const hoursUntil = (requestedDateObj.getTime() - now.getTime()) / (1000 * 60 * 60);
+    if (hoursUntil < bookingPolicy.minBookingAdvanceHours) {
+      continue;
+    }
+
+    if (
+      !isRequestedTimeWithinSchedule(
+        daySchedule.timeSlots,
+        requestedMinutes,
+        requestedEndMinutes
+      )
+    ) {
+      continue;
+    }
+
+    const hasConflict = existingBookings.some((booking) => {
+      const bookingStart = timeToMinutes(booking.scheduledTime);
+      const bookingEnd = bookingStart + booking.duration + effectiveBufferTime;
+      return requestedMinutes < bookingEnd && requestedEndMinutes > bookingStart;
+    });
+
+    if (!hasConflict && !availableSlots.includes(timeString)) {
+      availableSlots.push(timeString);
+    }
+  }
+
+  return { slots: availableSlots, minBookingAdvanceHours: bookingPolicy.minBookingAdvanceHours };
+}
+
 function generateAvailableSlots(
   timeSlots: any[],
   durationMinutes: number,
@@ -331,25 +518,13 @@ function generateAvailableSlots(
   filterPast: boolean,
   bufferTimeMinutes: number = 0
 ): string[] {
-  const slots: string[] = [];
   const totalDuration = durationMinutes + bufferTimeMinutes;
+  const merged = mergeConsecutiveRanges(timeSlots);
+  const slots = generateBookableTimesFromRanges(merged, totalDuration, 30);
 
-  for (const slot of timeSlots) {
-    if (!slot.startTime || !slot.endTime) continue;
-    if (slot.isBooked) continue;
-    if (slot.maxBookings && slot.currentBookings >= slot.maxBookings) continue;
-
-    const slotStart = timeToMinutes(slot.startTime);
-    const slotEnd = timeToMinutes(slot.endTime);
-
-    // Generate slots with buffer time included
-    for (let minutes = slotStart; minutes + totalDuration <= slotEnd; minutes += 30) {
-      if (filterPast && minutes < minCutoffMinutes) continue;
-      const h = Math.floor(minutes / 60);
-      const m = minutes % 60;
-      slots.push(`${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`);
-    }
+  if (!filterPast) {
+    return slots;
   }
 
-  return slots;
+  return slots.filter((time) => timeToMinutes(time) >= minCutoffMinutes);
 }

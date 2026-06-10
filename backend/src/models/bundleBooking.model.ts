@@ -308,10 +308,7 @@ bundleBookingSchema.methods.getRemainingValue = function (): number {
   }, 0);
 };
 
-bundleBookingSchema.methods.canCancel = function (): boolean {
-  return !['completed', 'cancelled'].includes(this.status) &&
-    this.getPendingServices().length === this.services.length;
-};
+// NOTE: canCancel is defined as a virtual getter below
 
 // =============================================================================
 // Static Methods

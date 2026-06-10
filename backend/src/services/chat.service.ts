@@ -1,11 +1,13 @@
 import mongoose, { Types } from 'mongoose';
 import Message, { IMessage, MessageType, MessageStatus } from '../models/message.model';
 import ChatRoom, { IChatRoom, ChatRoomType } from '../models/chatRoom.model';
+import User from '../models/user.model';
 import { ApiError } from '../utils/ApiError';
 import logger from '../utils/logger';
 import { getSocketServer } from '../socket';
 import { addTenantFilter, getTenantContext } from '../utils/tenantFilter';
 import { validateMessageContent } from './chatModeration.service';
+import { notificationService } from './notification.service';
 
 // =============================================================================
 // Types
@@ -176,6 +178,35 @@ export class ChatService {
 
     // Emit socket event for real-time delivery
     this.emitNewMessage(chatRoomId, message);
+
+    // In-app notification for offline receiver
+    void (async () => {
+      try {
+        const sender = await User.findById(senderId).select('firstName lastName role').lean();
+        const senderName = sender
+          ? `${sender.firstName || ''} ${sender.lastName || ''}`.trim() || 'Someone'
+          : 'Someone';
+        const receiver = await User.findById(receiverId).select('role').lean();
+        const isReceiverProvider = receiver?.role === 'provider';
+
+        await notificationService.createInAppNotification({
+          recipientId: receiverId.toString(),
+          type: 'message_received',
+          title: 'New Message',
+          message: `${senderName} sent you a message`,
+          actionText: 'View Message',
+          actionUrl: isReceiverProvider ? '/provider/messages' : '/customer/messages',
+          metadata: { chatRoomId, senderId },
+        });
+      } catch (notifErr) {
+        logger.warn('Failed to create message notification', {
+          context: 'ChatService',
+          chatRoomId,
+          receiverId,
+          error: notifErr instanceof Error ? notifErr.message : String(notifErr),
+        });
+      }
+    })();
 
     logger.info('Message sent', {
       context: 'ChatService',

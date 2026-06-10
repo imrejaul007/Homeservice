@@ -27,8 +27,9 @@ router.get('/', getAllAgents);
 // Get agents by category
 router.get('/category/:category', getAgentsByCategory);
 
-// Get single agent by ID
-router.get('/:id', getAgentById);
+// ============================================
+// ROUTES WITH :id - Specific routes BEFORE parameterized /:id
+// ============================================
 
 // Create new agent
 router.post('/', createAgent);
@@ -44,5 +45,8 @@ router.post('/:id/suspend', suspendAgent);
 
 // Delete (archive) agent
 router.delete('/:id', deleteAgent);
+
+// Get single agent by ID (must be last for /:id routes)
+router.get('/:id', getAgentById);
 
 export default router;

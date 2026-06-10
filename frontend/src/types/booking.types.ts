@@ -4,6 +4,49 @@
  */
 
 // ==========================================
+// COORDINATE UTILITY TYPES & FUNCTIONS
+// ==========================================
+
+/**
+ * Frontend coordinate format: { lat, lng }
+ */
+export interface FrontendCoordinates {
+  lat: number;
+  lng: number;
+}
+
+/**
+ * Backend GeoJSON coordinate format: { type: 'Point', coordinates: [lng, lat] }
+ */
+export interface BackendGeoJSONCoordinates {
+  type: 'Point';
+  coordinates: [number, number]; // [lng, lat] format
+}
+
+/**
+ * Normalize coordinates to backend GeoJSON format
+ * Converts frontend { lat, lng } to backend { type: 'Point', coordinates: [lng, lat] }
+ */
+export function normalizeCoordinatesToBackend(coords?: FrontendCoordinates | BackendGeoJSONCoordinates | null): BackendGeoJSONCoordinates | undefined {
+  if (!coords) return undefined;
+
+  // Already in GeoJSON format
+  if ('type' in coords && coords.type === 'Point' && Array.isArray(coords.coordinates)) {
+    return coords as BackendGeoJSONCoordinates;
+  }
+
+  // Frontend format { lat, lng }
+  if ('lat' in coords && 'lng' in coords && typeof coords.lat === 'number' && typeof coords.lng === 'number') {
+    return {
+      type: 'Point',
+      coordinates: [coords.lng, coords.lat] as [number, number]
+    };
+  }
+
+  return undefined;
+}
+
+// ==========================================
 // BOOKING STATUS TYPES
 // ==========================================
 
@@ -46,6 +89,7 @@ export interface BookingLocation {
 // ==========================================
 
 export interface BookingCustomerInfo {
+  name?: string;  // Full name used by BookingForm
   firstName?: string;
   lastName?: string;
   email?: string;
@@ -59,6 +103,7 @@ export interface BookingCustomerInfo {
 // ==========================================
 
 export interface BookingAddOn {
+  id?: string;
   name: string;
   price: number;
   description?: string;
@@ -71,7 +116,8 @@ export interface BookingAddOn {
 export interface BookingPricing {
   basePrice: number;
   addOns?: BookingAddOn[];
-  discounts?: Array<{ code: string; amount: number; type: 'fixed' | 'percentage' }>;
+  discounts?: Array<{ code: string; amount: number; type: 'fixed' | 'percentage'; description?: string }>;
+  couponDiscount?: number;
   subtotal: number;
   tax: number;      // Primary field used by backend
   taxes?: number;   // Legacy field - some code uses this
@@ -85,6 +131,8 @@ export interface BookingPricing {
 // ==========================================
 
 export interface Booking {
+  /** Set when the server returned an existing booking for the same idempotency key */
+  isDuplicate?: boolean;
   _id: string;
   id?: string;  // Alternative ID field - normalize with _id
 
@@ -241,10 +289,11 @@ export interface Booking {
 
 export interface CreateBookingData {
   serviceId: string;
-  providerId: string;
+  /** Omit when platform auto-assigns a provider */
+  providerId?: string;
   scheduledDate: string; // YYYY-MM-DD format
   scheduledTime: string; // HH:MM format
-  location?: BookingLocation;
+  location: BookingLocation;
   customerInfo?: BookingCustomerInfo;
   addOns?: BookingAddOn[];
   notes?: string;
@@ -254,14 +303,14 @@ export interface CreateBookingData {
   selectedDuration?: number;
   professionalPreference?: 'male' | 'female' | 'no_preference';
   experiencePreference?: 'no_preference' | 'specific' | 'any_experience';
-  paymentMethod?: 'apple_pay' | 'credit_card' | 'cash';
+  paymentMethod?: 'apple_pay' | 'credit_card' | 'cash' | 'card' | 'wallet';
 
   // Coupon/Promo
   couponCode?: string;
 
   // Metadata for tracking and idempotency
-  metadata?: {
-    idempotencyKey?: string;
+  metadata: {
+    idempotencyKey: string;
     bookingSource?: string;
     deviceType?: string;
     sessionId?: string;
@@ -296,7 +345,7 @@ export interface CreateGuestBookingData {
   selectedDuration?: number;
   professionalPreference?: 'male' | 'female' | 'no_preference';
   experiencePreference?: 'no_preference' | 'specific' | 'any_experience';
-  paymentMethod?: 'apple_pay' | 'credit_card' | 'cash';
+  paymentMethod?: 'apple_pay' | 'credit_card' | 'cash' | 'card' | 'wallet';
 }
 
 // ==========================================
@@ -317,8 +366,8 @@ export interface UpdateBookingData {
 
 export interface BookingFilters {
   status?: BookingStatus | BookingStatus[];
-  dateFrom?: string;
-  dateTo?: string;
+  startDate?: string;
+  endDate?: string;
   page?: number;
   limit?: number;
   sortBy?: string;
@@ -339,14 +388,15 @@ export interface GetBookingsOptions {
   page?: number;
   limit?: number;
   status?: BookingStatus;
-  dateFrom?: string;
-  dateTo?: string;
+  startDate?: string;
+  endDate?: string;
   providerId?: string;
   customerId?: string;
   serviceId?: string;
   search?: string;
   sortBy?: 'scheduledDate' | 'createdAt' | 'total';
   sortOrder?: 'asc' | 'desc';
+  reviewable?: boolean;
 }
 
 // ==========================================

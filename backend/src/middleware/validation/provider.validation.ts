@@ -17,13 +17,18 @@ const serviceCreationSchema = Joi.object({
       'any.required': 'Service name is required'
     }),
   
-  category: Joi.string()
-    .min(1)
-    .max(100)
+  category: Joi.alternatives()
+    .try(
+      Joi.string().pattern(/^[0-9a-fA-F]{24}$/).messages({
+        'string.pattern.base': 'Category ID must be a valid ObjectId (24 hex characters)'
+      }),
+      Joi.string().min(1).max(100).messages({
+        'string.min': 'Category name is required',
+        'string.max': 'Category name cannot exceed 100 characters'
+      })
+    )
     .required()
     .messages({
-      'string.min': 'Service category is required',
-      'string.max': 'Category name cannot exceed 100 characters',
       'any.required': 'Service category is required',
     }),
   
@@ -70,7 +75,15 @@ const serviceCreationSchema = Joi.object({
         percentage: Joi.number().min(1).max(50),
         minQuantity: Joi.number().positive().optional(),
         validFrom: Joi.date().optional(),
-        validTo: Joi.date().optional()
+        validTo: Joi.date().optional().custom((value, helpers) => {
+          const validFrom = helpers.state.ancestors[0].validFrom;
+          if (validFrom && value && new Date(value) <= new Date(validFrom)) {
+            return helpers.error('date.lessThanValidFrom');
+          }
+          return value;
+        }).messages({
+          'date.lessThanValidFrom': 'validTo date must be after validFrom date'
+        })
       })
     ).optional()
   }).required(),
@@ -109,6 +122,19 @@ const serviceCreationSchema = Joi.object({
     coordinates: Joi.object({
       type: Joi.string().valid('Point').default('Point'),
       coordinates: Joi.array().items(Joi.number()).length(2).required()
+        .custom((value, helpers) => {
+          const [longitude, latitude] = value;
+          if (longitude < -180 || longitude > 180) {
+            return helpers.error('any.custom', { message: 'Longitude must be between -180 and 180' });
+          }
+          if (latitude < -90 || latitude > 90) {
+            return helpers.error('any.custom', { message: 'Latitude must be between -90 and 90' });
+          }
+          return value;
+        })
+        .messages({
+          'any.custom': 'Invalid coordinates: {{#message}}'
+        })
     }).required(),
     serviceArea: Joi.object({
       type: Joi.string().valid('radius', 'city', 'state').default('radius'),

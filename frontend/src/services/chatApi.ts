@@ -15,6 +15,8 @@ export interface ChatParticipant {
   role: 'customer' | 'provider' | 'admin';
   isOnline?: boolean;
   lastSeen?: string;
+  isMuted?: boolean;
+  isPinned?: boolean;
   userId?: {
     _id: string;
     firstName: string;
@@ -84,6 +86,7 @@ export interface ChatRoom {
   lastMessage?: ChatMessage;
   lastMessageAt?: string;
   unreadCount: number;
+  unreadCounts?: Record<string, number>; // Per-user unread counts Map<string, number>
   isPinned: boolean;
   isMuted: boolean;
   status: 'active' | 'archived' | 'blocked';
@@ -106,6 +109,7 @@ export interface ChatRoomListItem {
     type?: string;
   };
   unreadCount: number;
+  unreadCounts?: Record<string, number>; // Per-user unread counts Map<string, number>
   isPinned: boolean;
   createdAt: string;
   updatedAt: string;
@@ -196,19 +200,20 @@ export interface ChatApi {
   /**
    * Get all chat rooms for the current user
    */
-  getChatRooms: (options?: GetChatRoomsOptions) => Promise<ChatRoomsResponse>;
+  getChatRooms: (options?: GetChatRoomsOptions, signal?: AbortSignal) => Promise<ChatRoomsResponse>;
 
   /**
    * Get a single chat room by ID
    */
-  getChatRoom: (roomId: string) => Promise<{ chatRoom: ChatRoom }>;
+  getChatRoom: (roomId: string, signal?: AbortSignal) => Promise<{ chatRoom: ChatRoom }>;
 
   /**
    * Get messages for a specific chat room
    */
   getMessages: (
     roomId: string,
-    options?: GetMessagesOptions
+    options?: GetMessagesOptions,
+    signal?: AbortSignal
   ) => Promise<MessagesResponse>;
 
   /**
@@ -299,23 +304,23 @@ export const chatApi: ChatApi = {
   /**
    * Get all chat rooms for the current user
    */
-  getChatRooms: async (options = {}) => {
-    const response = await api.get('/chat/rooms', { params: options });
+  getChatRooms: async (options = {}, signal) => {
+    const response = await api.get('/chat/rooms', { params: options, signal });
     return response.data.data;
   },
 
   /**
    * Get a single chat room by ID with full details
    */
-  getChatRoom: async (roomId: string) => {
-    const response = await api.get(`/chat/rooms/${roomId}`);
+  getChatRoom: async (roomId: string, signal) => {
+    const response = await api.get(`/chat/rooms/${roomId}`, { signal });
     return response.data.data;
   },
 
   /**
    * Get messages for a specific chat room with pagination
    */
-  getMessages: async (roomId: string, options = {}) => {
+  getMessages: async (roomId: string, options = {}, signal) => {
     const params: Record<string, string | number | boolean> = {};
 
     if (options.limit) params.limit = options.limit;
@@ -324,7 +329,7 @@ export const chatApi: ChatApi = {
     if (options.after) params.after = options.after;
     if (options.includeDeleted) params.includeDeleted = options.includeDeleted;
 
-    const response = await api.get(`/chat/rooms/${roomId}/messages`, { params });
+    const response = await api.get(`/chat/rooms/${roomId}/messages`, { params, signal });
     return response.data.data;
   },
 
@@ -447,6 +452,17 @@ export const chatApi: ChatApi = {
 // ============================================
 
 /**
+ * Get unread count for a specific user from a chat room
+ * Backend stores unreadCounts as Map<string, number>, frontend receives as Record<string, number>
+ */
+export function getUnreadCountForUser(
+  room: ChatRoom | ChatRoomListItem,
+  userId: string
+): number {
+  return room.unreadCounts?.[userId] ?? room.unreadCount ?? 0;
+}
+
+/**
  * Normalize chat room data (handles _id vs id inconsistencies)
  */
 export function normalizeChatRoom(room: ChatRoom | ChatRoomListItem): ChatRoomListItem {
@@ -466,6 +482,7 @@ export function normalizeChatRoom(room: ChatRoom | ChatRoomListItem): ChatRoomLi
       type: room.lastMessage.type
     } : undefined,
     unreadCount: room.unreadCount,
+    unreadCounts: room.unreadCounts,
     isPinned: room.isPinned,
     createdAt: room.createdAt,
     updatedAt: room.updatedAt

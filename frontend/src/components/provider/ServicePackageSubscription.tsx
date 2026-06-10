@@ -15,50 +15,38 @@ import {
   TrendingUp,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import type {
+  BillingCycle,
+  PackageBenefit,
+  ServicePackage as ServicePackageInterface,
+  SubscriptionDetails as SubscriptionDetailsInterface,
+} from '../../types/subscription.types';
+
+// Re-export BillingCycle for backwards compatibility
+export type { BillingCycle } from '../../types/subscription.types';
 
 // ============================================
-// Type Definitions
+// Type Definitions - using unified types
 // ============================================
 
-export type PackageTier = 'basic' | 'standard' | 'premium' | 'enterprise';
-export type BillingCycle = 'monthly' | 'quarterly' | 'yearly';
+// Use unified provider subscription tier
+export type PackageTier = 'basic' | 'standard' | 'premium' | 'elite';
 
-export interface PackageBenefit {
-  id: string;
-  name: string;
-  description: string;
-  value: number | string;
-  icon?: string;
-}
-
-export interface ServicePackage {
-  _id: string;
-  name: string;
-  description: string;
+// Backwards compatible alias - extend with needed properties
+export type ServicePackage = ServicePackageInterface & {
   tier: PackageTier;
-  price: number;
-  currency: string;
-  billingCycle: BillingCycle;
-  benefits: PackageBenefit[];
-  maxServices: number;
-  maxBookings: number;
-  maxPhotos: number;
-  analyticsAccess: boolean;
-  prioritySupport: boolean;
-  featuredListing: boolean;
-  customBranding: boolean;
-  apiAccess: boolean;
+  price?: number;
+  currency?: string;
+  benefits?: Array<{
+    id: string;
+    name: string;
+    icon?: string;
+    value?: string | number;
+    included?: boolean;
+  }>;
   isPopular?: boolean;
-}
-
-export interface SubscriptionDetails {
-  currentTier: PackageTier;
-  billingCycle: BillingCycle;
-  currentPeriodEnd: Date;
-  autoRenewal: boolean;
-  totalSaved: number;
-  discountApplied: number;
-}
+};
+export type SubscriptionDetails = SubscriptionDetailsInterface & { currentTier: PackageTier };
 
 interface ServicePackageSubscriptionProps {
   packages: ServicePackage[];
@@ -91,10 +79,10 @@ const TIER_CONFIG: Record<PackageTier, { icon: React.ReactNode; color: string; l
     color: 'text-amber-500',
     label: 'Premium',
   },
-  enterprise: {
+  elite: {
     icon: <Sparkles className="h-5 w-5" />,
     color: 'text-purple-500',
-    label: 'Enterprise',
+    label: 'Elite',
   },
 };
 
@@ -334,7 +322,7 @@ const ServicePackageSubscription: React.FC<ServicePackageSubscriptionProps> = ({
   }, [currentSubscription, selectedCycle, onSubscribe, onChangePlan]);
 
   const getTierOrder = (tier: PackageTier): number => {
-    const order: Record<PackageTier, number> = { basic: 1, standard: 2, premium: 3, enterprise: 4 };
+    const order: Record<PackageTier, number> = { basic: 1, standard: 2, premium: 3, elite: 4 };
     return order[tier];
   };
 

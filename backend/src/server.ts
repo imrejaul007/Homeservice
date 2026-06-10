@@ -10,6 +10,7 @@ import { initializeEventSubscriptions } from './event-bus';
 import { initializeIndexes } from './services/search.service';
 import { initializeScheduledJobs } from './jobs/scheduler';
 import { closeAllQueues } from './queue';
+import { createAllIndexes, checkIndexHealth } from './models/indexes';
 
 // Create HTTP server
 const server = http.createServer(app);
@@ -87,13 +88,38 @@ const startServer = async () => {
     // Connect to database
     await database.connect();
 
-    // Seed database
-    try {
-      const { seedDatabase } = await import('./seeders/index');
-      await seedDatabase();
-      logger.info('Database seeded successfully');
-    } catch (seedError) {
-      logger.warn('Database seeding skipped or failed:', seedError);
+    // Create MongoDB indexes for optimal query performance
+    // Only run in development or when explicitly enabled (index creation can be slow on large datasets)
+    if (process.env.NODE_ENV !== 'production' || process.env.ENFORCE_INDEXES === 'true') {
+      try {
+        const indexResults = await createAllIndexes({ verbose: false });
+        logger.info('MongoDB indexes synchronized', {
+          created: indexResults.totalCreated,
+          skipped: indexResults.totalSkipped,
+          errors: indexResults.totalErrors
+        });
+
+        // Log any issues for monitoring
+        if (indexResults.totalErrors > 0) {
+          logger.warn('Some indexes failed to create - check logs for details', {
+            context: 'IndexManager',
+            models: indexResults.models
+          });
+        }
+      } catch (error) {
+        logger.warn('MongoDB index creation failed:', error);
+      }
+    }
+
+    // Only seed in development/test, not in production
+    if (process.env.NODE_ENV !== 'production') {
+      try {
+        const { seedDatabase } = await import('./seeders/index');
+        await seedDatabase();
+        logger.info('Database seeded successfully');
+      } catch (seedError) {
+        logger.warn('Database seeding skipped or failed:', seedError);
+      }
     }
 
     // Initialize event subscriptions

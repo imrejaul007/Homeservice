@@ -468,8 +468,7 @@ const AnalyticsDashboard: React.FC = () => {
       setRetentionMetrics(retentionResponse);
       setRfmData(rfmResponse);
       setHealthScore(healthResponse);
-    } catch (error) {
-      console.error('Failed to fetch analytics data:', error);
+    } catch {
       toast.error('Failed to load analytics data. Please try again.');
     } finally {
       setLoading(false);

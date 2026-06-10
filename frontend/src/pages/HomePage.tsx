@@ -15,6 +15,7 @@ import {
   WhyNilin,
   ProviderCTA,
 } from '../components/home';
+import LoggedInHomeBanner from '../components/home/LoggedInHomeBanner';
 import ExperienceSection from '../components/experience/ExperienceSection';
 import { PageErrorBoundary } from '../components/common/PageErrorBoundary';
 
@@ -51,8 +52,8 @@ const CATEGORIES = [
   { name: 'Makeup', image: 'https://images.unsplash.com/photo-1487412912498-0447578fcca8?w=400&q=80', link: '/category/makeup' },
   { name: 'Nails', image: 'https://images.unsplash.com/photo-1604654894610-df63bc536371?w=400&q=80', link: '/category/nails' },
   { name: 'Spa', image: 'https://images.unsplash.com/photo-1544161515-4ab6ce6db874?w=400&q=80', link: '/category/massage-body' },
-  { name: 'Skincare', image: 'https://images.unsplash.com/photo-1570172619644-dfd03ed5d881?w=400&q=80', link: '/category/skincare' },
-  { name: 'Eyes', image: 'https://images.unsplash.com/photo-1522335789203-aabd1fc54bc9?w=400&q=80', link: '/category/eyebrow' },
+  { name: 'Skincare', image: 'https://images.unsplash.com/photo-1570172619644-dfd03ed5d881?w=400&q=80', link: '/category/skin-aesthetics' },
+  { name: 'Eyes', image: 'https://images.unsplash.com/photo-1522335789203-aabd1fc54bc9?w=400&q=80', link: '/category/personal-care' },
 ];
 
 const HomePage: React.FC = () => {
@@ -246,8 +247,10 @@ const HomePage: React.FC = () => {
         </div>
       </section>
 
+      <LoggedInHomeBanner />
+
       {/* Category Quick Links */}
-      <section className="py-6 px-4 bg-white shadow-nilin animate-nilin-in">
+      <section className="py-6 px-4 bg-white/95 shadow-nilin animate-nilin-in border-t border-nilin-border/20">
         <div className="max-w-7xl mx-auto">
           <div className="flex gap-4 overflow-x-auto pb-2 scrollbar-hide" style={{scrollbarWidth: 'none'}}>
             {CATEGORIES.map((cat, i) => (

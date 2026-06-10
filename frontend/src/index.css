@@ -737,3 +737,95 @@
     animation: fade-out 0.15s ease-in;
   }
 }
+
+/* ===================== */
+/* CUSTOM SCROLLBAR      */
+/* ===================== */
+
+@layer utilities {
+  /* Thin scrollbar for chat widgets */
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(232, 180, 168, 0.4) transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+    border-radius: 3px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: rgba(232, 180, 168, 0.4);
+    border-radius: 3px;
+    transition: background 0.2s ease;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    background: rgba(232, 180, 168, 0.6);
+  }
+
+  /* Hide scrollbar but keep functionality */
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* NILIN branded scrollbar */
+  .scrollbar-nilin {
+    scrollbar-width: thin;
+    scrollbar-color: #E8B4A8 #F5E6E0;
+  }
+
+  .scrollbar-nilin::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .scrollbar-nilin::-webkit-scrollbar-track {
+    background: #F5E6E0;
+    border-radius: 4px;
+  }
+
+  .scrollbar-nilin::-webkit-scrollbar-thumb {
+    background: linear-gradient(135deg, #E8B4A8, #D4A89A);
+    border-radius: 4px;
+  }
+
+  .scrollbar-nilin::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(135deg, #D4A89A, #C8988A);
+  }
+
+  /* Chat specific scrollbar */
+  .scrollbar-chat {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(232, 180, 168, 0.5) rgba(245, 230, 224, 0.3);
+  }
+
+  .scrollbar-chat::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .scrollbar-chat::-webkit-scrollbar-track {
+    background: rgba(245, 230, 224, 0.3);
+    border-radius: 3px;
+    margin: 8px 0;
+  }
+
+  .scrollbar-chat::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg, #E8B4A8, #D4A89A);
+    border-radius: 3px;
+  }
+
+  .scrollbar-chat::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(180deg, #D4A89A, #C8988A);
+  }
+}

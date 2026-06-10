@@ -76,13 +76,25 @@ class BookingService {
    */
   async createBooking(data: CreateBookingData): Promise<BookingResponse<{ booking: Booking }>> {
     try {
+      console.log('[BookingService] POST /bookings', {
+        serviceId: data.serviceId,
+        providerId: data.providerId || '(auto-assign)',
+        scheduledDate: data.scheduledDate,
+        scheduledTime: data.scheduledTime,
+        couponCode: data.couponCode, // DEBUG: Check if coupon is being sent
+        hasMetadata: Boolean(data.metadata?.idempotencyKey),
+      });
       const response = await authService.post<any>('/bookings', data);
       // Transform the booking if it exists
       if (response?.data?.booking) {
         response.data.booking = this.transformBooking(response.data.booking);
+        if (response.data.isDuplicate) {
+          response.data.booking.isDuplicate = true;
+        }
       }
-      return response as BookingResponse<{ booking: Booking }>;
+      return response as BookingResponse<{ booking: Booking; isDuplicate?: boolean }>;
     } catch (error) {
+      console.error('[BookingService] createBooking failed', error);
       throw new Error(error instanceof Error ? error.message : 'Failed to create booking');
     }
   }
@@ -174,11 +186,12 @@ class BookingService {
 
   /**
    * Map frontend filter keys to backend API parameter names
+   * Note: startDate/endDate are now aligned with backend, no mapping needed
    */
   private mapFilterKeyToBackend(key: string): string {
+    // startDate and endDate are now aligned with backend API
+    // Only sort-related keys need passthrough mapping
     const keyMap: Record<string, string> = {
-      dateFrom: 'startDate',
-      dateTo: 'endDate',
       sortBy: 'sortBy',
       sortOrder: 'sortOrder',
       search: 'search',
@@ -294,6 +307,7 @@ class BookingService {
         totalAmount: booking.pricing?.totalAmount ?? booking.pricing?.total ?? 0,
         total: booking.pricing?.totalAmount ?? booking.pricing?.total ?? 0, // @deprecated Use 'totalAmount' instead
         currency: booking.pricing?.currency ?? 'AED',
+        couponDiscount: booking.pricing?.couponDiscount ?? 0,
       },
 
       // Service Info (populated)
@@ -763,7 +777,10 @@ class BookingService {
         }
       });
 
-      const response = await authService.get<BookingResponse<{ slots: string[] }>>(
+      const response = await authService.get<BookingResponse<{
+        slots: string[];
+        minBookingAdvanceHours?: number;
+      }>>(
         `/availability/provider/${providerId}/slots?${searchParams.toString()}`
       );
 
@@ -778,7 +795,8 @@ class BookingService {
       return {
         ...response,
         data: {
-          slots: transformedSlots
+          slots: transformedSlots,
+          minBookingAdvanceHours: response.data.minBookingAdvanceHours,
         }
       };
     } catch (error) {

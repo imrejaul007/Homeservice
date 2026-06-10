@@ -339,7 +339,7 @@ export const TrendingServices: React.FC<TrendingServicesProps> = ({
     if (onServiceClick) {
       onServiceClick(serviceId, service);
     } else {
-      navigate(`/service/${serviceId}`);
+      navigate(`/services/${serviceId}`);
     }
   }, [navigate, onServiceClick]);
 

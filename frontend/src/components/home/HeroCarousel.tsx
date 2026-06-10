@@ -27,7 +27,7 @@ const SLIDES = [
 ];
 
 const QUICK_PICKS = [
-  { label: 'Hair Styling', link: '/service/hair/haircut-styling' },
+  { label: 'Hair Styling', link: '/service/hair/womens-haircut' },
   { label: 'Bridal Makeup', link: '/service/makeup/bridal-makeup' },
   { label: 'Spa Massage', link: '/service/massage-body/swedish-massage' },
   { label: 'Nail Art', link: '/service/nails/gel-nails' },

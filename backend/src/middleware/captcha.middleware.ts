@@ -4,6 +4,66 @@ import { ApiError } from '../utils/ApiError';
 import logger from '../utils/logger';
 import { cache } from '../config/redis';
 
+/**
+ * Safely extract client IP address with protection against spoofing.
+ *
+ * Security: Only trusts X-Forwarded-For when Express trust proxy is enabled.
+ * Without trust proxy configured, req.ip cannot be spoofed by clients.
+ *
+ * Requirements:
+ * - If behind a reverse proxy (nginx, load balancer), configure `app.set('trust proxy', 1)` or higher
+ * - Only the first IP in X-Forwarded-For should be trusted (the proxy's IP)
+ * - Rate limiting and security decisions should use this function only
+ */
+const getClientIp = (req: Request): string => {
+  // Check if trust proxy is configured
+  const trustProxy = req.app.get('trust proxy');
+
+  if (trustProxy) {
+    // Trust proxy is configured - req.ip is derived from X-Forwarded-For safely
+    // req.socket.remoteAddress is used as fallback
+    const ip = req.ip || req.socket?.remoteAddress || 'unknown';
+    return normalizeIp(ip);
+  }
+
+  // No proxy trust configured - use req.ip directly (cannot be spoofed)
+  // This is safe because Express derives it from the actual TCP connection
+  const directIp = req.ip || req.socket?.remoteAddress || 'unknown';
+  return normalizeIp(directIp);
+};
+
+/**
+ * Normalize IP address format (handles IPv6-mapped IPv4)
+ */
+const normalizeIp = (ip: string): string => {
+  // Handle IPv6-mapped IPv4 addresses (::ffff:192.168.1.1)
+  if (ip.startsWith('::ffff:')) {
+    return ip.substring(7);
+  }
+  return ip;
+};
+
+/**
+ * Validate IP address format
+ */
+const isValidIp = (ip: string): boolean => {
+  // IPv4 pattern
+  const ipv4Pattern = /^(\d{1,3}\.){3}\d{1,3}$/;
+  // IPv6 pattern (simplified)
+  const ipv6Pattern = /^([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}$/;
+
+  if (ipv4Pattern.test(ip)) {
+    // Validate each octet is 0-255
+    const octets = ip.split('.');
+    return octets.every(octet => {
+      const num = parseInt(octet, 10);
+      return num >= 0 && num <= 255;
+    });
+  }
+
+  return ipv6Pattern.test(ip);
+};
+
 // CAPTCHA configuration interface
 interface CaptchaConfig {
   provider: 'hcaptcha' | 'recaptcha';
@@ -48,25 +108,47 @@ const getCaptchaConfig = (): CaptchaConfig => {
 const captchaFailureCache = new Map<string, { count: number; resetTime: number }>();
 const CAPTCHA_FAILURE_WINDOW = 15 * 60 * 1000; // 15 minutes
 const CAPTCHA_MAX_FAILURES = 5; // Block after 5 failures
+const CAPTCHA_CACHE_CLEANUP_INTERVAL = 5 * 60 * 1000; // Clean up every 5 minutes
+let lastCacheCleanup = Date.now();
 
 /**
- * Check if client IP is rate limited for CAPTCHA verification
+ * Check if client IP is rate limited for CAPTCHA verification (read-only, no increment)
  */
 const isCaptchaRateLimited = (ip: string): boolean => {
+  const now = Date.now();
+
+  // Periodic cleanup of expired entries to prevent memory leak
+  if (now - lastCacheCleanup > CAPTCHA_CACHE_CLEANUP_INTERVAL) {
+    for (const [key, value] of captchaFailureCache.entries()) {
+      if (value.resetTime < now) {
+        captchaFailureCache.delete(key);
+      }
+    }
+    lastCacheCleanup = now;
+  }
+
+  const record = captchaFailureCache.get(ip);
+
+  if (!record || record.resetTime < now) {
+    return false;
+  }
+
+  return record.count >= CAPTCHA_MAX_FAILURES;
+};
+
+/**
+ * Increment the CAPTCHA failure counter for client IP
+ */
+const incrementCaptchaFailures = (ip: string): void => {
   const now = Date.now();
   const record = captchaFailureCache.get(ip);
 
   if (!record || record.resetTime < now) {
     captchaFailureCache.set(ip, { count: 1, resetTime: now + CAPTCHA_FAILURE_WINDOW });
-    return false;
-  }
-
-  if (record.count >= CAPTCHA_MAX_FAILURES) {
-    return true;
+    return;
   }
 
   record.count++;
-  return false;
 };
 
 /**
@@ -149,7 +231,7 @@ export const verifyCaptcha = (options: CaptchaOptions = {}) => {
 
   return async (req: Request, res: Response, next: NextFunction) => {
     const config = getCaptchaConfig();
-    const clientIp = req.ip || req.headers['x-forwarded-for'] as string || 'unknown';
+    const clientIp = getClientIp(req);
 
     // Check rate limiting
     if (isCaptchaRateLimited(clientIp)) {
@@ -166,9 +248,32 @@ export const verifyCaptcha = (options: CaptchaOptions = {}) => {
     }
 
     // Extract CAPTCHA token from request
-    const token = req.body?.captchaToken ||
-                  req.body?.['g-recaptcha-response'] ||
-                  req.headers['x-captcha-token'] as string;
+    const rawToken = req.body?.captchaToken ||
+                     req.body?.['g-recaptcha-response'] ||
+                     req.headers['x-captcha-token'];
+
+    // Validate token format: must be a non-empty string with minimum length
+    const MIN_TOKEN_LENGTH = 10; // CAPTCHA tokens are typically 50-500+ characters
+    const isValidToken = typeof rawToken === 'string' &&
+                         rawToken.trim().length >= MIN_TOKEN_LENGTH;
+
+    // Reject malformed tokens immediately (type check, empty string, too short)
+    if (rawToken !== undefined && !isValidToken) {
+      logger.warn('CAPTCHA token validation failed', {
+        ip: clientIp,
+        path: req.path,
+        reason: typeof rawToken !== 'string' ? 'invalid-type' :
+                rawToken.trim().length === 0 ? 'empty' : 'too-short',
+        providedLength: typeof rawToken === 'string' ? rawToken.length : typeof rawToken,
+        minLength: MIN_TOKEN_LENGTH,
+        action: 'CAPTCHA_INVALID_TOKEN',
+      });
+      incrementCaptchaFailures(clientIp);
+      throw new ApiError(400, 'Invalid CAPTCHA token format.');
+    }
+
+    // Token must be a non-empty string at this point
+    const token = rawToken as string;
 
     // If no token provided and CAPTCHA is not required, skip
     if (!token && !required) {
@@ -182,6 +287,7 @@ export const verifyCaptcha = (options: CaptchaOptions = {}) => {
         path: req.path,
         action: 'CAPTCHA_MISSING',
       });
+      incrementCaptchaFailures(clientIp);
       throw new ApiError(400, 'CAPTCHA verification required. Please complete the CAPTCHA.');
     }
 
@@ -198,10 +304,12 @@ export const verifyCaptcha = (options: CaptchaOptions = {}) => {
 
       // Provide specific error message
       if (result.errorCodes?.includes('invalid-input-response')) {
+        incrementCaptchaFailures(clientIp);
         throw new ApiError(400, 'Invalid CAPTCHA token. Please try again.');
       }
 
       if (result.errorCodes?.includes('expired-input-response')) {
+        incrementCaptchaFailures(clientIp);
         throw new ApiError(400, 'CAPTCHA token has expired. Please refresh and try again.');
       }
 
@@ -214,9 +322,11 @@ export const verifyCaptcha = (options: CaptchaOptions = {}) => {
           });
           return next();
         }
+        incrementCaptchaFailures(clientIp);
         throw new ApiError(503, 'CAPTCHA verification service is temporarily unavailable. Please try again.');
       }
 
+      incrementCaptchaFailures(clientIp);
       throw new ApiError(400, 'CAPTCHA verification failed. Please try again.');
     }
 
@@ -232,6 +342,7 @@ export const verifyCaptcha = (options: CaptchaOptions = {}) => {
         });
 
         if (required) {
+          incrementCaptchaFailures(clientIp);
           throw new ApiError(403, 'Request flagged as suspicious. Please try again later.');
         }
       }
@@ -282,7 +393,7 @@ export const adaptiveCaptcha = (rateLimitKey: string) => {
  * Uses Redis for tracking failed attempts
  */
 const checkRateLimitTriggered = async (req: Request, key: string): Promise<boolean> => {
-  const clientIp = req.ip || 'unknown';
+  const clientIp = getClientIp(req);
   const cacheKey = `captcha:ratelimit:${key}:${clientIp}`;
 
   try {
@@ -292,10 +403,13 @@ const checkRateLimitTriggered = async (req: Request, key: string): Promise<boole
       return data.triggered === true;
     }
   } catch (error) {
-    logger.warn('Failed to check rate limit status for CAPTCHA', {
+    // Invalid JSON in cache - treat as not triggered and clear corrupted data
+    logger.warn('Failed to parse rate limit cache data for CAPTCHA', {
       error: (error as Error).message,
-      action: 'CAPTCHA_RATELIMIT_CHECK_FAILED',
+      cacheKey,
+      action: 'CAPTCHA_RATELIMIT_CACHE_PARSE_ERROR',
     });
+    await cache.del(cacheKey);
   }
 
   return false;

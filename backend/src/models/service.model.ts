@@ -739,6 +739,26 @@ serviceSchema.pre('save', function(next) {
   next();
 });
 
+// Add static method for updateBookingCount
+serviceSchema.statics.updateBookingCount = async function(serviceId: string | mongoose.Types.ObjectId): Promise<void> {
+  const Booking = mongoose.model('Booking');
+
+  const bookingCount = await Booking.countDocuments({
+    serviceId: serviceId,
+    status: { $in: ['completed', 'confirmed'] }
+  });
+
+  await this.updateOne(
+    { _id: serviceId },
+    { $set: { 'searchMetadata.bookingCount': bookingCount } }
+  );
+
+  const service = await this.findById(serviceId);
+  if (service) {
+    await (service as any).updatePopularityScore();
+  }
+};
+
 const Service = mongoose.model<IService, IServiceModel>('Service', serviceSchema);
 
 // ===================================
@@ -838,33 +858,8 @@ serviceSchema.pre('deleteOne', { document: true, query: false }, async function(
  */
 Service.recalculateRating = async function(serviceId: string | mongoose.Types.ObjectId): Promise<void> {
   const Review = mongoose.model('Review');
-  const Booking = mongoose.model('Booking');
 
   const serviceObjectId = new mongoose.Types.ObjectId(serviceId.toString());
-
-  // PERFORMANCE FIX: Use aggregation pipeline with $lookup to get reviews in a single query
-  // This eliminates the N+1 query pattern where we first fetch booking IDs and then reviews
-
-  // First, check if there are any completed bookings for this service
-  const hasCompletedBookings = await Booking.exists({
-    serviceId: serviceObjectId,
-    status: { $in: ['completed', 'confirmed'] }
-  });
-
-  if (!hasCompletedBookings) {
-    // No bookings, reset rating
-    await this.updateOne(
-      { _id: serviceId },
-      {
-        $set: {
-          'rating.average': 0,
-          'rating.count': 0,
-          'rating.distribution': { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 }
-        }
-      }
-    );
-    return;
-  }
 
   // Use aggregation to get reviews directly - Review has bookingId which links to Booking
   // Filter reviews by checking which bookings are for this service
@@ -934,29 +929,6 @@ Service.recalculateRating = async function(serviceId: string | mongoose.Types.Ob
       }
     }
   );
-};
-
-/**
- * FIX: Update booking count for a service with proper error handling
- */
-Service.updateBookingCount = async function(serviceId: string | mongoose.Types.ObjectId): Promise<void> {
-  const Booking = mongoose.model('Booking');
-
-  const bookingCount = await Booking.countDocuments({
-    serviceId: serviceId,
-    status: { $in: ['completed', 'confirmed'] }
-  });
-
-  await this.updateOne(
-    { _id: serviceId },
-    { $set: { 'searchMetadata.bookingCount': bookingCount } }
-  );
-
-  // Also recalculate popularity score after booking count changes
-  const service = await this.findById(serviceId);
-  if (service) {
-    await service.updatePopularityScore();
-  }
 };
 
 export default Service;

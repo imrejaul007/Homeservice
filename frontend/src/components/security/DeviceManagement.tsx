@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { api } from '../../services/api';
 
 // Types
 interface Device {
@@ -49,17 +50,8 @@ export const DeviceManagement: React.FC<DeviceManagementProps> = ({
       setLoading(true);
       setError(null);
 
-      const response = await fetch(`/api/devices?userId=${userId}`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('accessToken')}`,
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to fetch devices');
-      }
-
-      const result: ApiResponse<{ devices: Device[] }> = await response.json();
+      const response = await api.get<ApiResponse<{ devices: Device[] }>>(`/devices?userId=${userId}`);
+      const result = response.data;
 
       if (result.success && result.data) {
         setDevices(result.data.devices.map(d => ({
@@ -85,18 +77,7 @@ export const DeviceManagement: React.FC<DeviceManagementProps> = ({
     try {
       setActionLoading(deviceId);
 
-      const response = await fetch(`/api/devices/${deviceId}`, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('accessToken')}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ userId }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to remove device');
-      }
+      await api.delete(`/devices/${deviceId}`, { data: { userId } });
 
       setDevices(prev => prev.filter(d => d.id !== deviceId));
       onDeviceRemoved?.(deviceId);
@@ -113,18 +94,7 @@ export const DeviceManagement: React.FC<DeviceManagementProps> = ({
     try {
       setActionLoading(deviceId);
 
-      const response = await fetch(`/api/devices/${deviceId}/trust`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('accessToken')}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ userId }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to trust device');
-      }
+      await api.post(`/devices/${deviceId}/trust`, { userId });
 
       setDevices(prev => prev.map(d =>
         d.id === deviceId
@@ -149,18 +119,7 @@ export const DeviceManagement: React.FC<DeviceManagementProps> = ({
     try {
       setActionLoading(deviceId);
 
-      const response = await fetch(`/api/devices/${deviceId}/rename`, {
-        method: 'PATCH',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('accessToken')}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ userId, name: newDeviceName }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to rename device');
-      }
+      await api.patch(`/devices/${deviceId}/rename`, { name: newDeviceName });
 
       setDevices(prev => prev.map(d =>
         d.id === deviceId ? { ...d, deviceName: newDeviceName } : d

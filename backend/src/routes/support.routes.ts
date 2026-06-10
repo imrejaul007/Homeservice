@@ -2,6 +2,8 @@ import { Router } from 'express';
 import { authenticate, requireRole } from '../middleware/auth.middleware';
 import { adminLimiter } from '../middleware/rateLimiter';
 import Joi from 'joi';
+import { SUPPORT_FAQS } from '../constants/supportFaqs';
+import { createCallbackRequest, getMyCallbackRequests } from '../controllers/callback.controller';
 import {
   // Admin Controllers
   getAllTickets,
@@ -236,9 +238,55 @@ router.patch('/tickets/:id/close', authenticate, validateCloseTicket, closeUserT
 // LEGACY ROUTES (backward compatibility)
 // ============================================
 
-router.get('/faqs', (_req, res) => {
-  res.json({ faqs: [] });
+router.get('/faqs', (req, res) => {
+  const category = req.query.category as string | undefined;
+  const search = req.query.search as string | undefined;
+
+  let faqs = SUPPORT_FAQS;
+  if (category) {
+    faqs = faqs.filter((f) => f.category === category);
+  }
+  if (search) {
+    const q = search.toLowerCase();
+    faqs = faqs.filter(
+      (f) =>
+        f.question.toLowerCase().includes(q) ||
+        f.answer.toLowerCase().includes(q) ||
+        f.tags.some((t) => t.includes(q))
+    );
+  }
+
+  res.json({ success: true, data: { faqs, total: faqs.length } });
 });
+
+const callbackSchema = Joi.object({
+  phoneNumber: Joi.string().min(8).max(20).required(),
+  preferredTime: Joi.date().iso().required(),
+  alternateTime: Joi.date().iso().optional(),
+  reason: Joi.string().min(10).max(1000).required(),
+  category: Joi.string()
+    .valid('general', 'technical', 'billing', 'booking', 'complaint')
+    .default('general'),
+});
+
+const validateCallback = (req: any, res: any, next: any) => {
+  const { error, value } = callbackSchema.validate(req.body, { stripUnknown: true });
+  if (error) {
+    return res.status(400).json({
+      success: false,
+      error: 'Validation Error',
+      details: error.details.map((d) => ({
+        field: (d.path as string[]).join('.'),
+        message: d.message,
+      })),
+    });
+  }
+  req.body = value;
+  next();
+};
+
+router.post('/callback', authenticate, validateCallback, createCallbackRequest);
+router.get('/callback/my', authenticate, getMyCallbackRequests);
 
 // ============================================
 // ADMIN TICKET MANAGEMENT ROUTES

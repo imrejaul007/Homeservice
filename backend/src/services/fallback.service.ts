@@ -93,12 +93,19 @@ class InMemoryCache<T = unknown> {
 
     return removed;
   }
+
+  // Get all cache entries (for health checks)
+  getAll(): Map<string, CacheEntry<T>> {
+    return this.cache;
+  }
 }
 
 // Global fallback caches
 const popularServicesCache = new InMemoryCache<any[]>(300000);
 const analyticsQueue = new InMemoryCache<any[]>(300000);
 const notificationQueue = new InMemoryCache<any[]>(300000);
+const emailQueue = new InMemoryCache<any[]>(300000);
+const paymentQueue = new InMemoryCache<any[]>(300000); // Dedicated queue for payment retries
 
 // Interface for fallback options
 export interface FallbackOptions<T> {
@@ -318,7 +325,7 @@ export async function queueNotificationLocally(
  */
 export function getPendingNotifications(userId: string): any[] {
   const queueKey = `notification_queue_${userId}`;
-  return analyticsQueue.get(queueKey) || [];
+  return notificationQueue.get(queueKey) || [];
 }
 
 /**
@@ -326,13 +333,13 @@ export function getPendingNotifications(userId: string): any[] {
  */
 export function markNotificationSent(userId: string, notificationId: string): void {
   const queueKey = `notification_queue_${userId}`;
-  const queue = analyticsQueue.get(queueKey) || [];
+  const queue = notificationQueue.get(queueKey) || [];
 
   const filtered = queue.filter((n: any) =>
     n.queuedAt !== notificationId
   );
 
-  analyticsQueue.set(queueKey, filtered, 86400000);
+  notificationQueue.set(queueKey, filtered, 86400000);
 }
 
 // ============================================
@@ -543,7 +550,7 @@ export async function queuePaymentRetry(
   }
 ): Promise<string> {
   const queueKey = 'payment_retry_queue';
-  const queue = analyticsQueue.get(queueKey) || [];
+  const queue = paymentQueue.get(queueKey) || [];
 
   queue.push({
     bookingId,
@@ -553,7 +560,7 @@ export async function queuePaymentRetry(
     nextRetry: new Date(Date.now() + 60000).toISOString(), // 1 minute
   });
 
-  analyticsQueue.set(queueKey, queue, 3600000); // 1 hour TTL
+  paymentQueue.set(queueKey, queue, 3600000); // 1 hour TTL
 
   logger.warn('Payment queued for retry', {
     bookingId,
@@ -580,7 +587,8 @@ export async function queueEmailForRetry(
   options: FallbackOptions<any> = {}
 ): Promise<string> {
   const queueKey = 'email_retry_queue';
-  const queue = analyticsQueue.get(queueKey) || [];
+  // FIX: Use dedicated emailQueue instead of analyticsQueue
+  const queue = emailQueue.get(queueKey) || [];
 
   queue.push({
     ...email,
@@ -588,7 +596,7 @@ export async function queueEmailForRetry(
     retryCount: 0,
   });
 
-  analyticsQueue.set(queueKey, queue, 86400000); // 24 hours TTL
+  emailQueue.set(queueKey, queue, 86400000); // 24 hours TTL
 
   logger.warn('Email queued for retry', {
     to: email.to,
@@ -603,7 +611,8 @@ export async function queueEmailForRetry(
  * Get pending emails
  */
 export function getPendingEmails(): any[] {
-  return analyticsQueue.get('email_retry_queue') || [];
+  // FIX: Use dedicated emailQueue instead of analyticsQueue
+  return emailQueue.get('email_retry_queue') || [];
 }
 
 // ============================================
@@ -623,30 +632,33 @@ export function getFallbackHealthStatus(): {
   return {
     memoryCacheSize: memoryCache.size(),
     analyticsQueueSize: (analyticsQueue.get('analytics_queue') || []).length,
-    // FIX: Read from correct notificationQueue instead of analyticsQueue
-    notificationQueueCount: (notificationQueue.get('notification_queue_') || []).length,
-    pendingPaymentsCount: (analyticsQueue.get('payment_retry_queue') || []).length,
-    pendingEmailsCount: (analyticsQueue.get('email_retry_queue') || []).length,
+    // Count notifications across all user-specific queue keys
+    notificationQueueCount: Array.from(notificationQueue.getAll().values())
+      .reduce((total, entry) => total + (Array.isArray(entry.data) ? entry.data.length : 0), 0),
+    pendingPaymentsCount: (paymentQueue.get('payment_retry_queue') || []).length,
+    pendingEmailsCount: (emailQueue.get('email_retry_queue') || []).length,
   };
 }
 
 /**
  * Cleanup expired fallback data
  */
-export function cleanupFallbackData(): {
+export async function cleanupFallbackData(): Promise<{
   memoryCacheRemoved: number;
   analyticsQueueFlushed: number;
-} {
+}> {
   const memoryCacheRemoved = memoryCache.cleanup();
+  const analyticsQueueFlushed = await flushAnalyticsQueue();
 
   logger.info('Fallback data cleaned up', {
     memoryCacheRemoved,
+    analyticsQueueFlushed,
     action: 'FALLBACK_DATA_CLEANUP',
   });
 
   return {
     memoryCacheRemoved,
-    analyticsQueueFlushed: 0,
+    analyticsQueueFlushed,
   };
 }
 

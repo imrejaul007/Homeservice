@@ -101,10 +101,18 @@ export interface RecommendedProDTO {
   isVerified: boolean;
   tier: 'elite' | 'premium' | 'standard';
   distance?: number;
+  score: number;
+}
+
+export interface RecommendedProsPaginationDTO {
+  total: number;
+  hasMore: boolean;
 }
 
 export interface RecommendedProsResponseDTO {
+  recentlyUsed: RecommendedProDTO[];
   pros: RecommendedProDTO[];
+  pagination: RecommendedProsPaginationDTO;
 }
 
 // ============================================

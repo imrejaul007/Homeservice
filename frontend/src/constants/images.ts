@@ -53,6 +53,16 @@ export const CATEGORY_IMAGES: Record<
 export const SUBCATEGORY_IMAGES: Record<string, Record<string, string>> = {
   // ── Hair ──────────────────────────────────────────────────────────────────
   hair: {
+    'womens-haircut':
+      'https://images.unsplash.com/photo-1605497788044-5a32c7078486?w=400&q=80&fit=crop',
+    'mens-haircut':
+      'https://images.unsplash.com/photo-1503951914875-452162b0f3f1?w=400&q=80&fit=crop',
+    coloring:
+      'https://images.unsplash.com/photo-1617896848219-5ec29577b578?w=400&q=80&fit=crop',
+    treatments:
+      'https://images.unsplash.com/photo-1519699047748-de8e457a634e?w=400&q=80&fit=crop',
+    blowout:
+      'https://images.unsplash.com/photo-1522337360788-8b13dee7a37e?w=400&q=80&fit=crop',
     'haircut-styling':
       'https://images.unsplash.com/photo-1605497788044-5a32c7078486?w=400&q=80&fit=crop',
     'hair-coloring':
@@ -83,6 +93,8 @@ export const SUBCATEGORY_IMAGES: Record<string, Record<string, string>> = {
 
   // ── Nails ─────────────────────────────────────────────────────────────────
   nails: {
+    manicure:
+      'https://images.unsplash.com/photo-1632345031435-8727f6897d53?w=400&q=80&fit=crop',
     'classic-manicure':
       'https://images.unsplash.com/photo-1632345031435-8727f6897d53?w=400&q=80&fit=crop',
     'gel-nails':
@@ -99,6 +111,8 @@ export const SUBCATEGORY_IMAGES: Record<string, Record<string, string>> = {
 
   // ── Skin & Aesthetics ────────────────────────────────────────────────────
   'skin-aesthetics': {
+    facial:
+      'https://images.unsplash.com/photo-1616394584738-fc6e612e71b9?w=400&q=80&fit=crop',
     'facial-cleanup':
       'https://images.unsplash.com/photo-1616394584738-fc6e612e71b9?w=400&q=80&fit=crop',
     'chemical-peel':

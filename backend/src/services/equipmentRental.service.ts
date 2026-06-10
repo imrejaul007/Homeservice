@@ -3,6 +3,7 @@ import Booking from '../models/booking.model';
 import Service from '../models/service.model';
 import logger from '../utils/logger';
 import { eventBus, EVENT_TYPES } from '../event-bus';
+import { TAX_CONFIG } from '../config/constants';
 
 // ============================================
 // Types & Interfaces
@@ -610,8 +611,8 @@ export class EquipmentRentalService {
     // Calculate deposit
     const depositAmount = includeDeposit ? equipment.depositAmount : 0;
 
-    // Calculate taxes (5% VAT)
-    const taxRate = 0.05;
+    // FIX: Use centralized tax configuration
+    const taxRate = TAX_CONFIG.RATE;
     const taxes = includeTaxes ? subtotal * taxRate : 0;
 
     // Calculate total

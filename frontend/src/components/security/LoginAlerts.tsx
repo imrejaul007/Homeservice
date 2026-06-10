@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { api } from '../../services/api';
 
 // Types
 interface LoginAlert {
@@ -65,24 +66,12 @@ export const LoginAlerts: React.FC<LoginAlertsProps> = ({
       setError(null);
 
       const [alertsRes, sessionsRes] = await Promise.all([
-        fetch(`/api/security/alerts?userId=${userId}`, {
-          headers: {
-            'Authorization': `Bearer ${localStorage.getItem('accessToken')}`,
-          },
-        }),
-        fetch(`/api/security/sessions?userId=${userId}`, {
-          headers: {
-            'Authorization': `Bearer ${localStorage.getItem('accessToken')}`,
-          },
-        }),
+        api.get(`/security/alerts?userId=${userId}`),
+        api.get(`/security/sessions?userId=${userId}`),
       ]);
 
-      if (!alertsRes.ok || !sessionsRes.ok) {
-        throw new Error('Failed to fetch security data');
-      }
-
-      const [alertsData, sessionsData]: [ApiResponse<{ alerts: any[] }>, ApiResponse<{ sessions: any[] }>] =
-        await Promise.all([alertsRes.json(), sessionsRes.json()]);
+      const alertsData: ApiResponse<{ alerts: any[] }> = alertsRes.data;
+      const sessionsData: ApiResponse<{ sessions: any[] }> = sessionsRes.data;
 
       if (alertsData.success && alertsData.data) {
         setAlerts(alertsData.data.alerts.map(a => ({
@@ -117,18 +106,7 @@ export const LoginAlerts: React.FC<LoginAlertsProps> = ({
     try {
       setActionLoading(alertId);
 
-      const response = await fetch(`/api/security/alerts/${alertId}/resolve`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('accessToken')}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ userId }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to resolve alert');
-      }
+      await api.post(`/security/alerts/${alertId}/resolve`, { userId });
 
       setAlerts(prev => prev.map(a =>
         a.id === alertId ? { ...a, details: { ...a.details, resolved: true } } : a
@@ -146,18 +124,7 @@ export const LoginAlerts: React.FC<LoginAlertsProps> = ({
     try {
       setActionLoading(sessionId);
 
-      const response = await fetch(`/api/security/sessions/${sessionId}/revoke`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('accessToken')}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ userId }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to revoke session');
-      }
+      await api.post(`/security/sessions/${sessionId}/revoke`, { userId });
 
       setSessions(prev => prev.filter(s => s.id !== sessionId));
       onSessionRevoked?.(sessionId);
@@ -173,20 +140,10 @@ export const LoginAlerts: React.FC<LoginAlertsProps> = ({
     try {
       setActionLoading('revoke-all');
 
-      const response = await fetch(`/api/security/sessions/revoke-all`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('accessToken')}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ userId }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to revoke sessions');
-      }
+      await api.post('/security/sessions/revoke-all', { userId });
 
       setSessions(prev => prev.filter(s => s.isCurrent));
+      onAllRevoked?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to revoke sessions');
     } finally {

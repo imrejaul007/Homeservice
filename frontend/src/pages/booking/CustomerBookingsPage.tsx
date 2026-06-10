@@ -35,6 +35,10 @@ const CustomerBookingsPage: React.FC = () => {
   const [cancelBookingId, setCancelBookingId] = useState<string | null>(null);
   const isFetchingRef = useRef(false);
 
+  // Keep a ref to filters to avoid stale closure in the useEffect
+  const filtersRef = useRef(filters);
+  filtersRef.current = filters;
+
   // Subscribe to real-time booking updates from admin actions
   const { bookingUpdated } = useBookingAdminUpdates();
 
@@ -49,10 +53,10 @@ const CustomerBookingsPage: React.FC = () => {
     if (bookingUpdated && !isFetchingRef.current) {
       // Show toast notification about the update
       toast.success(`Booking #${bookingUpdated.bookingNumber.slice(-6)} status updated to ${bookingUpdated.status.replace('_', ' ')} by admin`);
-      // Refresh the bookings list
-      getCustomerBookings(filters);
+      // Refresh the bookings list with current filters (avoiding stale closure)
+      getCustomerBookings(filtersRef.current);
     }
-  }, [bookingUpdated, getCustomerBookings, filters]);
+  }, [bookingUpdated, getCustomerBookings]);
 
   const handleStatusChange = (status: string) => {
     setSelectedStatus(status);
@@ -77,10 +81,14 @@ const CustomerBookingsPage: React.FC = () => {
       toast.success('Booking cancelled successfully');
       getCustomerBookings(filters);
     } catch (err: unknown) {
-      // Axios errors have response.data property
-      const axiosError = err as { response?: { data?: { message?: string } }; message?: string };
-      const errorMessage = axiosError.response?.data?.message || axiosError.message || 'Failed to cancel booking. Please try again.';
-      toast.error(errorMessage);
+      // Use proper type guard to safely check for axios error structure
+      if (err && typeof err === 'object' && 'response' in err) {
+        const axiosError = err as { response?: { data?: { message?: string } }; message?: string };
+        const errorMessage = axiosError.response?.data?.message || axiosError.message || 'Failed to cancel booking. Please try again.';
+        toast.error(errorMessage);
+      } else {
+        toast.error('Failed to cancel booking. Please try again.');
+      }
     } finally {
       setCancellingBookingId(null);
       setCancelBookingId(null);

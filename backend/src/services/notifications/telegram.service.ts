@@ -10,7 +10,6 @@
  */
 
 import axios, { AxiosInstance } from 'axios';
-import crypto from 'crypto';
 import User from '../../models/user.model';
 import BookingNotification from '../../models/bookingNotification.model';
 import { withRetry, retryConfigs } from '../../utils/retry.util';

@@ -2,17 +2,19 @@ import winston from 'winston';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
+import { AsyncLocalStorage } from 'async_hooks';
 
-// Declare global correlation ID type
-declare global {
-  var correlationId: string | undefined;
-}
+// Correlation context using AsyncLocalStorage for request isolation
 
 // Create logs directory if it doesn't exist
 const logsDir = path.join(process.cwd(), 'logs');
 if (!fs.existsSync(logsDir)) {
   fs.mkdirSync(logsDir, { recursive: true });
 }
+interface CorrelationContext {
+  correlationId: string;
+}
+const correlationStorage = new AsyncLocalStorage<CorrelationContext>();
 
 // Sensitive fields to redact in logs
 const sensitiveFields = [
@@ -142,6 +144,12 @@ const redactSensitiveData = (obj: unknown, seen = new WeakSet()): Record<string,
   return result;
 };
 
+// Helper to get correlation ID from AsyncLocalStorage context
+const getContextCorrelationId = (): string => {
+  const context = correlationStorage.getStore();
+  return context?.correlationId || 'N/A';
+};
+
 // Create Winston logger
 const logger = winston.createLogger({
   level: process.env.LOG_LEVEL || 'info',
@@ -158,7 +166,7 @@ const logger = winston.createLogger({
         winston.format.colorize(),
         winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss.SSS' }),
         winston.format.printf(({ level, message, timestamp, ...meta }) => {
-          const correlationId = global.correlationId || 'N/A';
+          const correlationId = getContextCorrelationId();
           const redactedMeta = redactSensitiveData(meta);
           // Redact sensitive strings in the message itself
           const redactedMessage = redactString(message as string);
@@ -206,14 +214,63 @@ export const generateCorrelationId = (): string => {
   return crypto.randomBytes(16).toString('hex');
 };
 
-// Helper to set correlation ID globally
-export const setCorrelationId = (id: string): void => {
-  global.correlationId = id;
+/**
+ * Run a callback within a correlation context.
+ * All async operations within the callback will share the same correlation ID.
+ * This is the correct way to handle correlation IDs in concurrent request scenarios.
+ *
+ * @param correlationId - The correlation ID for this request context
+ * @param callback - The function to run within the context
+ * @returns The result of the callback
+ */
+export const runWithCorrelationId = <T>(correlationId: string, callback: () => T): T => {
+  return correlationStorage.run({ correlationId }, callback);
 };
 
-// Get current correlation ID
+/**
+ * Set correlation ID - now stored in AsyncLocalStorage context.
+ * Note: For proper request isolation, use runWithCorrelationId() instead.
+ * This function now only updates the current async context.
+ */
+export const setCorrelationId = (id: string): void => {
+  // This modifies the current context, but for proper isolation,
+  // use runWithCorrelationId at the request entry point
+  const context = correlationStorage.getStore();
+  if (context) {
+    context.correlationId = id;
+  }
+};
+
+/**
+ * Get current correlation ID from AsyncLocalStorage context.
+ * Falls back to 'N/A' if not in a correlation context.
+ */
 export const getCorrelationId = (): string => {
-  return global.correlationId || 'N/A';
+  return getContextCorrelationId();
+};
+
+/**
+ * Express middleware to automatically set up correlation ID context.
+ * Use this middleware at the start of your request pipeline.
+ */
+export const correlationIdMiddleware = (
+  req: { headers: Record<string, string | string[] | undefined> },
+  res: { setHeader: (name: string, value: string) => void },
+  next: () => void
+): void => {
+  // Use existing correlation ID from header if provided, otherwise generate new one
+  const correlationIdHeader = req.headers['x-correlation-id'];
+  const correlationId = Array.isArray(correlationIdHeader)
+    ? correlationIdHeader[0]
+    : correlationIdHeader || generateCorrelationId();
+
+  // Store correlation ID in response header for client reference
+  res.setHeader('X-Correlation-ID', correlationId);
+
+  // Run the rest of the request within the correlation context
+  runWithCorrelationId(correlationId, () => {
+    next();
+  });
 };
 
 // Child logger with additional context
@@ -241,7 +298,8 @@ export const paymentLogger = winston.createLogger({
         winston.format.colorize(),
         winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss.SSS' }),
         winston.format.printf(({ level, message, timestamp }) => {
-          return `${timestamp} [${level}] [PAYMENT] ${message}`;
+          const correlationId = getContextCorrelationId();
+          return `${timestamp} [${level}] [PAYMENT] [${correlationId}] ${message}`;
         })
       ),
     }),

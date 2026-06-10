@@ -11,7 +11,12 @@ import { ApiError } from '../utils/ApiError';
 import Joi from 'joi';
 
 const redeemSchema = Joi.object({
-  cashbackIds: Joi.array().items(Joi.string()).min(1).required(),
+  cashbackIds: Joi.array()
+    .items(Joi.string().regex(/^[0-9a-fA-F]{24}$/).required())
+    .min(1)
+    .max(50)
+    .unique()
+    .required(),
 });
 
 export const getBalance = asyncHandler(async (req: Request, res: Response) => {

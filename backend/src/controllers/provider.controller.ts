@@ -2337,3 +2337,121 @@ export const updateProviderSettings = asyncHandler(async (req: Request, res: Res
     },
   });
 });
+
+// ===========================================
+// SERVICE CLONE
+// ===========================================
+
+/**
+ * Clone a service with optional adjustments
+ * POST /api/provider/services/:id/clone
+ * SECURITY: Uses verifyServiceOwnership helper to prevent IDOR
+ */
+export const cloneService = asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const user = req.user as IUser;
+  const {
+    name,
+    priceAdjustment,
+    durationAdjustment,
+    includeImages = true,
+    includeTags = true,
+    includeVariants = true,
+    includeAddOns = true
+  } = req.body;
+
+  try {
+    // SECURITY: Use reusable helper for ownership verification
+    const { service: sourceService } = await verifyServiceOwnership(id, user);
+
+    // Validate new name
+    if (!name || typeof name !== 'string' || name.trim().length === 0) {
+      throw new ApiError(400, 'Service name is required');
+    }
+    if (name.length > 100) {
+      throw new ApiError(400, 'Service name cannot exceed 100 characters');
+    }
+
+    // Check for duplicate names
+    const existingService = await Service.findOne({
+      providerId: user._id.toString(),
+      name: { $regex: new RegExp(`^${escapeRegex(name.trim())}$`, 'i') },
+      isDeleted: { $ne: true }
+    });
+    if (existingService) {
+      throw new ApiError(400, 'A service with this name already exists');
+    }
+
+    // Build cloned service data
+    const clonedService = new Service({
+      providerId: user._id,
+      name: name.trim(),
+      category: sourceService.category,
+      subcategory: sourceService.subcategory,
+      description: sourceService.description,
+      shortDescription: sourceService.shortDescription || '',
+      duration: durationAdjustment || sourceService.duration,
+      price: {
+        amount: priceAdjustment !== undefined ? priceAdjustment : sourceService.price.amount,
+        currency: sourceService.price.currency,
+        type: sourceService.price.type,
+        discounts: sourceService.price.discounts || []
+      },
+      tags: includeTags ? [...sourceService.tags] : [],
+      requirements: [...(sourceService.requirements || [])],
+      includedItems: [...(sourceService.includedItems || [])],
+      addOns: includeAddOns ? sourceService.addOns?.map((a: any) => ({ ...a })) : [],
+      durationOptions: includeVariants ? sourceService.durationOptions?.map((v: any) => ({ ...v })) : [],
+      images: includeImages ? [...sourceService.images] : [],
+      location: {
+        ...sourceService.location
+      },
+      availability: {
+        schedule: { ...sourceService.availability.schedule },
+        exceptions: [],
+        bufferTime: sourceService.availability.bufferTime,
+        instantBooking: false,
+        advanceBookingDays: sourceService.availability.advanceBookingDays
+      },
+      status: 'draft',
+      isActive: false,
+      isFeatured: false,
+      isPopular: false,
+      rating: {
+        average: 0,
+        count: 0,
+        distribution: { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 }
+      },
+      searchMetadata: {
+        searchCount: 0,
+        clickCount: 0,
+        bookingCount: 0,
+        popularityScore: 0,
+        searchKeywords: []
+      },
+      createdBy: user._id,
+      updatedBy: user._id
+    });
+
+    await clonedService.save();
+
+    logger.info('Service cloned successfully', {
+      context: 'ProviderController',
+      action: 'SERVICE_CLONED',
+      sourceServiceId: id,
+      newServiceId: clonedService._id.toString(),
+      providerId: user._id.toString(),
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'Service cloned successfully. Review and publish when ready.',
+      data: {
+        service: clonedService
+      }
+    });
+  } catch (error: any) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, 'Failed to clone service', error.message);
+  }
+});

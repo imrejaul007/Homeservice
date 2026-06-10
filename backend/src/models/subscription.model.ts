@@ -1,31 +1,31 @@
 import mongoose, { Schema, Document } from 'mongoose';
+import {
+  PROVIDER_PLAN_FEATURES,
+  PROVIDER_PLAN_PRICES,
+  type ProviderPlanType,
+  type ProviderBillingCycle,
+} from '../constants/subscriptionPlans';
 
+// Define the subscription status type
+export type SubscriptionStatus = 'active' | 'paused' | 'cancelled' | 'trial' | 'expired';
+
+// Document interface
 export interface ISubscription extends Document {
-  // Multi-tenant support
   tenantId?: mongoose.Types.ObjectId;
-
   providerId: mongoose.Types.ObjectId;
-  plan: 'basic' | 'standard' | 'premium' | 'enterprise';
-  status: 'active' | 'paused' | 'cancelled' | 'trial' | 'expired';
-  billingCycle: 'monthly' | 'yearly';
+  plan: ProviderPlanType;
+  status: SubscriptionStatus;
+  billingCycle: ProviderBillingCycle;
   price: number;
   currency: string;
-
-  // Trial period
   trialEndsAt?: Date;
   isInTrialPeriod: boolean;
-
-  // Billing
   currentPeriodStart: Date;
   currentPeriodEnd: Date;
   nextBillingDate: Date;
   autoRenew: boolean;
-
-  // Payment
   stripeSubscriptionId?: string;
   stripePriceId?: string;
-
-  // Features included
   features: {
     maxServices: number;
     maxImagesPerService: number;
@@ -34,116 +34,37 @@ export interface ISubscription extends Document {
     analyticsAccess: boolean;
     customBranding: boolean;
     apiAccess: boolean;
-    commissionRate: number; // Provider commission rate (e.g., 10 = 10%)
+    commissionRate: number;
   };
-
-  // Usage
   usage: {
     servicesUsed: number;
     imagesUsed: number;
     bookingsThisPeriod: number;
   };
-
-  // Limits
   limits: {
     maxBookingsPerMonth: number;
     maxCustomers: number;
   };
-
-  // Cancellation
   cancelledAt?: Date;
   cancellationReason?: string;
   willRenew: boolean;
-
-  // History
   history: Array<{
     plan: string;
     price: number;
     changedAt: Date;
     reason?: string;
   }>;
-
   createdAt: Date;
   updatedAt: Date;
 }
 
-// Plan configurations
-export const PLAN_FEATURES = {
-  basic: {
-    maxServices: 5,
-    maxImagesPerService: 3,
-    featuredListingEnabled: false,
-    prioritySupport: false,
-    analyticsAccess: false,
-    customBranding: false,
-    apiAccess: false,
-    commissionRate: 15, // 15% commission
-    maxBookingsPerMonth: 50,
-    maxCustomers: 100,
-  },
-  standard: {
-    maxServices: 15,
-    maxImagesPerService: 5,
-    featuredListingEnabled: true,
-    prioritySupport: false,
-    analyticsAccess: true,
-    customBranding: false,
-    apiAccess: false,
-    commissionRate: 12,
-    maxBookingsPerMonth: 200,
-    maxCustomers: 500,
-  },
-  premium: {
-    maxServices: 50,
-    maxImagesPerService: 10,
-    featuredListingEnabled: true,
-    prioritySupport: true,
-    analyticsAccess: true,
-    customBranding: true,
-    apiAccess: false,
-    commissionRate: 10,
-    maxBookingsPerMonth: 1000,
-    maxCustomers: 2000,
-  },
-  enterprise: {
-    maxServices: -1, // Unlimited
-    maxImagesPerService: 20,
-    featuredListingEnabled: true,
-    prioritySupport: true,
-    analyticsAccess: true,
-    customBranding: true,
-    apiAccess: true,
-    commissionRate: 8,
-    maxBookingsPerMonth: -1, // Unlimited
-    maxCustomers: -1, // Unlimited
-  },
-} as const;
-
-// Pricing
-export const PLAN_PRICES = {
-  monthly: {
-    basic: 99,
-    standard: 299,
-    premium: 599,
-    enterprise: 1299,
-  },
-  yearly: {
-    basic: 990,
-    standard: 2990,
-    premium: 5990,
-    enterprise: 12990,
-  },
-} as const;
-
-const subscriptionSchema = new Schema<ISubscription>(
+const subscriptionSchema = new Schema(
   {
-    // Multi-tenant support
     tenantId: {
       type: Schema.Types.ObjectId,
       ref: 'Tenant',
       index: true
     },
-
     providerId: {
       type: Schema.Types.ObjectId,
       ref: 'User',
@@ -244,8 +165,8 @@ subscriptionSchema.virtual('isInTrialPeriod').get(function() {
 // Pre-save hook to set features based on plan
 subscriptionSchema.pre('save', function(next) {
   if (this.isModified('plan') || this.isModified('billingCycle')) {
-    const planFeatures = PLAN_FEATURES[this.plan as keyof typeof PLAN_FEATURES];
-    const planPrices = PLAN_PRICES[this.billingCycle as keyof typeof PLAN_PRICES];
+    const planFeatures = PROVIDER_PLAN_FEATURES[this.plan as keyof typeof PROVIDER_PLAN_FEATURES];
+    const planPrices = PROVIDER_PLAN_PRICES[this.billingCycle as keyof typeof PROVIDER_PLAN_PRICES];
 
     if (planFeatures && planPrices) {
       this.features = {
@@ -258,8 +179,10 @@ subscriptionSchema.pre('save', function(next) {
   next();
 });
 
+// Re-export for backward compatibility
+export { PROVIDER_PLAN_FEATURES as PLAN_FEATURES, PROVIDER_PLAN_PRICES as PLAN_PRICES };
+
 // Indexes for query optimization
-// Note: stripeSubscriptionId has index: true on field, stripePriceId is indexed via sparse index below
 subscriptionSchema.index({ providerId: 1, status: 1 });
 subscriptionSchema.index({ status: 1, nextBillingDate: 1 });
 subscriptionSchema.index({ status: 1, currentPeriodEnd: 1 });

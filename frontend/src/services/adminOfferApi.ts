@@ -16,6 +16,8 @@ export interface AdminOffer {
   imageUrl?: string;
   featured?: boolean;
   isActive: boolean;
+  // FIX: Add approval workflow status
+  status?: 'draft' | 'pending_review' | 'approved' | 'published' | 'archived';
   validFrom: string;
   validUntil: string;
   maxUses: number;
@@ -23,6 +25,18 @@ export interface AdminOffer {
   currentUses: number;
   applicableServices: string[];
   applicableCategories: string[];
+  claimExpiresInDays?: number;
+
+  // NEW: Target type for audience restrictions
+  targetType?: 'all' | 'new_users' | 'specific_users' | 'specific_services' | 'first_booking' | 'specific_providers';
+
+  // NEW: Provider-specific offers
+  targetProviders?: string[];
+
+  // NEW: Day/time restrictions
+  validDays?: string[];
+  validTimeStart?: string;
+  validTimeEnd?: string;
 }
 
 export interface OfferFormPayload {
@@ -45,6 +59,18 @@ export interface OfferFormPayload {
   isActive?: boolean;
   applicableServices?: string[];
   applicableCategories?: string[];
+  claimExpiresInDays?: number;
+
+  // NEW: Target type for audience restrictions
+  targetType?: 'all' | 'new_users' | 'specific_users' | 'specific_services' | 'first_booking' | 'specific_providers';
+
+  // NEW: Provider-specific offers
+  targetProviders?: string[];
+
+  // NEW: Day/time restrictions
+  validDays?: string[];
+  validTimeStart?: string;
+  validTimeEnd?: string;
 }
 
 function normalizeOffer(raw: Record<string, unknown>): AdminOffer {
@@ -72,6 +98,8 @@ function toApiPayload(form: OfferFormPayload) {
     validUntil: new Date(`${form.validUntil}T23:59:59.999`).toISOString(),
     applicableServices: form.applicableServices || [],
     applicableCategories: form.applicableCategories || [],
+    targetProviders: form.targetProviders || [],
+    validDays: form.validDays || [],
     maxUsesPerUser: form.maxUsesPerUser ?? 1,
     maxDiscount: form.maxDiscount || undefined,
   };
@@ -126,5 +154,23 @@ export const adminOfferApi = {
   loadCategoryOptions: async (): Promise<Array<{ _id: string; name: string }>> => {
     const response = await api.get('/admin/categories', { params: { limit: 200, page: 1 } });
     return response.data.data?.categories || [];
+  },
+
+  // Archive an offer - uses /api/offers/admin/:id/archive endpoint
+  archive: async (id: string) => {
+    const response = await api.post(`/offers/admin/${id}/archive`);
+    return response.data;
+  },
+
+  // Clone an offer - uses /api/offers/admin/:id/clone endpoint
+  clone: async (id: string, newCode: string) => {
+    const response = await api.post(`/offers/admin/${id}/clone`, { newCode });
+    return response.data;
+  },
+
+  // Update offer status (for approval workflow) - uses /api/offers/admin/:id/status endpoint
+  updateStatus: async (id: string, status: string, isActive?: boolean) => {
+    const response = await api.patch(`/offers/admin/${id}/status`, { status, isActive });
+    return response.data;
   },
 };

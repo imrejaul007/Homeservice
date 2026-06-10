@@ -44,6 +44,7 @@ import {
   Activity,
   Award,
 } from 'lucide-react';
+import toast from 'react-hot-toast';
 
 // ============================================
 // KPI Card Component
@@ -283,8 +284,8 @@ const ExecutiveDashboard: React.FC = () => {
       }
 
       setLastUpdated(new Date());
-    } catch (error) {
-      console.error('Failed to fetch dashboard data:', error);
+    } catch {
+      toast.error('Failed to load executive dashboard data');
     } finally {
       setLoading(false);
       setRefreshing(false);

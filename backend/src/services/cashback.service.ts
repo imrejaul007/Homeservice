@@ -1,5 +1,6 @@
 import Cashback from '../models/cashback.model';
 import Wallet from '../models/wallet.model';
+import mongoose from 'mongoose';
 import logger from '../utils/logger';
 import { randomUUID } from 'crypto';
 import { Request } from 'express';
@@ -88,12 +89,35 @@ export const earnCashback = async (
       return { success: false, error: 'Cashback amount is zero or negative' };
     }
 
+    if (sourceId) {
+      const existing = await Cashback.findOne({
+        userId,
+        source,
+        sourceId,
+        isDeleted: false,
+      }).lean();
+
+      if (existing) {
+        logger.info('Cashback already awarded — skipping duplicate', {
+          userId,
+          source,
+          sourceId,
+          cashbackId: existing._id.toString(),
+        });
+        return {
+          success: true,
+          cashbackId: existing._id.toString(),
+          amount: existing.amount,
+        };
+      }
+    }
+
     const cashbackData: Record<string, unknown> = {
       userId,
       amount: calculation.cashbackAmount,
       currency: 'AED',
       source,
-      status: 'earned',
+      status: 'available',
       sourceDescription,
       originalAmount: amount,
       percentage: calculation.percentage,
@@ -297,58 +321,105 @@ export const redeemCashbackToWallet = async (
     const tenantId = req ? getTenantIdOptional(req) : undefined;
     const isAdmin = req ? isAdminOrSystem(req) : false;
 
-    // Validate and get cashbacks
-    const query: Record<string, unknown> = {
+    // SECURITY FIX: Verify ALL cashbackIds belong to this user before redemption
+    // First, verify count of user's available cashbacks matches requested IDs
+    const ownershipCheckQuery: Record<string, unknown> = {
+      _id: { $in: cashbackIds },
+      status: 'available',
+    };
+    if (!isAdmin && tenantId) {
+      ownershipCheckQuery.tenantId = tenantId;
+    }
+
+    // Count how many of the requested IDs are actually available for THIS user
+    const availableForUser = await Cashback.countDocuments({
+      ...ownershipCheckQuery,
+      userId,
+    });
+
+    // Count total requested (regardless of owner) to detect IDOR attempts
+    const totalRequested = await Cashback.countDocuments({
+      _id: { $in: cashbackIds },
+      status: 'available',
+    });
+
+    // If the counts don't match, someone is trying to redeem cashbacks they don't own
+    if (availableForUser !== cashbackIds.length || totalRequested !== cashbackIds.length) {
+      logger.warn('Cashback IDOR attempt detected', {
+        userId,
+        cashbackIds,
+        availableForUser,
+        totalRequested,
+        requestedCount: cashbackIds.length,
+        action: 'CASHBACK_IDOR_BLOCKED',
+      });
+      return { success: false, error: 'Invalid cashback selection. Please try again.' };
+    }
+
+    // Now safely fetch the cashbacks - they are guaranteed to belong to this user
+    const cashbacks = await Cashback.find({
       _id: { $in: cashbackIds },
       userId,
       status: 'available',
-    };
+    });
 
-    if (!isAdmin && tenantId) {
-      query.tenantId = tenantId;
-    }
-
-    const cashbacks = await Cashback.find(query);
-
+    // Final verification - ensure count matches
     if (cashbacks.length !== cashbackIds.length) {
-      return { success: false, error: 'Some cashback entries not found or not available' };
+      return { success: false, error: 'Some cashback entries are no longer available' };
     }
 
     const totalRedeemed = cashbacks.reduce((sum, cb) => sum + cb.amount, 0);
+    const redemptionReference = `cashback_redeem_${randomUUID()}`;
 
-    // Redeem to wallet
-    const walletResult = await creditWallet(
-      {
-        userId,
-        type: 'credit',
-        amount: totalRedeemed,
-        description: `Cashback redemption (${cashbacks.length} entries)`,
-        reference: `cashback_redeem_${randomUUID()}`,
-        referenceType: 'bonus',
-        metadata: {
-          cashbackIds: cashbackIds.map((id) => id.toString()),
-          source: 'cashback_redemption',
+    const session = await mongoose.startSession();
+    let walletResult: Awaited<ReturnType<typeof creditWallet>>;
+
+    try {
+      session.startTransaction();
+
+      walletResult = await creditWallet(
+        {
+          userId,
+          type: 'credit',
+          amount: totalRedeemed,
+          description: `Cashback redemption (${cashbacks.length} entries)`,
+          reference: redemptionReference,
+          referenceType: 'bonus',
+          metadata: {
+            cashbackIds: cashbackIds.map((id) => id.toString()),
+            source: 'cashback_redemption',
+          },
         },
-      },
-      req
-    );
+        req,
+        undefined,
+        session
+      );
 
-    if (!walletResult.success) {
-      return { success: false, error: walletResult.error };
-    }
-
-    // Update cashback statuses
-    await Cashback.updateMany(
-      { _id: { $in: cashbackIds } },
-      {
-        $set: {
-          status: 'redeemed',
-          redeemedAt: new Date(),
-          redeemedTo: 'wallet',
-          redemptionReference: walletResult.transactionId,
-        },
+      if (!walletResult.success) {
+        await session.abortTransaction();
+        return { success: false, error: walletResult.error };
       }
-    );
+
+      await Cashback.updateMany(
+        { _id: { $in: cashbackIds }, userId },
+        {
+          $set: {
+            status: 'redeemed',
+            redeemedAt: new Date(),
+            redeemedTo: 'wallet',
+            redemptionReference: walletResult.transactionId,
+          },
+        },
+        { session }
+      );
+
+      await session.commitTransaction();
+    } catch (error: any) {
+      await session.abortTransaction();
+      throw error;
+    } finally {
+      session.endSession();
+    }
 
     logger.info('Cashback redeemed to wallet', {
       userId,

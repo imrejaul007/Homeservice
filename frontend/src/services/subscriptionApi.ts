@@ -1,145 +1,82 @@
 import { api } from './api';
 
 // ============================================
-// Types
+// Types - Re-exported from unified types file
 // ============================================
 
-export type PlanType = 'free' | 'basic' | 'premium' | 'enterprise';
-export type SubscriptionStatus = 'active' | 'cancelled' | 'past_due' | 'expired' | 'trialing';
-export type BillingCycle = 'monthly' | 'yearly';
-export type MembershipTier = 'standard' | 'silver' | 'gold' | 'platinum' | 'vip';
+export {
+  // Provider subscription tiers
+  type ProviderSubscriptionTier,
+  PROVIDER_TIER_ORDER,
+  PROVIDER_TIER_CONFIG,
+  // Customer subscription types
+  type CustomerPlanType,
+  type SubscriptionStatus,
+  type BillingCycle,
+  // Membership tiers
+  type MembershipTier,
+  MEMBERSHIP_TIER_ORDER,
+  // API plan tiers
+  type ApiPlanTier,
+  // Interfaces
+  type SubscriptionPlan,
+  type Subscription,
+  type MembershipBenefits,
+  type FeaturedListing,
+  type Membership,
+  type UsageStats,
+  type BillingHistoryItem,
+  type TierUpgradeEligibility,
+  type PaymentMethod,
+} from '../types/subscription.types';
 
-export interface SubscriptionPlan {
-  id: PlanType;
-  name: string;
-  price: number;
-  currency: string;
-  features: string[];
-  limits: {
-    bookingsPerMonth?: number;
-    featuredListings?: number;
-    commissionDiscount?: number;
-    maxAddresses?: number;
-    maxPaymentMethods?: number;
-    prioritySupport?: boolean;
-    exclusiveOffers?: boolean;
-    earlyAccess?: boolean;
-  };
-}
+// ============================================
+// Invoice Types (for subscription invoices)
+// ============================================
 
-export interface Subscription {
-  _id: string;
-  userId: string;
-  plan: PlanType;
-  status: SubscriptionStatus;
-  billingCycle: BillingCycle;
-  currentPeriodStart: string;
-  currentPeriodEnd: string;
-  cancelAtPeriodEnd: boolean;
-  trialEnd?: string;
-  stripeSubscriptionId?: string;
-  price: number;
-  currency: string;
-  cancelledAt?: string;
-  cancellationReason?: string;
-  usage: {
-    bookingsThisMonth: number;
-    featuredListingsUsed: number;
-    totalSpent: number;
-  };
-  history: Array<{
-    plan: PlanType;
-    price: number;
-    changedAt: string;
-    reason?: string;
-    changedBy: 'user' | 'admin' | 'system';
-  }>;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface MembershipBenefits {
-  featuredListingCredits: number;
-  featuredListingDuration: number;
-  prioritySupport: boolean;
-  priorityResponseTime?: number;
-  bookingPriority: boolean;
-  exclusiveProviders: boolean;
-  commissionDiscount: number;
-  cashbackPercentage: number;
-  exclusiveDiscounts: boolean;
-  earlyAccess: boolean;
-  exclusiveEvents: boolean;
-  vipConcierge: boolean;
-  customNotifications: boolean;
-  advancedAnalytics: boolean;
-}
-
-export interface FeaturedListing {
+export interface SubscriptionInvoice {
   id: string;
-  serviceId?: string;
-  experienceId?: string;
-  title: string;
-  imageUrl?: string;
-  startDate: string;
-  endDate: string;
-  status: 'pending' | 'active' | 'completed' | 'cancelled';
-  placement?: 'top' | 'featured' | 'category';
-}
-
-export interface Membership {
-  _id: string;
-  userId: string;
-  tier: MembershipTier;
-  status: 'active' | 'expired' | 'cancelled' | 'suspended';
-  startDate: string;
-  endDate: string;
-  benefits: MembershipBenefits;
-  featuredListings: FeaturedListing[];
-  featuredListingCreditsUsed: number;
-  totalCashbackEarned: number;
-  totalDiscountsReceived: number;
-  metrics: {
-    totalBookings: number;
-    totalSpent: number;
-    averageRating: number;
-    referralCount: number;
-    referralConversions: number;
-    exclusiveOffersUsed: number;
-    priorityBookings: number;
-  };
+  invoiceNumber: string;
+  type: 'booking' | 'subscription' | 'refund' | 'adjustment';
+  status: 'draft' | 'pending' | 'sent' | 'paid' | 'overdue' | 'cancelled' | 'refunded';
+  customerId: string;
+  customerName: string;
+  customerEmail: string;
+  items: Array<{
+    id: string;
+    description: string;
+    quantity: number;
+    unitPrice: number;
+    totalPrice: number;
+  }>;
+  subtotal: number;
+  taxRate: number;
+  taxAmount: number;
+  discountAmount: number;
+  totalAmount: number;
+  currency: string;
+  dueDate: string;
+  paidAt?: string;
+  sentAt?: string;
+  notes?: string;
+  pdfUrl?: string;
   createdAt: string;
   updatedAt: string;
 }
 
-export interface UsageStats {
-  bookingsThisMonth: number;
-  bookingLimit: number;
-  featuredListingsUsed: number;
-  featuredListingLimit: number;
-  isUnderLimit: boolean;
-}
-
-export interface BillingHistoryItem {
-  date: string;
-  description: string;
-  amount: number;
-  status: 'paid' | 'pending' | 'failed' | 'refunded';
-  invoiceUrl?: string;
-}
-
-export interface TierUpgradeEligibility {
-  currentTier: MembershipTier;
-  nextTier: MembershipTier | null;
-  requirements: {
-    minBookings?: number;
-    minSpent?: number;
-    minRating?: number;
-    referralCount?: number;
+export interface SubscriptionInvoicesResponse {
+  success: boolean;
+  data: {
+    invoices: SubscriptionInvoice[];
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
   };
-  progress: Record<string, number>;
-  canUpgrade: boolean;
 }
+
+// PlanType is now exported as CustomerPlanType from subscription.types.ts
+export { type CustomerPlanType as PlanType } from '../types/subscription.types';
 
 // ============================================
 // API Response Types
@@ -197,6 +134,26 @@ interface StatsResponse {
 }
 
 // ============================================
+// Error Handling Helper
+// ============================================
+
+function getErrorMessage(error: unknown, fallback: string): string {
+  if (error && typeof error === 'object') {
+    const err = error as Record<string, unknown>;
+    if (err.response?.data?.message) {
+      return String(err.response.data.message);
+    }
+    if (err.response?.data?.error) {
+      return String(err.response.data.error);
+    }
+    if (err.message) {
+      return String(err.message);
+    }
+  }
+  return fallback;
+}
+
+// ============================================
 // Subscription API Service
 // ============================================
 
@@ -209,47 +166,63 @@ class SubscriptionApiService {
    * Get current user's subscription
    */
   async getSubscription(): Promise<SubscriptionResponse> {
-    const response = await api.get('/subscriptions/me');
-    return response.data;
+    try {
+      const response = await api.get('/subscriptions/me');
+      return response.data;
+    } catch (error) {
+      throw new Error(getErrorMessage(error, 'Failed to fetch subscription'));
+    }
   }
 
   /**
    * Get available subscription plans
    */
   async getPlans(): Promise<{ success: boolean; data: SubscriptionPlan[] }> {
-    const response = await api.get('/subscriptions/plans');
-    return response.data;
+    try {
+      const response = await api.get('/subscriptions/plans');
+      return response.data;
+    } catch (error) {
+      throw new Error(getErrorMessage(error, 'Failed to fetch subscription plans'));
+    }
   }
 
   /**
    * Create a new subscription
    */
   async createSubscription(data: {
-    plan: PlanType;
+    plan: CustomerPlanType;
     billingCycle: BillingCycle;
     paymentMethodId?: string;
     trialDays?: number;
   }): Promise<SubscriptionResponse> {
-    const response = await api.post('/subscriptions', data);
-    return response.data;
+    try {
+      const response = await api.post('/subscriptions', data);
+      return response.data;
+    } catch (error) {
+      throw new Error(getErrorMessage(error, 'Failed to create subscription'));
+    }
   }
 
   /**
    * Change subscription plan
    */
   async changePlan(
-    newPlan: PlanType,
+    newPlan: CustomerPlanType,
     options?: {
       billingCycle?: BillingCycle;
       immediate?: boolean;
       reason?: string;
     }
   ): Promise<SubscriptionResponse> {
-    const response = await api.patch('/subscriptions/plan', {
-      plan: newPlan,
-      ...options,
-    });
-    return response.data;
+    try {
+      const response = await api.patch('/subscriptions/plan', {
+        plan: newPlan,
+        ...options,
+      });
+      return response.data;
+    } catch (error) {
+      throw new Error(getErrorMessage(error, 'Failed to change subscription plan'));
+    }
   }
 
   /**
@@ -259,26 +232,57 @@ class SubscriptionApiService {
     immediate?: boolean;
     reason?: string;
   }): Promise<SubscriptionResponse> {
-    const response = await api.post('/subscriptions/cancel', options || {});
-    return response.data;
+    try {
+      const response = await api.post('/subscriptions/cancel', options || {});
+      return response.data;
+    } catch (error) {
+      throw new Error(getErrorMessage(error, 'Failed to cancel subscription'));
+    }
   }
 
   /**
    * Reactivate cancelled subscription
    */
   async reactivateSubscription(): Promise<SubscriptionResponse> {
-    const response = await api.post('/subscriptions/reactivate');
-    return response.data;
+    try {
+      const response = await api.post('/subscriptions/reactivate');
+      return response.data;
+    } catch (error) {
+      throw new Error(getErrorMessage(error, 'Failed to reactivate subscription'));
+    }
   }
 
   /**
    * Update payment method
    */
   async updatePaymentMethod(paymentMethodId: string): Promise<SubscriptionResponse> {
-    const response = await api.patch('/subscriptions/payment-method', {
-      paymentMethodId,
-    });
-    return response.data;
+    try {
+      const response = await api.patch('/subscriptions/payment-method', {
+        paymentMethodId,
+      });
+      return response.data;
+    } catch (error) {
+      throw new Error(getErrorMessage(error, 'Failed to update payment method'));
+    }
+  }
+
+  /**
+   * Get user's saved payment methods (from Stripe and local storage)
+   */
+  async getPaymentMethods(): Promise<{
+    success: boolean;
+    data: {
+      paymentMethods: PaymentMethod[];
+      defaultMethod: PaymentMethod | null;
+      hasStripeCustomer: boolean;
+    };
+  }> {
+    try {
+      const response = await api.get('/payments/methods');
+      return response.data;
+    } catch (error) {
+      throw new Error(getErrorMessage(error, 'Failed to fetch payment methods'));
+    }
   }
 
   // ========================================
@@ -289,8 +293,12 @@ class SubscriptionApiService {
    * Get usage statistics
    */
   async getUsageStats(): Promise<UsageStatsResponse> {
-    const response = await api.get('/subscriptions/usage');
-    return response.data;
+    try {
+      const response = await api.get('/subscriptions/usage');
+      return response.data;
+    } catch (error) {
+      throw new Error(getErrorMessage(error, 'Failed to fetch usage statistics'));
+    }
   }
 
   /**
@@ -300,8 +308,12 @@ class SubscriptionApiService {
     success: boolean;
     data: { allowed: boolean; reason?: string };
   }> {
-    const response = await api.get(`/subscriptions/permissions/${action}`);
-    return response.data;
+    try {
+      const response = await api.get(`/subscriptions/permissions/${action}`);
+      return response.data;
+    } catch (error) {
+      throw new Error(getErrorMessage(error, 'Failed to check permission'));
+    }
   }
 
   // ========================================
@@ -323,15 +335,73 @@ class SubscriptionApiService {
       pages: number;
     };
   }> {
-    const params = new URLSearchParams();
-    if (options?.page) params.append('page', options.page.toString());
-    if (options?.limit) params.append('limit', options.limit.toString());
+    try {
+      const params = new URLSearchParams();
+      if (options?.page) params.append('page', options.page.toString());
+      if (options?.limit) params.append('limit', options.limit.toString());
 
-    const queryString = params.toString();
-    const url = `/subscriptions/history${queryString ? `?${queryString}` : ''}`;
+      const queryString = params.toString();
+      const url = `/subscriptions/history${queryString ? `?${queryString}` : ''}`;
 
-    const response = await api.get(url);
-    return response.data;
+      const response = await api.get(url);
+      return response.data;
+    } catch (error) {
+      throw new Error(getErrorMessage(error, 'Failed to fetch billing history'));
+    }
+  }
+
+  // ========================================
+  // Subscription Invoices
+  // ========================================
+
+  /**
+   * Get invoices for the current user's subscription
+   */
+  async getInvoices(options?: {
+    page?: number;
+    limit?: number;
+    status?: string;
+  }): Promise<SubscriptionInvoicesResponse> {
+    try {
+      const params = new URLSearchParams();
+      if (options?.page) params.append('page', options.page.toString());
+      if (options?.limit) params.append('limit', options.limit.toString());
+      if (options?.status) params.append('status', options.status);
+
+      const queryString = params.toString();
+      const url = `/subscriptions/invoices${queryString ? `?${queryString}` : ''}`;
+
+      const response = await api.get(url);
+      return response.data;
+    } catch (error) {
+      throw new Error(getErrorMessage(error, 'Failed to fetch invoices'));
+    }
+  }
+
+  /**
+   * Download an invoice as PDF
+   */
+  async downloadInvoice(invoiceId: string): Promise<Blob> {
+    try {
+      const response = await api.get(`/subscriptions/invoices/${invoiceId}/pdf`, {
+        responseType: 'blob',
+      });
+      return response.data;
+    } catch (error) {
+      throw new Error(getErrorMessage(error, 'Failed to download invoice'));
+    }
+  }
+
+  /**
+   * Get the PDF URL for an invoice (for opening in new tab)
+   */
+  async getInvoicePdfUrl(invoiceId: string): Promise<{ url: string; expiresAt: string }> {
+    try {
+      const response = await api.get(`/subscriptions/invoices/${invoiceId}/pdf-url`);
+      return response.data.data;
+    } catch (error) {
+      throw new Error(getErrorMessage(error, 'Failed to get invoice PDF URL'));
+    }
   }
 
   // ========================================
@@ -342,8 +412,12 @@ class SubscriptionApiService {
    * Get current user's membership
    */
   async getMembership(): Promise<MembershipResponse> {
-    const response = await api.get('/membership/me');
-    return response.data;
+    try {
+      const response = await api.get('/membership/me');
+      return response.data;
+    } catch (error) {
+      throw new Error(getErrorMessage(error, 'Failed to fetch membership'));
+    }
   }
 
   /**
@@ -364,8 +438,12 @@ class SubscriptionApiService {
       };
     }>;
   }> {
-    const response = await api.get('/membership/tiers');
-    return response.data;
+    try {
+      const response = await api.get('/membership/tiers');
+      return response.data;
+    } catch (error) {
+      throw new Error(getErrorMessage(error, 'Failed to fetch membership tiers'));
+    }
   }
 
   /**
@@ -378,19 +456,27 @@ class SubscriptionApiService {
       reason?: string;
     }
   ): Promise<MembershipResponse> {
-    const response = await api.post('/membership/upgrade', {
-      tier,
-      ...options,
-    });
-    return response.data;
+    try {
+      const response = await api.post('/membership/upgrade', {
+        tier,
+        ...options,
+      });
+      return response.data;
+    } catch (error) {
+      throw new Error(getErrorMessage(error, 'Failed to upgrade membership tier'));
+    }
   }
 
   /**
    * Check tier upgrade eligibility
    */
   async checkTierEligibility(): Promise<TierEligibilityResponse> {
-    const response = await api.get('/membership/eligibility');
-    return response.data;
+    try {
+      const response = await api.get('/membership/eligibility');
+      return response.data;
+    } catch (error) {
+      throw new Error(getErrorMessage(error, 'Failed to check tier eligibility'));
+    }
   }
 
   // ========================================
@@ -404,8 +490,12 @@ class SubscriptionApiService {
     success: boolean;
     data: FeaturedListing[];
   }> {
-    const response = await api.get('/membership/featured-listings');
-    return response.data;
+    try {
+      const response = await api.get('/membership/featured-listings');
+      return response.data;
+    } catch (error) {
+      throw new Error(getErrorMessage(error, 'Failed to fetch featured listings'));
+    }
   }
 
   /**
@@ -423,8 +513,12 @@ class SubscriptionApiService {
     success: boolean;
     data: FeaturedListing;
   }> {
-    const response = await api.post('/membership/featured-listings', data);
-    return response.data;
+    try {
+      const response = await api.post('/membership/featured-listings', data);
+      return response.data;
+    } catch (error) {
+      throw new Error(getErrorMessage(error, 'Failed to add featured listing'));
+    }
   }
 
   /**
@@ -434,8 +528,12 @@ class SubscriptionApiService {
     success: boolean;
     message: string;
   }> {
-    const response = await api.delete(`/membership/featured-listings/${listingId}`);
-    return response.data;
+    try {
+      const response = await api.delete(`/membership/featured-listings/${listingId}`);
+      return response.data;
+    } catch (error) {
+      throw new Error(getErrorMessage(error, 'Failed to cancel featured listing'));
+    }
   }
 
   // ========================================
@@ -455,8 +553,12 @@ class SubscriptionApiService {
     success: boolean;
     message: string;
   }> {
-    const response = await api.post(`/membership/booking-priority/${providerId}`, options || {});
-    return response.data;
+    try {
+      const response = await api.post(`/membership/booking-priority/${providerId}`, options || {});
+      return response.data;
+    } catch (error) {
+      throw new Error(getErrorMessage(error, 'Failed to add booking priority'));
+    }
   }
 
   /**
@@ -466,8 +568,12 @@ class SubscriptionApiService {
     success: boolean;
     data: { hasPriority: boolean };
   }> {
-    const response = await api.get(`/membership/booking-priority/${providerId}`);
-    return response.data;
+    try {
+      const response = await api.get(`/membership/booking-priority/${providerId}`);
+      return response.data;
+    } catch (error) {
+      throw new Error(getErrorMessage(error, 'Failed to check booking priority'));
+    }
   }
 
   // ========================================
@@ -497,16 +603,20 @@ class SubscriptionApiService {
       pages: number;
     };
   }> {
-    const params = new URLSearchParams();
-    if (options?.type) params.append('type', options.type);
-    if (options?.page) params.append('page', options.page.toString());
-    if (options?.limit) params.append('limit', options.limit.toString());
+    try {
+      const params = new URLSearchParams();
+      if (options?.type) params.append('type', options.type);
+      if (options?.page) params.append('page', options.page.toString());
+      if (options?.limit) params.append('limit', options.limit.toString());
 
-    const queryString = params.toString();
-    const url = `/membership/transactions${queryString ? `?${queryString}` : ''}`;
+      const queryString = params.toString();
+      const url = `/membership/transactions${queryString ? `?${queryString}` : ''}`;
 
-    const response = await api.get(url);
-    return response.data;
+      const response = await api.get(url);
+      return response.data;
+    } catch (error) {
+      throw new Error(getErrorMessage(error, 'Failed to fetch membership transactions'));
+    }
   }
 
   // ========================================
@@ -528,8 +638,12 @@ class SubscriptionApiService {
       estimatedResponseTime: string;
     };
   }> {
-    const response = await api.post('/membership/concierge', data);
-    return response.data;
+    try {
+      const response = await api.post('/membership/concierge', data);
+      return response.data;
+    } catch (error) {
+      throw new Error(getErrorMessage(error, 'Failed to submit concierge request'));
+    }
   }
 
   // ========================================
@@ -543,27 +657,35 @@ class SubscriptionApiService {
     page?: number;
     limit?: number;
     status?: SubscriptionStatus;
-    plan?: PlanType;
+    plan?: CustomerPlanType;
   }): Promise<SubscriptionListResponse> {
-    const params = new URLSearchParams();
-    if (options?.page) params.append('page', options.page.toString());
-    if (options?.limit) params.append('limit', options.limit.toString());
-    if (options?.status) params.append('status', options.status);
-    if (options?.plan) params.append('plan', options.plan);
+    try {
+      const params = new URLSearchParams();
+      if (options?.page) params.append('page', options.page.toString());
+      if (options?.limit) params.append('limit', options.limit.toString());
+      if (options?.status) params.append('status', options.status);
+      if (options?.plan) params.append('plan', options.plan);
 
-    const queryString = params.toString();
-    const url = `/admin/subscriptions${queryString ? `?${queryString}` : ''}`;
+      const queryString = params.toString();
+      const url = `/admin/subscriptions${queryString ? `?${queryString}` : ''}`;
 
-    const response = await api.get(url);
-    return response.data;
+      const response = await api.get(url);
+      return response.data;
+    } catch (error) {
+      throw new Error(getErrorMessage(error, 'Failed to fetch all subscriptions'));
+    }
   }
 
   /**
    * Get subscription statistics (admin)
    */
   async getStats(): Promise<StatsResponse> {
-    const response = await api.get('/admin/subscriptions/stats');
-    return response.data;
+    try {
+      const response = await api.get('/admin/subscriptions/stats');
+      return response.data;
+    } catch (error) {
+      throw new Error(getErrorMessage(error, 'Failed to fetch subscription statistics'));
+    }
   }
 
   /**
@@ -575,17 +697,21 @@ class SubscriptionApiService {
     tier?: MembershipTier;
     status?: string;
   }): Promise<MembershipListResponse> {
-    const params = new URLSearchParams();
-    if (options?.page) params.append('page', options.page.toString());
-    if (options?.limit) params.append('limit', options.limit.toString());
-    if (options?.tier) params.append('tier', options.tier);
-    if (options?.status) params.append('status', options.status);
+    try {
+      const params = new URLSearchParams();
+      if (options?.page) params.append('page', options.page.toString());
+      if (options?.limit) params.append('limit', options.limit.toString());
+      if (options?.tier) params.append('tier', options.tier);
+      if (options?.status) params.append('status', options.status);
 
-    const queryString = params.toString();
-    const url = `/admin/memberships${queryString ? `?${queryString}` : ''}`;
+      const queryString = params.toString();
+      const url = `/admin/memberships${queryString ? `?${queryString}` : ''}`;
 
-    const response = await api.get(url);
-    return response.data;
+      const response = await api.get(url);
+      return response.data;
+    } catch (error) {
+      throw new Error(getErrorMessage(error, 'Failed to fetch all memberships'));
+    }
   }
 
   /**
@@ -602,8 +728,12 @@ class SubscriptionApiService {
       totalDiscountsIssued: number;
     };
   }> {
-    const response = await api.get('/admin/memberships/stats');
-    return response.data;
+    try {
+      const response = await api.get('/admin/memberships/stats');
+      return response.data;
+    } catch (error) {
+      throw new Error(getErrorMessage(error, 'Failed to fetch membership statistics'));
+    }
   }
 }
 
@@ -622,30 +752,46 @@ export default subscriptionApi;
  * Simple get current subscription - returns the data directly
  */
 export async function getSubscription() {
-  const response = await api.get('/subscription/current');
-  return response.data;
+  try {
+    const response = await api.get('/subscription/current');
+    return response.data;
+  } catch (error) {
+    throw new Error(getErrorMessage(error, 'Failed to fetch subscription'));
+  }
 }
 
 /**
  * Simple subscribe to a tier
  */
 export async function subscribe(tier: string) {
-  const res = await api.post('/subscription/create', { tier });
-  return res.data;
+  try {
+    const res = await api.post('/subscription/create', { tier });
+    return res.data;
+  } catch (error) {
+    throw new Error(getErrorMessage(error, 'Failed to subscribe'));
+  }
 }
 
 /**
  * Simple cancel subscription
  */
 export async function cancelSubscriptionSimple() {
-  const res = await api.post('/subscription/cancel');
-  return res.data;
+  try {
+    const res = await api.post('/subscription/cancel');
+    return res.data;
+  } catch (error) {
+    throw new Error(getErrorMessage(error, 'Failed to cancel subscription'));
+  }
 }
 
 /**
  * Simple upgrade subscription
  */
 export async function upgradeSubscription(tier: string) {
-  const res = await api.post('/subscription/upgrade', { tier });
-  return res.data;
+  try {
+    const res = await api.post('/subscription/upgrade', { tier });
+    return res.data;
+  } catch (error) {
+    throw new Error(getErrorMessage(error, 'Failed to upgrade subscription'));
+  }
 }

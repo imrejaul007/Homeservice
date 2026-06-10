@@ -18,6 +18,7 @@ declare global {
       };
       missingConsents?: ConsentType[];
       outdatedConsents?: ConsentType[];
+      consentProofs?: Record<string, { valid: boolean; proof?: string }>;
     }
   }
 }
@@ -62,19 +63,10 @@ export const requireConsent = (requiredConsents?: ConsentType[]) => {
       }
     }
 
-    // Check for outdated consents
-    for (const consentType of consentsToCheck) {
-      const hasValid = await consentService.hasValidConsent(userId, consentType);
-      if (!hasValid) {
-        const hasConsent = await consentService.hasValidConsent(userId, consentType);
-        // If user has some consent but it's outdated
-        const userConsents = await consentService.getUserConsents(userId);
-        const outdated = userConsents.find(c => c.type === consentType && !c.granted === false);
-        if (outdated) {
-          outdatedConsents.push(consentType);
-        }
-      }
-    }
+    // Check for outdated consents (granted but version is behind current policy)
+    // Single query to check all consent types at once - O(1) instead of O(N)
+    const allOutdated = await consentService.hasOutdatedConsents(userId, consentsToCheck);
+    outdatedConsents.push(...allOutdated);
 
     // Attach consent info to request for later use
     req.hasConsents = {
@@ -278,10 +270,38 @@ export const recordConsentOnAccept = (consentType: ConsentType) => {
     // Only record if the request indicates consent is being given
     if (req.body && req.body.granted === true) {
       const userId = req.user._id.toString();
-      const version = req.body.version;
+      const providedVersion = req.body.version;
+
+      // Validate version exists and matches current policy version
+      if (providedVersion === undefined || providedVersion === null || providedVersion === '') {
+        throw new ApiError(
+          400,
+          `Missing required version for ${consentType} consent. Client must send current policy version.`,
+          [],
+          'CONSENT_VERSION_MISSING'
+        );
+      }
+
+      const requiredVersion = consentService.getRequiredVersion(consentType);
+      if (providedVersion !== requiredVersion) {
+        logger.warn('Consent submitted with outdated version', {
+          context: 'ConsentMiddleware',
+          action: 'OUTDATED_CONSENT_VERSION',
+          userId,
+          consentType,
+          providedVersion,
+          requiredVersion,
+        });
+        throw new ApiError(
+          400,
+          `Policy version mismatch for ${consentType}. Expected '${requiredVersion}', got '${providedVersion}'. Please refresh and accept the latest policy.`,
+          [],
+          'CONSENT_VERSION_MISMATCH'
+        );
+      }
 
       await consentService.recordConsent(userId, consentType, true, {
-        version,
+        version: providedVersion,
         ipAddress: req.ip || req.connection?.remoteAddress,
         userAgent: req.get('User-Agent'),
         purpose: req.body.purpose,
@@ -298,6 +318,7 @@ export const recordConsentOnAccept = (consentType: ConsentType) => {
         action: 'CONSENT_RECORDED',
         userId,
         consentType,
+        version: providedVersion,
       });
     }
 
@@ -327,8 +348,8 @@ export const verifyConsentProof = () => {
       };
     }
 
-    // Attach proofs to response for verification
-    (req as any).consentProofs = proofs;
+    // Attach proofs to request for verification
+    req.consentProofs = proofs;
 
     next();
   });
@@ -336,22 +357,43 @@ export const verifyConsentProof = () => {
 
 /**
  * GDPR data processing agreement middleware for API consumers
+ *
+ * SECURITY: DPA acceptance is validated server-side via the consent database.
+ * Client headers cannot spoof DPA acceptance - only server-side consent records count.
+ * This prevents: header spoofing, URL tampering, saved-link bypass attacks.
  */
 export const requireDataProcessingAgreement = () => {
   return asyncHandler(async (req: Request, _res: Response, next: NextFunction) => {
-    // Check for Data Processing Agreement acceptance header or body
-    const dpaAccepted = req.headers['x-dpa-accepted'] === 'true' ||
-      req.body?.dpaAccepted === true ||
-      req.query?.dpaAccepted === 'true';
+    // DPA acceptance MUST be tied to an authenticated user
+    if (!req.user) {
+      throw new ApiError(401, 'Authentication required for DPA verification');
+    }
 
-    if (!dpaAccepted) {
+    const userId = req.user._id.toString();
+
+    // Server-side verification: check the consent database, not client headers
+    // The X-DPA-Accepted header is REMOVED from trust - clients cannot self-certify
+    const hasValidDpaConsent = await consentService.hasValidConsent(userId, 'data_processing');
+
+    if (!hasValidDpaConsent) {
+      logger.warn('DPA acceptance required', {
+        context: 'ConsentMiddleware',
+        action: 'DPA_REQUIRED',
+        userId,
+        ip: req.ip,
+        userAgent: req.get('User-Agent'),
+      });
+
       throw new ApiError(
         403,
-        'Data Processing Agreement must be accepted. Set X-DPA-Accepted: true header or include dpaAccepted: true in request body.',
+        'Data Processing Agreement must be accepted. Please accept the DPA via the /api/consent endpoint.',
         [],
         'DPA_REQUIRED'
       );
     }
+
+    // Attach DPA verification timestamp for audit trail
+    (req as any).dpaVerifiedAt = new Date().toISOString();
 
     next();
   });

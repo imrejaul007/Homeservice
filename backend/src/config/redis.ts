@@ -10,6 +10,12 @@ dotenv.config({ path: path.join(__dirname, '../../.env') });
 const REDIS_URL = process.env.REDIS_URL || process.env.REDIS_URI;
 let redisAvailable = false;
 
+const refreshRedisAvailability = (): void => {
+  redisAvailable = [redis, cacheRedis, queueRedis, metricsRedis].some(
+    (client) => client?.status === 'ready'
+  );
+};
+
 // In-memory cache fallback when Redis is unavailable
 interface MemoryCacheEntry {
   value: string;
@@ -119,12 +125,12 @@ const createRedisClient = (name: string): Redis | null => {
       name,
     });
 
-    client.on('connect', () => {
+    client.on('ready', () => {
       logger.info(`Redis client connected: ${name}`, {
         name,
         action: 'REDIS_CONNECTED',
       });
-      redisAvailable = true;
+      refreshRedisAvailability();
     });
 
     client.on('error', (err) => {
@@ -140,7 +146,7 @@ const createRedisClient = (name: string): Redis | null => {
         name,
         action: 'REDIS_CLOSED',
       });
-      redisAvailable = false;
+      refreshRedisAvailability();
     });
 
     return client;
@@ -213,8 +219,22 @@ export const checkRedisHealth = async (): Promise<{ healthy: boolean; latencyMs?
 // Export clients (may be null if Redis not configured)
 export { redis, cacheRedis, queueRedis, metricsRedis };
 
-// Helper to check if Redis is available
-export const isRedisAvailable = (): boolean => redisAvailable;
+// Helper to check if Redis is available (sync — may be stale briefly during reconnect)
+export const isRedisAvailable = (): boolean => {
+  if (redisAvailable) return true;
+  return cacheRedis?.status === 'ready';
+};
+
+/** Authoritative check for slot locks — pings cache Redis when status is uncertain */
+export async function isCacheRedisReady(): Promise<boolean> {
+  if (!cacheRedis) return false;
+  if (cacheRedis.status === 'ready') return true;
+  try {
+    return (await cacheRedis.ping()) === 'PONG';
+  } catch {
+    return false;
+  }
+}
 
 // ============================================
 // Session Store with In-Memory Fallback

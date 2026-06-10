@@ -14,6 +14,23 @@ export function resolveOfferGradient(stored?: string): string {
 
 export type ValidityTone = 'success' | 'warning' | 'danger' | 'muted';
 
+export function getOfferUsageLabel(offer: {
+  maxUsesPerUser?: number;
+  remainingUses?: number;
+  isFullyRedeemed?: boolean;
+}): string | null {
+  const max = offer.maxUsesPerUser ?? 1;
+  if (max <= 1) {
+    if (offer.isFullyRedeemed) return '1 use per customer — limit reached';
+    return '1 use per customer';
+  }
+  if (offer.isFullyRedeemed) return `Limit reached (${max} uses per customer)`;
+  if (typeof offer.remainingUses === 'number') {
+    return `${offer.remainingUses} of ${max} uses left for you`;
+  }
+  return `Up to ${max} uses per customer`;
+}
+
 export function getOfferValidityLabel(
   validFrom: string | Date,
   validUntil: string | Date,

@@ -2,6 +2,7 @@ import axios, { AxiosError } from 'axios';
 // Use simplified types to avoid bundling issues
 import { useAuthStore } from '../stores/authStore';
 import type { CustomerProfile, ProviderProfile } from '../stores/authStore';
+import { getApiUrl } from '../lib/getApiUrl';
 
 /**
  * Custom error class that preserves Axios response structure
@@ -134,11 +135,11 @@ class AuthService {
   private refreshPromise: Promise<void> | null = null;
   private isRefreshing = false;
   private isLoggingOut = false;
-  private tokenRefreshTimer: NodeJS.Timeout | null = null;
+  private tokenRefreshTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
     this.httpClient = axios.create({
-      baseURL: import.meta.env.VITE_API_URL || 'http://localhost:5000/api',
+      baseURL: getApiUrl(),
       withCredentials: true,  // For httpOnly cookies
       timeout: 15000,
       headers: {
@@ -278,26 +279,23 @@ class AuthService {
 
   /**
    * Refresh authentication tokens using refresh token
+   * Uses promise chain pattern to prevent race conditions when multiple
+   * requests try to refresh tokens simultaneously.
    */
   private async refreshTokens(): Promise<void> {
-    // Prevent multiple simultaneous refresh attempts
-    if (this.refreshPromise) {
+    // Prevent multiple simultaneous refresh attempts - return existing promise if refresh is in progress
+    if (this.isRefreshing && this.refreshPromise) {
       return this.refreshPromise;
     }
 
-    if (this.isRefreshing) {
-      throw new Error('Token refresh already in progress');
-    }
-
     this.isRefreshing = true;
-    this.refreshPromise = this.performTokenRefresh();
+    this.refreshPromise = this.performTokenRefresh()
+      .finally(() => {
+        this.isRefreshing = false;
+        this.refreshPromise = null;
+      });
 
-    try {
-      await this.refreshPromise;
-    } finally {
-      this.isRefreshing = false;
-      this.refreshPromise = null;
-    }
+    return this.refreshPromise;
   }
 
   /**
@@ -571,9 +569,9 @@ class AuthService {
       // Get CSRF token from cookie to include in header
       const csrfToken = this.getCsrfTokenFromCookie();
 
-      const endpoint = data.role === 'customer'
-        ? '/auth/register/customer'
-        : '/auth/register/provider';
+      const endpoint = data.role === 'provider'
+        ? '/auth/register/provider'
+        : '/auth/register/customer';
 
       const response = await this.httpClient.post<AuthResponse<RegisterResponse>>(
         endpoint,
@@ -863,7 +861,10 @@ class AuthService {
    */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private formatRequestError(error: unknown, fallback: string): Error {
-    if (axios.isAxiosError(error) && error.response) {
+    if (!axios.isAxiosError(error)) {
+      return error instanceof Error ? error : new Error(fallback);
+    }
+    if (error.response) {
       const data = error.response.data as {
         message?: string;
         errors?: Array<{ field?: string; message: string }>;

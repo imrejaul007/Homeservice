@@ -11,6 +11,10 @@ import path from 'path';
 // Load test environment variables
 dotenv.config({ path: path.join(__dirname, '../../.env') });
 
+jest.mock('uuid', () => ({
+  v4: jest.fn(() => '00000000-0000-4000-8000-000000000001'),
+}));
+
 let mongoServer: MongoMemoryServer;
 
 // Global setup
@@ -23,6 +27,9 @@ beforeAll(async () => {
   // Create in-memory MongoDB instance
   mongoServer = await MongoMemoryServer.create();
   const mongoUri = mongoServer.getUri();
+
+  // Set MONGODB_URI for environment checks (e.g., user model cascade delete)
+  process.env.MONGODB_URI = mongoUri;
 
   // Connect to the in-memory database
   await mongoose.connect(mongoUri, {

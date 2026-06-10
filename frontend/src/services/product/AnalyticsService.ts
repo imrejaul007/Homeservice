@@ -108,6 +108,15 @@ class AnalyticsService {
     });
   }
 
+  // Track social sharing events
+  trackShareEvent(platform: string, itemTitle: string) {
+    this.track('share', {
+      platform,
+      item_title: itemTitle,
+      timestamp: Date.now(),
+    });
+  }
+
   // Funnel tracking
   trackFunnelStep(step: 'search' | 'view_service' | 'select_time' | 'add_details' | 'payment' | 'confirmed') {
     this.track('funnel_step', {

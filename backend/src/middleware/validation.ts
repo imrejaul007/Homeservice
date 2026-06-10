@@ -1,6 +1,52 @@
 import { Request, Response, NextFunction } from 'express';
 import Joi from 'joi';
 import logger from '../utils/logger';
+import { LOCATION_TYPES, OBJECT_ID_PATTERN, IDEMPOTENCY_KEY_PATTERN } from '../validation/schemas';
+
+// ===================================
+// PII REDACTION UTILITY
+// ===================================
+
+/**
+ * Redacts sensitive PII fields from objects before logging.
+ * This prevents personal identifiable information from leaking into logs.
+ */
+function redactPii(obj: any): any {
+  if (obj === null || obj === undefined) {
+    return obj;
+  }
+
+  if (Array.isArray(obj)) {
+    return obj.map(item => redactPii(item));
+  }
+
+  if (typeof obj === 'object') {
+    const redacted: any = {};
+    for (const [key, value] of Object.entries(obj)) {
+      // Fields that contain PII - redact the value
+      const piiFields = [
+        'firstName', 'lastName', 'name', 'fullName',
+        'email', 'emailAddress',
+        'phone', 'phoneNumber', 'mobile',
+        'address', 'street', 'city', 'state', 'zipCode', 'postalCode',
+        'accessInstructions', 'specialRequests',
+        'password', 'currentPassword', 'newPassword',
+        'cardNumber', 'cvv', 'expiry', 'cardExpiry',
+      ];
+
+      if (piiFields.includes(key)) {
+        redacted[key] = '[REDACTED]';
+      } else if (typeof value === 'object' && value !== null) {
+        redacted[key] = redactPii(value);
+      } else {
+        redacted[key] = value;
+      }
+    }
+    return redacted;
+  }
+
+  return obj;
+}
 
 // ===================================
 // BOOKING VALIDATION SCHEMAS
@@ -15,14 +61,12 @@ const bookingMetadataSchema = Joi.object({
     .valid('mobile', 'desktop', 'tablet')
     .default('desktop'),
   sessionId: Joi.string().optional(),
+  // Use centralized idempotency key pattern
   idempotencyKey: Joi.string()
-    .min(16)
-    .max(64)
-    .pattern(/^[a-zA-Z0-9_-]+$/)
+    .pattern(IDEMPOTENCY_KEY_PATTERN)
     .required()
     .messages({
-      'string.min': 'Idempotency key must be at least 16 characters',
-      'string.max': 'Idempotency key cannot exceed 64 characters',
+      'string.pattern.base': 'Idempotency key must be 16-64 alphanumeric characters',
       'any.required': 'Idempotency key is required to prevent duplicate bookings',
     }),
   variantDuration: Joi.number().integer().min(15).max(480).optional(),
@@ -32,7 +76,7 @@ const bookingMetadataSchema = Joi.object({
 
 const createBookingSchema = Joi.object({
   serviceId: Joi.string()
-    .pattern(/^[0-9a-fA-F]{24}$/)
+    .pattern(OBJECT_ID_PATTERN)
     .required()
     .messages({
       'string.pattern.base': 'Invalid service ID format',
@@ -40,18 +84,17 @@ const createBookingSchema = Joi.object({
     }),
 
   providerId: Joi.string()
-    .pattern(/^[0-9a-fA-F]{24}$/)
-    .required()
+    .pattern(OBJECT_ID_PATTERN)
+    .optional()
     .messages({
       'string.pattern.base': 'Invalid provider ID format',
-      'any.required': 'Provider ID is required'
     }),
 
   scheduledDate: Joi.string()
-    .pattern(/^\d{4}-\d{2}-\d{2}$/)
+    .isoDate()
     .required()
     .messages({
-      'string.pattern.base': 'Invalid date format. Use YYYY-MM-DD format',
+      'string.isoDate': 'Invalid date format. Use YYYY-MM-DD format',
       'any.required': 'Scheduled date is required'
     }),
 
@@ -64,8 +107,9 @@ const createBookingSchema = Joi.object({
     }),
 
   location: Joi.object({
+    // Use centralized location types
     type: Joi.string()
-      .valid('customer_address', 'provider_location', 'online')
+      .valid(...LOCATION_TYPES)
       .optional()
       .default('customer_address'),
     address: Joi.object({
@@ -113,9 +157,9 @@ const createBookingSchema = Joi.object({
 
   metadata: bookingMetadataSchema.required(),
 
-  // New booking flow fields
+  // New booking flow fields - use centralized location types
   locationType: Joi.string()
-    .valid('at_home', 'hotel')
+    .valid(...LOCATION_TYPES)
     .optional()
     .default('at_home'),
 
@@ -129,6 +173,11 @@ const createBookingSchema = Joi.object({
     .optional()
     .default('no_preference'),
 
+  /** Alias used by the booking wizard — mapped to genderPreference in middleware */
+  professionalPreference: Joi.string()
+    .valid('male', 'female', 'no_preference')
+    .optional(),
+
   experiencePreference: Joi.string()
     .valid('no_preference', 'specific', 'any_experience')
     .optional()
@@ -137,7 +186,12 @@ const createBookingSchema = Joi.object({
   paymentMethod: Joi.string()
     .valid('apple_pay', 'credit_card', 'cash')
     .optional()
-    .default('credit_card')
+    .default('credit_card'),
+
+  // Coupon/Promo Code - validated by booking service
+  couponCode: Joi.string()
+    .pattern(/^[A-Z0-9_-]{3,30}$/i)
+    .optional(),
 });
 
 const bookingMessageSchema = Joi.object({
@@ -188,7 +242,7 @@ const completeBookingSchema = Joi.object({
 // Guest booking schema with honeypot for bot prevention
 const guestBookingSchema = Joi.object({
   serviceId: Joi.string()
-    .pattern(/^[0-9a-fA-F]{24}$/)
+    .pattern(OBJECT_ID_PATTERN)
     .required()
     .messages({
       'string.pattern.base': 'Invalid service ID format',
@@ -196,7 +250,7 @@ const guestBookingSchema = Joi.object({
     }),
 
   providerId: Joi.string()
-    .pattern(/^[0-9a-fA-F]{24}$/)
+    .pattern(OBJECT_ID_PATTERN)
     .required()
     .messages({
       'string.pattern.base': 'Invalid provider ID format',
@@ -204,10 +258,10 @@ const guestBookingSchema = Joi.object({
     }),
 
   scheduledDate: Joi.string()
-    .pattern(/^\d{4}-\d{2}-\d{2}$/)
+    .isoDate()
     .required()
     .messages({
-      'string.pattern.base': 'Invalid date format. Use YYYY-MM-DD format',
+      'string.isoDate': 'Invalid date format. Use YYYY-MM-DD format',
       'any.required': 'Scheduled date is required'
     }),
 
@@ -219,8 +273,9 @@ const guestBookingSchema = Joi.object({
       'any.required': 'Scheduled time is required'
     }),
 
+  // Use centralized location types
   locationType: Joi.string()
-    .valid('at_home', 'hotel')
+    .valid(...LOCATION_TYPES)
     .default('at_home'),
 
   guestInfo: Joi.object({
@@ -366,11 +421,12 @@ const updateAvailabilitySchema = Joi.object({
 });
 
 const dateOverrideSchema = Joi.object({
-  date: Joi.string()
-    .pattern(/^\d{4}-\d{2}-\d{2}$/)
+  date: Joi.date()
+    .iso()
     .required()
     .messages({
-      'string.pattern.base': 'Invalid date format. Use YYYY-MM-DD format',
+      'date.format': 'Invalid date format. Use YYYY-MM-DD format',
+      'date.base': 'Invalid date value',
       'any.required': 'Date is required'
     }),
   isAvailable: Joi.boolean().required(),
@@ -422,12 +478,14 @@ const blockPeriodSchema = Joi.object({
 // Generic validation middleware factory
 const createValidationMiddleware = (schema: Joi.ObjectSchema) => {
   return (req: Request, res: Response, next: NextFunction) => {
-    // Debug logging for booking validation
+    // Debug logging for booking validation - body is redacted to prevent PII leaks
     if (req.path === '/api/bookings' || req.originalUrl?.includes('/bookings')) {
       logger.debug('Booking validation request', {
         context: 'ValidationMiddleware',
         action: 'BOOKING_VALIDATION',
-        body: req.body,
+        body: redactPii(req.body),
+        hasPiiFields: true,
+        piiRedacted: true,
       });
     }
 
@@ -453,6 +511,12 @@ const createValidationMiddleware = (schema: Joi.ObjectSchema) => {
         message: 'Validation error',
         errors: errorMessages
       });
+    }
+
+    // Map wizard field names to API fields
+    if (value.professionalPreference && !value.genderPreference) {
+      value.genderPreference = value.professionalPreference;
+      delete value.professionalPreference;
     }
 
     // Replace req.body with validated and sanitized data
@@ -500,10 +564,22 @@ export const validateTimeSlotOverlaps = (req: Request, res: Response, next: Next
         const slot1 = slots[i];
         const slot2 = slots[j];
 
-        const start1 = timeToMinutes(slot1.start);
-        const end1 = timeToMinutes(slot1.end);
-        const start2 = timeToMinutes(slot2.start);
-        const end2 = timeToMinutes(slot2.end);
+        let start1: number, end1: number, start2: number, end2: number;
+        try {
+          start1 = timeToMinutes(slot1.start);
+          end1 = timeToMinutes(slot1.end);
+          start2 = timeToMinutes(slot2.start);
+          end2 = timeToMinutes(slot2.end);
+        } catch (err) {
+          return res.status(400).json({
+            success: false,
+            message: `Invalid time format: ${(err as Error).message}`,
+            errors: [{
+              field: `weeklySchedule.${day}.timeSlots`,
+              message: `Time slot ${slot1.start}-${slot1.end} or ${slot2.start}-${slot2.end} has invalid format`
+            }]
+          });
+        }
 
         if (start1 < end2 && start2 < end1) {
           return res.status(400).json({
@@ -520,8 +596,20 @@ export const validateTimeSlotOverlaps = (req: Request, res: Response, next: Next
 
     // Validate that start time is before end time for each slot
     for (const slot of slots) {
-      const start = timeToMinutes(slot.start);
-      const end = timeToMinutes(slot.end);
+      let start: number, end: number;
+      try {
+        start = timeToMinutes(slot.start);
+        end = timeToMinutes(slot.end);
+      } catch (err) {
+        return res.status(400).json({
+          success: false,
+          message: `Invalid time format: ${(err as Error).message}`,
+          errors: [{
+            field: `weeklySchedule.${day}.timeSlots`,
+            message: `Time slot ${slot.start}-${slot.end} has invalid format`
+          }]
+        });
+      }
 
       if (start >= end) {
         return res.status(400).json({
@@ -554,8 +642,20 @@ export const validateBusinessHours = (req: Request, res: Response, next: NextFun
     }
 
     for (const slot of daySchedule.timeSlots) {
-      const start = timeToMinutes(slot.start);
-      const end = timeToMinutes(slot.end);
+      let start: number, end: number;
+      try {
+        start = timeToMinutes(slot.start);
+        end = timeToMinutes(slot.end);
+      } catch (err) {
+        return res.status(400).json({
+          success: false,
+          message: `Invalid time format: ${(err as Error).message}`,
+          errors: [{
+            field: `weeklySchedule.${day}.timeSlots`,
+            message: `Time slot ${slot.start}-${slot.end} has invalid format`
+          }]
+        });
+      }
 
       // Ensure reasonable business hours (5 AM to 11 PM)
       if (start < 300 || end > 1380) { // 5 AM = 300 minutes, 11 PM = 1380 minutes
@@ -608,8 +708,23 @@ export const requireRole = (allowedRoles: string[]) => {
 };
 
 // Helper function to convert time string to minutes
+// Throws if input is malformed (invalid format, out-of-range hours/minutes)
 function timeToMinutes(timeString: string): number {
-  const [hours, minutes] = timeString.split(':').map(Number);
+  const parts = timeString.split(':');
+  if (parts.length !== 2) {
+    throw new Error(`Invalid time format: "${timeString}". Expected HH:MM`);
+  }
+  const hours = Number(parts[0]);
+  const minutes = Number(parts[1]);
+  if (Number.isNaN(hours) || Number.isNaN(minutes)) {
+    throw new Error(`Invalid time format: "${timeString}". Hours and minutes must be numbers`);
+  }
+  if (hours < 0 || hours > 23) {
+    throw new Error(`Invalid hours: "${hours}". Must be 0-23`);
+  }
+  if (minutes < 0 || minutes > 59) {
+    throw new Error(`Invalid minutes: "${minutes}". Must be 0-59`);
+  }
   return hours * 60 + minutes;
 }
 

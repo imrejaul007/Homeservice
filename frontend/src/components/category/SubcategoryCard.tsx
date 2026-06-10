@@ -1,6 +1,7 @@
 import React from 'react';
 import { ArrowRight } from 'lucide-react';
 import { SUBCATEGORY_IMAGES } from '../../constants/images';
+import { getSubcategoryImageKey } from '../../utils/categorySlugResolver';
 
 interface SubcategoryMetadata {
   displayName?: string;
@@ -32,8 +33,8 @@ const SubcategoryCard: React.FC<SubcategoryCardProps> = ({ subcategory, category
   const price = subcategory.metadata?.averagePrice;
   const duration = subcategory.metadata?.averageDuration;
 
-  // Get image from centralized image library
-  const image = (categorySlug && SUBCATEGORY_IMAGES[categorySlug]?.[subcategory.slug])
+  const imageKey = categorySlug ? getSubcategoryImageKey(categorySlug, subcategory.slug) : subcategory.slug;
+  const image = (categorySlug && SUBCATEGORY_IMAGES[categorySlug]?.[imageKey])
     || subcategory.metadata?.heroImage
     || 'https://images.unsplash.com/photo-1560066984-138dadb4c035?w=400&q=80&fit=crop';
 

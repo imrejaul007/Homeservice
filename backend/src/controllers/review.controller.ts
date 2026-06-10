@@ -2,10 +2,11 @@ import { Request, Response } from 'express';
 import mongoose from 'mongoose';
 import ProviderProfile from '../models/providerProfile.model';
 import Booking from '../models/booking.model';
-import Service from '../models/service.model';
-import User from '../models/user.model';
+import Review, { PUBLIC_REVIEW_QUERY } from '../models/review.model';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
+
+const INVALID_ID_ERROR = 'Invalid ID format';
 
 // ============================================
 // Get Provider Reviews (Public)
@@ -16,97 +17,83 @@ export const getProviderReviews = asyncHandler(async (req: Request, res: Respons
   const pageNum = Math.max(1, parseInt(req.query.page as string, 10) || 1);
   const limitNum = Math.min(50, Math.max(1, parseInt(req.query.limit as string, 10) || 10));
 
-  // Validate ObjectId format
   if (!mongoose.Types.ObjectId.isValid(providerId)) {
     return res.status(400).json({ success: false, message: 'Invalid provider ID' });
   }
 
-  const providerProfile = await ProviderProfile.findOne({ userId: providerId });
+  const providerObjectId = new mongoose.Types.ObjectId(providerId);
+  const stats = await Review.getProviderStats(providerId);
+  const totalReviews = stats.totalReviews || 0;
+  const averageRating = totalReviews > 0 ? stats.averageRating : 0;
+  const ratingDistribution = stats.ratingDistribution || { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
+  const totalPages = Math.ceil(totalReviews / limitNum);
 
-  if (!providerProfile || !providerProfile.reviewsData) {
+  if (totalReviews === 0) {
     return res.json({
       success: true,
       data: {
         reviews: [],
         total: 0,
+        totalReviews: 0,
         averageRating: 0,
         ratingDistribution: { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 },
-      },
-    });
-  }
-
-  const totalReviews = providerProfile.reviewsData.totalReviews || 0;
-  const totalPages = Math.ceil(totalReviews / limitNum);
-
-  // FIX: Apply pagination BEFORE fetching (prevents loading all reviews into memory)
-  const startIndex = (pageNum - 1) * limitNum;
-  const endIndex = startIndex + limitNum;
-  const paginatedReviewIds = providerProfile.reviewsData.recentReviews
-    .slice(startIndex, endIndex)
-    .map((review: any) => review.bookingId)
-    .filter(Boolean);
-
-  if (paginatedReviewIds.length === 0) {
-    return res.json({
-      success: true,
-      data: {
-        reviews: [],
-        total: totalReviews,
-        totalReviews,
-        averageRating: providerProfile.reviewsData.averageRating,
-        ratingDistribution: providerProfile.reviewsData.ratingDistribution,
         page: pageNum,
-        pages: totalPages,
+        pages: 0,
       },
     });
   }
 
-  // FIX: Single query with $in instead of N+1 individual queries
-  const bookings = await Booking.find({ _id: { $in: paginatedReviewIds } })
-    .populate([
-      { path: 'customerId', select: 'firstName lastName avatar' },
-      { path: 'serviceId', select: 'name' },
-    ])
+  const reviewDocs = await Review.find({
+    revieweeId: providerObjectId,
+    reviewerType: 'customer',
+    ...PUBLIC_REVIEW_QUERY,
+  })
+    .sort({ createdAt: -1 })
+    .skip((pageNum - 1) * limitNum)
+    .limit(limitNum)
+    .populate('reviewerId', 'firstName lastName avatar')
+    .populate({
+      path: 'bookingId',
+      select: 'serviceId',
+      populate: { path: 'serviceId', select: 'name' },
+    })
     .lean();
 
-  // Create a map for O(1) lookup
-  const bookingMap = new Map(
-    bookings.map(b => [b._id.toString(), b])
-  );
+  const reviews = reviewDocs.map((review) => {
+    const customer = review.reviewerId as {
+      _id?: mongoose.Types.ObjectId;
+      firstName?: string;
+      lastName?: string;
+      avatar?: string;
+    } | null;
+    const booking = review.bookingId as {
+      serviceId?: { name?: string } | mongoose.Types.ObjectId;
+    } | null;
+    const serviceName =
+      booking?.serviceId && typeof booking.serviceId === 'object' && 'name' in booking.serviceId
+        ? (booking.serviceId as { name?: string }).name
+        : undefined;
 
-  // Transform reviews maintaining pagination order
-  const reviews = paginatedReviewIds
-    .map((bookingId: any) => {
-      const booking = bookingMap.get(bookingId?.toString());
-      if (!booking) return null;
-
-      const reviewData = providerProfile.reviewsData.recentReviews.find(
-        (r: any) => r.bookingId?.toString() === bookingId?.toString()
-      );
-
-      return {
-        _id: reviewData?._id?.toString() || '',
-        id: reviewData?._id?.toString() || '',
-        rating: reviewData?.rating || 0,
-        title: reviewData?.title || '',
-        comment: reviewData?.comment || '',
-        photos: reviewData?.photos || [],
-        isVerified: true,
-        createdAt: reviewData?.createdAt || booking.createdAt,
-        customer: booking.customerId
-          ? {
-              id: (booking.customerId as any)._id.toString(),
-              firstName: (booking.customerId as any).firstName,
-              lastName: (booking.customerId as any).lastName,
-              avatar: (booking.customerId as any).avatar,
-            }
-          : null,
-        service: booking.serviceId
-          ? { name: (booking.serviceId as any).name || 'Service' }
-          : null,
-      };
-    })
-    .filter(Boolean);
+    return {
+      _id: review._id.toString(),
+      id: review._id.toString(),
+      rating: review.rating,
+      title: review.title || '',
+      comment: review.comment,
+      photos: review.photos || [],
+      isVerified: review.isVerified,
+      createdAt: review.createdAt,
+      customer: customer
+        ? {
+            id: customer._id?.toString() || '',
+            firstName: customer.firstName || '',
+            lastName: customer.lastName || '',
+            avatar: customer.avatar,
+          }
+        : null,
+      service: serviceName ? { name: serviceName } : null,
+    };
+  });
 
   return res.json({
     success: true,
@@ -114,8 +101,8 @@ export const getProviderReviews = asyncHandler(async (req: Request, res: Respons
       reviews,
       total: totalReviews,
       totalReviews,
-      averageRating: providerProfile.reviewsData.averageRating,
-      ratingDistribution: providerProfile.reviewsData.ratingDistribution,
+      averageRating,
+      ratingDistribution,
       page: pageNum,
       pages: totalPages,
     },
@@ -131,65 +118,59 @@ export const getMyReviews = asyncHandler(async (req: Request, res: Response) => 
   const pageNum = Math.max(1, parseInt(req.query.page as string, 10) || 1);
   const limitNum = Math.min(50, Math.max(1, parseInt(req.query.limit as string, 10) || 20));
 
-  const matchStage = {
-    customerId: user._id,
-    customerReview: { $exists: true, $ne: null }
+  // FIX: Query Review collection directly since reviews are stored in Review model
+  // This is cleaner and more aligned with the actual data storage pattern
+  const matchStage: any = {
+    reviewerId: user._id,
+    reviewerType: 'customer',
   };
 
   // Use aggregation pipeline to apply filtering and pagination at database level
-  // This avoids loading all documents into memory before pagination
-  const aggregationResult = await Booking.aggregate([
+  const aggregationResult = await Review.aggregate([
     { $match: matchStage },
-    // Lookup customerReview to filter by moderationStatus
+    // Lookup booking to get service and provider info
     {
       $lookup: {
-        from: 'reviews',
-        localField: 'customerReview',
+        from: 'bookings',
+        localField: 'bookingId',
         foreignField: '_id',
-        as: 'customerReviewData'
+        as: 'bookingData'
       }
     },
-    { $unwind: { path: '$customerReviewData', preserveNullAndEmptyArrays: true } },
-    // Filter out rejected reviews at database level
+    { $unwind: { path: '$bookingData', preserveNullAndEmptyArrays: true } },
+    // Lookup provider
     {
-      $match: {
-        $or: [
-          { 'customerReviewData.moderationStatus': { $exists: false } },
-          { 'customerReviewData.moderationStatus': { $ne: 'rejected' } }
-        ]
+      $lookup: {
+        from: 'users',
+        localField: 'revieweeId',
+        foreignField: '_id',
+        as: 'providerData'
       }
     },
+    { $unwind: { path: '$providerData', preserveNullAndEmptyArrays: true } },
+    // Lookup service
+    {
+      $lookup: {
+        from: 'services',
+        localField: 'bookingData.serviceId',
+        foreignField: '_id',
+        as: 'serviceData'
+      }
+    },
+    { $unwind: { path: '$serviceData', preserveNullAndEmptyArrays: true } },
     // Facet to get count and paginated data in single query
     {
       $facet: {
         metadata: [{ $count: 'total' }],
         data: [
-          { $sort: { updatedAt: -1 } },
+          { $sort: { createdAt: -1 } },
           { $skip: (pageNum - 1) * limitNum },
           { $limit: limitNum },
-          // Lookup related data
-          {
-            $lookup: {
-              from: 'users',
-              localField: 'providerId',
-              foreignField: '_id',
-              as: 'providerData'
-            }
-          },
-          { $unwind: { path: '$providerData', preserveNullAndEmptyArrays: true } },
-          {
-            $lookup: {
-              from: 'services',
-              localField: 'serviceId',
-              foreignField: '_id',
-              as: 'serviceData'
-            }
-          },
-          { $unwind: { path: '$serviceData', preserveNullAndEmptyArrays: true } },
-          // Project final shape
+          // Project final shape with data from Review, Booking, User, Service
           {
             $project: {
               _id: 1,
+              bookingId: '$bookingData._id',
               provider: {
                 id: '$providerData._id',
                 name: { $concat: [{ $ifNull: ['$providerData.firstName', ''] }, ' ', { $ifNull: ['$providerData.lastName', ''] }] },
@@ -199,14 +180,17 @@ export const getMyReviews = asyncHandler(async (req: Request, res: Response) => 
                 id: '$serviceData._id',
                 name: { $ifNull: ['$serviceData.name', 'Service'] }
               },
-              rating: { $ifNull: ['$rating', 0] },
-              comment: { $ifNull: ['$reviewComment', ''] },
-              images: { $ifNull: ['$reviewPhotos', []] },
-              helpfulVotes: 0,
-              isVerified: true,
-              moderationStatus: { $ifNull: ['$customerReviewData.moderationStatus', 'pending'] },
-              createdAt: { $ifNull: ['$customerReviewCreatedAt', '$updatedAt'] },
-              updatedAt: 1
+              // Get rating from Review document
+              rating: '$rating',
+              comment: '$comment',
+              photos: { $ifNull: ['$photos', []] },
+              title: { $ifNull: ['$title', ''] },
+              helpfulVotes: { $ifNull: ['$helpfulVotes', 0] },
+              isVerified: '$isVerified',
+              moderationStatus: { $ifNull: ['$moderationStatus', 'pending'] },
+              response: '$response',
+              createdAt: '$createdAt',
+              updatedAt: '$updatedAt'
             }
           }
         ]
@@ -242,47 +226,59 @@ export const getMyReviews = asyncHandler(async (req: Request, res: Response) => 
 export const updateReview = asyncHandler(async (req: Request, res: Response) => {
   const user = req.user as any;
   const { reviewId } = req.params;
-  const { rating, comment, images } = req.body;
+  const { rating, comment, images, photos } = req.body;
 
-  const booking = await Booking.findOne({
-    _id: reviewId,
-    customerId: user._id,
-  });
+  // Support both 'images' and 'photos' field names
+  const photosToSave = images ?? photos;
 
-  if (!booking) {
-    throw new ApiError(404, 'Booking not found');
+  if (!mongoose.Types.ObjectId.isValid(reviewId)) {
+    throw new ApiError(400, INVALID_ID_ERROR);
   }
 
-  if (!(booking as any).customerReview) {
-    throw new ApiError(400, 'No review found for this booking');
+  // FIX: First look up the review by reviewId
+  const review = await Review.findById(reviewId);
+  if (!review) {
+    throw new ApiError(404, 'Review not found');
+  }
+
+  // Verify the review belongs to the current user
+  if (review.reviewerId.toString() !== user._id.toString()) {
+    throw new ApiError(403, 'Not authorized to update this review');
+  }
+
+  // Verify it's a customer review (only customers can update their reviews)
+  if (review.reviewerType !== 'customer') {
+    throw new ApiError(400, 'Only customer reviews can be updated');
   }
 
   // Check if review is within 30 days
-  const reviewDate = (booking as any).customerReviewCreatedAt || booking.updatedAt;
-  const daysSinceReview = (Date.now() - new Date(reviewDate).getTime()) / (1000 * 60 * 60 * 24);
+  const daysSinceReview = (Date.now() - new Date(review.createdAt).getTime()) / (1000 * 60 * 60 * 24);
   if (daysSinceReview > 30) {
     throw new ApiError(400, 'Reviews can only be edited within 30 days');
   }
 
-  // Update review fields on booking
-  if (rating !== undefined) (booking as any).rating = rating;
-  if (comment !== undefined) (booking as any).reviewComment = comment;
-  if (images !== undefined) (booking as any).reviewPhotos = images;
+  // Update review fields
+  if (rating !== undefined) review.rating = rating;
+  if (comment !== undefined) review.comment = comment;
+  if (images !== undefined || photos !== undefined) review.photos = photosToSave;
 
-  await booking.save();
+  // Reset moderation status to pending when edited
+  review.moderationStatus = 'pending';
+
+  await review.save();
 
   return res.json({
     success: true,
     message: 'Review updated successfully',
     data: {
       review: {
-        _id: booking._id.toString(),
-        rating: (booking as any).rating,
-        comment: (booking as any).reviewComment,
-        images: (booking as any).reviewPhotos,
-        isVerified: true,
-        createdAt: reviewDate,
-        updatedAt: new Date(),
+        _id: review._id.toString(),
+        rating: review.rating,
+        comment: review.comment,
+        photos: review.photos,
+        isVerified: review.isVerified,
+        createdAt: review.createdAt,
+        updatedAt: review.updatedAt,
       },
     },
   });
@@ -296,49 +292,36 @@ export const deleteReview = asyncHandler(async (req: Request, res: Response) => 
   const user = req.user as any;
   const { reviewId } = req.params;
 
-  const booking = await Booking.findOne({
-    _id: reviewId,
-    customerId: user._id,
-  });
-
-  if (!booking) {
-    throw new ApiError(404, 'Booking not found');
+  if (!mongoose.Types.ObjectId.isValid(reviewId)) {
+    throw new ApiError(400, INVALID_ID_ERROR);
   }
 
-  if (!(booking as any).customerReview) {
-    throw new ApiError(400, 'No review found for this booking');
+  // FIX: First look up the review by reviewId
+  const review = await Review.findById(reviewId);
+  if (!review) {
+    throw new ApiError(404, 'Review not found');
   }
 
-  // Update provider's average rating
-  const providerProfile = await ProviderProfile.findOne({ userId: booking.providerId });
-  if (providerProfile?.reviewsData) {
-    const bookingsWithReviews = await Booking.countDocuments({
-      providerId: booking.providerId,
-      customerReview: { $exists: true, $ne: null },
-      _id: { $ne: booking._id },
-    });
-
-    if (bookingsWithReviews > 0) {
-      const avgResult = await Booking.aggregate([
-        { $match: { providerId: booking.providerId, customerReview: { $exists: true, $ne: null } } },
-        { $group: { _id: null, avgRating: { $avg: '$rating' } } }
-      ]);
-      providerProfile.reviewsData.averageRating = avgResult[0]?.avgRating || 0;
-      providerProfile.reviewsData.totalReviews = bookingsWithReviews;
-    } else {
-      providerProfile.reviewsData.averageRating = 0;
-      providerProfile.reviewsData.totalReviews = 0;
-    }
-
-    await providerProfile.save();
+  // Verify the review belongs to the current user
+  if (review.reviewerId.toString() !== user._id.toString()) {
+    throw new ApiError(403, 'Not authorized to delete this review');
   }
 
-  // Clear the review fields
-  (booking as any).customerReview = undefined;
-  (booking as any).rating = 0;
-  (booking as any).reviewComment = '';
-  (booking as any).reviewPhotos = [];
-  await booking.save();
+  // Verify it's a customer review (only customers can delete their reviews)
+  if (review.reviewerType !== 'customer') {
+    throw new ApiError(400, 'Only customer reviews can be deleted');
+  }
+
+  // Store provider ID for recalculating stats later
+  const providerId = review.revieweeId;
+  const tenantId = review.tenantId;
+
+  // The Review model's post-findOneAndDelete hook will:
+  // 1. Recalculate provider's review stats
+  // 2. Clear customerReview reference from the Booking
+
+  // Delete the review
+  await Review.findByIdAndDelete(reviewId);
 
   return res.json({
     success: true,

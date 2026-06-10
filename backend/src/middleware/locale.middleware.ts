@@ -44,7 +44,7 @@ export function localeMiddleware(options: LocaleMiddlewareOptions = {}): Request
 
     if (opts.setCookie && res.cookie) {
       const cookieOptions = {
-        httpOnly: false,
+        httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
         sameSite: 'lax' as const,
         maxAge: opts.cookieMaxAge,
@@ -98,7 +98,9 @@ function extractCookieLocale(req: Request, cookieName: string): string | null {
   const cookies = req.headers.cookie;
   if (!cookies) return null;
 
-  const pattern = new RegExp(`(?:^|;\\s*)${cookieName}=([^;]+)`);
+  // Escape special regex characters to prevent regex injection
+  const escapedCookieName = cookieName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = new RegExp(`(?:^|;\\s*)${escapedCookieName}=([^;]+)`);
   const match = cookies.match(pattern);
   return match ? match[1] : null;
 }
@@ -164,7 +166,7 @@ export function setLocaleHandler(options?: Partial<LocaleMiddlewareOptions>): Re
     const normalizedLocale = localizationService.normalizeLocaleCode(locale);
 
     res.cookie(opts.cookieName, normalizedLocale, {
-      httpOnly: false,
+      httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
       maxAge: opts.cookieMaxAge,

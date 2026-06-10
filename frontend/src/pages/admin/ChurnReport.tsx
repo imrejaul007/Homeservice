@@ -337,8 +337,7 @@ const ChurnReport: React.FC = () => {
       });
 
       if (isRefresh) toast.success('Churn data refreshed');
-    } catch (error) {
-      console.error('Failed to fetch churn data:', error);
+    } catch {
       toast.error('Failed to load churn data');
     } finally {
       setLoading(false);
@@ -379,9 +378,8 @@ const ChurnReport: React.FC = () => {
     try {
       await churnApi.executeRetentionAction(userId, action);
       toast.success(`Action "${action.title}" executed for user`);
-    } catch (error) {
-      console.error('Failed to execute action:', error);
-      toast.error('Failed to execute action');
+    } catch {
+      toast.error('Failed to execute retention action');
     }
   };
 

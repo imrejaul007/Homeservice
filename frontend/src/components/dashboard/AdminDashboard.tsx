@@ -2,10 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
 import authService from '../../services/AuthService';
-import { aiApi } from '../../services/aiApi';
 import PageLayout from '../layout/PageLayout';
 import AdminExperiencePanel from './AdminExperiencePanel';
-import type { AIInsightsData, AdminServiceData, AdminUserData, ProviderVerificationData } from '../../types/auth';
+import type { AdminServiceData, AdminUserData, ProviderVerificationData } from '../../types/auth';
 import {
   Users,
   UserCheck,
@@ -412,12 +411,7 @@ const AdminDashboard: React.FC = () => {
   const [showProvidersServices, setShowProvidersServices] = useState(false);
   const [showServices, setShowServices] = useState(false);
   const [showUsers, setShowUsers] = useState(false);
-  const [showAIInsights, setShowAIInsights] = useState(true);
   const [showExperiences, setShowExperiences] = useState(false);
-
-  // AI Insights State
-  const [aiInsights, setAIInsights] = useState<AIInsightsData | null>(null);
-  const [loadingAI, setLoadingAI] = useState(false);
 
   // Interactive States
   const [expandedProviders, setExpandedProviders] = useState<Set<string>>(new Set());
@@ -460,24 +454,6 @@ const AdminDashboard: React.FC = () => {
       fetchPendingServices();
     }
   }, [showPendingServices]);
-
-  useEffect(() => {
-    if (showAIInsights) {
-      fetchAIInsights();
-    }
-  }, [showAIInsights]);
-
-  const fetchAIInsights = async () => {
-    setLoadingAI(true);
-    try {
-      const data = await aiApi.getInsights();
-      setAIInsights(data as unknown as AIInsightsData);
-    } catch (error) {
-      console.error('Error fetching AI insights:', error);
-    } finally {
-      setLoadingAI(false);
-    }
-  };
 
   const fetchAllData = async () => {
     setIsLoading(true);
@@ -859,90 +835,27 @@ const AdminDashboard: React.FC = () => {
         </div>
       </div>
 
-      {/* AI Insights Section */}
-      {showAIInsights && (
-        <div className="mb-8">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-2">
-              <Brain className="h-6 w-6 text-nilin-coral" />
-              <h2 className="text-xl font-serif text-nilin-charcoal">AI Insights</h2>
-            </div>
-            <button
-              onClick={() => setShowAIInsights(false)}
-              className="text-nilin-warmGray hover:text-nilin-charcoal transition-colors"
-            >
-              <ChevronUp className="h-5 w-5" />
-            </button>
+      {/* AI Insights Section - Coming Soon */}
+      <div className="mb-8">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <Brain className="h-6 w-6 text-nilin-coral" />
+            <h2 className="text-xl font-serif text-nilin-charcoal">AI Insights</h2>
           </div>
-
-          {loadingAI ? (
-            <div className="glass rounded-2xl border border-nilin-border/50 p-6">
-              <div className="flex items-center justify-center h-32">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-nilin-coral"></div>
-              </div>
-            </div>
-          ) : aiInsights ? (
-            <div className="space-y-4">
-              {/* Insights Stats */}
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                <div className="glass rounded-xl border border-nilin-border/50 p-4 text-center">
-                  <p className="text-2xl font-bold text-nilin-coral">{aiInsights.stats?.completionRate || 0}%</p>
-                  <p className="text-sm text-nilin-warmGray">Completion Rate</p>
-                </div>
-                <div className="glass rounded-xl border border-nilin-border/50 p-4 text-center">
-                  <p className="text-2xl font-bold text-green-600">AED {(aiInsights.stats?.totalRevenue || 0).toLocaleString()}</p>
-                  <p className="text-sm text-nilin-warmGray">Total Revenue</p>
-                </div>
-                <div className="glass rounded-xl border border-nilin-border/50 p-4 text-center">
-                  <p className="text-2xl font-bold text-nilin-charcoal">{aiInsights.stats?.totalBookings || 0}</p>
-                  <p className="text-sm text-nilin-warmGray">Total Bookings</p>
-                </div>
-                <div className="glass rounded-xl border border-nilin-border/50 p-4 text-center">
-                  <p className="text-2xl font-bold text-amber-600">{aiInsights.topServices?.[0]?.service || 'N/A'}</p>
-                  <p className="text-sm text-nilin-warmGray">Top Service</p>
-                </div>
-              </div>
-
-              {/* AI Recommendations */}
-              {aiInsights.insights && aiInsights.insights.length > 0 && (
-                <div className="glass rounded-2xl border border-nilin-border/50 p-4">
-                  <h3 className="text-lg font-serif text-nilin-charcoal mb-3 flex items-center gap-2">
-                    <Sparkles className="h-5 w-5 text-nilin-coral" />
-                    Recommendations
-                  </h3>
-                  <div className="space-y-3">
-                    {aiInsights.insights.map((insight: any, index: number) => (
-                      <div
-                        key={index}
-                        className={`p-3 rounded-xl border ${
-                          insight.type === 'positive' ? 'bg-green-50 border-green-200' :
-                          insight.type === 'warning' ? 'bg-amber-50 border-amber-200' :
-                          'bg-blue-50 border-blue-200'
-                        }`}
-                      >
-                        <div className="flex items-start gap-3">
-                          {insight.type === 'positive' && <CheckCircle className="h-5 w-5 text-green-600 flex-shrink-0" />}
-                          {insight.type === 'warning' && <AlertTriangle className="h-5 w-5 text-amber-600 flex-shrink-0" />}
-                          {insight.type === 'info' && <Star className="h-5 w-5 text-blue-600 flex-shrink-0" />}
-                          <div>
-                            <p className="font-medium text-nilin-charcoal">{insight.title}</p>
-                            <p className="text-sm text-nilin-warmGray">{insight.description}</p>
-                            <p className="text-xs text-nilin-coral mt-1">{insight.recommendation}</p>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="glass rounded-2xl border border-nilin-border/50 p-6 text-center">
-              <p className="text-nilin-warmGray">Unable to load AI insights. Please try again later.</p>
-            </div>
-          )}
+          <span className="px-3 py-1 bg-nilin-coral/10 text-nilin-coral text-xs font-medium rounded-full">
+            Coming Soon
+          </span>
         </div>
-      )}
+        <div className="glass rounded-2xl border border-nilin-border/50 p-6 text-center">
+          <div className="flex items-center justify-center mb-3">
+            <Sparkles className="h-10 w-10 text-nilin-warmGray/50" />
+          </div>
+          <p className="text-nilin-charcoal font-medium mb-1">AI-Powered Insights</p>
+          <p className="text-sm text-nilin-warmGray">
+            Advanced analytics and recommendations powered by artificial intelligence are coming soon.
+          </p>
+        </div>
+      </div>
 
       {/* User Breakdown */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">

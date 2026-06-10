@@ -1,4 +1,8 @@
-import React, { useState, useEffect, useCallback } from 'react';
+/**
+ * @deprecated Use frontend/src/pages/CustomerDashboard.tsx (routed at /customer/dashboard).
+ * This legacy component is kept for reference; navigation paths are synced with the live page.
+ */
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Search,
@@ -81,6 +85,7 @@ import { searchApi } from '../../services/searchApi';
 import type { Service } from '../../types/service';
 import { CATEGORY_IMAGES } from '../../constants/images';
 import { useUserStatus } from '../../hooks/useSocket';
+import { useAuthGuard } from '../../hooks/useAuthGuard';
 import { toast } from 'react-hot-toast';
 import { FadeSection } from '../ui/FadeSection';
 import { EmptyState, NoBookingsEmpty, ErrorState } from '../common/EmptyState';
@@ -102,6 +107,8 @@ import {
   type DashboardResponse,
   type BookingSummary
 } from '../../services/customerDashboardApi';
+import { offerService } from '../../services/offerService';
+import type { Offer } from '../../types/offer';
 
 // =============================================================================
 // Customer Dashboard - Production-Ready Beauty & Wellness Platform
@@ -123,7 +130,12 @@ interface BookingStats {
   totalSpent: number;
   favorites: number;
   active: number;
-  inProgress: number;
+  inProgressBookings: number;
+  todayBookings?: number;
+  totalProviders?: number;
+  rating?: number;
+  pendingBookings?: number;
+  confirmedBookings?: number;
 }
 
 // Quick Action Card Component
@@ -220,7 +232,12 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
     e.stopPropagation();
     e.preventDefault();
 
-    if (!providerId || isToggling) return;
+    // FIX HIGH: Explicitly check for undefined providerId with user feedback
+    if (!providerId) {
+      toast.error('Unable to favorite: provider information unavailable', { duration: 3000 });
+      return;
+    }
+    if (isToggling) return;
 
     setIsToggling(true);
     try {
@@ -292,15 +309,15 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
             <span className="flex items-center gap-1 bg-amber-50/80 px-2 py-0.5 rounded-full border border-amber-100">
               <Star className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
               <span className="font-semibold text-amber-700">
-                {service.rating?.average?.toFixed(1) || '4.8'}
+                {service.rating?.average ? service.rating.average.toFixed(1) : '-'}
               </span>
               <span className="text-amber-600/70">
-                ({service.rating?.count || 127})
+                ({service.rating?.count ?? 0})
               </span>
             </span>
             <span className="flex items-center gap-1">
               <Clock className="w-3.5 h-3.5" />
-              {service.duration || 60} min
+              {service.duration || 0} min
             </span>
           </div>
 
@@ -315,7 +332,7 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
         {/* Price */}
         <div className="text-right flex-shrink-0">
           <div className="font-bold text-nilin-charcoal text-lg">
-            AED {service.price?.amount || 199}
+            AED {service.price?.amount ?? 0}
           </div>
           <div className="text-xs text-nilin-warmGray">per session</div>
         </div>
@@ -356,19 +373,33 @@ const StatsOverview: React.FC<StatsOverviewProps> = ({ stats, loading, favorites
           <h2 className="text-base font-medium text-nilin-charcoal">Your Activity Overview</h2>
         </div>
         <StatCardGrid columns={{ default: 2, lg: 4 }} className="gap-4">
-          <StatCard
-            label="Active Bookings"
-            value={stats.active}
-            icon={<Calendar className="w-5 h-5" />}
-            variant="coral"
-            description="In progress"
-          />
+          {/* Active Bookings with breakdown */}
+          <div className="bg-gradient-to-br from-nilin-coral/5 to-rose-50 rounded-xl p-4 border border-nilin-coral/10">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm text-nilin-warmGray">Active Bookings</span>
+              <Calendar className="w-4 h-4 text-nilin-coral" />
+            </div>
+            <div className="text-2xl font-bold text-nilin-charcoal mb-2">{stats.active}</div>
+            <div className="space-y-1 text-xs">
+              <div className="flex justify-between text-nilin-warmGray">
+                <span>Pending</span>
+                <span className="font-medium text-amber-600">{stats.pendingBookings || 0}</span>
+              </div>
+              <div className="flex justify-between text-nilin-warmGray">
+                <span>Confirmed</span>
+                <span className="font-medium text-blue-600">{stats.confirmedBookings || 0}</span>
+              </div>
+              <div className="flex justify-between text-nilin-warmGray">
+                <span>In Progress</span>
+                <span className="font-medium text-purple-600">{stats.inProgressBookings}</span>
+              </div>
+            </div>
+          </div>
           <StatCard
             label="Completed"
             value={stats.completed}
             icon={<Award className="w-5 h-5" />}
             variant="mint"
-            trend={{ value: '+12%', type: 'up' }}
             description="Services completed"
           />
           <StatCard
@@ -379,11 +410,11 @@ const StatsOverview: React.FC<StatsOverviewProps> = ({ stats, loading, favorites
             description="This month"
           />
           <StatCard
-            label="Favorites"
-            value={favoritesCount || stats.favorites}
-            icon={<Heart className="w-5 h-5" />}
+            label="Your Rating"
+            value={stats.rating !== undefined ? stats.rating : 'N/A'}
+            icon={<Star className="w-5 h-5" />}
             variant="lavender"
-            description="Saved providers"
+            description="From providers"
           />
         </StatCardGrid>
       </div>
@@ -393,13 +424,13 @@ const StatsOverview: React.FC<StatsOverviewProps> = ({ stats, loading, favorites
 
 // Welcome Header Component
 interface WelcomeHeaderProps {
-  userName: string | undefined;
+  userFirstName: string | undefined;
   onRefresh: () => void;
   isRefreshing: boolean;
 }
 
 const WelcomeHeader: React.FC<WelcomeHeaderProps> = ({
-  userName,
+  userFirstName,
   onRefresh,
   isRefreshing
 }) => {
@@ -418,7 +449,7 @@ const WelcomeHeader: React.FC<WelcomeHeaderProps> = ({
             {getGreeting()},
           </h1>
           <span className="text-2xl md:text-3xl font-serif font-medium text-nilin-coral">
-            {userName?.split(' ')?.[0] || 'there'}
+            {userFirstName || 'there'}
           </span>
         </div>
         <p className="text-nilin-warmGray text-sm flex items-center gap-1.5">
@@ -566,9 +597,10 @@ interface RecentBookingsTableProps {
   bookings: BookingSummary[];
   loading: boolean;
   onViewAll: () => void;
+  navigate: ReturnType<typeof useNavigate>;
 }
 
-const RecentBookingsTable: React.FC<RecentBookingsTableProps> = ({ bookings, loading, onViewAll }) => {
+const RecentBookingsTable: React.FC<RecentBookingsTableProps> = ({ bookings, loading, onViewAll, navigate }) => {
   if (loading) {
     return (
       <div className="rounded-2xl border border-nilin-border/50 bg-white/40 p-6">
@@ -602,7 +634,7 @@ const RecentBookingsTable: React.FC<RecentBookingsTableProps> = ({ bookings, loa
           <p className="text-sm text-nilin-warmGray mb-5 max-w-xs mx-auto leading-relaxed">
             Book your first service to start your beauty journey
           </p>
-          <Button onClick={() => window.location.href = '/search'} size="sm" leftIcon={<Search className="w-4 h-4" />}>
+          <Button onClick={() => navigate('/search')} size="sm" leftIcon={<Search className="w-4 h-4" />}>
             Browse Services
           </Button>
         </div>
@@ -626,32 +658,40 @@ const RecentBookingsTable: React.FC<RecentBookingsTableProps> = ({ bookings, loa
           </thead>
           <tbody className="divide-y divide-nilin-border/20">
             {bookings.map((booking, index) => (
-              <tr key={booking._id} className="hover:bg-nilin-blush/10 transition-colors group">
+              <tr
+                key={booking._id}
+                className="hover:bg-nilin-blush/10 transition-colors group cursor-pointer"
+                role="button"
+                tabIndex={0}
+                onClick={() => onViewAll()}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onViewAll(); } }}
+                aria-label={`View booking ${booking.bookingNumber?.slice(-6) || booking._id} - ${booking.serviceName} with ${booking.providerName}`}
+              >
                 <td className="px-4 py-3.5">
                   <div className="flex items-center gap-2">
                     <span className="w-2 h-2 rounded-full bg-nilin-coral/60" />
                     <span className="text-sm font-medium text-nilin-charcoal">
-                      #{booking.bookingNumber?.slice(-6) || 'N/A'}
+                      #{booking.bookingNumber?.slice(-6) || '-'}
                     </span>
                   </div>
                 </td>
                 <td className="px-4 py-3.5">
-                  <div className="text-sm text-nilin-charcoal font-medium">{booking.serviceName || 'Service'}</div>
-                  <div className="text-xs text-nilin-warmGray">{booking.serviceCategory || 'General'}</div>
+                  <div className="text-sm text-nilin-charcoal font-medium">{booking.serviceName}</div>
+                  <div className="text-xs text-nilin-warmGray">{booking.serviceCategory}</div>
                 </td>
                 <td className="px-4 py-3.5">
-                  <div className="text-sm text-nilin-charcoal">{booking.providerName || 'Provider'}</div>
+                  <div className="text-sm text-nilin-charcoal">{booking.providerName}</div>
                 </td>
                 <td className="px-4 py-3.5">
                   <div className="text-sm text-nilin-charcoal">
-                    {booking.scheduledDate ? new Date(booking.scheduledDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : 'N/A'}
+                    {booking.scheduledDate ? new Date(booking.scheduledDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '-'}
                   </div>
                   <div className="text-xs text-nilin-warmGray">{booking.scheduledTime || ''}</div>
                 </td>
                 <td className="px-4 py-3.5"><StatusBadge status={booking.status} /></td>
                 <td className="px-4 py-3.5 text-right">
                   <span className="text-sm font-semibold text-nilin-charcoal">
-                    AED {booking.totalAmount?.toLocaleString() || 0}
+                    AED {booking.totalAmount?.toLocaleString() ?? 0}
                   </span>
                 </td>
               </tr>
@@ -678,14 +718,16 @@ interface NavigationCardsProps {
   onViewPro: () => void;
   onBookService: () => void;
   onMyBookings: () => void;
+  onWriteReview: () => void;
   upcomingCount: number;
 }
 
-const NavigationCards: React.FC<NavigationCardsProps> = ({ onViewPackages, onViewPro, onBookService, onMyBookings, upcomingCount }) => {
+const NavigationCards: React.FC<NavigationCardsProps> = ({ onViewPackages, onViewPro, onBookService, onMyBookings, onWriteReview, upcomingCount }) => {
   const cards = [
     { icon: <LayoutGrid className="w-5 h-5" />, title: 'View Packages', description: 'Explore service bundles', onClick: onViewPackages, gradient: 'from-nilin-coral/15 via-white to-nilin-rose/10', iconBg: 'bg-nilin-coral/20', iconColor: 'text-nilin-coral' },
-    { icon: <Gem className="w-5 h-5" />, title: 'View Pro', description: 'Find verified professionals', onClick: onViewPro, gradient: 'from-purple-50 via-white to-pink-50/50', iconBg: 'bg-purple-100', iconColor: 'text-purple-600' },
-    { icon: <Calendar className="w-5 h-5" />, title: 'Book Service', description: 'Schedule a new appointment', onClick: onBookService, gradient: 'from-green-50 via-white to-emerald-50/50', iconBg: 'bg-green-100', iconColor: 'text-green-600' },
+    { icon: <Search className="w-5 h-5" />, title: 'Find Professionals', description: 'Discover verified pros', onClick: onViewPro, gradient: 'from-purple-50 via-white to-pink-50/50', iconBg: 'bg-purple-100', iconColor: 'text-purple-600' },
+    { icon: <Star className="w-5 h-5" />, title: 'Write Review', description: 'Share your experience', onClick: onWriteReview, gradient: 'from-amber-50 via-white to-orange-50/50', iconBg: 'bg-amber-100', iconColor: 'text-amber-600' },
+    { icon: <Calendar className="w-5 h-5" />, title: 'Book Service', description: 'Schedule new appointment', onClick: onBookService, gradient: 'from-green-50 via-white to-emerald-50/50', iconBg: 'bg-green-100', iconColor: 'text-green-600' },
     { icon: <ActivityIcon className="w-5 h-5" />, title: 'My Bookings', description: upcomingCount > 0 ? `${upcomingCount} upcoming` : 'View all bookings', onClick: onMyBookings, gradient: 'from-blue-50 via-white to-indigo-50/50', iconBg: 'bg-blue-100', iconColor: 'text-blue-600' }
   ];
 
@@ -696,7 +738,7 @@ const NavigationCards: React.FC<NavigationCardsProps> = ({ onViewPackages, onVie
         icon={<LayoutGrid className="w-5 h-5" />}
         subtitle="Navigate to key features"
       />
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
         {cards.map((card, index) => (
           <FadeSection key={card.title} delay={index * 75}>
             <button
@@ -763,6 +805,7 @@ const CustomerDashboard: React.FC = () => {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [showAccountWarning, setShowAccountWarning] = useState(false);
   const [favoritesCount, setFavoritesCount] = useState(0);
+  const [activeOffers, setActiveOffers] = useState<Offer[]>([]);
   const [showViewProModal, setShowViewProModal] = useState(false);
   const [bookingStats, setBookingStats] = useState<BookingStats>({
     upcoming: 0,
@@ -770,11 +813,26 @@ const CustomerDashboard: React.FC = () => {
     totalSpent: 0,
     favorites: 0,
     active: 0,
-    inProgress: 0,
+    inProgressBookings: 0,
+    todayBookings: 0,
+    totalProviders: 0,
   });
 
   // Subscribe to user account status updates
   const { statusChanged, accountLocked } = useUserStatus();
+
+  // FIX HIGH: Validate auth tokens before API calls
+  // Use useAuthGuard to check token validity and trigger refresh if needed
+  const { isSessionExpired, attemptTokenRefresh } = useAuthGuard({
+    redirectOnExpiry: true,
+    onExpired: () => {
+      toast.error('Your session has expired. Please log in again.');
+    },
+    onExpiryWarning: () => {
+      // Attempt silent refresh when session is expiring soon
+      attemptTokenRefresh();
+    },
+  });
 
   // Fetch dashboard data from API
   const fetchDashboardData = useCallback(async (isRefresh = false) => {
@@ -782,49 +840,62 @@ const CustomerDashboard: React.FC = () => {
     else setLoading(true);
     setError(null);
 
+    // FIX HIGH: Validate tokens before making API calls
+    // Check if session is expired or tokens are missing/invalid
+    if (!tokens?.accessToken || isSessionExpired) {
+      console.error('Auth token validation failed: missing or expired token');
+      setError('Your session appears to be invalid. Please log in again.');
+      setLoading(false);
+      setIsRefreshing(false);
+      return;
+    }
+
     try {
       // Fetch all dashboard data in parallel
       const [dashboardResponse, servicesResponse, favoritesResponse] = await Promise.allSettled([
         customerDashboardApi.getDashboard(),
         searchApi.searchServices({ limit: 5, sortBy: 'popularity' }),
-        favoritesApi.getFavorites().catch(() => ({ success: true, data: [] }))
+        favoritesApi.getFavorites()
       ]);
 
+      // Extract and narrow all response data upfront to avoid race condition issues with PromiseSettledResult
+      const dashboardData = dashboardResponse.status === 'fulfilled' ? dashboardResponse.value : null;
+      const servicesData = servicesResponse.status === 'fulfilled' && servicesResponse.value.success ? servicesResponse.value.data : null;
+      const favoritesRaw = favoritesResponse.status === 'fulfilled' ? favoritesResponse.value.data : null;
+      const favoritesList = favoritesRaw ? (favoritesRaw.favorites || []) : [];
+
       // Handle dashboard data
-      if (dashboardResponse.status === 'fulfilled') {
-        const data = dashboardResponse.value;
-        setDashboardData(data);
-        const favoritesData = favoritesResponse.status === 'fulfilled' ? favoritesResponse.value.data : null;
-        const favoritesList = Array.isArray(favoritesData) ? favoritesData : favoritesData?.favorites;
+      if (dashboardData) {
+        setDashboardData(dashboardData);
         setBookingStats({
-          upcoming: data.upcomingBookings?.length || 0,
-          completed: data.stats?.completedBookings || 0,
-          totalSpent: data.stats?.totalSpent || 0,
-          favorites: favoritesList?.length || 0,
-          active: data.stats?.activeBookings || 0,
-          inProgress: data.stats?.inProgressBookings || 0,
+          upcoming: dashboardData.upcomingBookings?.length || 0,
+          completed: dashboardData.stats?.completedBookings || 0,
+          totalSpent: dashboardData.stats?.totalSpent || 0,
+          favorites: favoritesList.length,
+          active: dashboardData.stats?.activeBookings || 0,
+          inProgressBookings: dashboardData.stats?.inProgressBookings || 0,
+          todayBookings: (dashboardData.stats as any)?.todayBookings || 0,
+          totalProviders: (dashboardData.stats as any)?.totalProviders || 0,
+          rating: dashboardData.stats?.averageRating || 0,
+          pendingBookings: (dashboardData.stats as any)?.pendingBookings || 0,
+          confirmedBookings: (dashboardData.stats as any)?.confirmedBookings || 0,
         });
       } else {
-        console.error('Dashboard API error:', dashboardResponse.reason);
-        const favData = favoritesResponse.status === 'fulfilled' ? favoritesResponse.value.data : null;
-        const favList = Array.isArray(favData) ? favData : favData?.favorites;
+        console.error('Dashboard API error:', dashboardResponse.status === 'rejected' ? dashboardResponse.reason : 'Unknown error');
+        toast.error('Failed to load dashboard data. Some information may be missing.');
         setBookingStats(prev => ({
           ...prev,
-          favorites: favList?.length || 0
+          favorites: favoritesList.length
         }));
       }
 
       // Handle services data
-      if (servicesResponse.status === 'fulfilled' && servicesResponse.value.success) {
-        setRecentServices(servicesResponse.value.data?.services || []);
+      if (servicesData) {
+        setRecentServices(servicesData.services || []);
       }
 
       // Handle favorites count
-      if (favoritesResponse.status === 'fulfilled') {
-        const favData = favoritesResponse.value.data;
-        const favList = Array.isArray(favData) ? favData : favData?.favorites;
-        setFavoritesCount(favList?.length || 0);
-      }
+      setFavoritesCount(favoritesList.length);
 
     } catch (err) {
       console.error('Error fetching dashboard data:', err);
@@ -833,7 +904,7 @@ const CustomerDashboard: React.FC = () => {
       setLoading(false);
       setIsRefreshing(false);
     }
-  }, []);
+  }, [tokens, isSessionExpired]);
 
   // Fetch services only
   const fetchServices = useCallback(async (isRefresh = false) => {
@@ -858,6 +929,11 @@ const CustomerDashboard: React.FC = () => {
   // Initial load
   useEffect(() => {
     fetchDashboardData();
+
+    // Fetch active offers from API
+    offerService.getActiveOffers()
+      .then((offers) => setActiveOffers(offers.slice(0, 4)))
+      .catch((err) => console.error('Failed to fetch offers:', err));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -875,24 +951,31 @@ const CustomerDashboard: React.FC = () => {
         setShowAccountWarning(false);
       }
     }
-    return () => {
-      setShowAccountWarning(false);
-    };
   }, [statusChanged, user?.id]);
 
   // Handle account locked events
   useEffect(() => {
     if (accountLocked && accountLocked.userId === user?.id) {
-      toast.error(`Account locked: ${accountLocked.reason}`);
+      // Sanitize reason to prevent XSS - strip HTML tags and limit length
+      const sanitizedReason = accountLocked.reason
+        ? accountLocked.reason.replace(/<[^>]*>/g, '').slice(0, 200)
+        : 'Security concern';
+      toast.error(`Account locked: ${sanitizedReason}`);
       if (accountLocked.until) {
         toast(`Account will be unlocked on ${new Date(accountLocked.until).toLocaleDateString()}`);
       }
     }
   }, [accountLocked, user?.id]);
 
-  // Handle refresh
+  // Handle refresh with debounce to prevent rapid-fire API calls
+  const refreshTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const handleRefresh = useCallback(() => {
-    fetchDashboardData(true);
+    if (refreshTimeoutRef.current) {
+      clearTimeout(refreshTimeoutRef.current);
+    }
+    refreshTimeoutRef.current = setTimeout(() => {
+      fetchDashboardData(true);
+    }, 500);
   }, [fetchDashboardData]);
 
   // Quick actions data
@@ -915,28 +998,6 @@ const CustomerDashboard: React.FC = () => {
       label: 'My Profile',
       description: 'Update your details',
       href: '/customer/profile',
-    },
-  ];
-
-  // Promos data
-  const promos = [
-    {
-      id: '1',
-      icon: <Sparkle className="w-5 h-5" />,
-      title: 'First Booking Discount',
-      description: 'Get 20% off your first service booking',
-      badge: 'New User',
-      gradient: 'from-nilin-coral/10 to-nilin-rose/10',
-      textColor: 'text-nilin-rose',
-    },
-    {
-      id: '2',
-      icon: <Heart className="w-5 h-5" />,
-      title: 'Loyalty Rewards',
-      description: 'Earn points with every booking',
-      badge: 'Members',
-      gradient: 'from-nilin-blush/30 to-nilin-peach/30',
-      textColor: 'text-nilin-coral',
     },
   ];
 
@@ -970,7 +1031,7 @@ const CustomerDashboard: React.FC = () => {
 
           {/* Welcome Header */}
           <WelcomeHeader
-            userName={user?.name}
+            userFirstName={user?.firstName}
             onRefresh={handleRefresh}
             isRefreshing={isRefreshing}
           />
@@ -979,8 +1040,9 @@ const CustomerDashboard: React.FC = () => {
           <NavigationCards
             onViewPackages={() => navigate('/packages')}
             onViewPro={() => setShowViewProModal(true)}
-            onBookService={() => navigate('/search')}
+            onBookService={() => navigate('/customer/book-services')}
             onMyBookings={() => navigate('/customer/bookings')}
+            onWriteReview={() => navigate('/customer/reviews')}
             upcomingCount={bookingStats.upcoming}
           />
 
@@ -999,70 +1061,57 @@ const CustomerDashboard: React.FC = () => {
           )}
 
           {/* Promos Section */}
-          <FadeSection delay={150}>
-            <SectionHeader
-              title="Special Offers"
-              icon={<Ticket className="w-5 h-5" />}
-              subtitle="Exclusive deals for you"
-            />
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
-              <div
-                className="group relative overflow-hidden rounded-2xl border border-nilin-border/40 bg-gradient-to-br from-nilin-coral/15 via-white/80 to-nilin-rose/10 p-5 cursor-pointer hover:shadow-nilin-xl hover:-translate-y-1 transition-all duration-300"
-                onClick={() => navigate('/search')}
-              >
-                {/* Decorative elements */}
-                <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-bl from-nilin-coral/20 to-transparent rounded-bl-full opacity-50" />
-                <div className="absolute bottom-0 left-0 w-16 h-16 bg-gradient-to-tr from-nilin-rose/10 to-transparent rounded-tr-full opacity-50" />
+          {activeOffers.length > 0 && (
+            <FadeSection delay={150}>
+              <SectionHeader
+                title="Special Offers"
+                icon={<Ticket className="w-5 h-5" />}
+                subtitle="Exclusive deals for you"
+              />
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+                {activeOffers.map((offer) => {
+                  const gradientColors = offer.displayGradient?.split(' ') || ['from-nilin-coral/15', 'to-nilin-rose/10'];
+                  const gradientFrom = gradientColors[0] || 'from-nilin-coral/15';
+                  const gradientTo = gradientColors[gradientColors.length - 1] || 'to-nilin-rose/10';
 
-                <div className="relative flex items-start gap-4">
-                  <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-nilin-coral to-nilin-rose flex items-center justify-center text-white shadow-lg shadow-nilin-coral/30">
-                    <Sparkle className="w-6 h-6" />
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="px-2.5 py-0.5 bg-gradient-to-r from-nilin-coral/20 to-nilin-rose/20 text-nilin-coral text-xs font-semibold rounded-full">
-                        New User
-                      </span>
+                  return (
+                    <div
+                      key={offer._id}
+                      className={`group relative overflow-hidden rounded-2xl border border-nilin-border/40 bg-gradient-to-br ${gradientFrom} ${gradientTo} p-5 cursor-pointer hover:shadow-nilin-xl hover:-translate-y-1 transition-all duration-300`}
+                      onClick={() => navigate(`/offer/${offer._id}`)}
+                    >
+                      {/* Decorative elements */}
+                      <div className={`absolute top-0 right-0 w-24 h-24 bg-gradient-to-bl ${gradientFrom.replace('/15', '/20').replace('/10', '/20')} to-transparent rounded-bl-full opacity-50`} />
+                      <div className={`absolute bottom-0 left-0 w-16 h-16 bg-gradient-to-tr ${gradientTo} to-transparent rounded-tr-full opacity-50`} />
+
+                      <div className="relative flex items-start gap-4">
+                        <div className={`w-14 h-14 rounded-2xl bg-gradient-to-br ${gradientFrom} flex items-center justify-center text-white shadow-lg`}>
+                          <Sparkle className="w-6 h-6" />
+                        </div>
+                        <div className="flex-1">
+                          {offer.displayBadge && (
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className={`px-2.5 py-0.5 bg-gradient-to-r ${gradientFrom.replace('/15', '/20').replace('/10', '/20')} ${gradientTo.replace('/15', '/20').replace('/10', '/20')} text-xs font-semibold rounded-full`}>
+                                {offer.displayBadge}
+                              </span>
+                            </div>
+                          )}
+                          <h3 className="font-semibold text-nilin-charcoal mb-1">{offer.displayTitle || offer.title}</h3>
+                          <p className="text-sm text-nilin-warmGray leading-relaxed">
+                            {offer.displaySubtitle || offer.description || `${offer.value}${offer.type === 'percentage' ? '%' : ' AED'} off`}
+                          </p>
+                          <div className="mt-3 flex items-center gap-1 text-nilin-coral text-sm font-medium group-hover:gap-2 transition-all">
+                            <span>{offer.isClaimed ? 'View details' : 'Claim offer'}</span>
+                            <ArrowRight className="w-4 h-4" />
+                          </div>
+                        </div>
+                      </div>
                     </div>
-                    <h3 className="font-semibold text-nilin-charcoal mb-1">First Booking Discount</h3>
-                    <p className="text-sm text-nilin-warmGray leading-relaxed">Get 20% off your first service booking</p>
-                    <div className="mt-3 flex items-center gap-1 text-nilin-coral text-sm font-medium group-hover:gap-2 transition-all">
-                      <span>Claim offer</span>
-                      <ArrowRight className="w-4 h-4" />
-                    </div>
-                  </div>
-                </div>
+                  );
+                })}
               </div>
-
-              <div
-                className="group relative overflow-hidden rounded-2xl border border-nilin-border/40 bg-gradient-to-br from-amber-50 via-white/80 to-orange-50/50 p-5 cursor-pointer hover:shadow-nilin-xl hover:-translate-y-1 transition-all duration-300"
-                onClick={() => navigate('/customer/rewards')}
-              >
-                {/* Decorative elements */}
-                <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-bl from-amber-200/40 to-transparent rounded-bl-full opacity-50" />
-                <div className="absolute bottom-0 left-0 w-16 h-16 bg-gradient-to-tr from-orange-100/30 to-transparent rounded-tr-full opacity-50" />
-
-                <div className="relative flex items-start gap-4">
-                  <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center text-white shadow-lg shadow-amber-400/30">
-                    <Heart className="w-6 h-6" />
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="px-2.5 py-0.5 bg-gradient-to-r from-amber-100 to-orange-100 text-amber-700 text-xs font-semibold rounded-full">
-                        Members
-                      </span>
-                    </div>
-                    <h3 className="font-semibold text-nilin-charcoal mb-1">Loyalty Rewards</h3>
-                    <p className="text-sm text-nilin-warmGray leading-relaxed">Earn points with every booking</p>
-                    <div className="mt-3 flex items-center gap-1 text-amber-600 text-sm font-medium group-hover:gap-2 transition-all">
-                      <span>View rewards</span>
-                      <ArrowRight className="w-4 h-4" />
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </FadeSection>
+            </FadeSection>
+          )}
 
           {/* Recent Bookings Section */}
           <FadeSection delay={175}>
@@ -1076,11 +1125,12 @@ const CustomerDashboard: React.FC = () => {
               bookings={dashboardData?.recentBookings || []}
               loading={loading}
               onViewAll={() => navigate('/customer/bookings')}
+              navigate={navigate}
             />
           </FadeSection>
 
           {/* Ongoing Bookings Section - Shows active in-progress bookings */}
-          {bookingStats.inProgress > 0 && (
+          {bookingStats.inProgressBookings > 0 && (
             <FadeSection delay={185}>
               <OngoingBookings limit={3} showViewAll={true} />
             </FadeSection>
@@ -1104,7 +1154,7 @@ const CustomerDashboard: React.FC = () => {
               badge="Based on your preferences"
               action={{
                 label: 'View all',
-                onClick: () => navigate('/search'),
+                onClick: () => navigate('/customer/book-services'),
               }}
             />
 
@@ -1126,7 +1176,7 @@ const CustomerDashboard: React.FC = () => {
                 ))}
               </div>
             ) : (
-              <EmptyServices onBrowse={() => navigate('/search')} />
+              <EmptyServices onBrowse={() => navigate('/customer/book-services')} />
             )}
           </FadeSection>
 

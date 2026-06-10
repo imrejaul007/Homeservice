@@ -222,8 +222,8 @@ async function validateSessionWithTimeout(
       sessionId,
       error: (error as Error).message,
     });
-    // On error, don't block the request
-    return { expired: false, shouldRefresh: false };
+    // Fail closed: reject session on database errors to prevent auth bypass
+    return { expired: true, shouldRefresh: false };
   }
 }
 
@@ -365,6 +365,7 @@ export async function removeRedisSession(sessionId: string): Promise<void> {
 }
 
 // Optional authentication middleware (doesn't throw error if no token)
+// SECURITY FIX: Now performs all critical security checks that authenticate does
 export const optionalAuth = asyncHandler(async (req: Request, _res: Response, next: NextFunction) => {
   try {
     let token: string | undefined;
@@ -377,16 +378,57 @@ export const optionalAuth = asyncHandler(async (req: Request, _res: Response, ne
 
     if (token) {
       const decoded = jwt.verify(token, process.env.JWT_ACCESS_SECRET as string) as JWTPayload;
-      const user = await User.findById(decoded.id);
-      
-      if (user && user.isActive && !user.isDeleted && user.accountStatus !== 'suspended') {
-        req.user = user;
+
+      // Find user and check if still exists and active
+      const user = await User.findById(decoded.id)
+        .select('+password +tokenVersion +refreshTokens');
+
+      if (!user) {
+        // User no longer exists - silently continue without user
+        return next();
       }
+
+      // SECURITY FIX: Check token version for invalidation (e.g., password reset, logout)
+      if (decoded.tokenVersion && decoded.tokenVersion !== (user.tokenVersion || 1)) {
+        // Token has been invalidated - silently continue without user
+        logger.debug('optionalAuth: token version mismatch, ignoring token');
+        return next();
+      }
+
+      // SECURITY FIX: Check if user account is active
+      if (!user.isActive || user.isDeleted) {
+        // Account deactivated - silently continue without user
+        return next();
+      }
+
+      // SECURITY FIX: Check if account is suspended
+      if (user.accountStatus === 'suspended') {
+        // Account suspended - silently continue without user
+        logger.debug('optionalAuth: account suspended, ignoring token');
+        return next();
+      }
+
+      // SECURITY FIX: Check if account is locked due to failed login attempts
+      if (user.isLocked()) {
+        // Account locked - silently continue without user
+        logger.debug('optionalAuth: account locked, ignoring token');
+        return next();
+      }
+
+      // SECURITY FIX: Check if password was changed after token was issued
+      if (user.passwordChangedAt && decoded.iat * 1000 < user.passwordChangedAt.getTime()) {
+        // Password changed - silently continue without user
+        logger.debug('optionalAuth: password changed since token issued, ignoring token');
+        return next();
+      }
+
+      // All security checks passed - attach user to request
+      req.user = user;
     }
-    
+
     next();
   } catch (error) {
-    // Silently continue without user authentication
+    // Invalid token - silently continue without user authentication
     next();
   }
 });
@@ -774,68 +816,101 @@ export const require2FA = asyncHandler(async (req: Request, _res: Response, next
 
   // Check if this is a recovery code
   if (isValidRecoveryCodeFormat(twoFactorToken)) {
-    // Verify recovery code
+    // Fetch user with recovery codes
     const userWithCodes = await User.findById(req.user._id).select('+twoFactor.recoveryCodes');
 
-    if (!userWithCodes?.twoFactor?.recoveryCodes) {
-      throw new ApiError(403, '2FA recovery codes not configured');
+    if (!userWithCodes?.twoFactor?.recoveryCodes || userWithCodes.twoFactor.recoveryCodes.length === 0) {
+      throw new ApiError(403, '2FA recovery codes not configured or exhausted');
     }
 
-    const isValidRecovery = await verifyRecoveryCode(
-      userWithCodes.twoFactor.recoveryCodes,
-      twoFactorToken
-    );
-
-    if (!isValidRecovery) {
-      throw new ApiError(403, 'Invalid recovery code');
-    }
-
-    // Recovery code is valid, remove it from the list (one-time use)
-    // SECURITY FIX: Rewrote async findIndex with proper async for loop
-    // Bug: findIndex callback cannot be async - the Promise was never awaited!
+    // First verify the code exists
     const normalizedToken = twoFactorToken.toUpperCase().replace(/[\s-]/g, '');
     let codeFound = false;
-    let codesRemaining = userWithCodes.twoFactor.recoveryCodes.length;
 
-    for (let i = 0; i < userWithCodes.twoFactor.recoveryCodes.length; i++) {
-      const isMatch = await bcrypt.compare(normalizedToken, userWithCodes.twoFactor.recoveryCodes[i]);
+    for (const hashedCode of userWithCodes.twoFactor.recoveryCodes) {
+      const isMatch = await bcrypt.compare(normalizedToken, hashedCode);
       if (isMatch) {
-        userWithCodes.twoFactor.recoveryCodes.splice(i, 1);
         codeFound = true;
         break;
       }
     }
 
-    if (codeFound) {
-      codesRemaining = userWithCodes.twoFactor.recoveryCodes.length;
-
-      // SECURITY FIX: Warn when codes < 3 remaining
-      if (codesRemaining > 0 && codesRemaining < 3) {
-        logger.warn('2FA recovery codes running low', {
-          userId: req.user._id,
-          codesRemaining,
-          warning: 'User should generate new recovery codes',
-          action: 'LOW_RECOVERY_CODES',
-        });
-      }
-
-      // SECURITY FIX: When all codes exhausted, set needsReenrollment flag
-      if (codesRemaining === 0) {
-        logger.error('SECURITY_ALERT: All 2FA recovery codes exhausted', {
-          userId: req.user._id,
-          email: userWithCodes.email,
-          action: 'ALL_RECOVERY_CODES_EXHAUSTED',
-          requiresReenrollment: true,
-        });
-
-        // Set reenrollment flag (user must re-setup 2FA)
-        userWithCodes.twoFactor.needsReenrollment = true;
-      }
-
-      await userWithCodes.save({ validateBeforeSave: false });
+    if (!codeFound) {
+      throw new ApiError(403, 'Invalid recovery code');
     }
 
-    logger.info('2FA verified via recovery code', { userId: req.user._id, codesRemaining });
+    // Race condition fix: Use atomic findOneAndUpdate with optimistic locking.
+    // This ensures only ONE concurrent request can consume a given recovery code.
+    // The update succeeds only if the specific hashed code is still present.
+    const currentVersion = userWithCodes.twoFactor.recoveryCodesVersion || 0;
+    const newVersion = currentVersion + 1;
+
+    // Build filter: must match user AND the code must still exist in array
+    // This prevents race conditions where two concurrent requests both think
+    // they have a valid code - only the first to complete the atomic update wins
+    const atomicFilter: any = {
+      _id: req.user._id,
+      'twoFactor.recoveryCodes': { $exists: true, $ne: [] },
+    };
+
+    // Include the matched code in the filter to make it truly atomic per-code
+    for (const hashedCode of userWithCodes.twoFactor.recoveryCodes) {
+      const isMatch = await bcrypt.compare(normalizedToken, hashedCode);
+      if (isMatch) {
+        atomicFilter['twoFactor.recoveryCodes'] = hashedCode;
+        break;
+      }
+    }
+
+    const atomicUpdate: any = {
+      $pull: { 'twoFactor.recoveryCodes': atomicFilter['twoFactor.recoveryCodes'] },
+      $set: { 'twoFactor.recoveryCodesVersion': newVersion },
+    };
+
+    const updateResult = await User.findOneAndUpdate(
+      atomicFilter,
+      atomicUpdate,
+      { new: true }
+    );
+
+    if (!updateResult) {
+      // Atomic update failed - code was already consumed by a concurrent request
+      logger.warn('2FA recovery code race condition prevented', {
+        userId: req.user._id,
+        action: 'RACE_CONDITION_BLOCKED',
+      });
+      throw new ApiError(403, 'Recovery code already used or invalid');
+    }
+
+    // Update succeeded - code was atomically consumed
+    const codesRemaining = (updateResult.twoFactor as any)?.recoveryCodes?.length ?? 0;
+
+    // Warn when codes < 3 remaining
+    if (codesRemaining > 0 && codesRemaining < 3) {
+      logger.warn('2FA recovery codes running low', {
+        userId: req.user._id,
+        codesRemaining,
+        warning: 'User should generate new recovery codes',
+        action: 'LOW_RECOVERY_CODES',
+      });
+    }
+
+    // When all codes exhausted, set needsReenrollment flag
+    if (codesRemaining === 0) {
+      logger.error('SECURITY_ALERT: All 2FA recovery codes exhausted', {
+        userId: req.user._id,
+        email: updateResult.email,
+        action: 'ALL_RECOVERY_CODES_EXHAUSTED',
+        requiresReenrollment: true,
+      });
+
+      await User.updateOne(
+        { _id: req.user._id },
+        { $set: { 'twoFactor.needsReenrollment': true } }
+      );
+    }
+
+    logger.info('2FA verified via recovery code (atomic)', { userId: req.user._id, codesRemaining });
 
     return next();
   }

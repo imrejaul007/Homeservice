@@ -32,7 +32,14 @@ import { useAuthStore } from '../../stores/authStore';
 import type { Service } from '../../types/search';
 import type { CreateBookingData, BookingAddOn } from '../../services/BookingService';
 import { API_BASE_URL } from '../../config/api';
+import { api } from '../../services/api';
 import { getClaimOffer, type ClaimedOffer } from '../../types/offer';
+import AvailabilityPreview from './ui/AvailabilityPreview';
+import CouponCodeInput from '../payment/CouponCodeInput';
+import offerService from '../../services/offerService';
+import SavedAddressSelector from './ui/SavedAddressSelector';
+import AddressForm from './ui/AddressForm';
+import { customerApi, type Address } from '../../services/customerApi';
 
 // ============================================
 // Duplicate Submission Prevention
@@ -88,6 +95,48 @@ const getOrCreateBookingSessionId = (): string => {
   return id;
 };
 
+/** Normalize providerId — search APIs may return a populated user object */
+const resolveProviderId = (
+  service: Service,
+  propProviderId?: string
+): string => {
+  const candidates = [
+    propProviderId,
+    (service as { providerId?: string | { _id?: string } }).providerId,
+    (service as { provider?: { _id?: string } }).provider?._id,
+  ];
+  for (const raw of candidates) {
+    if (typeof raw === 'string' && /^[0-9a-fA-F]{24}$/.test(raw)) return raw;
+    if (raw && typeof raw === 'object' && '_id' in raw) {
+      const id = String((raw as { _id: unknown })._id);
+      if (/^[0-9a-fA-F]{24}$/.test(id)) return id;
+    }
+  }
+  return '';
+};
+
+/** API expects HH:MM (24h); slots may include seconds */
+const formatScheduledTime = (time: string): string => {
+  if (!time) return '';
+  const parts = time.split(':');
+  const hours = parts[0]?.padStart(2, '0') ?? '00';
+  const minutes = (parts[1] ?? '00').padStart(2, '0');
+  return `${hours}:${minutes}`;
+};
+
+const hoursUntilSlot = (scheduledDate: string, time: string): number => {
+  const [hours, minutes] = time.split(':').map(Number);
+  const slotStart = new Date(scheduledDate);
+  slotStart.setHours(hours, minutes || 0, 0, 0);
+  return (slotStart.getTime() - Date.now()) / (1000 * 60 * 60);
+};
+
+const isSlotBookable = (
+  scheduledDate: string,
+  time: string,
+  minAdvanceHours: number
+): boolean => hoursUntilSlot(scheduledDate, time) >= minAdvanceHours;
+
 /**
  * Generate a unique request key for deduplication
  */
@@ -108,6 +157,8 @@ interface ConfirmedBookingSnapshot {
     tax: number;
     totalAmount: number;
     currency: string;
+    couponDiscount?: number;
+    couponCode?: string;
   };
   status?: string;
 }
@@ -134,6 +185,38 @@ const formatAddressLine = (address: FormData['address']): string | undefined => 
     .filter(Boolean)
     .join(', ');
 };
+
+const formatCouponUserMessage = (rawMessage?: string): string => {
+  const msg = (rawMessage || '').toLowerCase();
+  if (msg.includes('limit') || msg.includes('maximum number of times') || msg.includes('already used') || msg.includes('reached the limit')) {
+    return 'This offer has already been used on your account. Remove it to continue at full price, or pick a different offer.';
+  }
+  if (msg.includes('expired')) {
+    return 'This offer has expired. Remove it to continue your booking at the regular price.';
+  }
+  if (msg.includes('sign in')) {
+    return 'Please sign in to use this promo code.';
+  }
+  if (msg.includes('claim')) {
+    return 'This offer must be claimed from My Offers before you can use it here.';
+  }
+  if (msg.includes('not valid for the selected service')) {
+    return 'This offer does not apply to the service you are booking.';
+  }
+  if (msg.includes('inactive') || msg.includes('not active')) {
+    return 'This offer is no longer active. Please choose a different offer.';
+  }
+  if (msg.includes('not yet valid') || msg.includes('not yet active')) {
+    return 'This offer is not yet available. Please check back later.';
+  }
+  if (msg.includes('minimum order')) {
+    return 'The minimum order value for this offer has not been met.';
+  }
+  return rawMessage || 'This offer cannot be applied to this booking.';
+};
+
+const isCouponRelatedError = (message: string): boolean =>
+  /promo|coupon|offer|limit|expired|claim/i.test(message);
 
 const generateRequestKey = (
   serviceId: string,
@@ -162,7 +245,18 @@ interface BookingFormWizardProps {
   onSuccess?: (bookingId: string, bookingNumber?: string) => void;
   onCancel?: () => void;
   guestMode?: boolean;
-  idempotencyKey?: string;
+  // Pre-loaded offer from claim flow
+  preloadedOffer?: {
+    code: string;
+    offerId?: string;
+    offerDetails?: {
+      code: string;
+      title: string;
+      type: 'percentage' | 'fixed' | 'free_service';
+      value: number;
+      maxDiscount?: number;
+    };
+  };
 }
 
 interface FormData {
@@ -179,6 +273,7 @@ interface FormData {
 
   // Step 3: Payment
   paymentMethod: 'apple_pay' | 'credit_card' | 'cash';
+  couponCode?: string; // Manual promo code entry
 
   // Guest info
   guestName: string;
@@ -199,6 +294,13 @@ interface FormData {
     accessInstructions: string;
   };
   addOns: BookingAddOn[];
+}
+
+// Applied coupon state
+interface AppliedCoupon {
+  code: string;
+  discountAmount: number;
+  discountType?: 'fixed' | 'percentage';
 }
 
 // Initial form data factory to avoid reference issues
@@ -235,11 +337,20 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
   onSuccess,
   onCancel,
   guestMode = false,
-  idempotencyKey
+  preloadedOffer
 }) => {
   const navigate = useNavigate();
   const { user, isAuthenticated, tokens } = useAuthStore();
-  const { createBooking, getAvailableSlots, availableSlots, isSubmitting, isLoading, errors } = useBookingStore();
+  const {
+    createBooking,
+    getAvailableSlots,
+    availableSlots,
+    minBookingAdvanceHours,
+    isSubmitting,
+    isLoading,
+    errors,
+    setSubmitting,
+  } = useBookingStore();
 
   const [currentStep, setCurrentStep] = useState(1);
   const [isFetchingSlots, setIsFetchingSlots] = useState(false);
@@ -248,9 +359,19 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
   const [confirmedBookingNumber, setConfirmedBookingNumber] = useState<string | null>(null);
   const [confirmedSnapshot, setConfirmedSnapshot] = useState<ConfirmedBookingSnapshot | null>(null);
   const [guestSubmitting, setGuestSubmitting] = useState(false);
+  const [submittingUi, setSubmittingUi] = useState(false);
   const [claimedOffers, setClaimedOffers] = useState<ClaimedOffer[]>([]);
   const [selectedOffer, setSelectedOffer] = useState<ClaimedOffer | null>(null);
   const [loadingOffers, setLoadingOffers] = useState(false);
+  const [appliedCoupon, setAppliedCoupon] = useState<AppliedCoupon | null>(null);
+  const [couponError, setCouponError] = useState<string | null>(null);
+  const [preloadedOfferApplied, setPreloadedOfferApplied] = useState(false);
+
+  // Saved addresses state
+  const [savedAddresses, setSavedAddresses] = useState<Address[]>([]);
+  const [selectedSavedAddressId, setSelectedSavedAddressId] = useState<string | null>(null);
+  const [showNewAddressForm, setShowNewAddressForm] = useState(false);
+  const [saveAddressOnBooking, setSaveAddressOnBooking] = useState(false);
 
   const parseDuration = (durationStr: string | number): number => {
     if (typeof durationStr === 'number') return durationStr;
@@ -314,6 +435,29 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
     );
   }, [selectedVariantMeta?.variantDuration]);
 
+  // Auto-apply preloaded offer from claim flow
+  useEffect(() => {
+    if (!preloadedOffer || !isAuthenticated || preloadedOfferApplied) return;
+
+    const applyOffer = async () => {
+      try {
+        const result = await handleApplyCoupon(preloadedOffer.code);
+        if (result?.valid) {
+          toast.success(`Offer "${preloadedOffer.offerDetails?.title || preloadedOffer.code}" applied!`);
+          setPreloadedOfferApplied(true);
+        } else {
+          toast.error(result?.message || 'This offer cannot be applied to this booking.');
+        }
+      } catch {
+        toast.error('This offer cannot be applied to this booking.');
+      }
+    };
+
+    // Small delay to let the component render first
+    const timer = setTimeout(applyOffer, 500);
+    return () => clearTimeout(timer);
+  }, [preloadedOffer, isAuthenticated, preloadedOfferApplied]);
+
   // New step order as per mockups
   const steps = [
     { number: 1, title: 'Date & Time' },
@@ -344,24 +488,50 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
   };
 
   const buildConfirmedSnapshot = useCallback(
-    (bookingResponse: Record<string, unknown>, form: FormData): ConfirmedBookingSnapshot => {
-      const pricing = (bookingResponse.pricing || {}) as ConfirmedBookingSnapshot['pricing'];
+    (
+      bookingResponse: Record<string, unknown>,
+      form: FormData,
+      coupon?: AppliedCoupon | null
+    ): ConfirmedBookingSnapshot => {
+      const apiPricing = (bookingResponse.pricing || {}) as ConfirmedBookingSnapshot['pricing'] & {
+        discounts?: Array<{ code?: string; amount?: number }>;
+        couponDiscount?: number;
+      };
       const guestInfo = bookingResponse.guestInfo as
         | { name?: string; email?: string; phone?: string }
         | undefined;
-      const scheduledRaw = bookingResponse.scheduledDate ?? form.scheduledDate;
-      const dateStr =
-        typeof scheduledRaw === 'string'
-          ? scheduledRaw.split('T')[0]
-          : scheduledRaw instanceof Date
-            ? scheduledRaw.toISOString().split('T')[0]
-            : String(form.scheduledDate).split('T')[0];
+
+      // Always show what the user selected — API may return a stale idempotent booking
+      const dateStr = String(form.scheduledDate).split('T')[0];
+      const timeStr = formatScheduledTime(form.scheduledTime);
+
+      const basePrice =
+        apiPricing.basePrice ??
+        selectedVariantMeta?.variantPrice ??
+        (typeof service.price === 'number' ? service.price : service.price?.amount) ??
+        0;
+      const subtotal = apiPricing.subtotal ?? basePrice;
+      const tax = apiPricing.tax ?? 0;
+      const apiCouponDiscount =
+        apiPricing.couponDiscount ??
+        apiPricing.discounts?.find((d) => d.amount && d.amount > 0)?.amount ??
+        0;
+      const apiCouponCode = apiPricing.discounts?.find((d) => d.code)?.code;
+      const couponDiscount = apiCouponDiscount > 0 ? apiCouponDiscount : (coupon?.discountAmount ?? 0);
+      const couponCode = apiCouponCode || coupon?.code;
+      const hasDiscount = couponDiscount > 0;
+      const totalAmount =
+        apiCouponDiscount > 0
+          ? (apiPricing.totalAmount ?? Math.max(0, subtotal + tax - apiCouponDiscount))
+          : hasDiscount
+            ? Math.max(0, subtotal + tax - couponDiscount)
+            : (apiPricing.totalAmount ?? subtotal + tax);
 
       return {
         bookingNumber: String(bookingResponse.bookingNumber || ''),
         serviceName: getDisplayServiceName(),
         scheduledDate: dateStr,
-        scheduledTime: String(bookingResponse.scheduledTime || form.scheduledTime),
+        scheduledTime: timeStr,
         duration: Number(
           bookingResponse.duration ??
             selectedVariantMeta?.variantDuration ??
@@ -373,30 +543,33 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
         guestEmail: guestInfo?.email || form.guestEmail,
         guestPhone: guestInfo?.phone || form.guestPhone,
         pricing: {
-          basePrice: pricing.basePrice,
-          subtotal: pricing.subtotal ?? pricing.totalAmount ?? 0,
-          tax: pricing.tax ?? 0,
-          totalAmount: pricing.totalAmount ?? pricing.subtotal ?? 0,
-          currency: pricing.currency || 'AED',
+          basePrice,
+          subtotal,
+          tax,
+          totalAmount,
+          currency: apiPricing.currency || 'AED',
+          couponDiscount: hasDiscount ? couponDiscount : undefined,
+          couponCode: hasDiscount ? couponCode : undefined,
         },
         status: bookingResponse.status as string | undefined,
       };
     },
-    [getDisplayServiceName, selectedVariantMeta]
+    [getDisplayServiceName, selectedVariantMeta, service.price]
   );
 
-  // Load available slots when date changes
+  // Load available slots when date or service duration changes
   useEffect(() => {
     const fetchSlots = async () => {
       if (formData.scheduledDate && providerId) {
-        const duration = formData.selectedDuration || service.duration;
+        const duration = getEffectiveDuration();
 
         setIsFetchingSlots(true);
         try {
           await getAvailableSlots(providerId, {
             date: formData.scheduledDate,
             duration,
-            days: 1
+            days: 1,
+            serviceId: String(service._id),
           });
         } catch (err) {
           console.error('Failed to fetch slots:', err);
@@ -408,7 +581,44 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
     };
 
     fetchSlots();
-  }, [formData.scheduledDate, formData.selectedDuration, providerId, service.duration, getAvailableSlots]);
+  }, [
+    formData.scheduledDate,
+    formData.selectedDuration,
+    selectedVariantMeta?.variantDuration,
+    providerId,
+    service._id,
+    service.duration,
+    getAvailableSlots,
+  ]);
+
+  // Clear selected time if it is no longer bookable (conflict, advance window, or slots refreshed)
+  useEffect(() => {
+    if (!formData.scheduledTime || !formData.scheduledDate || isFetchingSlots) return;
+    if (!availableSlots?.length) return;
+
+    const inAdvanceWindow = isSlotBookable(
+      formData.scheduledDate,
+      formData.scheduledTime,
+      minBookingAdvanceHours
+    );
+    const inAvailableList = availableSlots.some(
+      (slot) => slot.time === formData.scheduledTime && slot.isAvailable
+    );
+
+    if (!inAdvanceWindow || !inAvailableList) {
+      setFormData((prev) =>
+        prev.scheduledTime === formData.scheduledTime
+          ? { ...prev, scheduledTime: '' }
+          : prev
+      );
+    }
+  }, [
+    formData.scheduledDate,
+    formData.scheduledTime,
+    minBookingAdvanceHours,
+    availableSlots,
+    isFetchingSlots,
+  ]);
 
   // Fetch user's claimed offers
   useEffect(() => {
@@ -417,32 +627,41 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
 
       setLoadingOffers(true);
       try {
-        const token = tokens?.accessToken || '';
+        const response = await api.get('/offers/my/claims');
 
-        const response = await fetch(`${API_BASE_URL}/offers/my/claims`, {
-          headers: {
-            'Authorization': `Bearer ${token}`
-          }
-        });
-
-        if (response.ok) {
-          const data = await response.json();
+        if (response.status === 200 || response.status === 201) {
+          const data = response.data;
           if (data.success && data.data) {
             // Filter offers that are applicable to this service or have no restrictions
             const serviceId = String(service._id);
-            const categoryId = typeof service.category === 'string' ? service.category : null;
+            // Handle both string category IDs and populated category objects
+            const categoryId = typeof service.category === 'string'
+              ? service.category
+              : (service.category as { _id?: string })?._id || null;
 
             const applicableOffers = data.data.filter((claim: ClaimedOffer) => {
+              if (claim.status !== 'claimed') return false;
+              if (claim.isExpired || (claim.expiresAt && new Date(claim.expiresAt) < new Date())) {
+                return false;
+              }
               const offer = getClaimOffer(claim);
               if (!offer) return false;
               // If no service linking, offer applies to all services
               if (!offer.applicableServices?.length && !offer.applicableCategories?.length) {
                 return true;
               }
-              if (offer.applicableServices?.some((s: string) => s === serviceId)) {
+              // Check services - handle both string IDs and populated objects
+              const offerServiceIds = offer.applicableServices?.map((s: string | { _id?: string }) =>
+                typeof s === 'string' ? s : s._id
+              );
+              if (offerServiceIds?.some((s: string) => s === serviceId)) {
                 return true;
               }
-              if (categoryId && offer.applicableCategories?.some((c: string) => c === categoryId)) {
+              // Check categories - handle both string IDs and populated objects
+              const offerCategoryIds = offer.applicableCategories?.map((c: string | { _id?: string }) =>
+                typeof c === 'string' ? c : c._id
+              );
+              if (categoryId && offerCategoryIds?.some((c: string) => c === categoryId)) {
                 return true;
               }
               return false;
@@ -460,6 +679,167 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
     fetchClaimedOffers();
   }, [service, isAuthenticated, guestMode]);
 
+  // Load saved addresses for authenticated users
+  useEffect(() => {
+    const fetchSavedAddresses = async () => {
+      if (!isAuthenticated || guestMode) return;
+
+      try {
+        const response = await customerApi.getAddresses();
+        setSavedAddresses(response.data.addresses);
+        // Auto-select default address
+        const defaultAddr = response.data.addresses.find((a: Address) => a.isDefault);
+        if (defaultAddr) {
+          setSelectedSavedAddressId(defaultAddr._id);
+          // Populate form with default address
+          setFormData(prev => ({
+            ...prev,
+            address: {
+              street: defaultAddr.street,
+              city: defaultAddr.city,
+              state: defaultAddr.state || '',
+              zipCode: defaultAddr.zipCode || '',
+              country: defaultAddr.country || 'AE'
+            }
+          }));
+        }
+      } catch (err) {
+        console.error('[BookingFormWizard] Failed to fetch saved addresses:', err);
+      }
+    };
+
+    fetchSavedAddresses();
+  }, [isAuthenticated, guestMode]);
+
+  // Handle saved address selection
+  const handleSavedAddressSelect = (address: Address | null) => {
+    if (address) {
+      setSelectedSavedAddressId(address._id);
+      setShowNewAddressForm(false);
+      setFormData(prev => ({
+        ...prev,
+        address: {
+          street: address.street,
+          city: address.city,
+          state: address.state || '',
+          zipCode: address.zipCode || '',
+          country: address.country || 'AE'
+        }
+      }));
+    } else {
+      setSelectedSavedAddressId(null);
+      setShowNewAddressForm(true);
+    }
+  };
+
+  // ============================================
+  // Coupon/Offers Handlers
+  // ============================================
+
+  const clearAppliedCouponState = () => {
+    setSelectedOffer(null);
+    setAppliedCoupon(null);
+    setCouponError(null);
+    setFormData((prev) => ({ ...prev, couponCode: undefined }));
+  };
+
+  const handleApplyCoupon = async (code: string) => {
+    const orderAmount = getCurrentPrice();
+    const serviceId = String(service._id);
+    const categoryId = typeof service.category === 'string' ? service.category : null;
+
+    try {
+      const result = await offerService.validatePromoCode(code, orderAmount, serviceId, categoryId || undefined);
+
+      if (result.valid && result.discountAmount) {
+        setAppliedCoupon({
+          code: result.couponCode || code,
+          discountAmount: result.discountAmount,
+          discountType: result.discountType as 'fixed' | 'percentage' | undefined,
+        });
+        setCouponError(null);
+        setFormData(prev => ({ ...prev, couponCode: result.couponCode || code }));
+        return { valid: true, code: result.couponCode || code, discountAmount: result.discountAmount };
+      }
+
+      const friendly = formatCouponUserMessage(result.message);
+      setCouponError(friendly);
+      return { valid: false, code, message: friendly };
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to apply coupon';
+      const friendly = formatCouponUserMessage(errorMessage);
+      setCouponError(friendly);
+      return { valid: false, code, message: friendly };
+    }
+  };
+
+  const handleRemoveCoupon = async () => {
+    clearAppliedCouponState();
+  };
+
+  const validateCouponBeforeBooking = async (): Promise<boolean> => {
+    const code = getEffectiveCouponCode();
+    if (!code) return true;
+
+    const orderAmount = getCurrentPrice();
+    const serviceId = String(service._id);
+    const categoryId = typeof service.category === 'string' ? service.category : null;
+    const result = await offerService.validatePromoCode(code, orderAmount, serviceId, categoryId || undefined);
+
+    if (result.valid && result.discountAmount) {
+      setAppliedCoupon({
+        code: result.couponCode || code,
+        discountAmount: result.discountAmount,
+        discountType: result.discountType as 'fixed' | 'percentage' | undefined,
+      });
+      setCouponError(null);
+      setFormData((prev) => ({ ...prev, couponCode: result.couponCode || code }));
+      return true;
+    }
+
+    const friendly = formatCouponUserMessage(result.message);
+    clearAppliedCouponState();
+    setCouponError(friendly);
+    toast.error(friendly, { duration: 6000 });
+    return false;
+  };
+
+  // Save address if user checked the option
+  const handleSaveAddressAfterBooking = async () => {
+    if (!saveAddressOnBooking) return;
+    if (selectedSavedAddressId) return; // Already saved, no need to save again
+
+    try {
+      // Determine label based on city or default
+      const label = formData.address.city ? `${formData.address.city} Address` : 'Home';
+
+      await customerApi.addAddress({
+        label,
+        street: formData.address.street,
+        city: formData.address.city,
+        state: formData.address.state,
+        zipCode: formData.address.zipCode,
+        country: formData.address.country || 'AE',
+        isDefault: savedAddresses.length === 0, // First address is default
+      });
+      console.log('[BookingFormWizard] Address saved successfully');
+    } catch (err) {
+      console.error('[BookingFormWizard] Failed to save address:', err);
+      // Don't show error toast - the booking was successful, address save is optional
+    }
+  };
+
+  // Get effective coupon code - prefer claimed offer, then manual entry
+  const getEffectiveCouponCode = (): string | undefined => {
+    if (selectedOffer) {
+      const offer = getClaimOffer(selectedOffer);
+      if (offer?.code) return offer.code;
+    }
+    if (appliedCoupon?.code) return appliedCoupon.code;
+    if (formData.couponCode) return formData.couponCode;
+    return undefined;
+  };
+
   const handleNext = () => {
     // Validation for Step 1: Date & Time
     if (currentStep === 1) {
@@ -469,6 +849,10 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
       }
       if (!formData.scheduledTime) {
         toast.error('Please select a time slot');
+        return;
+      }
+      if (!isSlotBookable(formData.scheduledDate, formData.scheduledTime, minBookingAdvanceHours)) {
+        toast.error(`Please choose a time at least ${minBookingAdvanceHours} hours from now`);
         return;
       }
     }
@@ -482,6 +866,21 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
         }
         if (!formData.address.city?.trim()) {
           toast.error('Please enter your city for home service');
+          return;
+        }
+      }
+      // FIX: Validate guest contact fields when advancing from step 2 in guest mode
+      if (guestMode) {
+        if (!formData.guestName.trim()) {
+          toast.error('Please enter your name');
+          return;
+        }
+        if (!formData.guestEmail.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.guestEmail)) {
+          toast.error('Please enter a valid email address');
+          return;
+        }
+        if (!formData.guestPhone.trim()) {
+          toast.error('Please enter your phone number');
           return;
         }
       }
@@ -540,7 +939,7 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
       formData.guestEmail
     );
 
-    if (isSubmitting || guestSubmitting || submitInProgressRef.current) {
+    if (isSubmitting || guestSubmitting || submittingUi || submitInProgressRef.current) {
       toast.error('Please wait — your booking is still processing.');
       return;
     }
@@ -556,11 +955,14 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
       return;
     }
     submitInProgressRef.current = true;
+    setSubmittingUi(true);
 
     const finishSubmit = () => {
       setGuestSubmitting(false);
       guestSubmittingRef.current = false;
       submitInProgressRef.current = false;
+      setSubmittingUi(false);
+      setSubmitting(false);
     };
 
     const handleBookingConflict = async (message: string) => {
@@ -672,16 +1074,16 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
             phone: formData.guestPhone
           },
           location: {
-            type: formData.locationType === 'at_home' ? 'customer_address' : 'hotel',
-            address: formData.address.street?.trim()
-              ? {
-                  street: formData.address.street,
-                  city: formData.address.city,
-                  state: formData.address.state,
-                  zipCode: formData.address.zipCode,
-                  country: formData.address.country || 'AE'
-                }
-              : undefined,
+            type: formData.locationType === 'at_home' ? 'customer_address' : formData.locationType === 'hotel' ? 'hotel' : 'provider_location',
+            // FIX: Always include address fields to satisfy backend Joi validation
+            // Backend requires street and city even for non-at_home locations
+            address: {
+              street: formData.address.street || '',
+              city: formData.address.city || '',
+              state: formData.address.state || '',
+              zipCode: formData.address.zipCode || '',
+              country: formData.address.country || 'AE'
+            },
             notes: formData.specialRequests || undefined
           },
           locationType: formData.locationType === 'at_home' ? 'at_home' : 'hotel',
@@ -701,21 +1103,11 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
 
         console.log('[GuestBooking] Sending request...');
 
-        // Add timeout to prevent infinite hangs
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 30000);
-
-        const response = await fetch(`${API_BASE_URL}/bookings/guest`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(guestBookingData),
-          signal: controller.signal
+        const response = await api.post('/bookings/guest', guestBookingData, {
+          timeout: 30000,
         });
 
-        clearTimeout(timeoutId);
-
-        const result = await response.json();
-        console.log('[GuestBooking] Response:', result);
+        const result = response.data;
 
         if (response.status === 409) {
           await handleBookingConflict(
@@ -724,15 +1116,17 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
           return;
         }
 
-        if (response.ok && result.success) {
+        if (result.success) {
           const bookingData = result.data?.booking || result.data;
           clearPendingRequest(requestKey);
           sessionStorage.removeItem(`booking_idempotency_${service._id}`);
-          setConfirmedSnapshot(buildConfirmedSnapshot(bookingData, formData));
+          sessionStorage.removeItem(BOOKING_SESSION_STORAGE_KEY);
+          setConfirmedSnapshot(buildConfirmedSnapshot(bookingData, formData, appliedCoupon));
           setBookingConfirmed(true);
           setConfirmedBookingId(null);
           setConfirmedBookingNumber(bookingData?.bookingNumber || null);
           setCurrentStep(4);
+          // Note: Don't save address for guest users - they don't have an account
         } else {
           const errorMsg = result.message || result.errors?.[0]?.message || 'Failed to create booking.';
           toast.error(errorMsg);
@@ -740,7 +1134,7 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
         }
       } catch (err: any) {
         clearPendingRequest(requestKey);
-        if (err.name === 'AbortError') {
+        if (err.code === 'ECONNABORTED' || err.message?.includes('timeout')) {
           console.error('[GuestBooking] Request timed out');
           toast.error('Request timed out. Please try again.');
         } else {
@@ -752,13 +1146,25 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
       }
     } else {
       // Authenticated booking - use store
+      const resolvedProviderId = resolveProviderId(service, providerId);
+      const formattedTime = formatScheduledTime(formData.scheduledTime);
+      // Always generate a fresh idempotency key - don't cache it to avoid returning duplicate bookings
+      const bookingIdempotencyKey = crypto.randomUUID();
+
+      const locationType =
+        formData.locationType === 'at_home'
+          ? 'customer_address'
+          : formData.locationType === 'hotel'
+            ? 'hotel'
+            : 'provider_location';
+
       const bookingData = {
         serviceId: service._id,
-        providerId,
+        ...(resolvedProviderId ? { providerId: resolvedProviderId } : {}),
         scheduledDate: formatDateString(formData.scheduledDate),
-        scheduledTime: formData.scheduledTime,
+        scheduledTime: formattedTime,
         location: {
-          type: formData.locationType === 'at_home' ? 'customer_address' : 'provider_location',
+          type: locationType,
           address: formData.address.street ? {
             street: formData.address.street,
             city: formData.address.city,
@@ -774,15 +1180,15 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
           accessInstructions: formData.customerInfo.accessInstructions || undefined
         },
         addOns: formData.addOns,
-        notes: formData.specialRequests || undefined,
+        specialRequests: formData.specialRequests || undefined,
         locationType: formData.locationType,
         selectedDuration: selectedVariantMeta?.variantDuration ?? formData.selectedDuration,
         professionalPreference: formData.professionalPreference,
         experiencePreference: formData.experiencePreference,
         paymentMethod: formData.paymentMethod,
-        couponCode: selectedOffer ? (getClaimOffer(selectedOffer)?.code ?? selectedOffer.couponCode) : undefined,
+        couponCode: getEffectiveCouponCode(),
         metadata: {
-          idempotencyKey: idempotencyKey,
+          idempotencyKey: bookingIdempotencyKey,
           sessionId: getOrCreateBookingSessionId(),
           bookingSource: 'search',
           deviceType: 'desktop',
@@ -794,12 +1200,47 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
         }
       } as CreateBookingData;
 
+      console.log('[Booking] Submitting authenticated booking', {
+        serviceId: bookingData.serviceId,
+        providerId: resolvedProviderId || '(auto-assign)',
+        scheduledDate: bookingData.scheduledDate,
+        scheduledTime: bookingData.scheduledTime,
+        locationType: bookingData.location?.type,
+        paymentMethod: bookingData.paymentMethod,
+      });
+
+      const couponOk = await validateCouponBeforeBooking();
+      if (!couponOk) {
+        clearPendingRequest(requestKey);
+        finishSubmit();
+        return;
+      }
+
       try {
         const booking = await createBooking(bookingData);
+        console.log('[Booking] Created successfully', {
+          bookingId: booking?._id,
+          bookingNumber: booking?.bookingNumber,
+          isDuplicate: booking?.isDuplicate,
+        });
 
         if (booking && booking._id) {
           clearPendingRequest(requestKey);
           sessionStorage.removeItem(`booking_idempotency_${service._id}`);
+          sessionStorage.removeItem(BOOKING_SESSION_STORAGE_KEY);
+
+          const responseDate = String(booking.scheduledDate || '').split('T')[0];
+          const submittedDate = formatDateString(formData.scheduledDate);
+          const submittedTime = formatScheduledTime(formData.scheduledTime);
+          if (
+            booking.isDuplicate &&
+            (responseDate !== submittedDate || booking.scheduledTime !== submittedTime)
+          ) {
+            toast.error(
+              'A previous booking was returned instead of your new selection. Please check My Bookings or try again.'
+            );
+          }
+
           setConfirmedSnapshot(
             buildConfirmedSnapshot(
               {
@@ -810,13 +1251,16 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
                 pricing: booking.pricing,
                 status: booking.status,
               },
-              formData
+              formData,
+              appliedCoupon
             )
           );
           setBookingConfirmed(true);
           setConfirmedBookingId(booking._id);
           setConfirmedBookingNumber(booking.bookingNumber || null);
           setCurrentStep(4);
+          // Save address if user checked the option
+          handleSaveAddressAfterBooking();
         } else {
           clearPendingRequest(requestKey);
           toast.error('Failed to create booking. Please try again.');
@@ -825,22 +1269,26 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
         const err = error as { message?: string };
         const errorMessage = err?.message || 'Failed to create booking. Please try again.';
         const isSlotConflict =
-          /time slot|slot is|being booked|already booked/i.test(errorMessage);
+          /time slot|slot is|being booked|already booked|temporarily unavailable|try again/i.test(errorMessage);
 
         clearPendingRequest(requestKey);
 
         if (isSlotConflict) {
           await handleBookingConflict(errorMessage);
+        } else if (isCouponRelatedError(errorMessage)) {
+          const friendly = formatCouponUserMessage(errorMessage);
+          clearAppliedCouponState();
+          setCouponError(friendly);
+          toast.error(friendly, { duration: 6000 });
         } else {
           toast.error(errorMessage);
-          finishSubmit();
         }
         return;
       } finally {
         finishSubmit();
       }
     }
-  }, [service, providerId, formData, guestMode, user, createBooking, idempotencyKey, selectedOffer, durationOptions, selectedVariantMeta, getAvailableSlots, isSubmitting, guestSubmitting]);
+  }, [service, providerId, formData, guestMode, user, createBooking, selectedOffer, appliedCoupon, durationOptions, selectedVariantMeta, getAvailableSlots, isSubmitting, guestSubmitting, submittingUi, setSubmitting, buildConfirmedSnapshot]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -849,11 +1297,16 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
     };
   }, []);
 
-  // Transform availableSlots to TimeSlotGrid format
-  const timeSlots = availableSlots?.map(slot => ({
-    time: slot.time,
-    isAvailable: slot.isAvailable
-  })) || [];
+  // Transform availableSlots — hide slots inside min advance window (defense in depth)
+  const timeSlots = useMemo(() => {
+    if (!formData.scheduledDate || !availableSlots?.length) return [];
+    return availableSlots.map((slot) => ({
+      time: slot.time,
+      isAvailable:
+        slot.isAvailable &&
+        isSlotBookable(formData.scheduledDate, slot.time, minBookingAdvanceHours),
+    }));
+  }, [availableSlots, formData.scheduledDate, minBookingAdvanceHours]);
 
   return (
     <div className="min-h-screen bg-nilin-cream flex flex-col">
@@ -873,6 +1326,35 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
                 </svg>
                 <span className="text-sm font-medium">Back</span>
               </button>
+
+              {/* Preloaded Offer Banner */}
+              {preloadedOffer && preloadedOfferApplied && appliedCoupon && (
+                <div className="mb-6 p-4 bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 rounded-xl">
+                  <div className="flex items-center gap-3">
+                    <div className="flex-shrink-0 w-10 h-10 bg-green-500 rounded-full flex items-center justify-center">
+                      <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      </svg>
+                    </div>
+                    <div className="flex-1">
+                      <p className="font-semibold text-green-800">
+                        {preloadedOffer.offerDetails?.title || 'Special Offer'} Applied
+                      </p>
+                      <p className="text-sm text-green-600">
+                        {appliedCoupon.discountType === 'percentage'
+                          ? `${appliedCoupon.discountAmount}% off your booking`
+                          : `AED ${appliedCoupon.discountAmount} off your booking`}
+                      </p>
+                    </div>
+                    <div className="flex-shrink-0">
+                      <span className="px-3 py-1 bg-green-100 text-green-700 text-xs font-mono rounded-full">
+                        {appliedCoupon.code}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="text-center mb-8">
                 <h1 className="text-2xl md:text-3xl font-bold text-nilin-charcoal mb-1 font-serif">Book Your Service</h1>
                 <p className="text-sm text-nilin-warmGray">Complete your booking in a few simple steps</p>
@@ -947,6 +1429,9 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
                   <label className="block text-sm font-semibold text-gray-900 mb-3">
                     Select Time
                   </label>
+                  <p className="text-xs text-nilin-warmGray mb-3">
+                    Times must be at least {minBookingAdvanceHours} hours from now
+                  </p>
                   <TimeSlotGrid
                     slots={timeSlots}
                     selectedTime={formData.scheduledTime}
@@ -954,6 +1439,21 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
                     isLoading={isFetchingSlots}
                   />
                 </div>
+
+                {/* Availability Preview - Quick Overview */}
+                {formData.scheduledDate && providerId && (
+                  <div className="mt-6">
+                    <AvailabilityPreview
+                      providerId={providerId}
+                      serviceId={String(service._id)}
+                      duration={getEffectiveDuration()}
+                      selectedDate={formData.scheduledDate}
+                      availabilitySlots={timeSlots}
+                      isLoadingSlots={isFetchingSlots}
+                      onSlotSelect={(time) => setFormData({ ...formData, scheduledTime: time })}
+                    />
+                  </div>
+                )}
               </div>
             )}
 
@@ -977,61 +1477,60 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
                 {/* Address Section - Show when At Home is selected */}
                 {formData.locationType === 'at_home' && (
                   <div className="mb-6 card-nilin p-6 rounded-xl transition-all duration-300 hover:shadow-nilin-warm">
-                    <label className="block text-sm font-semibold text-nilin-charcoal mb-3">
-                      Service Address
-                    </label>
-                    <div className="space-y-3">
-                      <input
-                        type="text"
-                        value={formData.address.street}
-                        onChange={(e) =>
-                          setFormData({
-                            ...formData,
-                            address: { ...formData.address, street: e.target.value }
-                          })
-                        }
-                        placeholder="Street Address / Building Name"
-                        className="w-full px-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-coral/30 font-sans border-2 border-nilin-border bg-white/80 transition-all duration-300 focus:border-nilin-coral"
-                      />
-                      <div className="grid grid-cols-2 gap-3">
-                        <input
-                          type="text"
-                          value={formData.address.city}
-                          onChange={(e) =>
-                            setFormData({
-                              ...formData,
-                              address: { ...formData.address, city: e.target.value }
-                            })
-                          }
-                          placeholder="City"
-                          className="px-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-coral/30 font-sans border-2 border-nilin-border bg-white/80 transition-all duration-300 focus:border-nilin-coral"
+                    {/* For authenticated users with saved addresses */}
+                    {!guestMode && savedAddresses.length > 0 ? (
+                      <>
+                        <SavedAddressSelector
+                          selectedAddressId={selectedSavedAddressId}
+                          onSelect={handleSavedAddressSelect}
+                          onManageAddresses={() => navigate('/customer/addresses')}
                         />
-                        <input
-                          type="text"
-                          value={formData.address.state}
-                          onChange={(e) =>
-                            setFormData({
-                              ...formData,
-                              address: { ...formData.address, state: e.target.value }
-                            })
+                        {/* New address form when "Enter new address" is selected */}
+                        {(showNewAddressForm || !selectedSavedAddressId) && (
+                          <div className="mt-4 pt-4 border-t border-nilin-border/30">
+                            <p className="text-xs text-nilin-warmGray mb-3">Enter new address:</p>
+                            <AddressForm
+                              address={formData.address}
+                              onChange={(newAddress) =>
+                                setFormData({ ...formData, address: newAddress })
+                              }
+                              showCountry={true}
+                            />
+                            {/* Save address checkbox */}
+                            <div className="mt-4 flex items-center gap-3">
+                              <button
+                                type="button"
+                                onClick={() => setSaveAddressOnBooking(!saveAddressOnBooking)}
+                                className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${
+                                  saveAddressOnBooking
+                                    ? 'bg-nilin-coral border-nilin-coral'
+                                    : 'border-nilin-border hover:border-nilin-coral'
+                                }`}
+                              >
+                                {saveAddressOnBooking && <Check className="w-3 h-3 text-white" />}
+                              </button>
+                              <span className="text-sm text-nilin-charcoal">
+                                Save this address for future bookings
+                              </span>
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      /* For guest users or users with no saved addresses */
+                      <>
+                        <label className="block text-sm font-semibold text-nilin-charcoal mb-3">
+                          Service Address
+                        </label>
+                        <AddressForm
+                          address={formData.address}
+                          onChange={(newAddress) =>
+                            setFormData({ ...formData, address: newAddress })
                           }
-                          placeholder="State"
-                          className="px-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-coral/30 font-sans border-2 border-nilin-border bg-white/80 transition-all duration-300 focus:border-nilin-coral"
+                          showCountry={true}
                         />
-                      </div>
-                      <input
-                        type="text"
-                        value={formData.address.zipCode}
-                        onChange={(e) =>
-                          setFormData({
-                            ...formData,
-                            address: { ...formData.address, zipCode: e.target.value }
-                          })
-                        }
-                        placeholder="PIN Code"
-                        className="w-full px-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-coral/30 font-sans border-2 border-nilin-border bg-white/80 transition-all duration-300 focus:border-nilin-coral"
-                      />
-                    </div>
+                      </>
+                    )}
                   </div>
                 )}
 
@@ -1148,6 +1647,27 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
                 <h2 className="text-2xl font-bold text-nilin-charcoal mb-2 font-serif">Payment Authorization</h2>
                 <p className="text-nilin-warmGray mb-6">Select your preferred payment method</p>
 
+                {couponError && (
+                  <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-xl" role="alert">
+                    <div className="flex items-start gap-3">
+                      <svg className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      <div className="flex-1">
+                        <p className="text-sm font-medium text-red-800">Offer could not be applied</p>
+                        <p className="text-sm text-red-700 mt-1">{couponError}</p>
+                        <button
+                          type="button"
+                          onClick={() => clearAppliedCouponState()}
+                          className="mt-2 text-sm font-medium text-red-800 underline hover:text-red-900"
+                        >
+                          Remove offer and continue at full price
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* Claimed Offers Section */}
                 {!guestMode && (claimedOffers.length > 0 || loadingOffers) && (
                   <div className="mb-6 card-nilin p-6 rounded-xl transition-all duration-300">
@@ -1170,11 +1690,39 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
                         ) : (
                           <select
                             value={selectedOffer ? JSON.stringify(selectedOffer) : ''}
-                            onChange={(e) => {
+                            onChange={async (e) => {
                               if (e.target.value) {
-                                setSelectedOffer(JSON.parse(e.target.value));
+                                const claim = JSON.parse(e.target.value);
+                                setSelectedOffer(claim);
+                                setCouponError(null);
+
+                                const orderAmount = getCurrentPrice();
+                                const offer = getClaimOffer(claim);
+                                if (offer) {
+                                  const result = await offerService.validatePromoCode(
+                                    offer.code,
+                                    orderAmount,
+                                    String(service._id),
+                                    typeof service.category === 'string' ? service.category : null
+                                  );
+
+                                  if (result.valid && result.discountAmount) {
+                                    setAppliedCoupon({
+                                      code: result.couponCode || offer.code,
+                                      discountAmount: result.discountAmount,
+                                      discountType: result.discountType as 'fixed' | 'percentage' | undefined,
+                                    });
+                                    setFormData(prev => ({ ...prev, couponCode: result.couponCode || offer.code }));
+                                    setCouponError(null);
+                                  } else {
+                                    clearAppliedCouponState();
+                                    const friendly = formatCouponUserMessage(result.message);
+                                    setCouponError(friendly);
+                                    toast.error(friendly, { duration: 6000 });
+                                  }
+                                }
                               } else {
-                                setSelectedOffer(null);
+                                clearAppliedCouponState();
                               }
                             }}
                             className="w-full px-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-coral/30 font-sans border-2 border-nilin-border bg-white/80 transition-all duration-300 focus:border-nilin-coral"
@@ -1188,46 +1736,62 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
                                 : offer.type === 'fixed'
                                   ? `AED ${offer.value} OFF`
                                   : 'Free Service';
+                              const expiresAt = new Date(claim.expiresAt);
+                              const daysLeft = Math.ceil((expiresAt.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+                              const expiresText = daysLeft > 0 ? `${daysLeft} days left` : 'Expiring soon';
                               return (
                                 <option key={offer._id || index} value={JSON.stringify(claim)}>
-                                  {offer.code} - {discountText} {offer.title ? `(${offer.title})` : ''}
+                                  {offer.code} - {discountText} ({expiresText})
                                 </option>
                               );
                             })}
                           </select>
                         )}
 
-                        {selectedOffer && (() => {
-                          const appliedOffer = getClaimOffer(selectedOffer);
-                          if (!appliedOffer) return null;
-                          const discountLabel = appliedOffer.type === 'percentage'
-                            ? `${appliedOffer.value}% OFF`
-                            : appliedOffer.type === 'fixed'
-                              ? `AED ${appliedOffer.value} OFF`
-                              : 'Free Service';
-                          return (
+                        {/* Applied offer display - shown when dropdown selection is active */}
+                        {selectedOffer && appliedCoupon && (
                           <div className="mt-3 p-3 bg-green-50 rounded-lg border border-green-200">
                             <div className="flex items-center justify-between">
                               <div>
                                 <p className="text-sm font-medium text-green-800">
-                                  {discountLabel} Applied!
+                                  {appliedCoupon.discountType === 'percentage'
+                                    ? `${appliedCoupon.discountAmount}% OFF`
+                                    : `AED ${appliedCoupon.discountAmount} OFF`} Applied!
                                 </p>
                                 <p className="text-xs text-green-600">
-                                  Code: {appliedOffer.code}
+                                  Code: {appliedCoupon.code}
                                 </p>
+                                {selectedOffer.expiresAt && (
+                                  <p className="text-xs text-green-500 mt-1">
+                                    Expires: {new Date(selectedOffer.expiresAt).toLocaleDateString('en-AE', { day: 'numeric', month: 'short', year: 'numeric' })}
+                                  </p>
+                                )}
                               </div>
                               <button
-                                onClick={() => setSelectedOffer(null)}
+                                type="button"
+                                onClick={() => clearAppliedCouponState()}
                                 className="text-xs text-green-700 hover:text-green-900 underline"
                               >
                                 Remove
                               </button>
                             </div>
                           </div>
-                          );
-                        })()}
+                        )}
                       </>
                     )}
+                  </div>
+                )}
+
+                {/* Coupon Code Input Section (for manually entered promo codes) */}
+                {/* Only show if no claimed offer is selected (claimed offers use the dropdown above) */}
+                {!guestMode && !selectedOffer && (
+                  <div className="mb-6 card-nilin p-6 rounded-xl transition-all duration-300">
+                    <CouponCodeInput
+                      onApply={handleApplyCoupon}
+                      onRemove={handleRemoveCoupon}
+                      appliedCoupon={appliedCoupon}
+                      currency="AED"
+                    />
                   </div>
                 )}
 
@@ -1272,6 +1836,8 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
                     locationType={formData.locationType}
                     price={getCurrentPrice()}
                     currency="AED"
+                    discountAmount={appliedCoupon?.discountAmount}
+                    discountCode={appliedCoupon?.code}
                   />
                 </div>
 
@@ -1403,6 +1969,20 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
                             {(confirmedSnapshot.pricing.basePrice ?? confirmedSnapshot.pricing.subtotal).toLocaleString('en-AE')}
                           </span>
                         </div>
+                        {(confirmedSnapshot.pricing.couponDiscount ?? 0) > 0 && (
+                          <div className="flex justify-between text-green-600">
+                            <span>
+                              Coupon
+                              {confirmedSnapshot.pricing.couponCode && (
+                                <span className="text-xs ml-1">({confirmedSnapshot.pricing.couponCode})</span>
+                              )}
+                            </span>
+                            <span>
+                              -{confirmedSnapshot.pricing.currency}{' '}
+                              {confirmedSnapshot.pricing.couponDiscount!.toLocaleString('en-AE')}
+                            </span>
+                          </div>
+                        )}
                         {confirmedSnapshot.pricing.tax > 0 && (
                           <div className="flex justify-between text-nilin-warmGray">
                             <span>Tax</span>
@@ -1524,11 +2104,11 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
                 ) : (
                   <button
                     onClick={handleSubmit}
-                    disabled={isSubmitting || guestSubmitting || submitInProgressRef.current}
+                    disabled={isSubmitting || guestSubmitting || submittingUi}
                     className="btn-nilin flex items-center gap-2 px-8 py-3 rounded-full font-semibold hover:shadow-nilin-warm transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
-                    title={submitInProgressRef.current ? 'Booking is being processed...' : ''}
+                    title={submittingUi ? 'Booking is being processed...' : ''}
                   >
-                    {(isSubmitting || guestSubmitting || submitInProgressRef.current) ? (
+                    {(isSubmitting || guestSubmitting || submittingUi) ? (
                       <>
                         <div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
                         Processing...

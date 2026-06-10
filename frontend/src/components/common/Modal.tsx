@@ -49,26 +49,27 @@ const sizeStyles = {
 // Dialog Overlay (Backdrop)
 // =============================================================================
 
-const ModalOverlay: React.FC<{ className?: string; children?: React.ReactNode }> = ({
-  className,
-  children,
-}) => (
-  <DialogPrimitive.Overlay
-    className={cn(
-      // Glass backdrop with blur
-      'fixed inset-0 z-50',
-      'bg-nilin-charcoal/40',
-      'backdrop-blur-sm',
-      '-webkit-backdrop-blur-sm',
-      // Fade animation
-      'data-[state=closed]:animate-fade-out',
-      'data-[state=open]:animate-fade-in',
-      className
-    )}
-  >
-    {children}
-  </DialogPrimitive.Overlay>
+const ModalOverlay = React.forwardRef<HTMLDivElement, { className?: string; children?: React.ReactNode }>(
+  ({ className, children }, forwardedRef) => (
+    <DialogPrimitive.Overlay
+      ref={forwardedRef}
+      className={cn(
+        // Glass backdrop with blur
+        'fixed inset-0 z-50',
+        'bg-nilin-charcoal/40',
+        'backdrop-blur-sm',
+        '-webkit-backdrop-blur-sm',
+        // Fade animation
+        'data-[state=closed]:animate-fade-out',
+        'data-[state=open]:animate-fade-in',
+        className
+      )}
+    >
+      {children}
+    </DialogPrimitive.Overlay>
+  )
 );
+ModalOverlay.displayName = 'ModalOverlay';
 
 // =============================================================================
 // Dialog Content (Modal Card)
@@ -80,41 +81,41 @@ interface ModalContentProps {
   size?: 'sm' | 'md' | 'lg' | 'xl';
 }
 
-const ModalContent: React.FC<ModalContentProps> = ({
-  children,
-  className,
-  size = 'md',
-}) => (
-  <DialogPrimitive.Content
-    className={cn(
-      // Positioning
-      'fixed left-[50%] top-[50%] z-50 translate-x-[-50%] translate-y-[-50%]',
-      // Glass effect background
-      'bg-white',
-      'border border-[#E8E4E0]',
-      // NILIN rounded corners
-      'rounded-nilin-lg',
-      // Warm shadow - NILIN signature
-      'shadow-nilin-warm-lg',
-      // Dimensions
-      'w-full',
-      sizeStyles[size],
-      'max-h-[90vh]',
-      // Overflow handling
-      'overflow-hidden',
-      // Focus outline
-      'focus:outline-none',
-      // Scale animation on open/close
-      'data-[state=closed]:animate-modal-scale-out',
-      'data-[state=open]:animate-modal-scale-in',
-      // Animation
-      'duration-200',
-      className
-    )}
-  >
-    {children}
-  </DialogPrimitive.Content>
+const ModalContent = React.forwardRef<HTMLDivElement, ModalContentProps>(
+  ({ children, className, size = 'md' }, forwardedRef) => (
+    <DialogPrimitive.Content
+      ref={forwardedRef}
+      className={cn(
+        // Positioning
+        'fixed left-[50%] top-[50%] z-50 translate-x-[-50%] translate-y-[-50%]',
+        // Glass effect background
+        'bg-white',
+        'border border-[#E8E4E0]',
+        // NILIN rounded corners
+        'rounded-nilin-lg',
+        // Warm shadow - NILIN signature
+        'shadow-nilin-warm-lg',
+        // Dimensions
+        'w-full',
+        sizeStyles[size],
+        'max-h-[90vh]',
+        // Overflow handling
+        'overflow-hidden',
+        // Focus outline
+        'focus:outline-none',
+        // Scale animation on open/close
+        'data-[state=closed]:animate-modal-scale-out',
+        'data-[state=open]:animate-modal-scale-in',
+        // Animation
+        'duration-200',
+        className
+      )}
+    >
+      {children}
+    </DialogPrimitive.Content>
+  )
 );
+ModalContent.displayName = 'ModalContent';
 
 // =============================================================================
 // Dialog Header

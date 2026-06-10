@@ -18,7 +18,11 @@ export type NotificationEventType =
   | 'provider_rejected'
   | 'loyalty_tier_upgrade'
   | 'welcome'
-  | 'birthday';
+  | 'birthday'
+  | 'offer_expiry_reminder'
+  | 'offer_expired'
+  | 'offer_reminder_unused'
+  | 'admin_offer_expiry_alert';
 
 export type NotificationChannel = 'email' | 'sms' | 'push' | 'in_app' | 'whatsapp' | 'telegram';
 

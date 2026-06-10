@@ -14,6 +14,7 @@ export interface SearchFilters {
   sortBy?: 'popularity' | 'price' | 'price_desc' | 'rating' | 'distance' | 'newest';
   page?: number;
   limit?: number;
+  providerId?: string;
 }
 
 export interface Service {
@@ -57,6 +58,9 @@ export interface Service {
   isActive: boolean;
   isFeatured: boolean;
   isPopular: boolean;
+  // Package identification fields
+  isPackage?: boolean;
+  bundleId?: string;
   provider?: {
     _id: string;
     firstName: string;
@@ -118,4 +122,57 @@ export interface SuggestionsResponse {
   data: {
     suggestions: Suggestion[];
   };
+}
+
+export interface SearchProvider {
+  id: string;
+  _id: string;
+  firstName: string;
+  lastName?: string;
+  businessName: string;
+  tagline?: string;
+  profilePhoto?: string;
+  tier?: 'elite' | 'premium' | 'standard';
+  isVerified?: boolean;
+  location?: { city: string; state: string } | null;
+  rating: number;
+  reviewCount: number;
+  startingPrice?: number | null;
+  maxPrice?: number | null;
+  servicesCount: number;
+  specializations?: string[];
+  completionRate?: number;
+}
+
+export interface ProviderSearchResponse {
+  success: boolean;
+  data: {
+    providers: SearchProvider[];
+    pagination: {
+      page: number;
+      limit: number;
+      total: number;
+      pages: number;
+    };
+    searchMetadata?: {
+      query?: string;
+      resultCount: number;
+      searchTime: number;
+    };
+  };
+}
+
+export interface SavedSearch {
+  id: string;
+  query: string;
+  viewMode: 'services' | 'providers';
+  filters: {
+    category?: string;
+    subcategory?: string;
+    minPrice?: number;
+    maxPrice?: number;
+    minRating?: number;
+    sortBy?: string;
+  };
+  createdAt: string;
 }

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { HelpCircle, Book, Video, MessageCircle, ExternalLink, ChevronRight, Search, Phone, Mail, Clock, FileText, Users, Star } from 'lucide-react';
 import NavigationHeader from '../components/layout/NavigationHeader';
 import Footer from '../components/layout/Footer';
+import { useAuthStore } from '../stores/authStore';
 
 interface HelpCategory {
   icon: React.ElementType;
@@ -106,8 +107,11 @@ const HelpPage: React.FC = () => {
     },
   ];
 
+  const { isAuthenticated } = useAuthStore();
+  const supportLink = isAuthenticated ? '/customer/support' : '/contact';
+
   const quickHelp = [
-    { icon: MessageCircle, title: 'Live Chat', description: 'Chat with our support team', link: '/contact' },
+    { icon: MessageCircle, title: 'Live Chat', description: 'Chat with our support team', link: supportLink },
     { icon: Mail, title: 'Email Support', description: 'support@nilin.com', link: 'mailto:support@nilin.com' },
     { icon: Phone, title: 'Call Us', description: '+971 4 123 4567', link: 'tel:+97141234567' },
   ];
@@ -233,11 +237,11 @@ const HelpPage: React.FC = () => {
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <Link
-                to="/contact"
+                to={supportLink}
                 className="inline-flex items-center justify-center gap-2 px-6 py-3 bg-nilin-coral text-white rounded-nilin font-medium hover:bg-nilin-rose transition-all duration-200 shadow-lg shadow-nilin-coral/30"
               >
                 <MessageCircle className="w-4 h-4" />
-                Contact Support
+                {isAuthenticated ? 'Support Center' : 'Contact Support'}
               </Link>
               <Link
                 to="/faq"

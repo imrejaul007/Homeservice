@@ -434,6 +434,19 @@ export async function submitDraft(
     return { success: false, error: 'Booking not found' };
   }
 
+  // FIX: Check 14-day review window for draft submissions too
+  const REVIEW_WINDOW_DAYS = 14;
+  const serviceCompletionDate = booking.completedAt || booking.estimatedEndTime;
+  const now = new Date();
+  const daysSinceCompletion = (now.getTime() - new Date(serviceCompletionDate).getTime()) / (1000 * 60 * 60 * 24);
+
+  if (daysSinceCompletion > REVIEW_WINDOW_DAYS) {
+    return {
+      success: false,
+      error: `Reviews must be submitted within ${REVIEW_WINDOW_DAYS} days after service completion. This service was completed ${Math.floor(daysSinceCompletion)} days ago.`,
+    };
+  }
+
   try {
     // Create review from draft
     const review = new Review({

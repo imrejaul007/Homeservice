@@ -208,6 +208,9 @@ export interface UserResponse {
   avatar?: string;
   phone?: string;
   bio?: string;
+  gender?: string;
+  dateOfBirth?: string;
+  address?: any;
   lastLogin?: Date;
 }
 
@@ -247,6 +250,7 @@ export interface LoginResult extends AuthResult {
 export interface PasswordResetResult {
   user: UserResponse;
   accessToken: string;
+  refreshToken?: string;
 }
 
 export interface EmailVerificationResult {

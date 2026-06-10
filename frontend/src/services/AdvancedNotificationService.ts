@@ -217,16 +217,6 @@ class AdvancedNotificationService {
       this.notifyStateChange();
     });
 
-    // Native token listener - handles both initial registration and token refresh
-    // Note: Capacitor doesn't have a separate 'token' event; use 'registration' for token acquisition
-    PushNotifications.addListener('registration', (token: Token) => {
-      console.log('[AdvancedNotifications] FCM token received:', token.value);
-      this.deviceToken = token.value;
-      this.saveDeviceToken(token.value);
-      this.registerTokenWithBackend(token.value);
-      this.notifyStateChange();
-    });
-
     // Register with FCM
     await PushNotifications.register();
   }
@@ -601,10 +591,11 @@ class AdvancedNotificationService {
 
   /**
    * Load notification center from storage
+   * Uses sessionStorage to prevent notification content from persisting across sessions
    */
   private loadNotificationCenter(): void {
     try {
-      const stored = localStorage.getItem(CENTER_STORAGE_KEY);
+      const stored = sessionStorage.getItem(CENTER_STORAGE_KEY);
       if (stored) {
         this.notificationCenter = JSON.parse(stored);
       }
@@ -616,10 +607,11 @@ class AdvancedNotificationService {
 
   /**
    * Save notification center to storage
+   * Uses sessionStorage to prevent notification content from persisting across sessions
    */
   private saveNotificationCenter(): void {
     try {
-      localStorage.setItem(CENTER_STORAGE_KEY, JSON.stringify(this.notificationCenter));
+      sessionStorage.setItem(CENTER_STORAGE_KEY, JSON.stringify(this.notificationCenter));
     } catch (error) {
       console.error('[AdvancedNotifications] Failed to save notification center:', error);
     }
@@ -775,10 +767,11 @@ class AdvancedNotificationService {
 
   /**
    * Load offline queue from storage
+   * Uses sessionStorage to prevent queued notifications from persisting across sessions
    */
   private loadOfflineQueue(): void {
     try {
-      const stored = localStorage.getItem(OFFLINE_QUEUE_KEY);
+      const stored = sessionStorage.getItem(OFFLINE_QUEUE_KEY);
       if (stored) {
         const parsed: [string, QueuedNotification][] = JSON.parse(stored);
         this.offlineQueue = new Map(parsed);
@@ -791,11 +784,12 @@ class AdvancedNotificationService {
 
   /**
    * Save offline queue to storage
+   * Uses sessionStorage to prevent queued notifications from persisting across sessions
    */
   private saveOfflineQueue(): void {
     try {
       const entries = Array.from(this.offlineQueue.entries());
-      localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(entries));
+      sessionStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(entries));
     } catch (error) {
       console.error('[AdvancedNotifications] Failed to save offline queue:', error);
     }
@@ -885,10 +879,11 @@ class AdvancedNotificationService {
 
   /**
    * Load analytics from storage
+   * Uses sessionStorage to prevent analytics from persisting across sessions
    */
   private loadAnalytics(): void {
     try {
-      const stored = localStorage.getItem(ANALYTICS_KEY);
+      const stored = sessionStorage.getItem(ANALYTICS_KEY);
       if (stored) {
         this.analytics = JSON.parse(stored);
       }
@@ -899,10 +894,11 @@ class AdvancedNotificationService {
 
   /**
    * Save analytics to storage
+   * Uses sessionStorage to prevent analytics from persisting across sessions
    */
   private saveAnalytics(): void {
     try {
-      localStorage.setItem(ANALYTICS_KEY, JSON.stringify(this.analytics));
+      sessionStorage.setItem(ANALYTICS_KEY, JSON.stringify(this.analytics));
     } catch (error) {
       console.error('[AdvancedNotifications] Failed to save analytics:', error);
     }
@@ -1070,7 +1066,7 @@ class AdvancedNotificationService {
       // Clear offline queue
       this.offlineQueue.clear();
       try {
-        localStorage.removeItem(OFFLINE_QUEUE_KEY);
+        sessionStorage.removeItem(OFFLINE_QUEUE_KEY);
       } catch (error) {
         console.error('[AdvancedNotifications] Failed to clear offline queue storage:', error);
       }
@@ -1078,7 +1074,7 @@ class AdvancedNotificationService {
       // Clear notification center
       this.notificationCenter = [];
       try {
-        localStorage.removeItem(CENTER_STORAGE_KEY);
+        sessionStorage.removeItem(CENTER_STORAGE_KEY);
       } catch (error) {
         console.error('[AdvancedNotifications] Failed to clear notification center storage:', error);
       }
@@ -1095,7 +1091,7 @@ class AdvancedNotificationService {
         byType: {},
       };
       try {
-        localStorage.removeItem(ANALYTICS_KEY);
+        sessionStorage.removeItem(ANALYTICS_KEY);
       } catch (error) {
         console.error('[AdvancedNotifications] Failed to clear analytics storage:', error);
       }

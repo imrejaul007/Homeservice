@@ -125,8 +125,14 @@ const creditWalletInternal = async (
     // The query includes a check that no transaction with this reference exists
     const duplicateCheckQuery = {
       ...baseQuery,
-      'transactions.reference': { $ne: options.preventDuplicateReference.reference },
-      'transactions.referenceType': { $ne: options.preventDuplicateReference.referenceType },
+      transactions: {
+        $not: {
+          $elemMatch: {
+            reference: options.preventDuplicateReference.reference,
+            referenceType: options.preventDuplicateReference.referenceType,
+          },
+        },
+      },
     };
 
     const wallet = await Wallet.findOneAndUpdate(

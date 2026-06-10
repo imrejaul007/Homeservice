@@ -66,8 +66,8 @@ export interface ChatServerToClientEvents {
 
 export interface ChatClientToServerEvents {
   // Room management
-  'join:chat_room': (chatRoomId: string) => void;
-  'leave:chat_room': (chatRoomId: string) => void;
+  'join:chat_room': (data: { chatRoomId: string }) => void;
+  'leave:chat_room': (data: { chatRoomId: string }) => void;
 
   // Booking room management (for frontend compatibility)
   'join:booking_room': (bookingId: string) => void;
@@ -112,8 +112,9 @@ export interface MessageReadEvent {
 
 // Note: userName is not populated by the backend to avoid N+1 queries
 // Frontend should resolve user names from its own cache/state if needed
+// bookingId is intentionally omitted - frontend should resolve it from chatRoomId if needed
 export interface TypingEvent {
-  bookingId: string;
+  chatRoomId: string;
   userId: string;
 }
 
@@ -201,6 +202,14 @@ const typingSchema = Joi.object({
 
 const typingTimers: Map<string, NodeJS.Timeout> = new Map();
 const TYPING_TIMEOUT_MS = 3000; // Stop typing indicator after 3 seconds of inactivity
+
+// Clear all typing timers (call on server shutdown/restart)
+export function clearAllTypingTimers(): void {
+  for (const timer of typingTimers.values()) {
+    clearTimeout(timer);
+  }
+  typingTimers.clear();
+}
 
 // =============================================================================
 // Chat Handler Class
@@ -298,14 +307,14 @@ export class ChatSocketHandler {
   // Room Management Handlers
   // =============================================================================
 
-  private async handleJoinRoom(socket: AuthenticatedSocket, rawData: string): Promise<void> {
-    const validation = this.validate<string>(joinRoomSchema, rawData);
+  private async handleJoinRoom(socket: AuthenticatedSocket, rawData: { chatRoomId: string }): Promise<void> {
+    const validation = this.validate<{ chatRoomId: string }>(joinRoomSchema, rawData);
     if (!validation.valid) {
       socket.emit('error', { message: validation.error || 'Invalid data' });
       return;
     }
 
-    const { chatRoomId } = validation.value as unknown as { chatRoomId: string };
+    const { chatRoomId } = validation.value!;
 
     // Verify user is a participant using lightweight validation
     try {
@@ -348,14 +357,14 @@ export class ChatSocketHandler {
     }
   }
 
-  private async handleLeaveRoom(socket: AuthenticatedSocket, rawData: string): Promise<void> {
-    const validation = this.validate<string>(typingSchema, rawData);
+  private async handleLeaveRoom(socket: AuthenticatedSocket, rawData: { chatRoomId: string }): Promise<void> {
+    const validation = this.validate<{ chatRoomId: string }>(joinRoomSchema, rawData);
     if (!validation.valid) {
       socket.emit('error', { message: validation.error || 'Invalid data' });
       return;
     }
 
-    const { chatRoomId } = validation.value as unknown as { chatRoomId: string };
+    const { chatRoomId } = validation.value!;
 
     // Leave the socket room
     socket.leave(`chat:${chatRoomId}`);
@@ -391,6 +400,13 @@ export class ChatSocketHandler {
 
       if (rooms.length > 0) {
         const chatRoomId = rooms[0]._id.toString();
+
+        // SECURITY FIX: Verify user is a participant before joining
+        const isParticipant = await chatService.isUserParticipant(chatRoomId, socket.userId!);
+        if (!isParticipant) {
+          socket.emit('error', { message: 'Not authorized to join this chat room' });
+          return;
+        }
 
         // Join the socket room
         socket.join(`chat:${chatRoomId}`);
@@ -471,6 +487,7 @@ export class ChatSocketHandler {
         bookingId,
         error: (error as Error).message,
       });
+      socket.emit('error', { message: 'Failed to leave booking chat room' });
     }
   }
 
@@ -634,37 +651,31 @@ export class ChatSocketHandler {
     }
 
     const { chatRoomId } = validation.value!;
+
+    // Lightweight participant check - uses indexed count query, not full document fetch
+    const isParticipant = await chatService.isUserParticipant(chatRoomId, socket.userId!);
+    if (!isParticipant) {
+      return; // Silently ignore - user not authorized
+    }
+
     const timerKey = `${socket.userId}:${chatRoomId}`;
+    const userId = socket.userId!;
 
     // Set or reset the typing timer
     this.clearTypingTimer(timerKey);
     const timer = setTimeout(() => {
-      this.handleTypingStop(socket, { chatRoomId });
+      this.handleTypingStop(userId, chatRoomId);
     }, TYPING_TIMEOUT_MS);
     typingTimers.set(timerKey, timer);
 
-    // Look up chat room to get bookingId for frontend compatibility
+    // Emit typing event to other users in the room
     try {
-      const { rooms } = await chatService.getChatRooms(socket.userId!, { limit: 100 });
-      const chatRoom = rooms.find(r => r._id.toString() === chatRoomId);
+      const typingEvent: TypingEvent = {
+        chatRoomId,
+        userId: socket.userId!
+      };
 
-      if (chatRoom && chatRoom.bookingId) {
-        // Emit to other users in the room with bookingId for frontend compatibility
-        const typingEvent: TypingEvent = {
-          bookingId: chatRoom.bookingId.toString(),
-          userId: socket.userId!
-        };
-
-        socket.to(`chat:${chatRoomId}`).emit('typing:start', typingEvent);
-      } else {
-        // Fallback: emit with chatRoomId for rooms without booking
-        const typingEvent: TypingEvent = {
-          bookingId: chatRoomId,
-          userId: socket.userId!
-        };
-
-        socket.to(`chat:${chatRoomId}`).emit('typing:start', typingEvent);
-      }
+      socket.to(`chat:${chatRoomId}`).emit('typing:start', typingEvent);
 
       logger.debug('User started typing', {
         context: 'ChatSocketHandler',
@@ -685,54 +696,66 @@ export class ChatSocketHandler {
     }
   }
 
-  private async handleTypingStop(socket: AuthenticatedSocket, rawData: { chatRoomId: string }): Promise<void> {
-    const validation = this.validate<{ chatRoomId: string }>(typingSchema, rawData);
-    if (!validation.valid) {
-      return;
+  private async handleTypingStop(
+    socketOrUserId: AuthenticatedSocket | string,
+    rawDataOrChatRoomId?: { chatRoomId: string } | string
+  ): Promise<void> {
+    let userId: string;
+    let chatRoomId: string;
+    let socket: AuthenticatedSocket | undefined;
+
+    // Overload 1: socket + rawData (direct socket event)
+    if (typeof socketOrUserId === 'object') {
+      socket = socketOrUserId;
+      const rawData = rawDataOrChatRoomId as { chatRoomId: string };
+      const validation = this.validate<{ chatRoomId: string }>(typingSchema, rawData);
+      if (!validation.valid) {
+        return;
+      }
+      userId = socket.userId!;
+      chatRoomId = validation.value!.chatRoomId;
+    }
+    // Overload 2: userId + chatRoomId (timer callback - no socket needed)
+    else {
+      userId = socketOrUserId;
+      chatRoomId = rawDataOrChatRoomId as string;
     }
 
-    const { chatRoomId } = validation.value!;
-    const timerKey = `${socket.userId}:${chatRoomId}`;
+    // Lightweight participant check - uses indexed count query, not full document fetch
+    const isParticipant = await chatService.isUserParticipant(chatRoomId, userId);
+    if (!isParticipant) {
+      return; // Silently ignore - user not authorized
+    }
+
+    const timerKey = `${userId}:${chatRoomId}`;
 
     // Clear the typing timer
     this.clearTypingTimer(timerKey);
 
-    // Look up chat room to get bookingId for frontend compatibility
+    // Emit typing stop event to other users in the room
     try {
-      const { rooms } = await chatService.getChatRooms(socket.userId!, { limit: 100 });
-      const chatRoom = rooms.find(r => r._id.toString() === chatRoomId);
-
-      if (chatRoom && chatRoom.bookingId) {
-        // Emit to other users in the room with bookingId for frontend compatibility
-        const typingEvent: TypingEvent = {
-          bookingId: chatRoom.bookingId.toString(),
-          userId: socket.userId!
-        };
-
-        socket.to(`chat:${chatRoomId}`).emit('typing:stop', typingEvent);
-      } else {
-        // Fallback: emit with chatRoomId for rooms without booking
-        const typingEvent: TypingEvent = {
-          bookingId: chatRoomId,
-          userId: socket.userId!
-        };
-
-        socket.to(`chat:${chatRoomId}`).emit('typing:stop', typingEvent);
-      }
-
-      logger.debug('User stopped typing', {
-        context: 'ChatSocketHandler',
-        action: 'TYPING_STOP',
-        socketId: socket.id,
-        userId: socket.userId,
+      const typingEvent: TypingEvent = {
         chatRoomId,
-      });
+        userId,
+      };
+
+      // Only emit if we have the socket (direct calls)
+      if (socket) {
+        socket.to(`chat:${chatRoomId}`).emit('typing:stop', typingEvent);
+
+        logger.debug('User stopped typing', {
+          context: 'ChatSocketHandler',
+          action: 'TYPING_STOP',
+          socketId: socket.id,
+          userId,
+          chatRoomId,
+        });
+      }
     } catch (error) {
       logger.error('Failed to emit typing stop event', {
         context: 'ChatSocketHandler',
         action: 'TYPING_STOP_ERROR',
-        socketId: socket.id,
-        userId: socket.userId,
+        userId,
         chatRoomId,
         error: (error as Error).message,
       });
@@ -744,6 +767,19 @@ export class ChatSocketHandler {
     if (existingTimer) {
       clearTimeout(existingTimer);
       typingTimers.delete(key);
+    }
+  }
+
+  /**
+   * Clear all typing timers for a specific user.
+   * Used on disconnect to prevent memory leaks from orphaned timers.
+   */
+  private clearUserTypingTimers(userId: string): void {
+    for (const [key, timer] of typingTimers.entries()) {
+      if (key.startsWith(`${userId}:`)) {
+        clearTimeout(timer);
+        typingTimers.delete(key);
+      }
     }
   }
 
@@ -780,16 +816,17 @@ export class ChatSocketHandler {
     // Remove from user sockets
     this.removeUserSocket(socket.userId, socket.id);
 
-    // Remove from all chat rooms this socket was in
+    // Clear ALL typing timers for this user (not just tracked rooms)
+    // This prevents memory leaks from orphaned timers if user typed without joining
+    this.clearUserTypingTimers(socket.userId);
+
+    // Remove from all chat rooms this socket was in and notify
     const rooms = this.userRooms.get(socket.id);
     if (rooms) {
       for (const chatRoomId of rooms) {
-        // Clear typing timers
-        this.clearTypingTimer(`${socket.userId}:${chatRoomId}`);
-
         // Emit typing stop to the room
         const typingEvent: TypingEvent = {
-          bookingId: chatRoomId,
+          chatRoomId,
           userId: socket.userId
         };
         this.io.to(`chat:${chatRoomId}`).emit('typing:stop', typingEvent);
@@ -860,7 +897,8 @@ export class ChatSocketHandler {
     event: T,
     data: Parameters<ChatServerToClientEvents[T]>[0]
   ): void {
-    this.io.to(`chat:${chatRoomId}`).emit(event as any, data);
+    // @ts-ignore - Generic event typing requires string cast
+    this.io.to(`chat:${chatRoomId}`).emit(event, data);
   }
 
   /**
@@ -874,7 +912,8 @@ export class ChatSocketHandler {
     const sockets = this.userSockets.get(userId);
     if (sockets) {
       for (const socketId of sockets) {
-        this.io.to(socketId).emit(event as any, data);
+        // @ts-ignore - Generic event typing requires string cast
+        this.io.to(socketId).emit(event, data);
       }
     }
   }
@@ -903,6 +942,19 @@ export class ChatSocketHandler {
       total += sockets.size;
     }
     return total;
+  }
+
+  /**
+   * Cleanup all resources - call on server shutdown/restart
+   */
+  cleanup(): void {
+    // Clear all typing timers
+    clearAllTypingTimers();
+    // Clear user tracking maps
+    this.userSockets.clear();
+    this.userRooms.clear();
+    this.userStatus.clear();
+    logger.info('ChatSocketHandler cleaned up', { context: 'ChatSocketHandler' });
   }
 }
 

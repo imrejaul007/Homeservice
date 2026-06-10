@@ -400,19 +400,13 @@ const ProviderVerificationPage: React.FC = () => {
       }
 
       // FIX #2: Upload to file storage endpoint
-      const uploadResponse = await fetch('/api/upload', {
-        method: 'POST',
-        body: formData,
+      const uploadResponse = await api.post('/upload', formData, {
         headers: {
-          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'multipart/form-data',
         },
       });
 
-      if (!uploadResponse.ok) {
-        throw new Error('Upload failed');
-      }
-
-      const uploadData = await uploadResponse.json();
+      const uploadData = uploadResponse.data;
       const fileUrl = uploadData.url;
 
       setUploadProgress((prev) => ({ ...prev, [documentId]: 50 }));

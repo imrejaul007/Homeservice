@@ -37,7 +37,7 @@ const TRENDING = [
     image: 'https://images.unsplash.com/photo-1570172619644-dfd03ed5d881?w=800&q=80',
     likes: '9.1K',
     category: 'Skincare',
-    link: '/category/skincare',
+    link: '/category/skin-aesthetics',
   },
   {
     id: '5',
@@ -55,7 +55,7 @@ const TRENDING = [
     image: 'https://images.unsplash.com/photo-1522335789203-aabd1fc54bc9?w=800&q=80',
     likes: '11.8K',
     category: 'Brows',
-    link: '/category/beauty',
+    link: '/category/personal-care',
   },
 ];
 

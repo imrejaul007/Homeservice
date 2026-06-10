@@ -78,6 +78,7 @@ export interface IUser extends Document {
     referredBy?: mongoose.Types.ObjectId;
     streakDays: number;
     lastStreakDate?: Date;
+    longestStreak: number; // Persisted longest streak to avoid O(n) recalculation
     totalEarned: number;
     totalSpent: number;
     pointsHistory: Array<{
@@ -112,17 +113,22 @@ export interface IUser extends Document {
       reminders: boolean;
       newsletters: boolean;
       promotions: boolean;
+      reviews?: boolean;
+      paymentUpdates?: boolean;
+      loyaltyUpdates?: boolean;
     };
     sms: {
       bookingUpdates: boolean;
       reminders: boolean;
       promotions: boolean;
+      newMessages?: boolean;
     };
     push: {
       bookingUpdates: boolean;
       reminders: boolean;
       newMessages: boolean;
       promotions: boolean;
+      marketing?: boolean;
     };
     telegram?: {
       enabled: boolean;
@@ -276,6 +282,7 @@ export interface IUser extends Document {
     enabled: boolean;
     secret?: string; // Encrypted TOTP secret
     recoveryCodes?: string[]; // Bcrypt hashed recovery codes
+    recoveryCodesVersion?: number; // Optimistic locking version for atomic code consumption
     backupEnabled: boolean;
     lastVerified?: Date;
     needsReenrollment?: boolean; // Set when all recovery codes are exhausted
@@ -363,10 +370,56 @@ export interface IUser extends Document {
   chargebackHistory?: Array<Record<string, unknown>>;
   deviceHistory?: Array<Record<string, unknown>>;
   knownLocations?: Array<Record<string, unknown>>;
-  digestPreferences?: Record<string, unknown>;
-  pushSubscriptions?: Array<Record<string, unknown>>;
+  digestPreferences?: {
+    enabled: boolean;
+    frequency: 'realtime' | 'hourly' | 'daily' | 'weekly';
+    channels: {
+      email: boolean;
+      sms: boolean;
+      push: boolean;
+      whatsapp: boolean;
+      telegram: boolean;
+    };
+    quietHours: {
+      enabled: boolean;
+      startTime: string;
+      endTime: string;
+      timezone: string;
+    };
+    types: {
+      bookingUpdates: boolean;
+      reminders: boolean;
+      promotions: boolean;
+      messages: boolean;
+      system: boolean;
+    };
+    scheduledTime?: string;
+    scheduledDays?: number[];
+  };
+  pushSubscriptions?: Array<{
+    endpoint: string;
+    p256dh: string;
+    auth: string;
+    createdAt?: Date;
+    lastUsed?: Date;
+    userAgent?: string;
+  }>;
   phoneHistory?: Array<Record<string, unknown>>;
   pendingDeviceVerification?: Record<string, unknown>;
+
+  // Saved Searches
+  savedSearches?: Array<{
+    _id: mongoose.Types.ObjectId;
+    query: string;
+    filters?: {
+      category?: string;
+      minPrice?: number;
+      maxPrice?: number;
+      minRating?: number;
+      sortBy?: string;
+    };
+    createdAt: Date;
+  }>;
 
   // Audit
   createdAt: Date;
@@ -570,6 +623,7 @@ const userSchema = new Schema<IUser>(
       referredBy: { type: Schema.Types.ObjectId, ref: 'User' },
       streakDays: { type: Number, default: 0, min: 0 },
       lastStreakDate: Date,
+      longestStreak: { type: Number, default: 0, min: 0 },
       totalEarned: { type: Number, default: 0, min: 0 },
       totalSpent: { type: Number, default: 0, min: 0 },
       pointsHistory: [{
@@ -604,18 +658,23 @@ const userSchema = new Schema<IUser>(
         bookingUpdates: { type: Boolean, default: true },
         reminders: { type: Boolean, default: true },
         newsletters: { type: Boolean, default: false },
-        promotions: { type: Boolean, default: false }
+        promotions: { type: Boolean, default: false },
+        reviews: { type: Boolean, default: true },
+        paymentUpdates: { type: Boolean, default: true },
+        loyaltyUpdates: { type: Boolean, default: true },
       },
       sms: {
         bookingUpdates: { type: Boolean, default: true },
         reminders: { type: Boolean, default: true },
-        promotions: { type: Boolean, default: false }
+        promotions: { type: Boolean, default: false },
+        newMessages: { type: Boolean, default: true },
       },
       push: {
         bookingUpdates: { type: Boolean, default: true },
         reminders: { type: Boolean, default: true },
         newMessages: { type: Boolean, default: true },
-        promotions: { type: Boolean, default: false }
+        promotions: { type: Boolean, default: false },
+        marketing: { type: Boolean, default: false },
       },
       telegram: {
         enabled: { type: Boolean, default: false },
@@ -637,7 +696,7 @@ const userSchema = new Schema<IUser>(
       },
       language: { type: String, default: 'en' },
       timezone: { type: String, default: 'UTC' },
-      currency: { type: String, default: 'USD' }
+      currency: { type: String, default: 'AED' }
     },
     
     // B2B Corporate Fields
@@ -795,6 +854,7 @@ const userSchema = new Schema<IUser>(
       enabled: { type: Boolean, default: false },
       secret: { type: String, select: false }, // Encrypted TOTP secret
       recoveryCodes: { type: [String], select: false }, // Bcrypt hashed recovery codes
+      recoveryCodesVersion: { type: Number, default: 0 }, // Optimistic locking version for atomic code consumption
       backupEnabled: { type: Boolean, default: true },
       lastVerified: Date,
       needsReenrollment: { type: Boolean, default: false }, // Set when all recovery codes exhausted
@@ -826,6 +886,60 @@ const userSchema = new Schema<IUser>(
       addedAt: { type: Date, default: Date.now },
       lastUsed: { type: Date },
       isActive: { type: Boolean, default: true },
+    }],
+
+    // Saved Searches (max 20)
+    digestPreferences: {
+      enabled: { type: Boolean, default: true },
+      frequency: {
+        type: String,
+        enum: ['realtime', 'hourly', 'daily', 'weekly'],
+        default: 'daily',
+      },
+      channels: {
+        email: { type: Boolean, default: true },
+        sms: { type: Boolean, default: false },
+        push: { type: Boolean, default: true },
+        whatsapp: { type: Boolean, default: false },
+        telegram: { type: Boolean, default: false },
+      },
+      quietHours: {
+        enabled: { type: Boolean, default: false },
+        startTime: { type: String, default: '22:00' },
+        endTime: { type: String, default: '08:00' },
+        timezone: { type: String, default: 'Asia/Dubai' },
+      },
+      types: {
+        bookingUpdates: { type: Boolean, default: true },
+        reminders: { type: Boolean, default: true },
+        promotions: { type: Boolean, default: false },
+        messages: { type: Boolean, default: true },
+        system: { type: Boolean, default: true },
+      },
+      scheduledTime: { type: String, default: '09:00' },
+      scheduledDays: [{ type: Number, min: 0, max: 6 }],
+    },
+
+    pushSubscriptions: [{
+      endpoint: { type: String, required: true },
+      p256dh: { type: String, required: true },
+      auth: { type: String, required: true },
+      createdAt: { type: Date, default: Date.now },
+      lastUsed: { type: Date },
+      userAgent: { type: String },
+    }],
+
+    savedSearches: [{
+      _id: { type: Schema.Types.ObjectId, auto: true },
+      query: { type: String, required: true },
+      filters: {
+        category: String,
+        minPrice: Number,
+        maxPrice: Number,
+        minRating: Number,
+        sortBy: String,
+      },
+      createdAt: { type: Date, default: Date.now },
     }],
 
     // Demo Account Fields
@@ -914,7 +1028,9 @@ userSchema.index({
   },
   name: 'user_text_search'
 });
-// Note: loyaltySystem.referralCode index created automatically by unique: true
+
+// NOTE: loyaltySystem.referralCode already has index via field-level unique: true (lines 566-570)
+// No explicit index needed here - avoids duplicate index on same path
 userSchema.index({ 'loyaltySystem.tier': 1 });
 userSchema.index({ 'socialProfiles.followers': 1 });
 userSchema.index({ 'socialProfiles.following': 1 });
@@ -939,8 +1055,9 @@ userSchema.index({ registrationIP: 1 });
 userSchema.index({ 'deviceFingerprints.fingerprint': 1 });
 userSchema.index({ knownIPs: 1 });
 
-// FIX: Add unique index for referral codes (sparse for optional field)
-userSchema.index({ 'loyaltySystem.referralCode': 1 }, { unique: true, sparse: true });
+// Index for referral code lookups (e.g., findByReferralCode static method)
+// Field-level unique: true at line 566-570 auto-creates this index
+userSchema.index({ 'loyaltySystem.referralCode': 1 });
 
 // FIX: Add index for loyalty points history queries (expired points cleanup)
 userSchema.index({ 'loyaltySystem.pointsHistory.expiresAt': 1 });
@@ -951,8 +1068,10 @@ userSchema.index({ 'sessions.deviceFingerprint': 1 }, { sparse: true });
 // FIX: Add compound index for email login queries with soft delete
 userSchema.index({ email: 1, isDeleted: 1 });
 
-// NOTE: loyaltySystem.referralCode index created above with unique: true
-// Removed duplicate index at line 944
+// FIX: Add index for notifications.isRead for efficient unread notification queries
+// Supports queries like: find users with unread notifications, count unread per user
+// Note: Sparse index since not all notification documents have isRead explicitly set
+userSchema.index({ 'notifications.isRead': 1 }, { sparse: true });
 
 // ===================================
 // TENANT ISOLATION INDEXES (CRITICAL)
@@ -1049,10 +1168,26 @@ userSchema.statics.generateUniqueReferralCode = generateUniqueReferralCode;
  * CRITICAL: Prevents orphan records across all related collections
  */
 async function performUserCascadeDelete(userId: mongoose.Types.ObjectId, userRole: string): Promise<void> {
-  const session: ClientSession = await mongoose.startSession();
-  try {
-    session.startTransaction();
+  // Skip transactions for standalone MongoDB instances (e.g., MongoDB Memory Server in tests)
+  // MongoDB Memory Server uses a standalone instance that doesn't support transactions
+  const mongoUri = process.env.MONGODB_URI || '';
+  const isMemoryServer = mongoUri.includes('mongodb-memory') || mongoUri.includes('127.0.0.1');
 
+  let session: ClientSession | null = null;
+
+  if (!isMemoryServer) {
+    try {
+      session = await mongoose.startSession();
+      session.startTransaction();
+    } catch {
+      // Transactions not supported
+      session = null;
+    }
+  }
+
+  const sessionOption = session ? { session } : {};
+
+  try {
     const Booking = mongoose.model('Booking');
     const Review = mongoose.model('Review');
     const BookingNotification = mongoose.model('BookingNotification');
@@ -1073,7 +1208,7 @@ async function performUserCascadeDelete(userId: mongoose.Types.ObjectId, userRol
           deletedAt: new Date(),
         }
       },
-      { session }
+      sessionOption
     );
 
     // Clean up reviews where this user is the reviewer or reviewee
@@ -1081,61 +1216,63 @@ async function performUserCascadeDelete(userId: mongoose.Types.ObjectId, userRol
       {
         $or: [{ reviewerId: userId }, { revieweeId: userId }]
       },
-      { session }
+      sessionOption
     );
 
     // CRITICAL: Clean up customer profile (prevents orphan customer data)
-    await CustomerProfile.deleteMany({ userId }, { session });
+    await CustomerProfile.deleteMany({ userId }, sessionOption);
 
     // CRITICAL: Clean up all addresses for this user (prevents orphan addresses)
-    await Address.deleteMany({ userId: userId.toString() }, { session });
+    await Address.deleteMany({ userId: userId.toString() }, sessionOption);
 
     // CRITICAL: Clean up consent records (GDPR compliance - no orphan consent data)
-    await Consent.deleteMany({ userId }, { session });
+    await Consent.deleteMany({ userId }, sessionOption);
 
     // CRITICAL: Clean up audit logs for this user (optional - may want to keep for compliance)
     // Uncomment the following line to delete audit logs. Commented out by default for compliance:
-    // await AuditLog.deleteMany({ userId }, { session });
+    // await AuditLog.deleteMany({ userId }, sessionOption);
 
     // CRITICAL: Clean up notifications for this user (prevents orphan notifications)
-    await BookingNotification.deleteMany({ recipientId: userId }, { session });
+    await BookingNotification.deleteMany({ recipientId: userId }, sessionOption);
 
     // CRITICAL: Clean up notification queue entries for this user
-    await NotificationQueue.deleteMany({ recipientId: userId.toString() }, { session });
+    await NotificationQueue.deleteMany({ recipientId: userId.toString() }, sessionOption);
 
     // FIX: Remove this user from other users' followers/following lists
     // This prevents orphaned references in the social graph
     await User.updateMany(
       { 'socialProfiles.followers': userId },
       { $pull: { 'socialProfiles.followers': userId } },
-      { session }
+      sessionOption
     );
     await User.updateMany(
       { 'socialProfiles.following': userId },
       { $pull: { 'socialProfiles.following': userId } },
-      { session }
+      sessionOption
     );
 
     // FIX: Clean up other users' referralCode references if this user was referred
     await User.updateMany(
       { 'loyaltySystem.referredBy': userId },
       { $unset: { 'loyaltySystem.referredBy': 1 } },
-      { session }
+      sessionOption
     );
 
     // FIX: Clean up favorite providers lists that reference this provider
     await User.updateMany(
       { 'aiPersonalization.preferences.preferredProviders': userId },
       { $pull: { 'aiPersonalization.preferences.preferredProviders': userId } },
-      { session }
+      sessionOption
     );
 
     // If provider, clean up provider profile (this also cascades to services, availability)
     if (userRole === 'provider') {
-      await ProviderProfile.deleteMany({ userId: userId }, { session });
+      await ProviderProfile.deleteMany({ userId: userId }, sessionOption);
     }
 
-    await session.commitTransaction();
+    if (session) {
+      await session.commitTransaction();
+    }
 
     logger.info('Cascade delete completed for user', {
       context: 'UserModel',
@@ -1144,7 +1281,9 @@ async function performUserCascadeDelete(userId: mongoose.Types.ObjectId, userRol
       userRole,
     });
   } catch (error) {
-    await session.abortTransaction();
+    if (session) {
+      await session.abortTransaction();
+    }
     logger.error('Cascade delete failed for user', {
       context: 'UserModel',
       action: 'CASCADE_DELETE_ERROR',
@@ -1153,7 +1292,7 @@ async function performUserCascadeDelete(userId: mongoose.Types.ObjectId, userRol
     });
     throw error;
   } finally {
-    if (!session.hasEnded) {
+    if (session && !session.hasEnded) {
       await session.endSession();
     }
   }

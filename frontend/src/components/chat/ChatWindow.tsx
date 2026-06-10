@@ -90,17 +90,18 @@ export function ChatWindow({
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   // =============================================================================
   // Fetch Chat Rooms
   // =============================================================================
 
-  const fetchChatRooms = useCallback(async () => {
+  const fetchChatRooms = useCallback(async (signal?: AbortSignal) => {
     setIsLoading(true);
     setError(null);
 
     try {
-      const response = await chatApi.getChatRooms({ limit: 50 });
+      const response = await chatApi.getChatRooms({ limit: 50 }, signal);
       const normalizedRooms = response.rooms.map(normalizeChatRoom) as ChatRoomWithDetails[];
       setChatRooms(normalizedRooms);
 
@@ -108,6 +109,8 @@ export function ChatWindow({
       const totalUnread = response.rooms.reduce((sum, room) => sum + (room.unreadCount || 0), 0);
       onUnreadChange?.(totalUnread);
     } catch (err) {
+      // Ignore abort errors - they are expected when component unmounts
+      if (signal?.aborted) return;
       setError('Failed to load conversations');
       console.error('Error fetching chat rooms:', err);
     } finally {
@@ -119,7 +122,7 @@ export function ChatWindow({
   // Fetch Messages
   // =============================================================================
 
-  const fetchMessages = useCallback(async (roomId: string, cursor?: Date) => {
+  const fetchMessages = useCallback(async (roomId: string, cursor?: Date, signal?: AbortSignal) => {
     setIsLoadingMessages(true);
 
     try {
@@ -128,7 +131,7 @@ export function ChatWindow({
         options.before = cursor.toISOString();
       }
 
-      const response = await chatApi.getMessages(roomId, options);
+      const response = await chatApi.getMessages(roomId, options, signal);
       const normalizedMessages = response.messages.map(normalizeMessage);
 
       if (cursor) {
@@ -142,6 +145,8 @@ export function ChatWindow({
       // Mark messages as read
       await markMessagesAsRead(roomId);
     } catch (err) {
+      // Ignore abort errors - they are expected when component unmounts
+      if (signal?.aborted) return;
       console.error('Error fetching messages:', err);
     } finally {
       setIsLoadingMessages(false);
@@ -264,17 +269,24 @@ export function ChatWindow({
     const currentSelectedRoomId = selectedRoom?._id;
     const currentUserId = userId;
 
+    // Cancel any pending requests from previous effect runs
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    abortControllerRef.current = new AbortController();
+
     // Use refs to capture current values for socket callbacks
     // This avoids re-subscribing on every selectedRoom change
     const selectedRoomIdRef = { current: currentSelectedRoomId };
     const userIdRef = { current: currentUserId };
+    const signal = abortControllerRef.current.signal;
 
     // Initial load of chat rooms
-    fetchChatRooms();
+    fetchChatRooms(signal);
 
     // Load messages when room changes
     if (currentSelectedRoomId) {
-      fetchMessages(currentSelectedRoomId);
+      fetchMessages(currentSelectedRoomId, undefined, signal);
     }
 
     // Subscribe to socket events once (not on every dependency change)
@@ -346,6 +358,10 @@ export function ChatWindow({
 
     // Cleanup function
     return () => {
+      // Cancel any pending fetch requests
+      abortControllerRef.current?.abort();
+      abortControllerRef.current = null;
+
       unsubNewMessage();
       unsubTypingStart();
       unsubTypingStop();
@@ -492,7 +508,7 @@ export function ChatWindow({
             </div>
             <p className="text-gray-600 mb-4">{error}</p>
             <button
-              onClick={fetchChatRooms}
+              onClick={() => fetchChatRooms()}
               className="px-4 py-2 bg-[#E8B4A8] text-white rounded-lg hover:bg-[#D4948A] transition-colors"
             >
               Retry

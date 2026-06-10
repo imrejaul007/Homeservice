@@ -4,6 +4,7 @@ import ProviderProfile from '../models/providerProfile.model';
 import User from '../models/user.model';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
+import { notificationService } from '../services/notification.service';
 
 // ============================================
 // Constants
@@ -192,6 +193,17 @@ export const addFavorite = asyncHandler(async (req: Request, res: Response) => {
 
   // Get full provider details for response
   const providerProfile = await ProviderProfile.findOne({ userId: providerId });
+
+  // Notify provider (non-blocking)
+  void notificationService.createInAppNotification({
+    recipientId: providerId,
+    type: 'promotion',
+    title: 'Added to Favorites',
+    message: `${user.firstName || 'A customer'} added you to their favorites`,
+    actionText: 'View Profile',
+    actionUrl: '/provider/profile',
+    metadata: { customerId: user._id.toString(), event: 'provider_favorited' },
+  }).catch(() => {});
 
   res.status(201).json({
     success: true,

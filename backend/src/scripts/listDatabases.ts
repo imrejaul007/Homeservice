@@ -2,7 +2,18 @@ import mongoose from 'mongoose';
 
 /**
  * List all databases on the MongoDB cluster
+ *
+ * Usage:
+ *   MONGODB_URI="mongodb+srv://..." npx ts-node scripts/listDatabases.ts
  */
+
+const MONGODB_URI = process.env.MONGODB_URI;
+
+if (!MONGODB_URI) {
+  console.error('❌ MONGODB_URI environment variable is required');
+  console.error('   Usage: MONGODB_URI="mongodb+srv://..." npx ts-node scripts/listDatabases.ts');
+  process.exit(1);
+}
 
 async function listDatabases() {
   console.log('='.repeat(60));
@@ -10,9 +21,10 @@ async function listDatabases() {
   console.log('='.repeat(60));
   console.log();
 
-  const baseUri = 'mongodb+srv://nilimraj_db_user:aXJBzxFtRJosdxEc@cluster0.wnjcyp1.mongodb.net/';
-
   try {
+    // Extract base URI from the full connection string (remove database name)
+    const baseUri = MONGODB_URI.replace(/\/[^/]+\?/, '/');
+
     // Connect without specifying a database
     await mongoose.connect(baseUri, {
       serverSelectionTimeoutMS: 10000,

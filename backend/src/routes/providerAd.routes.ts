@@ -110,11 +110,9 @@ router.post('/', createAd);
  */
 router.get('/', getMyAds);
 
-/**
- * GET /api/provider/ads/:id
- * Get a specific ad by ID
- */
-router.get('/:id', validateAdId, getAdById);
+// ============================================
+// Ad Campaign Routes with ID - Specific routes BEFORE parameterized /:id
+// ============================================
 
 /**
  * PUT /api/provider/ads/:id
@@ -155,5 +153,11 @@ router.post('/:id/launch', validateAdId, launchAd);
  * Get detailed analytics for a specific ad
  */
 router.get('/:id/analytics', validateAdId, getAdAnalytics);
+
+/**
+ * GET /api/provider/ads/:id
+ * Get a specific ad by ID (must be last for /:id routes)
+ */
+router.get('/:id', validateAdId, getAdById);
 
 export default router;

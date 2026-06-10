@@ -32,7 +32,7 @@ import { notificationApi, type Notification } from '../../services/notificationA
 
 export interface NotificationItem {
   id: string;
-  type: 'booking' | 'payment' | 'review' | 'system' | 'promotion';
+  type: 'booking' | 'payment' | 'review' | 'system' | 'promotion' | 'message';
   title: string;
   message: string;
   isRead: boolean;
@@ -56,7 +56,7 @@ interface NotificationCenterProps {
   maxHeight?: string;
 }
 
-type FilterType = 'all' | 'booking' | 'payment' | 'review' | 'promotion' | 'system';
+type FilterType = 'all' | 'booking' | 'payment' | 'review' | 'promotion' | 'system' | 'message';
 type SortOrder = 'newest' | 'oldest' | 'unread_first';
 
 interface Toast {
@@ -112,7 +112,7 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({
         unreadOnly: false,
       });
 
-      const newNotifications = response.data.notifications.map((n: any) => ({
+      const newNotifications = response.data.notifications.map((n) => ({
         ...n,
         createdAt: new Date(n.createdAt),
       })) as NotificationItem[];
@@ -323,6 +323,8 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({
         return Gift;
       case 'system':
         return Settings;
+      case 'message':
+        return MessageSquare;
       default:
         return Bell;
     }
@@ -341,6 +343,8 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({
         return 'bg-purple-100 text-purple-600';
       case 'system':
         return 'bg-gray-100 text-gray-600';
+      case 'message':
+        return 'bg-cyan-100 text-cyan-600';
       default:
         return 'bg-gray-100 text-gray-600';
     }
@@ -483,6 +487,7 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({
                 <option value="review">Review</option>
                 <option value="system">System</option>
                 <option value="promotion">Promotion</option>
+                <option value="message">Message</option>
               </select>
               <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
             </div>

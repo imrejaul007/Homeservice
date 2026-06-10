@@ -234,8 +234,10 @@ export type BookingStatus =
 
 /**
  * Location type enum
+ * Standardized values for booking location types
+ * Note: 'hotel' is an alias for 'at_hotel' - backend normalizes these
  */
-export type LocationType = 'at_home' | 'hotel';
+export type LocationType = 'at_home' | 'at_provider' | 'at_hotel' | 'hotel' | 'customer_address';
 
 /**
  * Professional preference enum

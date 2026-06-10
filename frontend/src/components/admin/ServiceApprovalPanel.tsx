@@ -35,6 +35,7 @@ interface Service {
   };
   tags: string[];
   status: string;
+  isActive?: boolean;
   providerId: {
     _id: string;
     firstName: string;
@@ -51,7 +52,6 @@ interface Service {
     average: number;
     count: number;
   };
-  isActive: boolean;
 }
 
 interface ServiceApprovalPanelProps {

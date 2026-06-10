@@ -1,4 +1,10 @@
 import { api } from './api';
+import {
+  transformBundle,
+  transformBundleList,
+  transformBundleListItem,
+  transformBundleListItems,
+} from '../utils/bundleTransformer';
 
 // ============================================
 // Bundle Types
@@ -280,7 +286,15 @@ export const bundleApi: BundleApi = {
    */
   getBundles: async (options = {}) => {
     const response = await api.get('/bundles', { params: options });
-    return response.data.data;
+    const rawBundles = response.data.data?.bundles || response.data.data || [];
+    const bundles = transformBundleListItems(rawBundles);
+    return {
+      bundles,
+      total: response.data.data?.pagination?.total || rawBundles.length,
+      page: response.data.data?.pagination?.page || 1,
+      limit: response.data.data?.pagination?.limit || 20,
+      totalPages: response.data.data?.pagination?.pages || 1,
+    };
   },
 
   /**
@@ -289,7 +303,7 @@ export const bundleApi: BundleApi = {
    */
   getBundle: async (id: string) => {
     const response = await api.get(`/bundles/${id}`);
-    return response.data.data;
+    return transformBundle(response.data.data);
   },
 
   /**
@@ -298,7 +312,7 @@ export const bundleApi: BundleApi = {
    */
   getBundleBySlug: async (slug: string) => {
     const response = await api.get(`/bundles/slug/${slug}`);
-    return response.data.data;
+    return transformBundle(response.data.data);
   },
 
   /**
@@ -334,7 +348,14 @@ export const bundleApi: BundleApi = {
    * @param data - Booking details including date, time, address, and payment
    */
   bookBundle: async (data: BookBundlePayload) => {
-    const response = await api.post('/bundles/book', data);
+    // Transform to backend format
+    const backendPayload = {
+      scheduledDate: data.scheduledDate,
+      scheduledTime: data.scheduledTime,
+      location: data.address,
+      notes: data.notes,
+    };
+    const response = await api.post(`/bundles/${data.bundleId}/book`, backendPayload);
     return response.data.data;
   },
 
@@ -347,7 +368,14 @@ export const bundleApi: BundleApi = {
     const response = await api.get(`/bundles/category/${categoryId}`, {
       params: options,
     });
-    return response.data.data;
+    const rawBundles = response.data.data || [];
+    const bundles = transformBundleListItems(rawBundles);
+    return {
+      bundles,
+      total: response.data.data?.pagination?.total || rawBundles.length,
+      page: response.data.data?.pagination?.page || 1,
+      limit: response.data.data?.pagination?.limit || 20,
+    };
   },
 
   /**
@@ -356,7 +384,8 @@ export const bundleApi: BundleApi = {
    */
   getFeaturedBundles: async (limit = 10) => {
     const response = await api.get('/bundles/featured', { params: { limit } });
-    return response.data.data;
+    const rawBundles = response.data.data || [];
+    return transformBundleListItems(rawBundles);
   },
 
   /**
@@ -365,7 +394,8 @@ export const bundleApi: BundleApi = {
    */
   getPopularBundles: async (limit = 10) => {
     const response = await api.get('/bundles/popular', { params: { limit } });
-    return response.data.data;
+    const rawBundles = response.data.data || [];
+    return transformBundleListItems(rawBundles);
   },
 
   /**
@@ -374,10 +404,15 @@ export const bundleApi: BundleApi = {
    * @param options - Additional filter options
    */
   searchBundles: async (query: string, options = {}) => {
-    const response = await api.get('/bundles/search', {
-      params: { query, ...options },
+    const response = await api.get('/bundles', {
+      params: { search: query, ...options },
     });
-    return response.data.data;
+    const rawBundles = response.data.data?.bundles || response.data.data || [];
+    const bundles = transformBundleListItems(rawBundles);
+    return {
+      bundles,
+      total: response.data.data?.pagination?.total || rawBundles.length,
+    };
   },
 
   /**
@@ -385,8 +420,26 @@ export const bundleApi: BundleApi = {
    * @param options - Pagination and filter options
    */
   getMyBundles: async (options = {}) => {
-    const response = await api.get('/bundles/my', { params: options });
-    return response.data.data;
+    // Map frontend status filter to backend filter
+    const params: Record<string, unknown> = {
+      page: options.page || 1,
+      limit: options.limit || 20,
+    };
+
+    if (options.status) {
+      // Map 'active' -> isActive=true, 'inactive' -> isActive=false
+      params.isActive = options.status === 'active';
+    }
+
+    const response = await api.get('/bundles/my', { params });
+    const rawBundles = response.data.data || [];
+    const bundles = transformBundleList(rawBundles);
+    return {
+      bundles,
+      total: response.data.data?.pagination?.total || rawBundles.length,
+      page: response.data.data?.pagination?.page || 1,
+      limit: response.data.data?.pagination?.limit || 20,
+    };
   },
 
   /**

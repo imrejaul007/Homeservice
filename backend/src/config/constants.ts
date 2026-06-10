@@ -120,7 +120,41 @@ export const APP_CONSTANTS = {
   }
 } as const;
 
+// Referral Rewards Configuration
+export const REFERRAL_REWARDS = {
+  // Coins awarded to referrer when referral completes first booking
+  REFERRER_REWARD: parseInt(process.env.REFERRER_REWARD_COINS || '500', 10),
+  // Coins awarded to new user (referee) when using referral code
+  REFEREE_REWARD: parseInt(process.env.REFEREE_REWARD_COINS || '250', 10),
+  // Welcome bonus for users without referral code
+  WELCOME_BONUS: parseInt(process.env.WELCOME_BONUS_COINS || '100', 10),
+  // Reduced bonus for suspicious referrals (fraud penalty)
+  SUSPICIOUS_REFERRAL_BONUS: parseInt(process.env.SUSPICIOUS_REFERRAL_BONUS_COINS || '50', 10),
+  // Maximum referrals allowed per user
+  MAX_REFERRALS_PER_USER: parseInt(process.env.MAX_REFERRALS_PER_USER || '50', 10),
+} as const;
+
 export type UserRole = typeof APP_CONSTANTS.USER_ROLES[keyof typeof APP_CONSTANTS.USER_ROLES];
 export type ServiceStatus = typeof APP_CONSTANTS.SERVICE_STATUS[keyof typeof APP_CONSTANTS.SERVICE_STATUS];
 export type BookingStatus = typeof APP_CONSTANTS.BOOKING_STATUS[keyof typeof APP_CONSTANTS.BOOKING_STATUS];
 export type PaymentStatus = typeof APP_CONSTANTS.PAYMENT_STATUS[keyof typeof APP_CONSTANTS.PAYMENT_STATUS];
+
+// FIX: Tax Configuration - Centralized tax rate for the platform
+// UAE VAT rate is 5% as of 2018. This can be changed if tax laws change.
+export const TAX_CONFIG = {
+  // VAT/Tax rate (as decimal, e.g., 0.05 = 5%)
+  RATE: parseFloat(process.env.TAX_RATE || '0.05'),
+  // Tax rate as percentage (for display purposes)
+  RATE_PERCENT: parseFloat(process.env.TAX_RATE || '0.05') * 100,
+  // Whether tax is enabled
+  ENABLED: process.env.TAX_ENABLED !== 'false',
+  // Tax name for display
+  NAME: process.env.TAX_NAME || 'VAT',
+  // Currency for tax calculations
+  CURRENCY: process.env.TAX_CURRENCY || 'AED',
+} as const;
+
+// FIX: Platform Timezone Configuration
+// All offers and bookings use the platform timezone for consistency
+// Default to Asia/Dubai (UAE timezone) as this is a UAE-based platform
+export const PLATFORM_TIMEZONE = process.env.PLATFORM_TIMEZONE || 'Asia/Dubai';

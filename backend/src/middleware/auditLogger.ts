@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import logger from '../utils/logger';
 import { v4 as uuid } from 'uuid';
 import { IUser } from '../models/user.model';
+import { shouldRecordAuditLog } from './platformSettings.middleware';
 
 // Sensitive fields to redact from audit logs (matches logger.ts)
 const sensitiveFields = [
@@ -59,7 +60,6 @@ export const auditLogger = (req: Request, res: Response, next: NextFunction) => 
 
   // Hook into response finish event
   res.on('finish', () => {
-    const { shouldRecordAuditLog } = require('./platformSettings.middleware');
     if (!shouldRecordAuditLog()) {
       return;
     }

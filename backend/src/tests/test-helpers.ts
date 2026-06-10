@@ -7,7 +7,7 @@ import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 
 // Valid address coordinates for Dubai
-const DUBAI_COORDS = {
+export const DUBAI_COORDS = {
   type: 'Point' as const,
   coordinates: [55.2708, 25.2048] as [number, number], // [lng, lat]
 };

@@ -12,6 +12,7 @@ import {
 } from 'recharts';
 import { Gift, Users, TrendingUp, Copy, Share2, Loader, CheckCircle } from 'lucide-react';
 import { motion } from 'framer-motion';
+import authService from '../../../services/AuthService';
 
 interface ReferralAttributionProps {
   customerId?: string;
@@ -104,9 +105,39 @@ export const ReferralAttribution: React.FC<ReferralAttributionProps> = ({
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
-      await new Promise((resolve) => setTimeout(resolve, 800));
-      // In production, fetch from API
-      setLoading(false);
+      try {
+        // Fetch referral stats from API
+        const [codeResponse, statsResponse] = await Promise.all([
+          authService.getReferralCode(),
+          authService.getReferralStats(),
+        ]);
+
+        if (codeResponse.success && codeResponse.data) {
+          setStats((prev) => ({
+            ...prev,
+            referralCode: codeResponse.data!.code,
+            shareUrl: `https://rezin.ae/ref/${codeResponse.data!.code}`,
+          }));
+        }
+
+        if (statsResponse.success && statsResponse.data) {
+          const { totalReferrals, successfulReferrals, totalEarned } = statsResponse.data;
+          setStats((prev) => ({
+            ...prev,
+            totalReferrals,
+            successfulReferrals,
+            pendingReferrals: totalReferrals - successfulReferrals,
+            conversionRate: totalReferrals > 0
+              ? Math.round((successfulReferrals / totalReferrals) * 100 * 10) / 10
+              : 0,
+            totalEarnings: totalEarned,
+          }));
+        }
+      } catch (error) {
+        console.error('Failed to fetch referral data:', error);
+      } finally {
+        setLoading(false);
+      }
     };
     fetchData();
   }, [customerId]);

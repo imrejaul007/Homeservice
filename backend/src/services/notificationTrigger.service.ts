@@ -70,22 +70,51 @@ async function isChannelEnabled(
   if (!user) return false;
 
   let enabled = true;
+  const emailPrefs = user.communicationPreferences?.email;
+  const smsPrefs = user.communicationPreferences?.sms;
+  const pushPrefs = user.communicationPreferences?.push;
+
+  const isPromotionalEvent = ['welcome', 'birthday'].includes(eventType);
+  const isLoyaltyEvent = ['loyalty_tier_upgrade', 'loyalty_update'].includes(eventType);
+  const isReviewEvent = ['review_submitted', 'review_received'].includes(eventType);
 
   switch (channel) {
     case 'email':
-      enabled = user.communicationPreferences?.email?.marketing ?? true;
+      if (isPromotionalEvent) {
+        enabled = emailPrefs?.marketing ?? emailPrefs?.promotions ?? emailPrefs?.newsletters ?? false;
+      } else if (isLoyaltyEvent) {
+        enabled = emailPrefs?.loyaltyUpdates ?? emailPrefs?.bookingUpdates ?? true;
+      } else if (eventType === 'booking_reminder') {
+        enabled = emailPrefs?.reminders ?? true;
+      } else if (isReviewEvent) {
+        enabled = emailPrefs?.reviews ?? emailPrefs?.bookingUpdates ?? true;
+      } else {
+        enabled = emailPrefs?.bookingUpdates ?? true;
+      }
       break;
     case 'sms':
-      enabled = user.communicationPreferences?.sms?.bookingUpdates ?? true;
+      if (isPromotionalEvent) {
+        enabled = smsPrefs?.promotions ?? false;
+      } else if (eventType === 'booking_reminder') {
+        enabled = smsPrefs?.reminders ?? true;
+      } else {
+        enabled = smsPrefs?.bookingUpdates ?? true;
+      }
       break;
     case 'push':
-      enabled = user.communicationPreferences?.push?.bookingUpdates ?? true;
+      if (isPromotionalEvent) {
+        enabled = pushPrefs?.promotions ?? pushPrefs?.marketing ?? false;
+      } else if (eventType === 'booking_reminder') {
+        enabled = pushPrefs?.reminders ?? true;
+      } else {
+        enabled = pushPrefs?.bookingUpdates ?? true;
+      }
       break;
     case 'whatsapp':
-      enabled = !!(user as any).whatsappOptIn?.optedIn;
+      enabled = !!(user.communicationPreferences?.whatsapp?.enabled);
       break;
     case 'telegram':
-      enabled = !!(user as any).telegramChatId;
+      enabled = !!(user.telegramChatId && user.communicationPreferences?.telegram?.enabled !== false);
       break;
     case 'in_app':
       enabled = true; // Always enabled
@@ -94,7 +123,7 @@ async function isChannelEnabled(
 
   // Cache the result for 5 minutes
   try {
-    await (cache as any).set(cacheKey, enabled.toString(), 'EX', 300);
+    await cache.set(cacheKey, enabled.toString(), 300);
   } catch (error) {
     // Cache error is non-fatal
   }
@@ -478,8 +507,8 @@ export class NotificationTriggerService {
     role: 'customer' | 'provider',
     variables: TemplateVariables
   ): Promise<void> {
-    const user = await User.findById(userId).select('phone whatsappOptIn');
-    if (!user?.phone || !(user as any).whatsappOptIn?.optedIn) return;
+    const user = await User.findById(userId).select('phone communicationPreferences');
+    if (!user?.phone || !user.communicationPreferences?.whatsapp?.enabled) return;
 
     const rendered = renderNotification(eventType, role, 'whatsapp', variables);
     if (!rendered) return;
@@ -580,6 +609,10 @@ export class NotificationTriggerService {
       loyalty_tier_upgrade: 'loyalty_update',
       welcome: 'promotion',
       birthday: 'promotion',
+      offer_expiry_reminder: 'promotion',
+      offer_expired: 'promotion',
+      offer_reminder_unused: 'promotion',
+      admin_offer_expiry_alert: 'promotion',
     };
 
     return mapping[eventType] || 'promotion';
@@ -818,5 +851,20 @@ export class NotificationTriggerService {
   }
 }
 
+/** Invalidate cached channel-preference lookups after preference changes */
+export async function bustUserChannelCache(userId: string): Promise<void> {
+  try {
+    const keys = await cache.keys(`user:${userId}:channel:*`);
+    if (keys.length > 0) {
+      await cache.del(...keys);
+    }
+  } catch {
+    // non-fatal
+  }
+}
+
 // Export singleton instance
 export const notificationTriggerService = new NotificationTriggerService();
+
+/** @internal Exported for unit tests only */
+export const __testIsChannelEnabled = isChannelEnabled;

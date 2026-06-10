@@ -12,6 +12,7 @@ import { favoritesApi } from '../services/favoritesApi';
 import { useAuthStore } from '../stores/authStore';
 import { CATEGORY_IMAGES, SUBCATEGORY_IMAGES } from '../constants/images';
 import { PageErrorBoundary } from '../components/common/PageErrorBoundary';
+import { ShareModal } from '../components/common/ShareModal';
 
 interface ServiceDetail {
   _id: string;
@@ -95,10 +96,21 @@ const ServiceDetailPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isFavorited, setIsFavorited] = useState(false);
+  const [isFavoriting, setIsFavoriting] = useState(false);
+  const [showShareModal, setShowShareModal] = useState(false);
 
   useEffect(() => {
     fetchServiceDetails();
   }, [id]);
+
+  // Check initial favorite state when service loads
+  useEffect(() => {
+    if (id && isAuthenticated && service?.provider?._id) {
+      favoritesApi.checkFavorite(service.provider._id)
+        .then(res => setIsFavorited(res.data.isFavorited))
+        .catch(() => {});
+    }
+  }, [id, isAuthenticated, service?.provider?._id]);
 
   const fetchServiceDetails = async () => {
     if (!id) { setError('Service ID not provided'); setLoading(false); return; }
@@ -110,24 +122,25 @@ const ServiceDetailPage: React.FC = () => {
         setService(response.data.service);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load service');
+      const message = err instanceof Error ? err.message : 'Failed to load service';
+      setError(message);
+      toast.error(message);
     } finally {
       setLoading(false);
     }
   };
 
   const handleBookNow = () => {
-    // Ensure service is loaded before navigating
     if (!service || loading) {
       toast.error('Please wait for service to load');
       return;
     }
-    console.log('[ServiceDetailPage] Booking service:', {
-      id: service._id,
-      name: service.name,
-      providerId: service.provider?._id
+    navigate(`/book/${id}`, {
+      state: {
+        service,
+        providerId: service.provider?._id
+      }
     });
-    navigate(`/book/${id}`, { state: { service } });
   };
 
   const toggleFavorite = async () => {
@@ -135,6 +148,8 @@ const ServiceDetailPage: React.FC = () => {
       navigate('/login', { state: { returnTo: `/services/${id}` } });
       return;
     }
+
+    if (isFavoriting) return;
 
     // Use providerId from the service if available, otherwise check provider._id
     const providerId = service?.provider?._id;
@@ -144,20 +159,20 @@ const ServiceDetailPage: React.FC = () => {
     }
 
     try {
+      setIsFavoriting(true);
       const result = await favoritesApi.toggleFavorite(providerId);
       setIsFavorited(result.isFavorited);
+      toast.success(result.isFavorited ? 'Added to favorites' : 'Removed from favorites');
     } catch (err) {
       console.error('Failed to toggle favorite:', err);
+      toast.error('Failed to update favorites. Please try again.');
+    } finally {
+      setIsFavoriting(false);
     }
   };
 
-  const shareService = async () => {
-    const url = window.location.href;
-    if (navigator.share) {
-      try { await navigator.share({ title: service?.name, text: `Check out: ${service?.name}`, url }); } catch {}
-    } else {
-      navigator.clipboard.writeText(url);
-    }
+  const shareService = () => {
+    setShowShareModal(true);
   };
 
   const getServiceImage = (): string => {
@@ -173,8 +188,20 @@ const ServiceDetailPage: React.FC = () => {
     return (
       <div className="min-h-screen bg-white flex flex-col">
         <NavigationHeader />
-        <div className="flex-1 flex items-center justify-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-nilin-primary" />
+        <div className="bg-nilin-cream border-b border-nilin-border h-10 w-full animate-pulse" />
+        <div className="flex-1 max-w-7xl mx-auto px-4 py-6 w-full">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <div className="lg:col-span-2 space-y-6">
+              <div className="h-[400px] bg-gray-200 rounded-2xl animate-pulse" />
+              <div className="h-8 bg-gray-200 rounded w-1/3 animate-pulse" />
+              <div className="h-4 bg-gray-200 rounded w-1/4 animate-pulse" />
+              <div className="h-32 bg-gray-200 rounded-xl animate-pulse" />
+            </div>
+            <div className="space-y-4">
+              <div className="h-48 bg-gray-200 rounded-2xl animate-pulse" />
+              <div className="h-32 bg-gray-200 rounded-2xl animate-pulse" />
+            </div>
+          </div>
         </div>
       </div>
     );
@@ -244,8 +271,9 @@ const ServiceDetailPage: React.FC = () => {
                 <div className="absolute top-4 right-4 flex items-center gap-2">
                   <button
                     onClick={toggleFavorite}
+                    disabled={isFavoriting}
                     className={`p-2.5 rounded-full bg-white/90 backdrop-blur-sm shadow-md transition-colors ${
-                      isFavorited ? 'text-red-500' : 'text-gray-600 hover:text-red-500'
+                      isFavoriting ? 'opacity-50 cursor-not-allowed' : isFavorited ? 'text-red-500' : 'text-gray-600 hover:text-red-500'
                     }`}
                   >
                     <Heart className={`w-5 h-5 ${isFavorited ? 'fill-current' : ''}`} />
@@ -431,8 +459,9 @@ const ServiceDetailPage: React.FC = () => {
                       </p>
                     )}
                     <button
-                      onClick={() => navigate(`/provider/${service.provider!._id}`)}
-                      className="w-full py-2 border border-nilin-border rounded-full text-sm font-medium text-nilin-charcoal hover:bg-nilin-blush/30 transition-colors"
+                      onClick={() => service.provider?._id && navigate(`/provider/${service.provider._id}`)}
+                      disabled={!service.provider?._id}
+                      className="w-full py-2 border border-nilin-border rounded-full text-sm font-medium text-nilin-charcoal hover:bg-nilin-blush/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       View Profile
                     </button>
@@ -467,6 +496,17 @@ const ServiceDetailPage: React.FC = () => {
       <div className="h-16 lg:hidden" />
 
       <Footer />
+
+      {/* Share Modal */}
+      <ShareModal
+        isOpen={showShareModal}
+        onClose={() => setShowShareModal(false)}
+        title={service?.name || 'Service'}
+        description={service?.shortDescription || service?.description}
+        url={typeof window !== 'undefined' ? window.location.href : ''}
+        itemType="service"
+        itemId={service?._id}
+      />
     </div>
   );
 };

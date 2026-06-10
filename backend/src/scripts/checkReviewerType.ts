@@ -4,7 +4,7 @@ dotenv.config();
 import mongoose from 'mongoose';
 
 async function check() {
-  const uri = 'mongodb+srv://nilimraj_db_user:aXJBzxFtRJosdxEc@cluster0.wnjcyp1.mongodb.net/test?appName=Cluster0';
+  const uri = process.env.MONGODB_URI || 'mongodb://localhost:27017/test';
   await mongoose.connect(uri, { maxPoolSize: 5 });
   const db = mongoose.connection.db!;
 

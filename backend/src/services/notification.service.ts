@@ -1,6 +1,8 @@
 import BookingNotification from '../models/bookingNotification.model';
 import { NotificationQueue } from '../models/notificationQueue.model';
 import User from '../models/user.model';
+import { buildDefaultChannels, formatNotificationForSocket } from '../utils/notificationHelpers';
+import { eventBus, EVENT_TYPES } from '../event-bus';
 import { send as emailSend } from './email.service';
 import { smsService } from './sms.service';
 import { withRetry } from '../utils/retry.util';
@@ -45,7 +47,17 @@ const initializeFirebaseAdmin = (): admin.app.App | null => {
         credential: admin.credential.cert(serviceAccountPath),
       });
     } else if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-      const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+      let serviceAccount;
+      try {
+        serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+      } catch (parseError) {
+        logger.error('Failed to parse FIREBASE_SERVICE_ACCOUNT JSON', {
+          context: 'NotificationService',
+          action: 'FIREBASE_JSON_PARSE_FAILED',
+          error: parseError instanceof Error ? parseError.message : String(parseError),
+        });
+        return null;
+      }
       app = admin.initializeApp({
         credential: admin.credential.cert(serviceAccount),
       });
@@ -78,6 +90,7 @@ const firebaseApp = initializeFirebaseAdmin();
 // In-memory cache kept as fallback only
 const userNotificationCache = new Map<string, number>();
 const NOTIFICATION_COOLDOWN = 60000; // 1 minute cooldown between notifications per user
+const MAX_IN_MEMORY_ENTRIES = 10000; // Max entries to prevent memory leak
 
 /**
  * Check if a notification can be sent to a user (rate limiting)
@@ -155,20 +168,38 @@ const getRemainingCooldown = async (userId: string): Promise<number> => {
 
 /**
  * Cleanup old entries from in-memory cache
+ * FIX: Prevents memory leak by:
+ * 1. Removing entries older than 2x cooldown
+ * 2. Enforcing max entry limit by removing oldest entries
  */
 const cleanupRateLimitCache = () => {
   const now = Date.now();
   const maxAge = NOTIFICATION_COOLDOWN * 2; // Clean entries older than 2x cooldown
 
+  // Phase 1: Remove expired entries by age
   for (const [userId, timestamp] of userNotificationCache.entries()) {
     if (now - timestamp > maxAge) {
       userNotificationCache.delete(userId);
     }
   }
+
+  // Phase 2: Prune oldest entries if cache exceeds max size
+  if (userNotificationCache.size > MAX_IN_MEMORY_ENTRIES) {
+    const entries = Array.from(userNotificationCache.entries());
+    entries.sort((a, b) => a[1] - b[1]); // Sort by timestamp (oldest first)
+    const entriesToRemove = entries.slice(0, entries.length - MAX_IN_MEMORY_ENTRIES);
+    entriesToRemove.forEach(([key]) => userNotificationCache.delete(key));
+    logger.debug('Rate limit cache pruned by size', {
+      context: 'NotificationService',
+      action: 'RATE_LIMIT_CACHE_PRUNED',
+      removedCount: entriesToRemove.length,
+      remainingSize: userNotificationCache.size,
+    });
+  }
 };
 
-// Run cleanup every 5 minutes
-setInterval(cleanupRateLimitCache, 300000);
+// Run cleanup every minute (more aggressive to prevent unbounded growth)
+setInterval(cleanupRateLimitCache, 60000);
 
 // ============================================
 // Types
@@ -204,7 +235,12 @@ export type NotificationType =
   | 'dispute_resolved'
   | 'withdrawal'
   | 'withdrawal_approved'
-  | 'withdrawal_rejected';
+  | 'withdrawal_rejected'
+  // FIX: Offer notification types
+  | 'offer_expiry_reminder'
+  | 'offer_expired'
+  | 'offer_unused_reminder'
+  | 'offer_claimed';
 
 export type NotificationChannel = 'in_app' | 'email' | 'sms' | 'push';
 
@@ -213,6 +249,8 @@ export interface NotificationData {
   type: NotificationType;
   title: string;
   message: string;
+  bookingId?: string;
+  tenantId?: string;
   actionText?: string;
   actionUrl?: string;
   metadata?: Record<string, any>;
@@ -532,6 +570,47 @@ const NOTIFICATION_TEMPLATES: Record<NotificationType, { customer: { title: stri
       message: 'Your withdrawal request has been rejected. Please contact support for more details.',
     },
   },
+  // FIX: Offer notification templates
+  offer_expiry_reminder: {
+    customer: {
+      title: 'Your offer expires soon! ⏰',
+      message: 'Don\'t miss out! Your offer is expiring soon. Use it before it\'s gone.',
+    },
+    provider: {
+      title: 'Offer Expiring Soon',
+      message: 'An offer is expiring in the next few days.',
+    },
+  },
+  offer_expired: {
+    customer: {
+      title: 'Offer Expired',
+      message: 'Your offer has expired. Check for new offers!',
+    },
+    provider: {
+      title: 'Offer Expired',
+      message: 'An offer has expired.',
+    },
+  },
+  offer_unused_reminder: {
+    customer: {
+      title: 'Don\'t forget your offer! 🎁',
+      message: 'You have an unused offer. Book a service and save!',
+    },
+    provider: {
+      title: 'Unused Offer Reminder',
+      message: 'A customer has an unused offer.',
+    },
+  },
+  offer_claimed: {
+    customer: {
+      title: 'Offer Claimed! 🎉',
+      message: 'You\'ve successfully claimed an offer. Use it on your next booking!',
+    },
+    provider: {
+      title: 'New Offer Claim',
+      message: 'A customer has claimed an offer.',
+    },
+  },
 };
 
 // ============================================
@@ -545,7 +624,61 @@ export class NotificationService {
   // In-App Notifications
   // ========================================
 
+  private async emitNotificationCreated(notification: any): Promise<void> {
+    try {
+      await eventBus.publish(
+        EVENT_TYPES.NOTIFICATION_CREATED,
+        formatNotificationForSocket(notification)
+      );
+    } catch (error) {
+      logger.warn('Failed to emit notification.created event', {
+        context: 'NotificationService',
+        action: 'EMIT_NOTIFICATION_FAILED',
+        notificationId: notification?._id?.toString?.(),
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  async createInAppNotification(params: {
+    bookingId?: string;
+    recipientId: string;
+    type: NotificationType | string;
+    title: string;
+    message: string;
+    metadata?: Record<string, any>;
+    tenantId?: string;
+    actionText?: string;
+    actionUrl?: string;
+  }): Promise<any> {
+    return this.createNotification({
+      recipientId: params.recipientId,
+      type: params.type as NotificationType,
+      title: params.title,
+      message: params.message,
+      bookingId: params.bookingId,
+      tenantId: params.tenantId,
+      actionText: params.actionText,
+      actionUrl: params.actionUrl,
+      metadata: params.metadata,
+      channels: ['in_app'],
+    });
+  }
+
   async createNotification(data: NotificationData): Promise<any> {
+    // Dedupe rapid duplicate writes (e.g. booking service + event bus)
+    if (data.bookingId) {
+      const recentDuplicate = await BookingNotification.findOne({
+        recipientId: data.recipientId,
+        bookingId: data.bookingId,
+        type: data.type,
+        createdAt: { $gte: new Date(Date.now() - 60_000) },
+      }).lean();
+      if (recentDuplicate) {
+        return recentDuplicate;
+      }
+    }
+
     // Check rate limit for this user
     if (!(await canSendNotification(data.recipientId))) {
       logger.debug('Skipping notification due to rate limit', {
@@ -559,25 +692,22 @@ export class NotificationService {
 
     const notification = new BookingNotification({
       recipientId: data.recipientId,
+      bookingId: data.bookingId,
+      tenantId: data.tenantId,
       type: data.type,
       title: data.title,
       message: data.message,
       actionText: data.actionText,
       actionUrl: data.actionUrl,
       metadata: data.metadata || {},
-      channels: data.channels || ['in_app'],
+      channels: buildDefaultChannels(data.channels),
+      status: 'delivered',
     });
 
     await notification.save();
-
-    // FIX: Mark in-app channel as sent after successful save
-    await BookingNotification.findByIdAndUpdate(notification._id, {
-      'channels.inApp.sent': true,
-      'channels.inApp.sentAt': new Date(),
-    });
-
-    // Prune old notifications to maintain bounded storage
     await this.pruneOldNotifications(data.recipientId);
+    await this.emitNotificationCreated(notification);
+    await this.dispatchRealtimeChannels(data, notification);
 
     return notification;
   }
@@ -613,18 +743,21 @@ export class NotificationService {
       title: roleTemplate.title,
       message: roleTemplate.message,
       metadata: this.formatMetadata(notificationType, metadata),
+      channels: buildDefaultChannels(['in_app']),
+      status: 'delivered',
     });
 
     await notification.save();
-
-    // FIX: Mark in-app channel as sent after successful save
-    await BookingNotification.findByIdAndUpdate(notification._id, {
-      'channels.inApp.sent': true,
-      'channels.inApp.sentAt': new Date(),
-    });
-
-    // Prune old notifications to maintain bounded storage
     await this.pruneOldNotifications(recipientId);
+    await this.emitNotificationCreated(notification);
+    await this.dispatchRealtimeChannels({
+      recipientId,
+      type: notificationType,
+      title: roleTemplate.title,
+      message: roleTemplate.message,
+      bookingId,
+      metadata,
+    }, notification);
 
     return notification;
   }
@@ -648,7 +781,8 @@ export class NotificationService {
         title: template.customer.title,
         message: template.customer.message,
         metadata: this.formatMetadata(notificationType, { ...metadata, isProvider: false }),
-        channels: ['in_app'],
+        channels: buildDefaultChannels(['in_app']),
+        status: 'delivered',
       });
     }
 
@@ -660,7 +794,8 @@ export class NotificationService {
       title: template.provider.title,
       message: template.provider.message,
       metadata: this.formatMetadata(notificationType, { ...metadata, isProvider: true }),
-      channels: ['in_app'],
+      channels: buildDefaultChannels(['in_app']),
+      status: 'delivered',
     });
 
     // Bulk insert all notifications at once
@@ -668,17 +803,9 @@ export class NotificationService {
       try {
         const insertedNotifications = await BookingNotification.insertMany(notificationsToInsert, { ordered: false });
 
-        // FIX: Mark in-app channel as sent for all inserted notifications
-        const insertedIds = insertedNotifications.map((n: any) => n._id);
-        await BookingNotification.updateMany(
-          { _id: { $in: insertedIds } },
-          {
-            $set: {
-              'channels.inApp.sent': true,
-              'channels.inApp.sentAt': new Date(),
-            },
-          }
-        );
+        for (const inserted of insertedNotifications) {
+          await this.emitNotificationCreated(inserted);
+        }
       } catch (error) {
         // FIX: Queue failed notifications for retry instead of silently swallowing errors
         const errorMessage = error instanceof Error ? error.message : String(error);
@@ -772,19 +899,20 @@ export class NotificationService {
         queueEntry.lastAttempt = new Date();
         await queueEntry.save();
 
-        // Attempt to create the notification
-        const notification = new BookingNotification({
-          recipientId: queueEntry.recipientId,
+        const notification = await this.createNotification({
+          recipientId: queueEntry.recipientId.toString(),
           type: queueEntry.type as NotificationType,
           title: queueEntry.title,
           message: queueEntry.message,
           actionText: queueEntry.actionText,
           actionUrl: queueEntry.actionUrl,
           metadata: queueEntry.metadata || {},
-          channels: [queueEntry.channel],
+          channels: [queueEntry.channel as NotificationChannel],
         });
 
-        await notification.save();
+        if (!notification) {
+          throw new Error('Notification creation skipped (rate limited or duplicate)');
+        }
 
         // Mark as completed
         queueEntry.status = 'completed';
@@ -902,8 +1030,71 @@ export class NotificationService {
     await BookingNotification.findOneAndDelete({ _id: notificationId, recipientId: userId });
   }
 
+  async deleteReadNotifications(userId: string): Promise<number> {
+    const result = await BookingNotification.deleteMany({
+      recipientId: userId,
+      'channels.inApp.read': true,
+    });
+    return result.deletedCount || 0;
+  }
+
   async clearAllNotifications(userId: string): Promise<void> {
     await BookingNotification.deleteMany({ recipientId: userId });
+  }
+
+  /**
+   * Migrate legacy User.notifications embedded array into BookingNotification collection
+   */
+  async migrateLegacyNotifications(userId: string): Promise<number> {
+    const userDoc = await User.findById(userId);
+    if (!userDoc) return 0;
+
+    const legacy: any[] = (userDoc as any).notifications || [];
+    if (legacy.length === 0) return 0;
+
+    const typeMap: Record<string, string> = {
+      booking: 'booking_confirmed',
+      payment: 'payment_received',
+      review: 'review_request',
+      system: 'promotion',
+      promotion: 'promotion',
+      message: 'message_received',
+    };
+
+    let migrated = 0;
+    for (const legacyNotification of legacy) {
+      try {
+        const channels = buildDefaultChannels(['in_app']);
+        if (legacyNotification.isRead) {
+          channels.inApp.read = true;
+          (channels.inApp as { readAt?: Date }).readAt = legacyNotification.readAt || new Date();
+        }
+
+        await BookingNotification.create({
+          recipientId: userId,
+          type: typeMap[legacyNotification.type] || 'promotion',
+          title: legacyNotification.title || 'Notification',
+          message: legacyNotification.message || '',
+          metadata: { customData: legacyNotification.data || {} },
+          channels,
+          status: 'delivered',
+          createdAt: legacyNotification.createdAt || new Date(),
+        });
+        migrated++;
+      } catch (error) {
+        logger.warn('Failed to migrate legacy notification', {
+          userId,
+          legacyId: legacyNotification._id || legacyNotification.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    (userDoc as any).notifications = [];
+    await userDoc.save({ validateBeforeSave: false });
+
+    logger.info('Migrated legacy notifications', { userId, migrated, total: legacy.length });
+    return migrated;
   }
 
   /**
@@ -1308,6 +1499,86 @@ export class NotificationService {
   // ========================================
 
   /**
+   * Dispatch external channels for realtime notifications, respecting digest deferral
+   */
+  private async dispatchRealtimeChannels(data: NotificationData, notification: any): Promise<void> {
+    try {
+      const { notificationDigestService } = await import('./notifications/notificationDigest.service');
+
+      if (await notificationDigestService.shouldDeferExternalDelivery(data.recipientId, data.type)) {
+        logger.debug('External channels deferred to digest', {
+          context: 'NotificationService',
+          action: 'DIGEST_DEFERRED',
+          recipientId: data.recipientId,
+          type: data.type,
+        });
+        return;
+      }
+
+      const digestPrefs = await notificationDigestService.getPreferences(data.recipientId);
+      const useDigestChannels = digestPrefs.enabled && digestPrefs.frequency === 'realtime';
+
+      const user = await User.findById(data.recipientId).select('email phone');
+      if (!user) return;
+
+      const requestedChannels = data.channels?.filter((c) => c !== 'in_app') || ['email', 'push', 'sms'];
+      const notificationId = notification._id?.toString();
+
+      for (const channel of requestedChannels) {
+        if (useDigestChannels && channel in digestPrefs.channels) {
+          const enabled = digestPrefs.channels[channel as keyof typeof digestPrefs.channels];
+          if (!enabled) continue;
+        }
+
+        if (channel === 'email' && user.email) {
+          if (await this.shouldSendToChannel(data.recipientId, 'email', data.type)) {
+            const html = `<p><strong>${data.title}</strong></p><p>${data.message}</p>`;
+            await this.sendEmail({
+              to: user.email,
+              subject: data.title,
+              template: html,
+              data: { title: data.title, message: data.message },
+            }, data.type);
+          }
+        } else if (channel === 'sms' && user.phone) {
+          if (await this.shouldSendToChannel(data.recipientId, 'sms', data.type)) {
+            await this.sendSms(user.phone, `${data.title}: ${data.message}`, data.type);
+          }
+        } else if (channel === 'push') {
+          if (await this.shouldSendToChannel(data.recipientId, 'push', data.type)) {
+            await this.sendPushNotification(
+              data.recipientId,
+              data.title,
+              data.message,
+              { notificationId, type: data.type, bookingId: data.bookingId },
+              data.type
+            );
+
+            try {
+              const { webPushService } = await import('./notifications/webpush.service');
+              await webPushService.sendPushNotification(data.recipientId, {
+                title: data.title,
+                body: data.message,
+                data: { notificationId, type: data.type, bookingId: data.bookingId },
+              });
+            } catch {
+              // Web push is optional when FCM is unavailable
+            }
+          }
+        }
+      }
+    } catch (error) {
+      logger.error('Failed to dispatch realtime notification channels', {
+        context: 'NotificationService',
+        action: 'DISPATCH_CHANNELS_FAILED',
+        recipientId: data.recipientId,
+        type: data.type,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
    * Check if a notification should be sent via a specific channel based on user preferences
    * FIX: This method was not being called before - now integrated into all send methods
    */
@@ -1318,8 +1589,13 @@ export class NotificationService {
   ): Promise<boolean> {
     const user = await User.findById(userId).select('communicationPreferences');
     if (!user) {
-      // If user not found, default to allowing notification
-      return true;
+      logger.warn('Notification skipped - user not found for preference check', {
+        context: 'NotificationService',
+        userId,
+        channel,
+        notificationType,
+      });
+      return false;
     }
 
     const prefs = user.communicationPreferences;
@@ -1444,6 +1720,11 @@ export class NotificationService {
       withdrawal: prefs.push?.bookingUpdates ?? true,
       withdrawal_approved: prefs.push?.bookingUpdates ?? true,
       withdrawal_rejected: prefs.push?.bookingUpdates ?? true,
+      // FIX: Offer notification preferences
+      offer_expiry_reminder: prefs.push?.promotions ?? true,
+      offer_expired: prefs.push?.promotions ?? true,
+      offer_unused_reminder: prefs.push?.promotions ?? true,
+      offer_claimed: prefs.push?.promotions ?? true,
     };
   }
 

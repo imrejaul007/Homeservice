@@ -337,6 +337,11 @@ export const requireCanManageUser = (targetUserIdParam: string = 'userId') => {
 
     const targetUserId = req.params[targetUserIdParam] || req.body[targetUserIdParam];
 
+    // Validate targetUserId exists and is a valid ObjectId
+    if (!targetUserId || !/^[a-fA-F0-9]{24}$/.test(targetUserId)) {
+      throw new ApiError(400, 'Invalid target user ID', [], ERROR_CODES.VALIDATION_ERROR);
+    }
+
     // Users can always manage themselves
     if (targetUserId === req.user._id.toString()) {
       return next();
@@ -436,11 +441,15 @@ export const requirePermissionAssignment = asyncHandler(
 
 /**
  * Skip middleware if condition is met
+ * SECURITY: Requires authentication before evaluating the skip condition.
+ * Unauthenticated requests always run the middleware (skip is not applied).
  */
 export const skipIf = (condition: (req: Request) => boolean) => {
   return (middleware: any) => {
     return asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
-      if (condition(req)) {
+      // SECURITY: Require authentication before applying skip condition
+      // Prevents unauthenticated requests from bypassing middleware via skip condition
+      if (req.user && condition(req)) {
         return next();
       }
       return middleware(req, res, next);
@@ -458,12 +467,17 @@ export const requirePermissionIfAuthenticated = (permission: Permission) => {
       return next();
     }
 
-    // Skip if loading permissions fails
+    // Skip if loading permissions fails - fail closed for security
     if (!req.permissions) {
       try {
         req.permissions = await rbacService.getUserPermissions(req.user._id.toString());
       } catch {
-        return next();
+        throw new ApiError(
+          503,
+          'Permission service unavailable',
+          [],
+          'SERVICE_UNAVAILABLE'
+        );
       }
     }
 
@@ -548,7 +562,7 @@ export const auditPermissionCheck = (
   action: string,
   getPermission: (req: Request) => Permission[]
 ) => {
-  return asyncHandler(async (req: Request, _res: Response, next: NextFunction) => {
+  return asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     if (!req.user) {
       return next();
     }
@@ -558,18 +572,23 @@ export const auditPermissionCheck = (
 
     next();
 
-    const duration = Date.now() - startTime;
-
-    logger.info('Permission check audit', {
-      userId: req.user._id,
-      userRole: req.user.role,
-      action,
-      requiredPermissions: permissions,
-      granted: !!(req as any).permissionDenied,
-      duration,
-      path: req.path,
-      method: req.method,
-    });
+    // Use response 'finish' event to capture actual status after full middleware chain
+    const logAudit = () => {
+      const duration = Date.now() - startTime;
+      const granted = res.statusCode !== 403;
+      logger.info('Permission check audit', {
+        userId: req.user?._id,
+        userRole: req.user?.role,
+        action,
+        requiredPermissions: permissions,
+        granted,
+        statusCode: res.statusCode,
+        duration,
+        path: req.path,
+        method: req.method,
+      });
+    };
+    res.on('finish', logAudit);
   });
 };
 

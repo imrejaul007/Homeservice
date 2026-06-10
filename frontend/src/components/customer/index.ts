@@ -191,3 +191,5 @@ export { default as Timeline } from './Timeline';
 export { default as CategoryGrid } from './CategoryGrid';
 export { default as ServiceCard } from './ServiceCard';
 export { default as BookingCard } from './BookingCard';
+export { WriteReviewModal, default as WriteReviewModalDefault } from './WriteReviewModal';
+export { WritePackageReviewModal, default as WritePackageReviewModalDefault } from './WritePackageReviewModal';

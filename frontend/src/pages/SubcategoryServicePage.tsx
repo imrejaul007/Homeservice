@@ -19,6 +19,12 @@ import type { ProviderCard } from '../types/provider';
 import { searchApi } from '../services/searchApi';
 import type { Service } from '../components/customer/ServiceCard';
 import { useState, useEffect } from 'react';
+import {
+  resolveCategorySlug,
+  resolveSubcategorySlug,
+  getServiceContentKey,
+  getSubcategoryImageKey,
+} from '../utils/categorySlugResolver';
 
 // Subcategory type
 interface Subcategory {
@@ -121,8 +127,27 @@ const Breadcrumb: React.FC<{ items: { label: string; href?: string }[] }> = ({ i
 };
 
 const SubcategoryServicePage: React.FC = () => {
-  const { categorySlug, subcategorySlug } = useParams<{ categorySlug: string; subcategorySlug: string }>();
+  const { categorySlug: rawCategorySlug, subcategorySlug: rawSubcategorySlug } = useParams<{
+    categorySlug: string;
+    subcategorySlug: string;
+  }>();
   const navigate = useNavigate();
+
+  const categorySlug = resolveCategorySlug(rawCategorySlug) ?? rawCategorySlug ?? '';
+  const subcategorySlug = categorySlug && rawSubcategorySlug
+    ? resolveSubcategorySlug(categorySlug, rawSubcategorySlug)
+    : rawSubcategorySlug ?? '';
+
+  // Redirect legacy URLs to canonical slugs (e.g. /service/hair/haircut-styling → womens-haircut)
+  useEffect(() => {
+    if (
+      rawCategorySlug &&
+      rawSubcategorySlug &&
+      (categorySlug !== rawCategorySlug || subcategorySlug !== rawSubcategorySlug)
+    ) {
+      navigate(`/service/${categorySlug}/${subcategorySlug}`, { replace: true });
+    }
+  }, [rawCategorySlug, rawSubcategorySlug, categorySlug, subcategorySlug, navigate]);
 
   const { category, isLoading: categoryLoading } = useCategory(categorySlug);
   const { providers, isLoading: providersLoading } = useProvidersBySubcategory(
@@ -143,8 +168,8 @@ const SubcategoryServicePage: React.FC = () => {
         setServicesLoading(true);
         // Search for services matching this subcategory
         const response = await searchApi.searchServices({
-          q: subcategorySlug.replace(/-/g, ' '), // Convert slug to search term
           category: categorySlug,
+          subcategory: subcategorySlug,
           limit: 20,
         });
 
@@ -166,9 +191,12 @@ const SubcategoryServicePage: React.FC = () => {
     [category, subcategorySlug]
   );
 
-  // Get rich content from constants (for display purposes)
-  const content = categorySlug && subcategorySlug
-    ? SERVICE_CONTENT?.[categorySlug]?.[subcategorySlug]
+  // Get rich content from constants (legacy content keys mapped to canonical slugs)
+  const contentKey = categorySlug && subcategorySlug
+    ? getServiceContentKey(categorySlug, subcategorySlug)
+    : undefined;
+  const content = categorySlug && contentKey
+    ? SERVICE_CONTENT?.[categorySlug]?.[contentKey]
     : undefined;
 
   const transformedProviders = useMemo((): TransformedProvider[] => {
@@ -196,7 +224,7 @@ const SubcategoryServicePage: React.FC = () => {
     // First priority: Book a real service from database
     if (services.length > 0) {
       const service = services[0];
-      const serviceId = (service as any)._id || (service as any).id || (service as any).serviceId;
+      const serviceId = service._id ?? (service as {id?: string}).id ?? (service as {serviceId?: string}).serviceId;
       console.log('[SubcategoryServicePage] Booking service from DB:', service.name);
       navigate(`/book/${serviceId}`, { state: { service } });
       return;
@@ -222,7 +250,7 @@ const SubcategoryServicePage: React.FC = () => {
     // If we have services from DB, book the first one
     if (services.length > 0) {
       const service = services[0];
-      const serviceId = (service as any)._id || (service as any).id || (service as any).serviceId;
+      const serviceId = service._id ?? (service as {id?: string}).id ?? (service as {serviceId?: string}).serviceId;
 
       // Get the selected variant details
       const selectedVariant = content?.variants?.[selectedVariantIndex];
@@ -282,7 +310,10 @@ const SubcategoryServicePage: React.FC = () => {
   const duration = content?.duration || `${metadata.averageDuration || 60} min`;
 
   // Get hero image
-  const heroImage: string = (categorySlug && subcategorySlug && SUBCATEGORY_IMAGES[categorySlug]?.[subcategorySlug])
+  const imageKey = categorySlug && subcategorySlug
+    ? getSubcategoryImageKey(categorySlug, subcategorySlug)
+    : undefined;
+  const heroImage: string = (categorySlug && imageKey && SUBCATEGORY_IMAGES[categorySlug]?.[imageKey])
     || String(metadata.heroImage || '')
     || CATEGORY_IMAGES[categorySlug || '']?.hero
     || 'https://images.unsplash.com/photo-1560066984-138dadb4c035?w=1400&q=80&fit=crop';
@@ -418,7 +449,7 @@ const SubcategoryServicePage: React.FC = () => {
 
         {/* Reviews */}
         <div className="animate-nilin-in" style={{animationDelay: '0.5s'}}>
-          <ServiceReviews providerId={transformedProviders[0]?.id || ''} rating={rating} reviewCount={reviewCount} />
+          <ServiceReviews providerId={transformedProviders[0]?.id || ''} />
         </div>
 
         {/* FAQ */}

@@ -17,3 +17,18 @@ export type { NotificationItem as NotificationCenterItem } from './NotificationC
 export { ToastContainer, useToast, toast } from './NotificationToast';
 export type { ToastNotification } from './NotificationToast';
 export { UnreadBadge, UnreadBadgeCompact, UnreadDot } from './UnreadBadge';
+
+// Booking notification templates
+export {
+  BOOKING_NOTIFICATION_TEMPLATES,
+  getTemplateByType,
+  formatBookingNotification,
+  getNotificationColor,
+  QUICK_ACTIONS,
+  type BookingNotificationTemplate,
+} from './BookingNotificationTemplates';
+export { default as BookingNotificationTemplates } from './BookingNotificationTemplates';
+
+// Digest preferences
+import DigestPreferences from './DigestPreferences';
+export { DigestPreferences };

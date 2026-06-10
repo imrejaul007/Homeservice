@@ -13,10 +13,12 @@ import { ApiError, ERROR_CODES } from '../utils/ApiError';
 import { normalizeServiceAreas, sanitizeProviderGeo } from '../utils/sanitizeProviderGeo';
 import { formatProviderProfileForClient } from '../utils/formatProviderProfileResponse';
 import { sendVerificationEmail, sendWelcomeEmail, sendPasswordResetEmail } from './email.service';
-import { uploadBufferToCloudinary } from '../utils/cloudinary';
+import { uploadFileToCloudinary, deleteFromCloudinary, extractPublicIdFromUrl } from '../utils/cloudinary';
+import fs from 'fs';
 import { cache } from '../config/redis';
 import logger from '../utils/logger';
 import { createAuditLog } from './audit.service';
+import { REFERRAL_REWARDS } from '../config/constants';
 import {
   CustomerRegistrationDTO,
   ProviderRegistrationDTO,
@@ -54,6 +56,9 @@ const formatUserResponse = (user: any): UserResponse => ({
   avatar: user.avatar,
   phone: user.phone,
   bio: user.bio,
+  gender: user.gender,
+  dateOfBirth: user.dateOfBirth,
+  address: user.address,
   lastLogin: user.lastLogin,
 });
 
@@ -171,7 +176,7 @@ export class AuthService {
       });
       if (referrer) {
         // Check if the referrer has the same email (self-referral)
-        if (referrer.email === data.email) {
+        if (referrer.email.toLowerCase() === data.email.toLowerCase()) {
           throw new ApiError(400, 'You cannot use your own referral code');
         }
 
@@ -348,11 +353,37 @@ export class AuthService {
           bookingUpdates: data.communicationPreferences?.push?.bookingUpdates !== false,
           reminders: data.communicationPreferences?.push?.reminders !== false,
           newMessages: data.communicationPreferences?.push?.newMessages !== false,
-          promotions: data.communicationPreferences?.push?.promotions || false,
+          promotions: data.communicationPreferences?.push?.promotions !== false,
         },
         language: data.communicationPreferences?.language || 'en',
-        timezone: data.communicationPreferences?.timezone || 'UTC',
+        timezone: data.communicationPreferences?.timezone || 'Asia/Dubai',
         currency: data.communicationPreferences?.currency || 'AED',
+      },
+      digestPreferences: {
+        enabled: true,
+        frequency: 'daily',
+        channels: {
+          email: true,
+          sms: false,
+          push: true,
+          whatsapp: false,
+          telegram: false,
+        },
+        quietHours: {
+          enabled: false,
+          startTime: '22:00',
+          endTime: '08:00',
+          timezone: data.communicationPreferences?.timezone || 'Asia/Dubai',
+        },
+        types: {
+          bookingUpdates: true,
+          reminders: true,
+          promotions: false,
+          messages: true,
+          system: true,
+        },
+        scheduledTime: '09:00',
+        scheduledDays: [1],
       },
       aiPersonalization: {
         preferences: {
@@ -430,23 +461,6 @@ export class AuthService {
         profileViews: 0,
         socialScore: 0,
       },
-      communicationPreferences: {
-        preferredContactMethod: 'push',
-        notificationSettings: {
-          bookingConfirmation: true,
-          bookingReminders: true,
-          providerUpdates: true,
-          promotionsAndOffers: false,
-          loyaltyUpdates: true,
-          socialActivity: true,
-          weeklyDigest: false,
-        },
-        reminderTiming: {
-          booking24Hours: true,
-          booking2Hours: true,
-          booking30Minutes: false,
-        },
-      },
       privacySettings: {
         profileVisibility: 'public',
         showBookingHistory: false,
@@ -486,6 +500,19 @@ export class AuthService {
 
       // Commit transaction
       await session.commitTransaction();
+
+      try {
+        const { notificationDigestService } = await import('./notifications/notificationDigest.service');
+        await notificationDigestService.initializeForUser(
+          user._id.toString(),
+          data.communicationPreferences?.timezone || 'Asia/Dubai'
+        );
+      } catch (digestInitError) {
+        logger.error('Failed to initialize digest schedule for new user', {
+          userId: user._id,
+          error: (digestInitError as Error).message,
+        });
+      }
 
       // Send verification email (non-blocking - outside transaction)
       try {
@@ -543,18 +570,17 @@ export class AuthService {
           _id: { $ne: user._id }
         });
 
-        const MAX_REFERRALS_PER_USER = 50;
-        if (referralCount >= MAX_REFERRALS_PER_USER) {
+        if (referralCount >= REFERRAL_REWARDS.MAX_REFERRALS_PER_USER) {
           logger.warn('Referrer has reached maximum referral limit', {
             referrerId: referrer._id,
             referralCount,
-            maxReferrals: MAX_REFERRALS_PER_USER,
+            maxReferrals: REFERRAL_REWARDS.MAX_REFERRALS_PER_USER,
             action: 'REFERRAL_LIMIT_REACHED',
           });
           // Still add pending reward for new user
           user.loyaltySystem.pendingRewards.push({
             type: 'welcome_bonus',
-            amount: 250,
+            amount: REFERRAL_REWARDS.REFEREE_REWARD,
             description: 'Welcome bonus for using referral code',
             status: 'pending'
           });
@@ -573,7 +599,7 @@ export class AuthService {
           // Add reduced bonus as pending
           user.loyaltySystem.pendingRewards.push({
             type: 'referral_bonus',
-            amount: 50,
+            amount: REFERRAL_REWARDS.SUSPICIOUS_REFERRAL_BONUS,
             description: 'Welcome bonus for using referral code (reduced - flagged)',
             status: 'pending'
           });
@@ -585,11 +611,11 @@ export class AuthService {
         }
 
         // Add pending rewards for legitimate referral
-        // User will receive 250 when first booking completes
-        // Referrer will receive 500 when their referral completes first booking
+        // User will receive referee reward when first booking completes
+        // Referrer will receive referrer reward when their referral completes first booking
         user.loyaltySystem.pendingRewards.push({
           type: 'referral_bonus',
-          amount: 250,
+          amount: REFERRAL_REWARDS.REFEREE_REWARD,
           description: 'Welcome bonus for using referral code',
           status: 'pending',
           referrerId: referredBy.toString()
@@ -600,7 +626,7 @@ export class AuthService {
         logger.info('Referral bonus pending until first booking completion', {
           userId: user._id,
           referrerId: referredBy,
-          pendingAmount: 250,
+          pendingAmount: REFERRAL_REWARDS.REFEREE_REWARD,
           action: 'PENDING_REFERRAL_REWARD',
         });
         return;
@@ -610,7 +636,7 @@ export class AuthService {
     // No referral - still add pending welcome bonus
     user.loyaltySystem.pendingRewards.push({
       type: 'welcome_bonus',
-      amount: 100,
+      amount: REFERRAL_REWARDS.WELCOME_BONUS,
       description: 'Welcome to the platform!',
       status: 'pending'
     });
@@ -618,7 +644,7 @@ export class AuthService {
 
     logger.info('Welcome bonus pending until first booking completion', {
       userId: user._id,
-      pendingAmount: 100,
+      pendingAmount: REFERRAL_REWARDS.WELCOME_BONUS,
       action: 'PENDING_WELCOME_REWARD',
     });
   }
@@ -2289,6 +2315,7 @@ export class AuthService {
     return {
       user: formatUserResponse(user),
       accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
     };
   }
 
@@ -2420,7 +2447,7 @@ export class AuthService {
 
     const allowedUpdates = [
       'firstName', 'lastName', 'phone', 'bio', 'dateOfBirth', 'gender',
-      'avatar', 'address', 'socialMediaLinks', 'communicationPreferences',
+      'avatar', 'address', 'socialMediaLinks',
       'yearsExperience', 'serviceAreas', 'serviceLocation',
     ];
 
@@ -2512,19 +2539,39 @@ export class AuthService {
       throw new ApiError(404, 'User not found');
     }
 
-    // Upload to Cloudinary
-    const uploadResult = await uploadBufferToCloudinary(file.buffer, 'avatars', {
-      publicId: `user_${userId}_${Date.now()}`,
-      transformation: [
-        { width: 400, height: 400, crop: 'fill', gravity: 'face', radius: 200, quality: 'auto', format: 'webp' },
-      ],
-    });
+    if (!file.path) {
+      throw new ApiError(400, 'Invalid file upload');
+    }
 
-    // Update user avatar
-    user.avatar = uploadResult.secureUrl;
-    await user.save({ validateBeforeSave: false });
+    const previousAvatar = user.avatar;
 
-    return { avatar: uploadResult.secureUrl };
+    try {
+      const uploadResult = await uploadFileToCloudinary(file.path, 'avatars');
+
+      user.avatar = uploadResult.secureUrl;
+      await user.save({ validateBeforeSave: false });
+
+      if (previousAvatar && previousAvatar !== uploadResult.secureUrl) {
+        const publicId = extractPublicIdFromUrl(previousAvatar);
+        if (publicId) {
+          try {
+            await deleteFromCloudinary(publicId);
+          } catch {
+            // non-fatal — old asset cleanup
+          }
+        }
+      }
+
+      return { avatar: uploadResult.secureUrl };
+    } finally {
+      try {
+        if (file.path && fs.existsSync(file.path)) {
+          fs.unlinkSync(file.path);
+        }
+      } catch {
+        // non-fatal — stale-file sweeper handles leftovers
+      }
+    }
   }
 
   // ========================================

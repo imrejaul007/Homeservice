@@ -11,6 +11,8 @@ import {
   Twitter,
   Facebook,
   Link as LinkIcon,
+  AlertTriangle,
+  RefreshCw,
 } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
 import { api } from '../../services/api';
@@ -37,6 +39,7 @@ const ProfileReferrals: React.FC = () => {
   const [referralData, setReferralData] = useState<ReferralData | null>(null);
   const [stats, setStats] = useState<ReferralStats | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -50,10 +53,17 @@ const ProfileReferrals: React.FC = () => {
         api.get('/referrals/my-code'),
         api.get('/referrals/stats'),
       ]);
-      setReferralData(codeRes.data.data);
+      const transformedData: ReferralData = {
+        referralCode: codeRes.data.data.code,
+        referralUrl: `${window.location.origin}/invite/${codeRes.data.data.code}`,
+        referrerReward: codeRes.data.data.referrerReward || 500,
+        refereeReward: codeRes.data.data.refereeReward || 250,
+      };
+      setReferralData(transformedData);
       setStats(statsRes.data.data);
     } catch (error) {
       console.error('Failed to fetch referral data:', error);
+      setError('Unable to load referral data. Please try again.');
     } finally {
       setIsLoading(false);
     }
@@ -69,7 +79,7 @@ const ProfileReferrals: React.FC = () => {
 
   const handleShare = (platform: 'twitter' | 'facebook' | 'copy') => {
     const shareText = `Join NILIN and get exclusive beauty services! Use my referral code: ${referralData?.referralCode}`;
-    const shareUrl = referralData?.referralUrl;
+    const shareUrl = referralData?.referralUrl || `${window.location.origin}/invite/${referralData?.referralCode}`;
 
     switch (platform) {
       case 'twitter':
@@ -98,6 +108,25 @@ const ProfileReferrals: React.FC = () => {
     );
   }
 
+  if (error) {
+    return (
+      <div className="glass-nilin rounded-nilin p-8 text-center">
+        <div className="w-16 h-16 rounded-full bg-red-100 flex items-center justify-center mx-auto mb-4">
+          <AlertTriangle className="w-8 h-8 text-red-500" />
+        </div>
+        <h3 className="text-lg font-medium text-nilin-charcoal mb-2">Something went wrong</h3>
+        <p className="text-sm text-nilin-warmGray mb-6">{error}</p>
+        <button
+          onClick={fetchReferralData}
+          className="btn-nilin flex items-center gap-2 mx-auto"
+        >
+          <RefreshCw className="w-4 h-4" />
+          Try Again
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Referral Code Card */}
@@ -118,7 +147,7 @@ const ProfileReferrals: React.FC = () => {
           <p className="text-xs text-nilin-warmGray mb-2">Your Referral Code</p>
           <div className="flex items-center justify-between">
             <span className="text-2xl font-bold text-nilin-charcoal tracking-wider">
-              {referralData?.referralCode || 'NILINXX'}
+              {referralData?.referralCode || ''}
             </span>
             <button
               onClick={handleCopyCode}
@@ -228,7 +257,7 @@ const ProfileReferrals: React.FC = () => {
               >
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-full bg-gradient-to-br from-nilin-blush to-nilin-coral flex items-center justify-center text-white font-medium">
-                    {referral.name[0]}
+                    {referral.name?.[0] || '?'}
                   </div>
                   <div>
                     <p className="font-medium text-nilin-charcoal">{referral.name}</p>

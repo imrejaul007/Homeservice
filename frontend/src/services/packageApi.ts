@@ -3,109 +3,36 @@
  * Calls backend package/endpoints for service packages
  */
 import { api } from './api';
+import type {
+  ServicePackage,
+  Feature,
+  PackageFilters,
+  PackageResponse,
+  PackageStats,
+} from '../types/subscription.types';
+import {
+  isFeatureObject,
+  isFeatureString,
+  getFeatureText,
+  isFeatureIncluded,
+  normalizeFeatures,
+} from '../types/subscription.types';
 
-// =============================================================================
-// Types
-// =============================================================================
-
-export interface ServicePackage {
-  _id: string;
-  id?: string;
-  name: string;
-  description: string;
-  shortDescription?: string;
-  category: string;
-  subcategory?: string;
-  pricing: {
-    originalPrice: number;
-    currentPrice: number;
-    currency: string;
-    type: 'fixed' | 'hourly' | 'custom';
-    discounts?: Array<{
-      code: string;
-      amount: number;
-      type: 'fixed' | 'percentage';
-    }>;
-  };
-  duration: {
-    totalMinutes: number;
-    formatted: string;
-  };
-  /** Backend returns includedItems; frontend maps to features for consistency */
-  features?: Array<{
-    name: string;
-    included: boolean;
-  }>;
-  /** Raw backend field - may be present instead of features */
-  includedItems?: Array<{
-    name: string;
-    included: boolean;
-  }>;
-  services: Array<{
-    _id: string;
-    name: string;
-    duration: number;
-    price: number;
-  }>;
-  images?: string[];
-  isActive: boolean;
-  isFeatured: boolean;
-  validity: {
-    days: number;
-    startDate?: string;
-    endDate?: string;
-  };
-  provider?: {
-    _id: string;
-    firstName: string;
-    lastName: string;
-    businessName?: string;
-    avatar?: string;
-    rating?: number;
-    isVerified?: boolean;
-  };
-  stats?: {
-    totalPurchases: number;
-    rating: number;
-    reviewCount: number;
-  };
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface PackageFilters {
-  category?: string;
-  subcategory?: string;
-  minPrice?: number;
-  maxPrice?: number;
-  minDuration?: number;
-  maxDuration?: number;
-  featured?: boolean;
-  page?: number;
-  limit?: number;
-  sortBy?: 'price' | 'duration' | 'popularity' | 'rating';
-  sortOrder?: 'asc' | 'desc';
-}
-
-export interface PackageResponse<T = any> {
-  success: boolean;
-  data: T;
-  message?: string;
-  pagination?: {
-    page: number;
-    limit: number;
-    total: number;
-    pages: number;
-    hasMore?: boolean;
-  };
-}
-
-export interface PackageStats {
-  totalPackages: number;
-  totalSavings: number;
-  averageRating: number;
-  popularCategories: Array<{ category: string; count: number }>;
-}
+// Re-export types for backwards compatibility
+export type {
+  ServicePackage,
+  Feature,
+  PackageFilters,
+  PackageResponse,
+  PackageStats,
+};
+export {
+  isFeatureObject,
+  isFeatureString,
+  getFeatureText,
+  isFeatureIncluded,
+  normalizeFeatures,
+};
 
 // =============================================================================
 // API Client

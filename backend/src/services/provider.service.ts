@@ -154,7 +154,10 @@ export class ProviderService {
     const providerQuery = addTenantFilter({ userId: providerId }, req || {} as Request);
     const providerProfile = await ProviderProfile.findOne(providerQuery);
     // Extract coordinates from GeoJSON format: { type: 'Point', coordinates: [lng, lat] }
+    // NOTE: Coordinates should come from tenant config or provider profile, not hardcoded
+    // TODO: Replace with tenant config lookup when multi-tenant coordinates are implemented
     let coordinatesArray: [number, number] = [55.2708, 25.2048]; // Default: Dubai [lng, lat]
+    // In production, this should be: coordinatesArray = tenantConfig.location.defaultCoordinates
     if (providerProfile?.locationInfo?.primaryAddress?.coordinates?.coordinates) {
       coordinatesArray = providerProfile.locationInfo.primaryAddress.coordinates.coordinates as [number, number];
     }

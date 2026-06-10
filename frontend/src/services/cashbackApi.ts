@@ -1,4 +1,5 @@
 import { api } from './api';
+import { handleApiError } from './errors';
 
 // ============================================
 // Types
@@ -57,8 +58,12 @@ export const cashbackApi = {
    * Get cashback balance
    */
   getBalance: async (): Promise<CashbackBalance> => {
-    const response = await api.get('/cashback/balance');
-    return response.data.data;
+    try {
+      const response = await api.get('/cashback/balance');
+      return response.data.data;
+    } catch (error) {
+      throw handleApiError(error, 'get cashback balance');
+    }
   },
 
   /**
@@ -72,43 +77,59 @@ export const cashbackApi = {
     startDate?: string;
     endDate?: string;
   }): Promise<CashbackHistoryResponse> => {
-    const params = new URLSearchParams();
-    if (options?.page) params.append('page', options.page.toString());
-    if (options?.limit) params.append('limit', options.limit.toString());
-    if (options?.source) params.append('source', options.source);
-    if (options?.status) params.append('status', options.status);
-    if (options?.startDate) params.append('startDate', options.startDate);
-    if (options?.endDate) params.append('endDate', options.endDate);
+    try {
+      const params = new URLSearchParams();
+      if (options?.page) params.append('page', options.page.toString());
+      if (options?.limit) params.append('limit', options.limit.toString());
+      if (options?.source) params.append('source', options.source);
+      if (options?.status) params.append('status', options.status);
+      if (options?.startDate) params.append('startDate', options.startDate);
+      if (options?.endDate) params.append('endDate', options.endDate);
 
-    const queryString = params.toString();
-    const url = queryString ? `/cashback/history?${queryString}` : '/cashback/history';
+      const queryString = params.toString();
+      const url = queryString ? `/cashback/history?${queryString}` : '/cashback/history';
 
-    const response = await api.get(url);
-    return response.data.data;
+      const response = await api.get(url);
+      return response.data.data;
+    } catch (error) {
+      throw handleApiError(error, 'get cashback history');
+    }
   },
 
   /**
    * Get expiring cashback alerts
    */
   getExpiring: async (days: number = 7): Promise<CashbackEntry[]> => {
-    const response = await api.get(`/cashback/expiring?days=${days}`);
-    return response.data.data.cashbacks;
+    try {
+      const response = await api.get(`/cashback/expiring?days=${days}`);
+      return response.data.data.cashbacks;
+    } catch (error) {
+      throw handleApiError(error, 'get expiring cashback alerts');
+    }
   },
 
   /**
    * Get cashback statistics
    */
   getStats: async (): Promise<CashbackStats> => {
-    const response = await api.get('/cashback/stats');
-    return response.data.data;
+    try {
+      const response = await api.get('/cashback/stats');
+      return response.data.data;
+    } catch (error) {
+      throw handleApiError(error, 'get cashback statistics');
+    }
   },
 
   /**
    * Redeem cashback to wallet
    */
   redeem: async (cashbackIds: string[]): Promise<RedeemResponse> => {
-    const response = await api.post('/cashback/redeem', { cashbackIds });
-    return response.data;
+    try {
+      const response = await api.post('/cashback/redeem', { cashbackIds });
+      return response.data;
+    } catch (error) {
+      throw handleApiError(error, 'redeem cashback');
+    }
   },
 };
 

@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import {
   Wallet,
   CreditCard,
@@ -14,6 +14,7 @@ import { Skeleton } from '../common/Skeleton';
 import { Badge } from '../common/Badge';
 import { Button } from '../common/Button';
 import { useAuthStore } from '../../stores/authStore';
+import { customerWalletApi } from '../../services/walletApi';
 
 // =============================================================================
 // NILIN Customer Dashboard - Split Payment Component
@@ -89,6 +90,46 @@ const AmountSlider: React.FC<AmountSliderProps> = ({
     onChange(Math.max(min, Math.min(max, roundedValue)));
   };
 
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    let newValue = value;
+
+    switch (e.key) {
+      case 'ArrowRight':
+      case 'ArrowUp':
+        newValue = Math.min(value + step, max);
+        e.preventDefault();
+        break;
+      case 'ArrowLeft':
+      case 'ArrowDown':
+        newValue = Math.max(value - step, min);
+        e.preventDefault();
+        break;
+      case 'Home':
+        newValue = min;
+        e.preventDefault();
+        break;
+      case 'End':
+        newValue = max;
+        e.preventDefault();
+        break;
+      case 'PageUp':
+        // Jump by 10%
+        newValue = Math.min(value + (max - min) * 0.1, max);
+        e.preventDefault();
+        break;
+      case 'PageDown':
+        // Jump by 10%
+        newValue = Math.max(value - (max - min) * 0.1, min);
+        e.preventDefault();
+        break;
+    }
+
+    if (newValue !== value) {
+      const roundedValue = Math.round(newValue / step) * step;
+      onChange(Math.max(min, Math.min(max, roundedValue)));
+    }
+  };
+
   return (
     <div className={cn('space-y-4', className)}>
       {/* Slider Track */}
@@ -109,13 +150,20 @@ const AmountSlider: React.FC<AmountSliderProps> = ({
           step={step}
           value={value}
           onChange={(e) => onChange(Number(e.target.value))}
-          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+          onKeyDown={handleKeyDown}
+          aria-label="Adjust payment split amount"
+          aria-valuemin={min}
+          aria-valuemax={max}
+          aria-valuenow={value}
+          aria-valuetext={`${formatPrice(value, currency)} from wallet`}
+          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-nilin-coral focus:ring-offset-2 rounded-full"
         />
 
         {/* Thumb Indicator */}
         <div
           className="absolute top-1/2 -translate-y-1/2 w-6 h-6 rounded-full bg-white border-2 border-nilin-coral shadow-md pointer-events-none transition-all"
           style={{ left: `calc(${percentage}% - 12px)` }}
+          aria-hidden="true"
         />
       </div>
 
@@ -226,15 +274,41 @@ export const SplitPayment: React.FC<SplitPaymentProps> = ({
   const [walletAmount, setWalletAmount] = useState(0);
   const [cardAmount, setCardAmount] = useState(totalAmount);
   const [error, setError] = useState<string | null>(null);
+  const [walletBalanceData, setWalletBalanceData] = useState<WalletBalance>({ available: 0, pending: 0, currency });
+  const [isLoadingWallet, setIsLoadingWallet] = useState(true);
+  const [walletError, setWalletError] = useState<string | null>(null);
 
   const customerProfile = useAuthStore((state) => state.customerProfile);
 
-  // Mock wallet balance - in production, fetch from API
+  // Fetch actual wallet balance from walletApi
+  useEffect(() => {
+    const fetchWalletBalance = async () => {
+      try {
+        setIsLoadingWallet(true);
+        setWalletError(null);
+        const response = await customerWalletApi.getWallet();
+        setWalletBalanceData({
+          available: response.data.balance,
+          pending: response.data.pendingBalance,
+          currency: response.data.currency || currency,
+        });
+      } catch (err) {
+        setWalletError(err instanceof Error ? err.message : 'Failed to fetch wallet balance');
+        // Fallback to 0 if API fails
+        setWalletBalanceData({ available: 0, pending: 0, currency });
+      } finally {
+        setIsLoadingWallet(false);
+      }
+    };
+
+    fetchWalletBalance();
+  }, [currency]);
+
+  // Use actual wallet balance from API
   const walletBalance: WalletBalance = useMemo(() => ({
-    available: customerProfile?.loyaltyPoints?.current || 0,
-    pending: 0,
+    ...walletBalanceData,
     currency,
-  }), [customerProfile, currency]);
+  }), [walletBalanceData, currency]);
 
   // Calculate split amounts
   const calculateSplit = useCallback((newWalletAmount: number) => {

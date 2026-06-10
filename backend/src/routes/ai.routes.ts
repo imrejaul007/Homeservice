@@ -1,11 +1,22 @@
 import { Router, Request, Response } from 'express';
 import { authenticate, requireRole, createRateLimit } from '../middleware/auth.middleware';
-import { chat, getConversations, getConversation, deleteConversation } from '../controllers/ai.controller';
+import {
+  chat,
+  getConversations,
+  getConversation,
+  deleteConversation,
+  getAvailableAgents,
+  getConversationStats,
+  startConversationCleanup,
+} from '../controllers/ai.controller';
 import { IAAgent, IAAgentCategory, IAAgentType, IAAgentStatus } from '../models/iaAgent.model';
 import Joi from 'joi';
 import logger from '../utils/logger';
 import { asyncHandler } from '../utils/asyncHandler';
 import mongoose from 'mongoose';
+
+// Start conversation cleanup on module load (runs in background)
+startConversationCleanup();
 
 const router = Router();
 // Note: Individual routes below have explicit authenticate middleware for security clarity
@@ -612,369 +623,44 @@ router.delete('/conversations/:conversationId', authenticate, (req: Request, res
   return deleteConversation(req, res);
 });
 
-// ============================================
-// IA Agent CRUD Routes
-// Admin-only endpoints for managing AI agents
-// ============================================
-
-// Validation schemas for IA Agent endpoints
-const createAgentSchema = Joi.object({
-  name: Joi.string().required().min(1).max(100),
-  description: Joi.string().required().max(500),
-  category: Joi.string().valid(...Object.values(IAAgentCategory)).required(),
-  type: Joi.string().valid(...Object.values(IAAgentType)).required(),
-  instructions: Joi.string().required().max(10000),
-  configuration: Joi.object({
-    model: Joi.string(),
-    temperature: Joi.number().min(0).max(2),
-    maxTokens: Joi.number().min(1),
-    topP: Joi.number().min(0).max(1),
-    frequencyPenalty: Joi.number().min(0).max(2),
-    presencePenalty: Joi.number().min(0).max(2),
-    stopSequences: Joi.array().items(Joi.string()),
-    systemPrompt: Joi.string(),
-    contextWindow: Joi.number(),
-    streaming: Joi.boolean(),
-  }),
-  knowledgeBase: Joi.array().items(
-    Joi.object({
-      title: Joi.string().required(),
-      content: Joi.string().required(),
-      source: Joi.string(),
-      metadata: Joi.object(),
-    })
-  ),
-});
-
-const updateAgentSchema = Joi.object({
-  name: Joi.string().min(1).max(100),
-  description: Joi.string().max(500),
-  category: Joi.string().valid(...Object.values(IAAgentCategory)),
-  type: Joi.string().valid(...Object.values(IAAgentType)),
-  instructions: Joi.string().max(10000),
-  configuration: Joi.object({
-    model: Joi.string(),
-    temperature: Joi.number().min(0).max(2),
-    maxTokens: Joi.number().min(1),
-    topP: Joi.number().min(0).max(1),
-    frequencyPenalty: Joi.number().min(0).max(2),
-    presencePenalty: Joi.number().min(0).max(2),
-    stopSequences: Joi.array().items(Joi.string()),
-    systemPrompt: Joi.string(),
-    contextWindow: Joi.number(),
-    streaming: Joi.boolean(),
-  }),
-  knowledgeBase: Joi.array().items(
-    Joi.object({
-      id: Joi.string(),
-      title: Joi.string().required(),
-      content: Joi.string().required(),
-      source: Joi.string(),
-      metadata: Joi.object(),
-    })
-  ),
-  isActive: Joi.boolean(),
-  status: Joi.string().valid(...Object.values(IAAgentStatus)),
-}).min(1);
-
-/**
- * List all IA Agents
- * GET /api/ai/agents
- * @access Admin
- */
-router.get('/agents', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
-  try {
-    const { page = 1, limit = 20, status, category, type, search } = req.query;
-
-    const filter: Record<string, unknown> = {};
-
-    if (status) {
-      filter.status = status;
-    }
-    if (category) {
-      filter.category = category;
-    }
-    if (type) {
-      filter.type = type;
-    }
-    if (search) {
-      filter.$or = [
-        { name: { $regex: String(search), $options: 'i' } },
-        { description: { $regex: String(search), $options: 'i' } },
-      ];
-    }
-
-    const pageNum = Number(page);
-    const limitNum = Math.min(Number(limit), 100);
-    const skip = (pageNum - 1) * limitNum;
-
-    const [agents, total] = await Promise.all([
-      IAAgent.find(filter)
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limitNum)
-        .lean(),
-      IAAgent.countDocuments(filter),
-    ]);
-
-    res.json({
-      success: true,
-      data: {
-        agents,
-        pagination: {
-          page: pageNum,
-          limit: limitNum,
-          total,
-          pages: Math.ceil(total / limitNum),
-        },
-      },
-    });
-  } catch (error) {
-    logger.error('List Agents Error', {
-      context: 'AIRoutes',
-      action: 'LIST_AGENTS_ERROR',
-      error: error instanceof Error ? error.message : String(error),
-    });
-    throw error;
-  }
-}));
-
-/**
- * Get single IA Agent by ID
- * GET /api/ai/agents/:id
- * @access Admin
- */
-router.get('/agents/:id', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
-  const { id } = req.params;
-
-  if (!isValidObjectId(id)) {
-    return res.status(400).json({
-      success: false,
-      message: 'Invalid agent ID format',
-    });
-  }
-
-  const agent = await IAAgent.findById(id).lean();
-
-  if (!agent) {
-    return res.status(404).json({
-      success: false,
-      message: 'Agent not found',
-    });
-  }
-
-  return res.json({
-    success: true,
-    data: agent,
-  });
-}));
-
-/**
- * Create new IA Agent
- * POST /api/ai/agents
- * @access Admin
- */
-router.post('/agents', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
-  const { error, value } = createAgentSchema.validate(req.body);
-
-  if (error) {
-    return res.status(400).json({
-      success: false,
-      message: error.details[0].message,
-    });
-  }
-
+// Get conversation statistics for authenticated user
+// @access Authenticated users - returns stats for their conversations
+router.get('/conversations/stats', authenticate, (req: Request, res: Response) => {
   const user = (req as any).user;
 
-  // Process knowledge base entries with IDs
-  const knowledgeBase = (value.knowledgeBase || []).map((entry: any) => ({
-    id: new mongoose.Types.ObjectId().toString(),
-    title: entry.title,
-    content: entry.content,
-    source: entry.source,
-    metadata: entry.metadata,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  }));
-
-  const agent = new IAAgent({
-    ...value,
-    createdBy: user._id,
-    knowledgeBase,
-  });
-
-  await agent.save();
-
-  logger.info('Agent Created', {
+  logger.info('Fetching conversation stats', {
     context: 'AIRoutes',
-    action: 'CREATE_AGENT',
-    agentId: agent._id.toString(),
-    agentName: agent.name,
-    createdBy: user._id.toString(),
+    action: 'GET_CONVERSATION_STATS',
+    userId: user._id.toString(),
   });
 
-  return res.status(201).json({
+  return getConversationStats(req, res);
+});
+
+// ============================================
+// Available Agents for Chat
+// GET /api/ai/agents/available
+// Returns deployed agents that can be used for chat
+// ============================================
+router.get('/agents/available', authenticate, asyncHandler(async (req: Request, res: Response) => {
+  const { category } = req.query;
+
+  const filter: Record<string, unknown> = {
+    status: IAAgentStatus.Deployed,
+    isActive: true,
+  };
+
+  if (category && Object.values(IAAgentCategory).includes(category as IAAgentCategory)) {
+    filter.category = category;
+  }
+
+  const agents = await IAAgent.find(filter)
+    .select('_id name description category type version')
+    .lean();
+
+  res.json({
     success: true,
-    data: agent,
-  });
-}));
-
-/**
- * Update IA Agent
- * PUT /api/ai/agents/:id
- * @access Admin
- */
-router.put('/agents/:id', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
-  const { id } = req.params;
-
-  if (!isValidObjectId(id)) {
-    return res.status(400).json({
-      success: false,
-      message: 'Invalid agent ID format',
-    });
-  }
-
-  const { error, value } = updateAgentSchema.validate(req.body);
-
-  if (error) {
-    return res.status(400).json({
-      success: false,
-      message: error.details[0].message,
-    });
-  }
-
-  // Process knowledge base entries
-  if (value.knowledgeBase) {
-    value.knowledgeBase = value.knowledgeBase.map((entry: any) => ({
-      ...entry,
-      id: entry.id || new mongoose.Types.ObjectId().toString(),
-      createdAt: entry.createdAt || new Date(),
-      updatedAt: new Date(),
-    }));
-  }
-
-  const agent = await IAAgent.findByIdAndUpdate(
-    id,
-    { $set: value },
-    { new: true, runValidators: true }
-  ).lean();
-
-  if (!agent) {
-    return res.status(404).json({
-      success: false,
-      message: 'Agent not found',
-    });
-  }
-
-  logger.info('Agent Updated', {
-    context: 'AIRoutes',
-    action: 'UPDATE_AGENT',
-    agentId: id,
-    updatedFields: Object.keys(value),
-  });
-
-  return res.json({
-    success: true,
-    data: agent,
-  });
-}));
-
-/**
- * Delete IA Agent
- * DELETE /api/ai/agents/:id
- * @access Admin
- */
-router.delete('/agents/:id', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
-  const { id } = req.params;
-
-  if (!isValidObjectId(id)) {
-    return res.status(400).json({
-      success: false,
-      message: 'Invalid agent ID format',
-    });
-  }
-
-  const agent = await IAAgent.findByIdAndDelete(id);
-
-  if (!agent) {
-    return res.status(404).json({
-      success: false,
-      message: 'Agent not found',
-    });
-  }
-
-  logger.info('Agent Deleted', {
-    context: 'AIRoutes',
-    action: 'DELETE_AGENT',
-    agentId: id,
-    agentName: agent.name,
-  });
-
-  return res.json({
-    success: true,
-    message: 'Agent deleted successfully',
-  });
-}));
-
-/**
- * Deploy IA Agent
- * POST /api/ai/agents/:id/deploy
- * @access Admin
- */
-router.post('/agents/:id/deploy', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
-  const { id } = req.params;
-
-  if (!isValidObjectId(id)) {
-    return res.status(400).json({
-      success: false,
-      message: 'Invalid agent ID format',
-    });
-  }
-
-  const agent = await IAAgent.findById(id);
-
-  if (!agent) {
-    return res.status(404).json({
-      success: false,
-      message: 'Agent not found',
-    });
-  }
-
-  // Validate agent is ready for deployment
-  if (!agent.instructions || agent.instructions.trim().length === 0) {
-    return res.status(400).json({
-      success: false,
-      message: 'Agent must have instructions before deployment',
-    });
-  }
-
-  if (!agent.name || agent.name.trim().length === 0) {
-    return res.status(400).json({
-      success: false,
-      message: 'Agent must have a name before deployment',
-    });
-  }
-
-  // Check current status
-  const currentStatus = agent.status;
-
-  // Deploy agent - triggers pre-save hook to set deployedAt and increment version
-  await agent.deploy();
-
-  logger.info('Agent Deployed', {
-    context: 'AIRoutes',
-    action: 'DEPLOY_AGENT',
-    agentId: id,
-    agentName: agent.name,
-    previousStatus: currentStatus,
-    newStatus: agent.status,
-    version: agent.version,
-  });
-
-  return res.json({
-    success: true,
-    data: agent,
-    message: `Agent deployed successfully. Version: ${agent.version}`,
+    data: { agents },
   });
 }));
 

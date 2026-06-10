@@ -66,6 +66,12 @@ export const EVENT_TYPES = {
   ANOMALY_STATUS_CHANGED: 'anomaly.status_changed',
   ANOMALY_RESOLVED: 'anomaly.resolved',
 
+  // Contact form events
+  CONTACT_SUBMISSION_CREATED: 'contact.submission_created',
+  CONTACT_PAGE_VIEWED: 'contact.page_viewed',
+  CONTACT_FORM_STARTED: 'contact.form_started',
+  CONTACT_FORM_SUBMITTED: 'contact.form_submitted',
+
   // Support Ticket events
   TICKET_CREATED: 'support.ticket_created',
   TICKET_ASSIGNED: 'support.ticket_assigned',
@@ -926,43 +932,8 @@ export const initializeEventSubscriptions = async (): Promise<void> => {
   // Notification Subscription
   // Listen to booking.* events and send push notifications
   // ============================================
-  eventBus.subscribe('booking.created', async (event) => {
-    try {
-      const data = event.data as {
-        bookingId?: string;
-        customerId?: string;
-        providerId?: string;
-        bookingNumber?: string;
-      };
-
-      // Notify provider about new booking
-      if (data.providerId) {
-        await addJob('notification-queue', 'send_notification', {
-          userId: data.providerId,
-          type: 'booking_new',
-          title: 'New Booking Request',
-          message: `You have a new booking request #${data.bookingNumber || 'Unknown'}`,
-          data: { bookingId: data.bookingId },
-        });
-      }
-
-      // Notify customer about booking created
-      if (data.customerId) {
-        await addJob('notification-queue', 'send_notification', {
-          userId: data.customerId,
-          type: 'booking_created',
-          title: 'Booking Submitted',
-          message: `Your booking #${data.bookingNumber || 'Unknown'} has been submitted`,
-          data: { bookingId: data.bookingId },
-        });
-      }
-    } catch (error) {
-      logger.error('Failed to send booking.created notifications', {
-        eventId: event.eventId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }, 10); // Higher priority - send immediately
+  // booking.created in-app notifications are handled in booking.service.createBookingNotifications.
+  // Socket events (booking:new_request) are emitted separately — no duplicate queue jobs here.
 
   eventBus.subscribe('booking.confirmed', async (event) => {
     try {
@@ -1042,6 +1013,24 @@ export const initializeEventSubscriptions = async (): Promise<void> => {
             customerId: data.customerId,
             bookingId: data.bookingId,
           });
+
+          // Award cashback on completed booking (5% default)
+          try {
+            const { earnCashback } = await import('../services/cashback.service');
+            await earnCashback(
+              data.customerId,
+              data.totalAmount,
+              'booking',
+              `Cashback for booking #${data.bookingNumber || data.bookingId}`,
+              data.bookingId
+            );
+          } catch (cashbackError) {
+            logger.error('Failed to award booking cashback', {
+              customerId: data.customerId,
+              bookingId: data.bookingId,
+              error: cashbackError instanceof Error ? cashbackError.message : String(cashbackError),
+            });
+          }
         }
       }
 
@@ -1128,6 +1117,7 @@ export const initializeEventSubscriptions = async (): Promise<void> => {
         providerId?: string;
         bookingId?: string;
         bookingNumber?: string;
+        customerId?: string;
         customerName?: string;
         rating?: number;
         comment?: string;
@@ -1154,6 +1144,7 @@ export const initializeEventSubscriptions = async (): Promise<void> => {
             data.reviewId,
             data.bookingId || '',
             data.bookingNumber || '',
+            data.customerId || '', // Required field - customer who submitted the review
             data.customerName || 'A customer',
             data.rating || 0,
             data.comment,
@@ -2017,6 +2008,36 @@ export const initializeEventSubscriptions = async (): Promise<void> => {
       });
     }
   }, 15);
+
+  // ============================================
+  // Recommendations Cache Invalidation
+  // Invalidate customer recommendations cache when booking is completed
+  // ============================================
+  eventBus.subscribe('booking.completed', async (event) => {
+    try {
+      const data = event.data as {
+        customerId?: string;
+        tenantId?: string;
+      };
+
+      if (data.customerId && data.tenantId) {
+        // Lazy import to avoid circular dependency
+        const { customerDashboardService } = require('../services/customerDashboard.service');
+        await customerDashboardService.invalidateRecommendationsCache(data.tenantId, data.customerId);
+        logger.debug('Recommendations cache invalidated on booking completion', {
+          customerId: data.customerId,
+          tenantId: data.tenantId,
+          action: 'RECOMMENDATIONS_CACHE_INVALIDATED',
+        });
+      }
+    } catch (error) {
+      logger.error('Failed to invalidate recommendations cache on booking completion', {
+        eventId: event.eventId,
+        error: error instanceof Error ? error.message : String(error),
+        action: 'RECOMMENDATIONS_CACHE_INVALIDATION_FAILED',
+      });
+    }
+  }, 5); // Lower priority - not critical path
 
   logger.info('Event subscriptions initialized', {
     subscriptionCount: eventBus.getSubscriptionCount(),

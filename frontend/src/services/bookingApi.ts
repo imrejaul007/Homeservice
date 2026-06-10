@@ -1,4 +1,65 @@
 import { api } from './api';
+import { AxiosError } from 'axios';
+
+/**
+ * Retry configuration
+ */
+const RETRY_CONFIG = {
+  maxRetries: 3,
+  initialDelayMs: 1000,
+  maxDelayMs: 5000,
+};
+
+/**
+ * Calculate exponential backoff delay with jitter
+ */
+function getRetryDelay(attempt: number): number {
+  const delay = Math.min(
+    RETRY_CONFIG.initialDelayMs * Math.pow(2, attempt),
+    RETRY_CONFIG.maxDelayMs
+  );
+  const jitter = delay * 0.25 * Math.random();
+  return Math.floor(delay + jitter);
+}
+
+/**
+ * Check if error is retryable
+ */
+function isRetryableError(error: unknown): boolean {
+  if (error instanceof AxiosError) {
+    if (!error.response) return true; // Network error
+    if (error.response.status >= 500) return true; // Server error
+    if (error.code === 'ECONNABORTED') return true; // Timeout
+  }
+  return false;
+}
+
+/**
+ * Execute a function with retry logic
+ */
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  options: { maxRetries?: number; context?: string } = {}
+): Promise<T> {
+  const maxRetries = options.maxRetries ?? RETRY_CONFIG.maxRetries;
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      if (attempt >= maxRetries || !isRetryableError(error)) {
+        throw error;
+      }
+      const delay = getRetryDelay(attempt);
+      console.warn(`[Retry] ${options.context || 'Operation'} failed (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${delay}ms...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+
+  throw lastError;
+}
 
 // ============================================
 // BOOKING TYPES
@@ -170,16 +231,18 @@ export const bookingApi: BookingApi = {
    * Get all bookings with filtering and pagination
    */
   getBookings: async (options = {}) => {
-    try {
-      const response = await api.get('/bookings', { params: options });
-      return response.data.data;
-    } catch (error: unknown) {
+    return withRetry(
+      async () => {
+        const response = await api.get('/bookings/customer', { params: options });
+        return response.data.data;
+      },
+      { context: 'getBookings' }
+    ).catch((error: unknown) => {
       const err = error as { response?: { status?: number; data?: { message?: string } }; message?: string };
       const message = err.response?.data?.message || err.message || 'Failed to fetch bookings';
       const statusCode = err.response?.status;
-      console.error('[bookingApi] getBookings error:', message, statusCode);
       throw new BookingApiError(message, statusCode, 'GET_BOOKINGS_FAILED');
-    }
+    });
   },
 
   /**

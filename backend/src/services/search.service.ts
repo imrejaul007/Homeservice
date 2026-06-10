@@ -1,9 +1,47 @@
+import mongoose from 'mongoose';
 import Service from '../models/service.model';
 import ProviderProfile from '../models/providerProfile.model';
 import ServiceCategory from '../models/serviceCategory.model';
 import { getMeiliClient, resetMeiliClient, INDEXES, isMeiliSearchConfigured } from '../config/meilisearch';
 import { cache } from '../config/redis';
 import logger from '../utils/logger';
+import { buildCaseInsensitiveNameFilter } from '../utils/categoryResolver';
+
+/**
+ * Search result cache TTL in seconds (5 minutes)
+ */
+const SEARCH_CACHE_TTL = 5 * 60;
+
+/**
+ * Popular searches cache TTL in seconds (24 hours)
+ */
+const POPULAR_SEARCHES_TTL = 24 * 60 * 60;
+
+/**
+ * Suggestions cache TTL in seconds (15 minutes)
+ */
+const SUGGESTIONS_CACHE_TTL = 15 * 60;
+
+/**
+ * Build a simple cache key for search results using string concatenation
+ * @param query - Search query string
+ * @param options - Search options
+ * @returns Cache key string
+ */
+const buildSearchCacheKey = (query: string, options: SearchOptions): string => {
+  const parts = ['search', query || ''];
+  if (options.category) parts.push(`cat:${options.category}`);
+  if (options.subcategory) parts.push(`sub:${options.subcategory}`);
+  if (options.minPrice !== undefined) parts.push(`minP:${options.minPrice}`);
+  if (options.maxPrice !== undefined) parts.push(`maxP:${options.maxPrice}`);
+  if (options.minRating !== undefined) parts.push(`minR:${options.minRating}`);
+  if (options.sortBy) parts.push(`sort:${options.sortBy}`);
+  if (options.providerId) parts.push(`prov:${options.providerId}`);
+  if (options.tags && options.tags.length > 0) parts.push(`tags:${options.tags.join(',')}`);
+  if (options.limit) parts.push(`limit:${options.limit}`);
+  if (options.offset) parts.push(`offset:${options.offset}`);
+  return parts.join('|');
+};
 
 /**
  * Escape special regex characters to prevent ReDoS attacks
@@ -276,10 +314,12 @@ export const refreshSearchTermsCache = async (): Promise<void> => {
       terms.add(canonical);
     }
 
-    // Convert to array and enforce bounded cache limit
-    let termArray = Array.from(terms);
+    // Convert to array and sort alphabetically before truncation
+    // This ensures deterministic cache eviction when limit is reached
+    let termArray = Array.from(terms).sort((a, b) => a.localeCompare(b));
 
     // Enforce max cache size to prevent unbounded memory growth
+    // Using sorted array ensures consistent cache eviction
     if (termArray.length > MAX_CACHED_TERMS) {
       logger.warn(`Search terms cache exceeded limit (${termArray.length}), truncating to ${MAX_CACHED_TERMS}`);
       termArray = termArray.slice(0, MAX_CACHED_TERMS);
@@ -656,6 +696,7 @@ const geoFallbackSearch = async (
       limit = 20,
       offset = 0,
       category,
+      subcategory,
       minPrice,
       maxPrice,
       minRating,
@@ -681,7 +722,8 @@ const geoFallbackSearch = async (
     }
 
     // Apply filters
-    if (category) searchQuery.category = category;
+    if (category) searchQuery.category = buildCaseInsensitiveNameFilter(category);
+    if (subcategory) searchQuery.subcategory = buildCaseInsensitiveNameFilter(subcategory);
     if (minPrice !== undefined) searchQuery['price.amount'] = { $gte: minPrice };
     if (maxPrice !== undefined) {
       searchQuery['price.amount'] = {
@@ -692,6 +734,9 @@ const geoFallbackSearch = async (
     if (minRating !== undefined) searchQuery['rating.average'] = { $gte: minRating };
     if (tags && tags.length > 0) {
       searchQuery.tags = { $in: tags };
+    }
+    if (options.providerId && mongoose.Types.ObjectId.isValid(options.providerId)) {
+      searchQuery.providerId = new mongoose.Types.ObjectId(options.providerId);
     }
 
     let queryBuilder = Service.find(searchQuery);
@@ -999,6 +1044,106 @@ export const initializeIndexes = async (): Promise<void> => {
 // ============================================
 
 /**
+ * Invalidate search cache
+ * Called when services are created, updated, or deleted
+ */
+const invalidateSearchCache = async (): Promise<void> => {
+  const redisClient = cache.client;
+  if (!redisClient) return;
+
+  try {
+    // Delete all search cache keys using pattern matching
+    const keys = await redisClient.keys('cache:search*');
+    if (keys.length > 0) {
+      await redisClient.del(...keys);
+      logger.debug(`Invalidated ${keys.length} search cache entries`);
+    }
+  } catch (err) {
+    logger.warn('Search cache invalidation failed:', err);
+  }
+};
+
+/**
+ * Track popular search queries for analytics and caching
+ * @param query - The search query to track
+ */
+const trackPopularSearch = async (query: string): Promise<void> => {
+  if (!query || query.length < 2) return;
+
+  const redisClient = cache.client;
+  if (!redisClient) return;
+
+  try {
+    const normalizedQuery = query.toLowerCase().trim();
+    await redisClient.zincrby('analytics:search:popularQueries', 1, normalizedQuery);
+    await redisClient.expire('analytics:search:popularQueries', POPULAR_SEARCHES_TTL);
+  } catch (err) {
+    logger.warn('Popular search tracking failed:', err);
+  }
+};
+
+/**
+ * Get popular search queries
+ * @param limit - Maximum number of queries to return
+ */
+export const getPopularSearches = async (limit = 10): Promise<string[]> => {
+  const redisClient = cache.client;
+  if (!redisClient) return [];
+
+  try {
+    const results = await redisClient.zrevrange('analytics:search:popularQueries', 0, limit - 1, 'WITHSCORES');
+    return results.filter((_, i) => i % 2 === 0);
+  } catch (err) {
+    logger.warn('Get popular searches failed:', err);
+    return [];
+  }
+};
+
+/**
+ * Get cached suggestions for a query
+ * @param query - The search query
+ * @returns Cached suggestions or null if not cached
+ */
+const getCachedSuggestions = async (query: string): Promise<string[] | null> => {
+  const redisClient = cache.client;
+  if (!redisClient) return null;
+
+  try {
+    const normalizedQuery = query.toLowerCase().trim();
+    const cached = await redisClient.get(`cache:suggestions:${normalizedQuery}`);
+    if (cached) {
+      logger.debug(`Suggestion cache hit for: ${normalizedQuery}`);
+      return JSON.parse(cached);
+    }
+  } catch (err) {
+    logger.warn('Get cached suggestions failed:', err);
+  }
+  return null;
+};
+
+/**
+ * Cache search suggestions
+ * @param query - The search query
+ * @param suggestions - The suggestions to cache
+ */
+const setCachedSuggestions = async (query: string, suggestions: string[]): Promise<void> => {
+  const redisClient = cache.client;
+  if (!redisClient || suggestions.length === 0) return;
+
+  try {
+    const normalizedQuery = query.toLowerCase().trim();
+    await redisClient.setex(
+      `cache:suggestions:${normalizedQuery}`,
+      SUGGESTIONS_CACHE_TTL,
+      JSON.stringify(suggestions)
+    );
+    logger.debug(`Cached ${suggestions.length} suggestions for: ${normalizedQuery}`);
+  } catch (err) {
+    logger.warn('Cache suggestions failed:', err);
+  }
+};
+
+/**
  * Index a single service in Meilisearch
  */
 export const indexService = async (service: any): Promise<void> => {
@@ -1035,6 +1180,9 @@ export const indexService = async (service: any): Promise<void> => {
 
     await client.index(INDEXES.SERVICES).addDocuments([document]);
     logger.debug(`Service ${service._id} indexed in Meilisearch`);
+
+    // Phase 1: Invalidate search cache on service create
+    await invalidateSearchCache();
   } catch (error) {
     logger.error(`Failed to index service ${service._id}:`, error);
   }
@@ -1054,6 +1202,8 @@ export const updateServiceInIndex = async (
     const service = await Service.findById(serviceId).lean();
     if (!service) {
       await client.index(INDEXES.SERVICES).deleteDocument(serviceId);
+      // Phase 1: Invalidate search cache on service delete
+      await invalidateSearchCache();
       return;
     }
 
@@ -1064,6 +1214,7 @@ export const updateServiceInIndex = async (
       updatedAt: partial.updatedAt ?? service.updatedAt,
     };
     await indexService(merged);
+    // Phase 1: Cache invalidation handled in indexService
   } catch (error) {
     logger.error(`Failed to update service ${serviceId} in Meilisearch:`, error);
   }
@@ -1079,6 +1230,8 @@ export const removeServiceFromIndex = async (serviceId: string): Promise<void> =
   try {
     await client.index(INDEXES.SERVICES).deleteDocument(serviceId);
     logger.debug(`Service ${serviceId} removed from Meilisearch`);
+    // Phase 1: Invalidate search cache on service remove
+    await invalidateSearchCache();
   } catch (error) {
     logger.error(`Failed to remove service ${serviceId} from Meilisearch:`, error);
   }
@@ -1162,15 +1315,34 @@ export const searchServices = async (
   // Track search for analytics
   trackSearch(query, 0, previousQuery);
 
+  // Track popular searches for caching
+  trackPopularSearch(query);
+
   // Apply synonym expansion first
   const expandedQueries = expandQueryWithSynonyms(query);
   const primaryQuery = expandedQueries[0];
 
-  // Try Meilisearch first
-  const client = await getMeiliClient();
+  // Phase 1: Search result caching layer (5-minute TTL)
+  const cacheKey = buildSearchCacheKey(primaryQuery, options);
+  const redisClient = cache.client;
+  if (redisClient) {
+    try {
+      const cached = await redisClient.get(`cache:${cacheKey}`);
+      if (cached) {
+        logger.debug(`Search cache hit for key: ${cacheKey}`);
+        const parsed = JSON.parse(cached) as SearchResults;
+        trackSearch(query, parsed.estimatedTotalHits, previousQuery);
+        return parsed;
+      }
+    } catch (err) {
+      logger.warn('Search cache read failed:', err);
+    }
+  }
+
+  // Try Meilisearch first (skip when empty query — MongoDB is faster for browse/popular lists)
+  const client = primaryQuery ? await getMeiliClient() : null;
 
   if (!client) {
-    // Fallback to MongoDB if Meilisearch not available
     const results = await fallbackSearch(primaryQuery, options);
     trackSearch(query, results.estimatedTotalHits, previousQuery);
     return results;
@@ -1181,6 +1353,7 @@ export const searchServices = async (
       limit = 20,
       offset = 0,
       category,
+      subcategory,
       minPrice,
       maxPrice,
       minRating,
@@ -1191,11 +1364,15 @@ export const searchServices = async (
     // Build filters
     const filters: string[] = ['isActive = true'];
     if (category) filters.push(`category = "${category}"`);
+    if (subcategory) filters.push(`subcategory = "${subcategory}"`);
     if (minPrice !== undefined) filters.push(`pricing.basePrice >= ${minPrice}`);
     if (maxPrice !== undefined) filters.push(`pricing.basePrice <= ${maxPrice}`);
     if (minRating !== undefined) filters.push(`rating.average >= ${minRating}`);
     if (tags && tags.length > 0) {
       filters.push(`tags IN [${tags.map(t => `"${t}"`).join(', ')}]`);
+    }
+    if (options.providerId) {
+      filters.push(`providerId = "${options.providerId}"`);
     }
 
     // Build sort
@@ -1252,6 +1429,22 @@ export const searchServices = async (
       }
     }
 
+    // If still no results, try MongoDB fallback for provider-specific queries
+    // This ensures provider search works even if Meilisearch is not synced
+    if (finalResult.estimatedTotalHits === 0 && options.providerId) {
+      logger.info(`Meilisearch returned 0 results for provider search, falling back to MongoDB`);
+      const fallbackResults = await fallbackSearch(primaryQuery, options);
+      return {
+        hits: fallbackResults.hits,
+        estimatedTotalHits: fallbackResults.estimatedTotalHits,
+        processingTimeMs: fallbackResults.processingTimeMs,
+        query: fallbackResults.query,
+        facetDistribution: fallbackResults.facetDistribution,
+        didYouMean: fallbackResults.didYouMean,
+        correctionApplied: false,
+      };
+    }
+
     // If still no results, generate "Did you mean?" suggestions using Levenshtein
     if (finalResult.estimatedTotalHits === 0) {
       const knownTerms = await getSearchTerms();
@@ -1266,7 +1459,7 @@ export const searchServices = async (
     // Update analytics with actual result count
     trackSearch(query, finalResult.estimatedTotalHits || 0, previousQuery);
 
-    return {
+    const searchResults: SearchResults = {
       hits: finalResult.hits || [],
       estimatedTotalHits: finalResult.estimatedTotalHits || 0,
       processingTimeMs: finalResult.processingTimeMs || Date.now() - startTime,
@@ -1275,27 +1468,58 @@ export const searchServices = async (
       didYouMean,
       correctionApplied,
     };
+
+    // Phase 1: Store search results in cache with 5-minute TTL
+    if (redisClient) {
+      try {
+        await redisClient.setex(`cache:${cacheKey}`, SEARCH_CACHE_TTL, JSON.stringify(searchResults));
+        logger.debug(`Search results cached with key: ${cacheKey}`);
+      } catch (err) {
+        logger.warn('Search cache write failed:', err);
+      }
+    }
+
+    return searchResults;
   } catch (error) {
     logSearchError('Meilisearch search failed, using MongoDB fallback', error);
     resetMeiliClient();
     const results = await fallbackSearch(primaryQuery, options);
+
+    // Phase 1: Store fallback search results in cache with 5-minute TTL
+    if (redisClient) {
+      try {
+        await redisClient.setex(`cache:${cacheKey}`, SEARCH_CACHE_TTL, JSON.stringify(results));
+        logger.debug(`Fallback search results cached with key: ${cacheKey}`);
+      } catch (err) {
+        logger.warn('Search cache write failed:', err);
+      }
+    }
+
     trackSearch(query, results.estimatedTotalHits, previousQuery);
     return results;
   }
 };
 
 /**
- * Get search suggestions with typo tolerance
+ * Get search suggestions with typo tolerance and caching
  */
 export const getSearchSuggestions = async (
   query: string,
   limit: number = 5
 ): Promise<string[]> => {
+  // Check cache first
+  const cachedSuggestions = await getCachedSuggestions(query);
+  if (cachedSuggestions !== null) {
+    return cachedSuggestions.slice(0, limit);
+  }
+
   const client = await getMeiliClient();
 
   if (!client) {
     // Fallback to MongoDB suggestions
-    return getMongoSuggestions(query, limit);
+    const suggestions = await getMongoSuggestions(query, limit);
+    await setCachedSuggestions(query, suggestions);
+    return suggestions;
   }
 
   try {
@@ -1304,7 +1528,7 @@ export const getSearchSuggestions = async (
       attributesToRetrieve: ['name', 'category'],
     });
 
-    const suggestions: string[] = searchResult.hits.map(
+    let suggestions: string[] = searchResult.hits.map(
       (hit: any) => hit.title as string
     );
 
@@ -1312,14 +1536,21 @@ export const getSearchSuggestions = async (
     if (suggestions.length === 0 && query.length >= 2) {
       const knownTerms = await getSearchTerms();
       const typoSuggestions = findSuggestions(query, knownTerms);
-      return typoSuggestions.map(s => s.term);
+      suggestions = typoSuggestions.map(s => s.term);
     }
 
-    return Array.from(new Set<string>(suggestions));
+    const uniqueSuggestions = Array.from(new Set<string>(suggestions));
+
+    // Cache the suggestions
+    await setCachedSuggestions(query, uniqueSuggestions);
+
+    return uniqueSuggestions.slice(0, limit);
   } catch (error) {
     logSearchError('Meilisearch suggestions failed, using MongoDB fallback', error);
     resetMeiliClient();
-    return getMongoSuggestions(query, limit);
+    const suggestions = await getMongoSuggestions(query, limit);
+    await setCachedSuggestions(query, suggestions);
+    return suggestions;
   }
 };
 
@@ -1375,6 +1606,7 @@ export const searchServicesWithGeo = async (
     limit = 20,
     offset = 0,
     category,
+    subcategory,
     minPrice,
     maxPrice,
     minRating,
@@ -1397,6 +1629,7 @@ export const searchServicesWithGeo = async (
       // Build filters
       const filters: string[] = ['isActive = true'];
       if (category) filters.push(`category = "${category}"`);
+      if (subcategory) filters.push(`subcategory = "${subcategory}"`);
       if (minPrice !== undefined) filters.push(`pricing.basePrice >= ${minPrice}`);
       if (maxPrice !== undefined) filters.push(`pricing.basePrice <= ${maxPrice}`);
       if (minRating !== undefined) filters.push(`rating.average >= ${minRating}`);
@@ -1469,7 +1702,7 @@ export const searchServicesWithGeo = async (
     });
 
     // Perform geo-only search to find nearby services
-    const geoResults = await performGeoSearch(options, limit, offset, category, minPrice, maxPrice, minRating, tags);
+    const geoResults = await performGeoSearch(options, limit, offset, category, subcategory, minPrice, maxPrice, minRating, tags);
 
     // If we had some text results, include them too
     const combinedHits = [...textSearchResults];
@@ -1514,6 +1747,7 @@ async function performGeoSearch(
   limit: number,
   offset: number,
   category?: string,
+  subcategory?: string,
   minPrice?: number,
   maxPrice?: number,
   minRating?: number,
@@ -1532,7 +1766,8 @@ async function performGeoSearch(
       isActive: true,
     };
 
-    if (category) searchQuery.category = category;
+    if (category) searchQuery.category = buildCaseInsensitiveNameFilter(category);
+    if (subcategory) searchQuery.subcategory = buildCaseInsensitiveNameFilter(subcategory);
     if (minPrice !== undefined) searchQuery['price.amount'] = { $gte: minPrice };
     if (maxPrice !== undefined) {
       searchQuery['price.amount'] = {
@@ -1608,6 +1843,7 @@ const fallbackSearch = async (
       limit = 20,
       offset = 0,
       category,
+      subcategory,
       minPrice,
       maxPrice,
       minRating,
@@ -1629,7 +1865,8 @@ const fallbackSearch = async (
       ];
     }
 
-    if (category) searchQuery.category = category;
+    if (category) searchQuery.category = buildCaseInsensitiveNameFilter(category);
+    if (subcategory) searchQuery.subcategory = buildCaseInsensitiveNameFilter(subcategory);
     if (minPrice !== undefined) searchQuery['price.amount'] = { $gte: minPrice };
     if (maxPrice !== undefined)
       searchQuery['price.amount'] = {
@@ -1641,11 +1878,19 @@ const fallbackSearch = async (
     if (tags && tags.length > 0) {
       searchQuery.tags = { $in: tags };
     }
+    if (options.providerId && mongoose.Types.ObjectId.isValid(options.providerId)) {
+      searchQuery.providerId = new mongoose.Types.ObjectId(options.providerId);
+    }
 
     const sort = buildMongoSort(sortBy);
 
     const [services, total] = await Promise.all([
-      Service.find(searchQuery).sort(sort).skip(offset).limit(limit).lean(),
+      Service.find(searchQuery)
+        .populate('providerId', 'firstName lastName avatar rating location')
+        .sort(sort)
+        .skip(offset)
+        .limit(limit)
+        .lean(),
       Service.countDocuments(searchQuery),
     ]);
 
@@ -1895,4 +2140,6 @@ export default {
   SYNONYM_DICTIONARY,
   // Export cache refresh
   refreshSearchTermsCache,
+  // Export popular searches
+  getPopularSearches,
 };

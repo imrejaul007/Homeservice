@@ -1,0 +1,16 @@
+{
+  "comment": "PLACEHOLDER - This file is a placeholder for Firebase configuration.",
+  "comment2": "Firebase is required for Push Notifications in the mobile app.",
+  "instructions": [
+    "1. Go to https://console.firebase.google.com/",
+    "2. Create a new project or select existing one",
+    "3. Add an Android app with package name: com.nilin.app",
+    "4. Download the google-services.json file from Firebase console",
+    "5. Replace this placeholder file with the downloaded google-services.json",
+    "6. Rebuild the Android app"
+  ],
+  "note": "Without google-services.json, Firebase/FCM features will not work.",
+  "alternative": "If you don't need push notifications, you can ignore this file.",
+  "build_note": "The build.gradle is configured to gracefully handle missing file - push notifications will be disabled.",
+  "required_for_push": true
+}

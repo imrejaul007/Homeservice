@@ -115,8 +115,8 @@ export const adminCategoryApi = {
     subSlug: string,
     payload: SubcategoryFormPayload
   ) => {
-    const response = await api.put(
-      `/categories/${categorySlug}/subcategories/${subSlug}`,
+    const response = await api.patch(
+      `/admin/categories/${categorySlug}/subcategories/${subSlug}`,
       payload
     );
     return response.data;
@@ -124,7 +124,7 @@ export const adminCategoryApi = {
 
   deleteSubcategory: async (categorySlug: string, subSlug: string) => {
     const response = await api.delete(
-      `/categories/${categorySlug}/subcategories/${subSlug}`
+      `/admin/categories/${categorySlug}/subcategories/${subSlug}`
     );
     return response.data;
   },

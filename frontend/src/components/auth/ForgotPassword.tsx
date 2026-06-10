@@ -48,18 +48,9 @@ const ForgotPassword: React.FC = () => {
       
       setSubmittedEmail(data.email);
       setIsSuccess(true);
-    } catch (error) {
-      // Handle forgot password errors
-      if (errors && errors.length > 0) {
-        errors.forEach(err => {
-          if (err.field) {
-            setError(err.field as keyof ForgotPasswordForm, {
-              type: 'server',
-              message: err.message,
-            });
-          }
-        });
-      }
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error('Request failed');
+      setError('root', { type: 'server', message: error.message });
     }
   };
 

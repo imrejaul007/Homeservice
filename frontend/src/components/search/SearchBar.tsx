@@ -213,6 +213,10 @@ const SearchBar: React.FC<SearchBarProps> = ({
       {showSuggestions && (query.length >= 2 || recentSearches.length > 0) && (
         <div
           ref={suggestionsRef}
+          role="listbox"
+          aria-expanded={showSuggestions}
+          aria-controls="search-suggestions"
+          id="search-suggestions"
           className="absolute top-full left-0 right-0 glass-nilin border border-nilin/20 rounded-nilin shadow-nilin z-50 mt-1 max-h-80 overflow-y-auto"
         >
           {/* Suggestions from API */}
@@ -224,6 +228,8 @@ const SearchBar: React.FC<SearchBarProps> = ({
               {suggestions.map((suggestion, index) => (
                 <button
                   key={index}
+                  role="option"
+                  aria-selected={false}
                   onClick={() => handleSuggestionClick(suggestion.text)}
                   className="w-full text-left px-3 py-2 hover:bg-nilin-blush/30 rounded-nilin flex items-center gap-2 transition-colors text-nilin-charcoal"
                 >

@@ -14,6 +14,14 @@ export interface DashboardStatsDTO {
   totalSpent: number;
   averageRating: number;
   averageOrderValue: number;
+  activeBookings?: number;
+  inProgressBookings?: number;
+  pendingBookings?: number;
+  todayBookings?: number;
+  totalProviders?: number;
+  reviewsWritten?: number;
+  pendingReviews?: number;
+  confirmedBookings?: number;
 }
 
 // ============================================
@@ -47,7 +55,7 @@ export interface StreakDataDTO {
 // Booking Types
 // ============================================
 
-export type BookingStatus = 'pending' | 'confirmed' | 'in_progress' | 'completed' | 'cancelled' | 'no_show';
+export type BookingStatus = 'pending' | 'confirmed' | 'in_progress' | 'completed' | 'cancelled' | 'no_show' | 'refunded';
 
 export interface BookingSummaryDTO {
   _id: string;

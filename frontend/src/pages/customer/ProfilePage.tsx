@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   User,
   Mail,
@@ -7,13 +8,13 @@ import {
   Save,
   X,
   Check,
-  AlertCircle,
   Settings,
   Shield,
   Gift,
   Bell,
   Calendar,
   MapPin,
+  AlertCircle,
 } from 'lucide-react';
 import * as Tabs from '@radix-ui/react-tabs';
 import NavigationHeader from '../../components/layout/NavigationHeader';
@@ -26,11 +27,41 @@ import ProfileNotifications from '../../components/customer/ProfileNotifications
 import { useAuthStore } from '../../stores/authStore';
 import { useBookingStore } from '../../stores/bookingStore';
 import { api } from '../../services/api';
+import { PageErrorBoundary } from '../../components/common/PageErrorBoundary';
+import toast from 'react-hot-toast';
+
+const VALID_TABS = ['profile', 'settings', 'security', 'referrals', 'notifications'] as const;
+type ProfileTab = typeof VALID_TABS[number];
+
+const TAB_ALIASES: Record<string, ProfileTab> = {
+  referral: 'referrals',
+  referrals: 'referrals',
+};
+
+const ALLOWED_AVATAR_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+const MAX_AVATAR_SIZE = 5 * 1024 * 1024;
 
 const ProfilePage: React.FC = () => {
-  const { user, customerProfile, updateProfile } = useAuthStore();
+  const { user, updateProfile, updateAvatar } = useAuthStore();
   const { customerBookings, getCustomerBookings, isLoading: isLoadingBookings } = useBookingStore();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [bookingError, setBookingError] = useState<string | null>(null);
+
+  const activeTab = useMemo<ProfileTab>(() => {
+    const tabParam = searchParams.get('tab');
+    if (!tabParam) return 'profile';
+    const normalized = TAB_ALIASES[tabParam] ?? tabParam;
+    return VALID_TABS.includes(normalized as ProfileTab) ? (normalized as ProfileTab) : 'profile';
+  }, [searchParams]);
+
+  const handleTabChange = (value: string) => {
+    if (value === 'profile') {
+      searchParams.delete('tab');
+    } else {
+      searchParams.set('tab', value);
+    }
+    setSearchParams(searchParams, { replace: true });
+  };
 
   // Fetch bookings on mount with error handling
   useEffect(() => {
@@ -41,6 +72,7 @@ const ProfilePage: React.FC = () => {
       } catch (error) {
         console.error('Failed to fetch bookings:', error);
         setBookingError('Failed to load booking history. Please try again.');
+        toast.error('Failed to load booking history');
       }
     };
     fetchBookings();
@@ -52,8 +84,8 @@ const ProfilePage: React.FC = () => {
 
   // Stats - using real data from booking store
   const stats = {
-    taskCompleted: completedBookings,
-    hoursWorked: totalBookings,
+    bookingsCompleted: completedBookings,
+    totalBookings: totalBookings,
   };
 
   // Personal Information State
@@ -73,25 +105,11 @@ const ProfilePage: React.FC = () => {
     dateOfBirth: user?.dateOfBirth || '',
   });
 
-  // Password Change State
-  const [passwordData, setPasswordData] = useState({
-    currentPassword: '',
-    newPassword: '',
-    confirmPassword: ''
-  });
-
-  const [showPasswords, setShowPasswords] = useState({
-    current: false,
-    new: false,
-    confirm: false
-  });
-
   // UI State
   const [isEditingPersonal, setIsEditingPersonal] = useState(false);
-  const [isEditingPassword, setIsEditingPassword] = useState(false);
   const [saveMessage, setSaveMessage] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
-  const [profileImage, setProfileImage] = useState<string | null>(user?.avatar || null);
+  const [profileImage, setProfileImage] = useState<string | null>(user?.avatar ?? null);
   const [isUploading, setIsUploading] = useState(false);
 
   // Update personal info when user changes
@@ -105,9 +123,7 @@ const ProfilePage: React.FC = () => {
         gender: user.gender || '',
         dateOfBirth: user.dateOfBirth ? new Date(user.dateOfBirth).toISOString().split('T')[0] : '',
       });
-      if (user.avatar) {
-        setProfileImage(user.avatar);
-      }
+      setProfileImage(user.avatar ?? null);
     }
   }, [user]);
 
@@ -116,23 +132,32 @@ const ProfilePage: React.FC = () => {
     setPersonalInfo(prev => ({ ...prev, [name]: value }));
   };
 
-  const handlePasswordChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const { name, value } = e.target;
-    setPasswordData(prev => ({ ...prev, [name]: value }));
-  };
-
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Preview
+    if (!ALLOWED_AVATAR_TYPES.includes(file.type)) {
+      setErrorMessage('Only JPEG, PNG, and WebP images are allowed');
+      setTimeout(() => setErrorMessage(''), 3000);
+      e.target.value = '';
+      return;
+    }
+
+    if (file.size > MAX_AVATAR_SIZE) {
+      setErrorMessage('Image must be smaller than 5MB');
+      setTimeout(() => setErrorMessage(''), 3000);
+      e.target.value = '';
+      return;
+    }
+
     const reader = new FileReader();
     reader.onloadend = () => {
-      setProfileImage(reader.result as string);
+      if (reader.result) {
+        setProfileImage(reader.result as string);
+      }
     };
     reader.readAsDataURL(file);
 
-    // Upload
     setIsUploading(true);
     const formData = new FormData();
     formData.append('avatar', file);
@@ -143,15 +168,22 @@ const ProfilePage: React.FC = () => {
       });
 
       if (response.data.success) {
+        const avatarUrl = response.data.data?.avatar;
+        if (avatarUrl) {
+          setProfileImage(avatarUrl);
+          updateAvatar(avatarUrl);
+        }
         setSaveMessage('Profile image updated!');
         setTimeout(() => setSaveMessage(''), 3000);
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       setProfileImage(user?.avatar || null);
-      setErrorMessage(error.response?.data?.message || 'Failed to upload image');
+      const apiError = error as { response?: { data?: { message?: string } } };
+      setErrorMessage(apiError.response?.data?.message || 'Failed to upload image');
       setTimeout(() => setErrorMessage(''), 3000);
     } finally {
       setIsUploading(false);
+      e.target.value = '';
     }
   };
 
@@ -197,6 +229,7 @@ const ProfilePage: React.FC = () => {
   };
 
   return (
+    <PageErrorBoundary pageName="Profile">
     <div className="min-h-screen bg-nilin-cream flex flex-col">
       <NavigationHeader />
 
@@ -226,8 +259,11 @@ const ProfilePage: React.FC = () => {
             </div>
           )}
 
-          <Tabs.Root defaultValue="profile" className="w-full">
-            <Tabs.List className="flex gap-2 mb-8 p-1 bg-white rounded-nilin shadow-nilin overflow-x-auto">
+          <Tabs.Root value={activeTab} onValueChange={handleTabChange} className="w-full">
+            <Tabs.List
+              className="flex gap-2 mb-8 p-1 bg-white rounded-nilin shadow-nilin overflow-x-auto"
+              aria-label="Profile sections"
+            >
               <Tabs.Trigger
                 value="profile"
                 className="flex-1 px-4 py-3 rounded-nilin text-sm font-medium text-nilin-warmGray data-[state=active]:bg-nilin-coral data-[state=active]:text-white transition-all whitespace-nowrap"
@@ -285,14 +321,18 @@ const ProfilePage: React.FC = () => {
                       </div>
                       <label
                         htmlFor="profile-upload"
-                        className="absolute bottom-4 right-0 bg-nilin-coral rounded-full p-2 cursor-pointer hover:bg-nilin-rose transition-colors shadow-nilin-warm"
+                        aria-label="Upload profile photo"
+                        className={`absolute bottom-4 right-0 bg-nilin-coral rounded-full p-2 transition-colors shadow-nilin-warm ${
+                          isUploading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:bg-nilin-rose'
+                        }`}
                       >
-                        <Camera className="h-4 w-4 text-white" />
+                        <Camera className="h-4 w-4 text-white" aria-hidden="true" />
                         <input
                           id="profile-upload"
                           type="file"
-                          accept="image/*"
+                          accept="image/jpeg,image/png,image/webp"
                           className="hidden"
+                          disabled={isUploading}
                           onChange={handleImageUpload}
                         />
                       </label>
@@ -309,18 +349,39 @@ const ProfilePage: React.FC = () => {
 
                   {/* Stats */}
                   <div className="mt-6 pt-6 border-t border-nilin-border">
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="text-center p-3 bg-nilin-muted rounded-nilin">
-                        <Calendar className="w-5 h-5 text-nilin-coral mx-auto mb-1" />
-                        <p className="text-lg font-bold text-nilin-charcoal">{stats.taskCompleted}</p>
-                        <p className="text-xs text-nilin-warmGray">Tasks Completed</p>
+                    {bookingError && (
+                      <div className="mb-4 p-3 rounded-nilin bg-amber-50 border border-amber-200 flex items-start gap-2">
+                        <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+                        <p className="text-xs text-amber-800">{bookingError}</p>
                       </div>
-                      <div className="text-center p-3 bg-nilin-muted rounded-nilin">
-                        <MapPin className="w-5 h-5 text-nilin-coral mx-auto mb-1" />
-                        <p className="text-lg font-bold text-nilin-charcoal">{stats.hoursWorked}</p>
-                        <p className="text-xs text-nilin-warmGray">Hours Worked</p>
+                    )}
+                    {isLoadingBookings ? (
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="text-center p-3 bg-nilin-muted rounded-nilin animate-pulse">
+                          <div className="w-5 h-5 bg-nilin-border rounded mx-auto mb-1" />
+                          <div className="h-6 bg-nilin-border rounded w-12 mx-auto mb-1" />
+                          <div className="h-3 bg-nilin-border rounded w-20 mx-auto" />
+                        </div>
+                        <div className="text-center p-3 bg-nilin-muted rounded-nilin animate-pulse">
+                          <div className="w-5 h-5 bg-nilin-border rounded mx-auto mb-1" />
+                          <div className="h-6 bg-nilin-border rounded w-12 mx-auto mb-1" />
+                          <div className="h-3 bg-nilin-border rounded w-20 mx-auto" />
+                        </div>
                       </div>
-                    </div>
+                    ) : (
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="text-center p-3 bg-nilin-muted rounded-nilin">
+                          <Calendar className="w-5 h-5 text-nilin-coral mx-auto mb-1" />
+                          <p className="text-lg font-bold text-nilin-charcoal">{stats.bookingsCompleted}</p>
+                          <p className="text-xs text-nilin-warmGray">Bookings Completed</p>
+                        </div>
+                        <div className="text-center p-3 bg-nilin-muted rounded-nilin">
+                          <MapPin className="w-5 h-5 text-nilin-coral mx-auto mb-1" />
+                          <p className="text-lg font-bold text-nilin-charcoal">{stats.totalBookings}</p>
+                          <p className="text-xs text-nilin-warmGray">Total Bookings</p>
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   {/* Account Info */}
@@ -496,6 +557,7 @@ const ProfilePage: React.FC = () => {
 
       <Footer />
     </div>
+    </PageErrorBoundary>
   );
 };
 

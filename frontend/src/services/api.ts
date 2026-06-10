@@ -1,7 +1,8 @@
 import axios, { type AxiosInstance, type AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
 import { sanitizeHtml, secureStorage, isSecureContext } from '@/lib/security';
+import { getApiUrl } from '@/lib/getApiUrl';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+const API_URL = getApiUrl();
 
 // CSRF token storage
 let csrfToken: string | null = null;
@@ -232,6 +233,11 @@ api.interceptors.response.use(
   async (error: AxiosError) => {
     const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean; _retryCount?: number };
 
+    // Ignore canceled/aborted requests (e.g., from component unmounts in React Strict Mode)
+    if (error.code === 'ERR_CANCELED' || error.message === 'canceled') {
+      return Promise.reject(error);
+    }
+
     // Log ALL errors for debugging including 404s
     const status = error.response?.status;
     console.error('[API ERROR]', {
@@ -243,8 +249,8 @@ api.interceptors.response.use(
       correlationId: originalRequest?.headers?.['X-Correlation-ID'],
     });
 
-    // Handle network errors with retry
-    if (!error.response && shouldRetry(error)) {
+    // Handle network errors with retry (but not canceled requests)
+    if (!error.response && shouldRetry(error) && error.code !== 'ERR_CANCELED') {
       const retryCount = (originalRequest._retryCount || 0) + 1;
       originalRequest._retryCount = retryCount;
 

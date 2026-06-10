@@ -59,24 +59,34 @@ const PaymentPage: React.FC = () => {
 
     setIsUpdatingPricing(true);
     try {
-      // Calculate order value from booking
-      const basePrice = booking?.pricing?.basePrice || 0;
-      const addOnsTotal = booking?.pricing?.addOns?.reduce((sum, addOn) => sum + addOn.price, 0) || 0;
-      const orderValue = basePrice + addOnsTotal;
+      // FIX: Skip separate validation - applyCoupon endpoint validates internally
+      // This reduces from 2 API calls to 1
+      const updatedBooking = await bookingApi.applyCoupon(bookingId, code);
 
-      const result = await bookingApi.validateCoupon(code, orderValue, booking?.serviceId);
-
-      if (result.valid) {
-        // Apply the coupon to the booking
-        const updatedBooking = await bookingApi.applyCoupon(bookingId, code);
+      if (updatedBooking) {
         setBooking(updatedBooking.booking);
+
+        // Extract discount from booking pricing
+        const discounts = updatedBooking.booking?.pricing?.discounts || [];
+        const couponDiscount = discounts.find((d: any) => d.code === code.toUpperCase());
+
         setAppliedCoupon({
-          code: result.code,
-          discountAmount: result.discountAmount || 0,
+          code: code.toUpperCase(),
+          discountAmount: couponDiscount?.amount || 0,
         });
+
+        return {
+          valid: true,
+          code,
+          discountAmount: couponDiscount?.amount || 0,
+          message: `Coupon applied! You save AED ${couponDiscount?.amount || 0}`,
+        };
       }
 
-      return result;
+      return { valid: false, code, message: 'Failed to apply coupon' };
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to apply coupon';
+      return { valid: false, code, message: errorMessage };
     } finally {
       setIsUpdatingPricing(false);
     }

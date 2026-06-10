@@ -64,6 +64,8 @@ export interface BookingInputDTO {
   paymentMethod?: string;
   // Coupon/Promo
   couponCode?: string;
+  /** Set from req.tenantId at controller layer */
+  tenantId?: string;
 }
 
 export interface GuestInfoDTO {
@@ -94,6 +96,8 @@ export interface BookingFiltersDTO {
   search?: string;
   // Category filter - filter by service category
   category?: string;
+  /** Completed bookings without a customer review */
+  reviewable?: boolean;
 }
 
 export interface PaginationDTO {
@@ -184,7 +188,7 @@ export interface PublicBookingTrackingDTO {
   pricing: {
     basePrice?: number;
     addOns?: Array<{ name: string; price: number }>;
-    discounts?: Array<{ type: string; amount: number; description: string }>;
+    discounts?: Array<{ type: string; code?: string; amount: number; description?: string }>;
     subtotal?: number;
     tax?: number;
     totalAmount: number;
@@ -237,6 +241,7 @@ export interface AddMessageDTO {
 export interface BookingResult {
   booking: BookingResponse;
   message?: string;
+  isDuplicate?: boolean;
 }
 
 export interface CancellationResult {

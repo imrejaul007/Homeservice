@@ -81,14 +81,9 @@ const LoginFormComponent: React.FC = () => {
       setIsSubmitted(false);
       await login({ email: data.email, password: data.password, rememberMe: data.rememberMe });
       setIsSubmitted(true);
-    } catch (error) {
-      if (errors && errors.length > 0) {
-        errors.forEach(err => {
-          if (err.field) {
-            setError(err.field as keyof LoginForm, { type: 'server', message: err.message });
-          }
-        });
-      }
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error('Login failed');
+      setError('root', { type: 'server', message: error.message });
     }
   };
 

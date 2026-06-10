@@ -469,9 +469,27 @@ class ChurnService {
           as: 'spending',
         },
       },
+      // Get all bookings for risk calculation
+      {
+        $lookup: {
+          from: 'bookings',
+          let: { userId: '$_id' },
+          pipeline: [
+            {
+              $match: {
+                $expr: { $eq: ['$customerId', '$$userId'] },
+              },
+            },
+            { $sort: { scheduledDate: -1 } },
+            { $limit: 50 },
+          ],
+          as: 'allBookings',
+        },
+      },
       {
         $addFields: {
           totalSpent: { $ifNull: [{ $arrayElemAt: ['$spending.totalSpent', 0] }, 0] },
+          bookingsForRisk: '$allBookings',
         },
       },
       // Calculate days since last booking
@@ -527,9 +545,10 @@ class ChurnService {
     const atRiskCustomers: AtRiskCustomer[] = [];
 
     for (const customer of customers) {
-      const riskMetrics = this.calculateRiskMetrics(customer, []);
+      const bookings = customer.bookingsForRisk || [];
+      const riskMetrics = this.calculateRiskMetrics(customer, bookings);
       const riskLevel = this.determineRiskLevel(riskMetrics.score);
-      const riskFactors = this.identifyRiskFactors(customer, []);
+      const riskFactors = this.identifyRiskFactors(customer, bookings);
       const recommendedActions = this.generateRecommendedActions(riskLevel, customer);
 
       // Apply filters

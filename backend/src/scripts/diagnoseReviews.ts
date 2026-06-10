@@ -9,6 +9,9 @@ import mongoose from 'mongoose';
  * Usage: npx ts-node src/scripts/diagnoseReviews.ts <database_name>
  */
 
+// FIX: Use environment variable instead of hardcoded credentials
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/';
+
 async function diagnose() {
   const dbName = process.argv[2];
 
@@ -23,8 +26,10 @@ async function diagnose() {
   console.log('='.repeat(60));
   console.log();
 
-  const baseUri = 'mongodb+srv://nilimraj_db_user:aXJBzxFtRJosdxEc@cluster0.wnjcyp1.mongodb.net/';
-  const uri = `${baseUri}${dbName}?appName=Cluster0`;
+  // Build URI from env or default
+  const baseUri = MONGODB_URI.endsWith('/') ? MONGODB_URI.slice(0, -1) : MONGODB_URI;
+  const dbPart = baseUri.includes('/') ? baseUri.split('/').slice(-1)[0] : dbName;
+  const uri = `${baseUri}/${dbName}?appName=Cluster0`;
 
   console.log(`📍 Target Database: ${dbName}`);
   console.log();

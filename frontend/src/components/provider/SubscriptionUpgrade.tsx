@@ -16,43 +16,31 @@ import {
   ArrowUp
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import type {
+  ProviderSubscriptionTier,
+  ProviderSubscriptionPlan,
+  PlanFeatures,
+  BillingCycle,
+} from '../../types/subscription.types';
 
-type PlanTier = 'basic' | 'standard' | 'premium' | 'elite';
+// Use unified type - backwards compatible alias
+export type PlanTier = ProviderSubscriptionTier;
 
-interface PlanFeatures {
-  maxServices: number;
-  maxImages: number;
-  featuredListing: boolean;
-  prioritySupport: boolean;
-  analytics: boolean;
-  customBranding: boolean;
-  apiAccess: boolean;
-  commissionRate: number;
-  bookingLimit: number;
-  leadCredits: number;
-  featuredDays: number;
-}
-
-interface SubscriptionPlan {
+// Backwards compatible type alias for local use
+type LocalSubscriptionPlan = Omit<ProviderSubscriptionPlan, 'tier' | 'features'> & {
   tier: PlanTier;
-  name: string;
-  description: string;
-  monthlyPrice: number;
-  annualPrice: number;
   features: PlanFeatures;
-  highlighted?: boolean;
-  popular?: boolean;
-}
+};
 
 interface SubscriptionUpgradeProps {
   currentPlan: PlanTier;
-  onUpgrade: (plan: PlanTier, billingCycle: 'monthly' | 'annually') => void;
+  onUpgrade: (plan: PlanTier, billingCycle: BillingCycle) => void;
   onDowngrade?: (plan: PlanTier) => void;
   currentPeriodEnd?: Date;
   prorationAmount?: number;
 }
 
-const PLANS: SubscriptionPlan[] = [
+const PLANS: LocalSubscriptionPlan[] = [
   {
     tier: 'basic',
     name: 'Basic',
@@ -145,7 +133,7 @@ const SubscriptionUpgrade: React.FC<SubscriptionUpgradeProps> = ({
   prorationAmount = 0,
 }) => {
   const [selectedPlan, setSelectedPlan] = useState<PlanTier>('premium');
-  const [billingCycle, setBillingCycle] = useState<'monthly' | 'annually'>('annually');
+  const [billingCycle, setBillingCycle] = useState<BillingCycle>('yearly');
   const [showComparison, setShowComparison] = useState(false);
 
   const formatPrice = (price: number) => {
@@ -172,8 +160,8 @@ const SubscriptionUpgrade: React.FC<SubscriptionUpgradeProps> = ({
 
   const selectedPlanData = PLANS.find((p) => p.tier === selectedPlan)!;
   const currentPlanData = PLANS.find((p) => p.tier === currentPlan)!;
-  const price = billingCycle === 'annually' ? selectedPlanData.annualPrice : selectedPlanData.monthlyPrice;
-  const savings = billingCycle === 'annually'
+  const price = billingCycle === 'yearly' ? selectedPlanData.annualPrice : selectedPlanData.monthlyPrice;
+  const savings = billingCycle === 'yearly'
     ? (selectedPlanData.monthlyPrice * 12) - (selectedPlanData.annualPrice * 12)
     : 0;
 
@@ -232,15 +220,15 @@ const SubscriptionUpgrade: React.FC<SubscriptionUpgradeProps> = ({
             Monthly
           </button>
           <button
-            onClick={() => setBillingCycle('annually')}
+            onClick={() => setBillingCycle('yearly')}
             className={cn(
               'px-6 py-2.5 rounded-lg font-medium transition flex items-center gap-2',
-              billingCycle === 'annually'
+              billingCycle === 'yearly'
                 ? 'bg-white text-nilin-charcoal shadow-sm'
                 : 'text-nilin-gray hover:text-nilin-charcoal'
             )}
           >
-            Annually
+            Yearly
             <span className="px-2 py-0.5 bg-green-100 text-green-700 text-xs rounded-full">
               Save 20%
             </span>
@@ -253,7 +241,7 @@ const SubscriptionUpgrade: React.FC<SubscriptionUpgradeProps> = ({
         {PLANS.map((plan) => {
           const isSelected = selectedPlan === plan.tier;
           const isCurrent = currentPlan === plan.tier;
-          const planPrice = billingCycle === 'annually' ? plan.annualPrice : plan.monthlyPrice;
+          const planPrice = billingCycle === 'yearly' ? plan.annualPrice : plan.monthlyPrice;
           const isDisabled = isCurrent || (isDowngrade && plan.tier !== selectedPlan);
 
           return (
@@ -294,7 +282,7 @@ const SubscriptionUpgrade: React.FC<SubscriptionUpgradeProps> = ({
               <div className="text-center mb-6">
                 <p className="text-3xl font-bold text-nilin-charcoal">{formatPrice(planPrice)}</p>
                 <p className="text-sm text-nilin-gray">per month</p>
-                {billingCycle === 'annually' && planPrice > 0 && (
+                {billingCycle === 'yearly' && planPrice > 0 && (
                   <p className="text-xs text-green-600 mt-1">
                     Billed {formatPrice(planPrice * 12)}/year
                   </p>

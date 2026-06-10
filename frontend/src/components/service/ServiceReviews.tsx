@@ -1,12 +1,17 @@
-import React, { useState, useEffect } from 'react';
-import { Star, User, Loader2, AlertCircle } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Star, User, Loader2, AlertCircle, ChevronLeft, ChevronRight } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { reviewsApi, type Review } from '@/services/reviewsApi';
+import { cn } from '@/lib/utils';
+import { ReviewVoting } from '@/components/common/ReviewVoting';
 
 interface ServiceReviewsProps {
   providerId: string;
-  rating: number;
-  reviewCount: number;
+  initialPage?: number;
+  /** Inline layout for provider profile page (no full-width gray section) */
+  embedded?: boolean;
+  /** Callback when review stats are loaded from live API */
+  onStatsLoaded?: (stats: { total: number; averageRating: number }) => void;
 }
 
 interface RatingDistribution {
@@ -70,37 +75,83 @@ const StarRatingDisplay: React.FC<StarRatingDisplayProps> = ({ rating, maxStars 
   </div>
 );
 
-const ServiceReviews: React.FC<ServiceReviewsProps> = ({ providerId, rating, reviewCount }) => {
+const ServiceReviews: React.FC<ServiceReviewsProps> = ({
+  providerId,
+  initialPage = 1,
+  embedded = false,
+  onStatsLoaded,
+}) => {
   const [reviews, setReviews] = useState<Review[]>([]);
   const [total, setTotal] = useState(0);
-  const [averageRating, setAverageRating] = useState(rating);
+  const [averageRating, setAverageRating] = useState(0);
   const [distribution, setDistribution] = useState<RatingDistribution>({ 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 });
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchReviews = async () => {
+  // FIX: Added pagination state
+  const [currentPage, setCurrentPage] = useState(initialPage);
+  const [totalPages, setTotalPages] = useState(1);
+  const [isPageLoading, setIsPageLoading] = useState(false);
+  const REVIEWS_PER_PAGE = 10;
+
+  const fetchReviews = useCallback(async (page: number = 1) => {
+    // Don't fetch if providerId is empty or invalid
+    if (!providerId || providerId.trim() === '') {
+      // Debug: Removed console.log - use logger in production
+      setIsLoading(false);
+      setReviews([]);
+      setTotal(0);
+      setAverageRating(0);
+      setDistribution({ 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 });
+      return;
+    }
+
     try {
-      setIsLoading(true);
+      if (page === 1) {
+        setIsLoading(true);
+      } else {
+        setIsPageLoading(true);
+      }
       setError(null);
-      const response = await reviewsApi.getProviderReviews(providerId);
+
+      const response = await reviewsApi.getPublicProviderReviews(providerId, { page, limit: REVIEWS_PER_PAGE });
+
+      const reviewTotal = response.data?.total ?? 0;
+      const apiAverage = response.data?.averageRating ?? 0;
+      const resolvedAverage = reviewTotal > 0 ? apiAverage : 0;
       setReviews(response.data?.reviews ?? []);
-      setTotal(response.data?.total ?? 0);
-      setAverageRating(response.data?.averageRating ?? rating);
+      setTotal(reviewTotal);
+      setAverageRating(resolvedAverage);
       setDistribution(response.data?.ratingDistribution ?? { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 });
+      setCurrentPage(page);
+      setTotalPages(response.data?.pagination?.pages ?? 1);
+      onStatsLoaded?.({ total: reviewTotal, averageRating: resolvedAverage });
     } catch (err) {
-      console.error('Failed to fetch reviews:', err);
+      // Keep error logging for debugging
+      console.error('[ServiceReviews] Failed to fetch reviews:', err);
       setError('Failed to load reviews');
       toast.error('Failed to load reviews. Please try again.');
+      // Set empty data on error to stop loading
+      setReviews([]);
+      setTotal(0);
+      setAverageRating(0);
     } finally {
       setIsLoading(false);
+      setIsPageLoading(false);
     }
-  };
+  }, [providerId, onStatsLoaded]);
 
   useEffect(() => {
-    if (providerId) {
-      fetchReviews();
+    fetchReviews(initialPage);
+  }, [fetchReviews, initialPage]);
+
+  const handlePageChange = (newPage: number) => {
+    if (newPage >= 1 && newPage <= totalPages && newPage !== currentPage) {
+      fetchReviews(newPage);
+      // Scroll to top of reviews section
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     }
-  }, [providerId, rating]);
+  };
 
   const getDisplayDistribution = () => {
     return RATING_DISTRIBUTION.map(dist => ({
@@ -109,13 +160,18 @@ const ServiceReviews: React.FC<ServiceReviewsProps> = ({ providerId, rating, rev
     }));
   };
 
+  const wrapperClass = embedded ? '' : 'py-8 md:py-12 bg-gray-50';
+  const containerClass = embedded ? '' : 'max-w-4xl mx-auto px-4 sm:px-6 lg:px-8';
+
   if (isLoading) {
     return (
-      <section className="py-8 md:py-12 bg-gray-50">
-        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
-          <h2 className="text-xl md:text-2xl font-bold text-gray-900 mb-6">
-            Customer reviews
-          </h2>
+      <section className={wrapperClass}>
+        <div className={containerClass}>
+          {!embedded && (
+            <h2 className="text-xl md:text-2xl font-bold text-gray-900 mb-6">
+              Customer reviews
+            </h2>
+          )}
           <div className="flex items-center justify-center py-12">
             <Loader2 className="h-8 w-8 animate-spin text-nilin mx-auto" />
           </div>
@@ -126,17 +182,19 @@ const ServiceReviews: React.FC<ServiceReviewsProps> = ({ providerId, rating, rev
 
   if (error) {
     return (
-      <section className="py-8 md:py-12 bg-gray-50">
-        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
-          <h2 className="text-xl md:text-2xl font-bold text-gray-900 mb-6">
-            Customer reviews
-          </h2>
+      <section className={wrapperClass}>
+        <div className={containerClass}>
+          {!embedded && (
+            <h2 className="text-xl md:text-2xl font-bold text-gray-900 mb-6">
+              Customer reviews
+            </h2>
+          )}
           <div className="flex items-center justify-center py-12">
             <div className="text-center">
               <AlertCircle className="h-8 w-8 text-red-500 mx-auto mb-4" />
               <p className="text-gray-600 mb-4">{error}</p>
               <button
-                onClick={fetchReviews}
+                onClick={() => fetchReviews(1)}
                 className="px-4 py-2 bg-nilin text-white rounded-lg hover:bg-opacity-90 transition-colors text-sm font-medium"
               >
                 Try Again
@@ -149,11 +207,13 @@ const ServiceReviews: React.FC<ServiceReviewsProps> = ({ providerId, rating, rev
   }
 
   return (
-    <section className="py-8 md:py-12 bg-gray-50">
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
-        <h2 className="text-xl md:text-2xl font-bold text-gray-900 mb-6">
-          Customer reviews
-        </h2>
+    <section className={wrapperClass}>
+      <div className={containerClass}>
+        {!embedded && (
+          <h2 className="text-xl md:text-2xl font-bold text-gray-900 mb-6">
+            Customer reviews
+          </h2>
+        )}
 
         {/* Rating summary */}
         <div className="bg-white rounded-2xl p-5 md:p-6 border border-gray-100 mb-6">
@@ -207,9 +267,9 @@ const ServiceReviews: React.FC<ServiceReviewsProps> = ({ providerId, rating, rev
               <p className="text-gray-500">No reviews yet. Be the first to review!</p>
             </div>
           ) : (
-            reviews.map((review) => (
+            reviews.map((review, index) => (
               <div
-                key={review.id}
+                key={review.id ?? `review-${index}`}
                 className="bg-white rounded-xl p-4 md:p-5 border border-gray-100"
               >
                 <div className="flex items-start gap-3">
@@ -217,7 +277,7 @@ const ServiceReviews: React.FC<ServiceReviewsProps> = ({ providerId, rating, rev
                     {review.customer?.avatar ? (
                       <img
                         src={review.customer.avatar}
-                        alt={`${review.customer.firstName} ${review.customer?.lastName || ''}`}
+                        alt={`${review.customer?.firstName || 'Customer'} ${review.customer?.lastName ? `${review.customer.lastName.charAt(0)}.` : ''}`}
                         className="w-full h-full object-cover"
                       />
                     ) : (
@@ -227,7 +287,7 @@ const ServiceReviews: React.FC<ServiceReviewsProps> = ({ providerId, rating, rev
                   <div className="flex-1">
                     <div className="flex items-center justify-between mb-1">
                       <h4 className="font-medium text-gray-900 text-sm">
-                        {review.customer?.firstName} {review.customer?.lastName ? `${review.customer.lastName.charAt(0)}.` : ''}
+                        {review.customer?.firstName || 'Anonymous'} {review.customer?.lastName ? `${review.customer.lastName.charAt(0)}.` : ''}
                       </h4>
                       <div className="flex items-center gap-2">
                         {review.isVerified && (
@@ -237,13 +297,13 @@ const ServiceReviews: React.FC<ServiceReviewsProps> = ({ providerId, rating, rev
                       </div>
                     </div>
                     <div className="flex items-center gap-0.5 mb-2">
-                      <StarRatingDisplay rating={review.rating} />
+                      <StarRatingDisplay rating={review.rating ?? 0} />
                     </div>
-                    {review.title && (
+                    {review.title ? (
                       <h5 className="font-medium text-gray-900 text-sm mb-1">{review.title}</h5>
-                    )}
+                    ) : null}
                     <p className="text-sm text-gray-600 leading-relaxed">
-                      {review.comment}
+                      {review.comment || ''}
                     </p>
                     {review.photos && review.photos.length > 0 && (
                       <div className="flex gap-2 mt-3">
@@ -264,12 +324,112 @@ const ServiceReviews: React.FC<ServiceReviewsProps> = ({ providerId, rating, rev
                           ))}
                       </div>
                     )}
+
+                    {/* FIX: Display provider response if exists */}
+                    {review.response && (
+                      <div className="mt-3 ml-4 pl-4 border-l-2 border-nilin-coral/30 bg-nilin-blush/20 rounded-r-lg p-3">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-xs font-medium text-nilin-coral">Provider Response</span>
+                          <span className="text-xs text-gray-400">
+                            {review.response.createdAt && formatDate(review.response.createdAt)}
+                          </span>
+                        </div>
+                        <p className="text-sm text-gray-700">
+                          {review.response.comment || (review.response as any).content || ''}
+                        </p>
+                      </div>
+                    )}
+
+                    {review.id && (
+                      <div className="mt-3">
+                        <ReviewVoting
+                          reviewId={review.id}
+                          initialHelpfulVotes={review.helpfulVotes ?? 0}
+                        />
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
             ))
           )}
         </div>
+
+        {/* FIX: Added pagination controls */}
+        {totalPages > 1 && (
+          <div className="flex items-center justify-center gap-2 mt-6">
+            <button
+              onClick={() => handlePageChange(currentPage - 1)}
+              disabled={currentPage === 1 || isPageLoading}
+              className={cn(
+                'p-2 rounded-lg border border-gray-200 transition-colors',
+                currentPage === 1
+                  ? 'text-gray-300 cursor-not-allowed'
+                  : 'text-gray-600 hover:bg-gray-50 hover:border-gray-300'
+              )}
+              aria-label="Previous page"
+            >
+              <ChevronLeft className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center gap-1">
+              {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
+                let pageNum: number;
+                if (totalPages <= 7) {
+                  pageNum = i + 1;
+                } else if (currentPage <= 4) {
+                  pageNum = i + 1;
+                  if (i === 6) pageNum = totalPages;
+                  if (i === 5) return <span key="ellipsis">...</span>;
+                } else if (currentPage >= totalPages - 3) {
+                  pageNum = totalPages - 6 + i;
+                  if (i === 0) return <span key="ellipsis">...</span>;
+                } else {
+                  if (i === 0) return <span key="ellipsis-start">...</span>;
+                  if (i === 6) return <span key="ellipsis-end">...</span>;
+                  pageNum = currentPage - 3 + i;
+                }
+
+                return (
+                  <button
+                    key={pageNum}
+                    onClick={() => handlePageChange(pageNum)}
+                    disabled={isPageLoading}
+                    className={cn(
+                      'w-10 h-10 rounded-lg text-sm font-medium transition-colors',
+                      pageNum === currentPage
+                        ? 'bg-nilin-coral text-white'
+                        : 'text-gray-600 hover:bg-gray-50'
+                    )}
+                  >
+                    {pageNum}
+                  </button>
+                );
+              })}
+            </div>
+
+            <button
+              onClick={() => handlePageChange(currentPage + 1)}
+              disabled={currentPage === totalPages || isPageLoading}
+              className={cn(
+                'p-2 rounded-lg border border-gray-200 transition-colors',
+                currentPage === totalPages
+                  ? 'text-gray-300 cursor-not-allowed'
+                  : 'text-gray-600 hover:bg-gray-50 hover:border-gray-300'
+              )}
+              aria-label="Next page"
+            >
+              <ChevronRight className="w-5 h-5" />
+            </button>
+          </div>
+        )}
+
+        {/* Page info */}
+        {totalPages > 1 && (
+          <p className="text-center text-sm text-gray-500 mt-2">
+            Page {currentPage} of {totalPages} ({total} reviews)
+          </p>
+        )}
       </div>
     </section>
   );

@@ -1,12 +1,20 @@
 import mongoose, { Schema, Document, Types } from 'mongoose';
+import {
+  CUSTOMER_SUBSCRIPTION_PLANS,
+  CUSTOMER_PLAN_PRICES,
+  CUSTOMER_YEARLY_DISCOUNT_PERCENTAGE,
+  type CustomerPlanType,
+  type CustomerBillingCycle,
+} from '../constants/subscriptionPlans';
 
 // ============================================
 // User Subscription Types & Interfaces
 // ============================================
 
-export type PlanType = 'free' | 'basic' | 'premium' | 'enterprise';
+// Re-export types for backward compatibility
+export type PlanType = CustomerPlanType;
 export type SubscriptionStatus = 'active' | 'cancelled' | 'past_due' | 'expired' | 'trialing';
-export type BillingCycle = 'monthly' | 'yearly';
+export type BillingCycle = CustomerBillingCycle;
 
 export interface ISubscriptionPlan {
   id: string;
@@ -26,125 +34,10 @@ export interface ISubscriptionPlan {
   };
 }
 
-// Plan configurations for user subscriptions
-export const USER_SUBSCRIPTION_PLANS: Record<PlanType, ISubscriptionPlan> = {
-  free: {
-    id: 'free',
-    name: 'Free',
-    price: 0,
-    currency: 'AED',
-    features: [
-      'Basic service browsing',
-      'Book appointments',
-      'View provider profiles',
-      'Basic search filters',
-      'Standard customer support',
-    ],
-    limits: {
-      bookingsPerMonth: 2,
-      featuredListings: 0,
-      commissionDiscount: 0,
-      maxAddresses: 1,
-      maxPaymentMethods: 1,
-      prioritySupport: false,
-      exclusiveOffers: false,
-      earlyAccess: false,
-    },
-  },
-  basic: {
-    id: 'basic',
-    name: 'Basic',
-    price: 29,
-    currency: 'AED',
-    features: [
-      'Everything in Free',
-      'Unlimited bookings',
-      'Save favorite providers',
-      'Receive booking reminders',
-      'Email support',
-      'View booking history',
-    ],
-    limits: {
-      bookingsPerMonth: -1, // Unlimited
-      featuredListings: 0,
-      commissionDiscount: 0,
-      maxAddresses: 3,
-      maxPaymentMethods: 2,
-      prioritySupport: false,
-      exclusiveOffers: false,
-      earlyAccess: false,
-    },
-  },
-  premium: {
-    id: 'premium',
-    name: 'Premium',
-    price: 79,
-    currency: 'AED',
-    features: [
-      'Everything in Basic',
-      'Featured listings priority',
-      'Exclusive deals & discounts',
-      'Priority customer support',
-      'Early access to new features',
-      'Save unlimited favorites',
-      'Share experiences',
-    ],
-    limits: {
-      bookingsPerMonth: -1,
-      featuredListings: 3,
-      commissionDiscount: 5,
-      maxAddresses: 5,
-      maxPaymentMethods: 5,
-      prioritySupport: true,
-      exclusiveOffers: true,
-      earlyAccess: true,
-    },
-  },
-  enterprise: {
-    id: 'enterprise',
-    name: 'Enterprise',
-    price: 199,
-    currency: 'AED',
-    features: [
-      'Everything in Premium',
-      'Dedicated account manager',
-      'VIP concierge service',
-      'Exclusive partner benefits',
-      'Priority provider matching',
-      'Custom notifications',
-      'Advanced analytics',
-    ],
-    limits: {
-      bookingsPerMonth: -1,
-      featuredListings: -1,
-      commissionDiscount: 10,
-      maxAddresses: -1,
-      maxPaymentMethods: -1,
-      prioritySupport: true,
-      exclusiveOffers: true,
-      earlyAccess: true,
-    },
-  },
-};
-
-// Plan pricing for both billing cycles
-export const PLAN_PRICES: Record<BillingCycle, Record<PlanType, number>> = {
-  monthly: {
-    free: 0,
-    basic: 29,
-    premium: 79,
-    enterprise: 199,
-  },
-  yearly: {
-    free: 0,
-    basic: 290,
-    premium: 790,
-    enterprise: 1990,
-  },
-};
-
-// Yearly discount percentage
-export const YEARLY_DISCOUNT_PERCENTAGE = 17; // Approx 2 months free
+// Re-export for backward compatibility
+export const USER_SUBSCRIPTION_PLANS = CUSTOMER_SUBSCRIPTION_PLANS;
+export const PLAN_PRICES = CUSTOMER_PLAN_PRICES;
+export const YEARLY_DISCOUNT_PERCENTAGE = CUSTOMER_YEARLY_DISCOUNT_PERCENTAGE;
 
 // ============================================
 // User Subscription Schema

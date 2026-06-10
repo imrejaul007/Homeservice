@@ -1,6 +1,7 @@
 // Customer Pages - Export all customer-related pages
 export { default as ProfilePage } from './ProfilePage';
 export { default as FavoritesPage } from './FavoritesPage';
+export { default as WishlistPage } from './WishlistPage';
 export { default as RewardsPage } from './RewardsPage';
 export { default as AddressesPage } from './AddressesPage';
 export { default as PaymentMethodsPage } from './PaymentMethodsPage';
@@ -9,3 +10,4 @@ export { default as ReviewsPage } from './ReviewsPage';
 export { default as NotificationSettingsPage } from './NotificationSettings';
 export { default as HelpCenter } from './HelpCenter';
 export { default as ContactUs } from './ContactUs';
+export { default as MessagesPage } from './MessagesPage';

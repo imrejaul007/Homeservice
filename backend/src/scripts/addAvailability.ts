@@ -20,15 +20,38 @@ const PROVIDER_IDS = [
   '692ef6fb197d384def4abbe8'
 ];
 
-// Larger continuous time blocks to accommodate services with longer durations
+/**
+ * Generate 30-minute interval time slots
+ */
+function create30MinSlots(startHour: number, endHour: number) {
+  const slots = [];
+  for (let hour = startHour; hour < endHour; hour++) {
+    for (let min = 0; min < 60; min += 30) {
+      const startTime = `${hour.toString().padStart(2, '0')}:${min.toString().padStart(2, '0')}`;
+      const endMinute = min + 30;
+      const endHourAdjusted = endMinute >= 60 ? hour + 1 : hour;
+      const endMinAdjusted = endMinute >= 60 ? 0 : endMinute;
+      const endTime = `${endHourAdjusted.toString().padStart(2, '0')}:${endMinAdjusted.toString().padStart(2, '0')}`;
+      slots.push({
+        startTime,
+        endTime,
+        isActive: true
+      });
+    }
+  }
+  return slots;
+}
+
+// 30-minute intervals for weekdays (09:00-12:00 and 14:00-18:00)
 const defaultTimeSlots = [
-  { start: '09:00', end: '12:00', isActive: true },  // Morning block: 3 hours
-  { start: '14:00', end: '18:00', isActive: true },  // Afternoon block: 4 hours
+  ...create30MinSlots(9, 12),   // 09:00-12:00 (6 slots)
+  ...create30MinSlots(14, 18),  // 14:00-18:00 (8 slots)
 ];
 
+// 30-minute intervals for Saturday (10:00-13:00 and 14:00-16:00)
 const saturdayTimeSlots = [
-  { start: '10:00', end: '13:00', isActive: true },  // Morning block: 3 hours
-  { start: '14:00', end: '16:00', isActive: true },  // Afternoon block: 2 hours
+  ...create30MinSlots(10, 13),  // 10:00-13:00 (6 slots)
+  ...create30MinSlots(14, 16),  // 14:00-16:00 (4 slots)
 ];
 
 async function main() {
@@ -36,6 +59,8 @@ async function main() {
   console.log('Connecting to MongoDB...');
   await mongoose.connect(mongoUri);
   console.log('Connected');
+
+  console.log(`Generating ${defaultTimeSlots.length} weekday slots and ${saturdayTimeSlots.length} Saturday slots...`);
 
   for (const providerId of PROVIDER_IDS) {
     // Check if availability already exists

@@ -1,17 +1,47 @@
 // Wallet Balance Component - Credits and transactions
 import { motion } from 'framer-motion';
 import { Wallet, Plus, ArrowUpRight, ArrowDownLeft, ChevronRight, Loader2 } from 'lucide-react';
-import { useWallet, useRefreshWallet, WalletTransaction } from '../../services/marketplace/RevenueService';
+import { useWallet, useRefreshWallet, WalletTransaction, type WalletContext } from '../../services/marketplace/RevenueService';
+import { useTranslation } from '../../hooks/useTranslation';
+
+// Currency code to symbol mapping
+const CURRENCY_SYMBOLS: Record<string, string> = {
+  AED: 'د.إ',
+  USD: '$',
+  EUR: '€',
+  GBP: '£',
+  INR: '₹',
+  SAR: '﷼',
+  QAR: '﷼',
+  KWD: 'د.ك',
+  BHD: '.د.ب',
+  OMR: 'ر.ع.',
+  CHF: 'CHF',
+  SGD: 'S$',
+};
+
+function getCurrencySymbol(currencyCode: string): string {
+  return CURRENCY_SYMBOLS[currencyCode] || currencyCode;
+}
 
 interface WalletBalanceProps {
   onAddMoney?: () => void;
   onViewHistory?: () => void;
   compact?: boolean;
+  walletContext?: WalletContext;
+  hideRecentTransactions?: boolean;
 }
 
-export function WalletBalance({ onAddMoney, onViewHistory, compact = false }: WalletBalanceProps) {
-  const wallet = useWallet();
-  const { loading, error, refresh } = useRefreshWallet();
+export function WalletBalance({
+  onAddMoney,
+  onViewHistory,
+  compact = false,
+  walletContext = 'customer',
+  hideRecentTransactions = false,
+}: WalletBalanceProps) {
+  const { t } = useTranslation();
+  const wallet = useWallet(walletContext);
+  const { loading, error, refresh } = useRefreshWallet(walletContext);
 
   if (compact) {
     return (
@@ -37,7 +67,7 @@ export function WalletBalance({ onAddMoney, onViewHistory, compact = false }: Wa
                 Tap to retry
               </p>
             ) : (
-              <p className="text-lg font-bold">₹{wallet.balance}</p>
+              <p className="text-lg font-bold">{getCurrencySymbol(wallet.currency)}{wallet.balance}</p>
             )}
           </div>
         </div>
@@ -60,16 +90,17 @@ export function WalletBalance({ onAddMoney, onViewHistory, compact = false }: Wa
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div>
-            <p className="text-white/60 text-sm">Available Balance</p>
+            <p className="text-white/60 text-sm">{t('wallet.available_balance')}</p>
             {error ? (
               <p className="text-3xl font-bold text-red-400">--</p>
             ) : (
-              <p className="text-3xl font-bold">₹{wallet.balance.toLocaleString()}</p>
+              <p className="text-3xl font-bold">{wallet ? `${getCurrencySymbol(wallet.currency)}${wallet.balance.toLocaleString()}` : '--'}</p>
             )}
           </div>
           <div className="flex gap-2">
             <button
               onClick={onAddMoney}
+              aria-label="Add money to wallet"
               className="p-3 bg-white/20 rounded-xl hover:bg-white/30 transition-colors"
             >
               <Plus className="w-5 h-5" />
@@ -80,21 +111,21 @@ export function WalletBalance({ onAddMoney, onViewHistory, compact = false }: Wa
         {/* Quick Stats */}
         <div className="grid grid-cols-2 gap-4 mb-6">
           <div className="bg-white/10 rounded-xl p-3">
-            <p className="text-white/60 text-xs">This Month</p>
-            <p className="text-lg font-bold text-green-400">+₹{wallet.transactions.filter((t: WalletTransaction) => t.type === 'credit').reduce((s: number, t: WalletTransaction) => s + t.amount, 0)}</p>
+            <p className="text-white/60 text-xs">{t('wallet.monthly_earnings')}</p>
+            <p className="text-lg font-bold text-green-400">+{getCurrencySymbol(wallet.currency)}{(wallet.monthlyEarnings ?? 0).toLocaleString()}</p>
           </div>
           <div className="bg-white/10 rounded-xl p-3">
-            <p className="text-white/60 text-xs">Pending</p>
-            <p className="text-lg font-bold text-amber-400">₹0</p>
+            <p className="text-white/60 text-xs">{t('wallet.pending_balance')}</p>
+            <p className="text-lg font-bold text-amber-400">{getCurrencySymbol(wallet.currency)}{(wallet.pendingCredits ?? 0).toLocaleString()}</p>
           </div>
         </div>
 
-        {/* Recent Transactions */}
+        {!hideRecentTransactions && (
         <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <p className="text-sm font-medium">Recent Transactions</p>
+            <p className="text-sm font-medium">{t('wallet.recent_transactions')}</p>
             <button onClick={onViewHistory} className="text-xs text-nilin-coral hover:underline flex items-center gap-1">
-              View All <ChevronRight className="w-3 h-3" />
+              {t('wallet.view_all')} <ChevronRight className="w-3 h-3" />
             </button>
           </div>
           {wallet.transactions.slice(0, 3).map((transaction: WalletTransaction) => (
@@ -117,14 +148,15 @@ export function WalletBalance({ onAddMoney, onViewHistory, compact = false }: Wa
                 </div>
               </div>
               <span className={`font-medium ${transaction.type === 'credit' ? 'text-green-400' : 'text-red-400'}`}>
-                {transaction.type === 'credit' ? '+' : '-'}₹{transaction.amount}
+                {transaction.type === 'credit' ? '+' : '-'}{getCurrencySymbol(wallet.currency)}{transaction.amount}
               </span>
             </div>
           ))}
           {wallet.transactions.length === 0 && (
-            <p className="text-sm text-white/50 text-center py-4">No transactions yet</p>
+            <p className="text-sm text-white/50 text-center py-4">{t('wallet.no_transactions')}</p>
           )}
         </div>
+        )}
       </div>
     </motion.div>
   );

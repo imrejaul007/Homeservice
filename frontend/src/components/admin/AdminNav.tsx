@@ -16,6 +16,7 @@ import {
   UserCheck,
   LogOut,
   Bot,
+  TrendingUp,
 } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
 import authService from '../../services/AuthService';
@@ -32,6 +33,7 @@ const NAV_ITEMS: AdminNavItem[] = [
   { to: '/admin/dashboard', label: 'Operations', description: 'Live overview', icon: LayoutDashboard },
   { to: '/admin/reports', label: 'Reports & Analytics', description: 'Charts & exports', icon: BarChart3 },
   { to: '/admin/providers', label: 'Providers', description: 'Verification queue', icon: UserCheck },
+  { to: '/admin/providers/metrics', label: 'Provider Metrics', description: 'Quality dashboards', icon: TrendingUp },
   { to: '/admin/payouts', label: 'Payouts', description: 'Withdrawals', icon: Wallet },
   { to: '/admin/churn', label: 'Churn & Retention', description: 'At-risk users', icon: TrendingDown },
   { to: '/admin/categories', label: 'Categories', description: 'Service taxonomy', icon: Layers },

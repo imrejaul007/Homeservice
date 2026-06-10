@@ -69,6 +69,7 @@ export const CashbackTracking: React.FC<CashbackTrackingProps> = ({
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
+  const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
 
   // Selection for redemption
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -120,6 +121,7 @@ export const CashbackTracking: React.FC<CashbackTrackingProps> = ({
   // Load more
   const loadMore = async () => {
     if (!hasMore || loading) return;
+    setLoadMoreError(null);
 
     try {
       const nextPage = page + 1;
@@ -134,6 +136,8 @@ export const CashbackTracking: React.FC<CashbackTrackingProps> = ({
       setPage(nextPage);
       setHasMore(moreData.page < moreData.pages);
     } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to load more entries';
+      setLoadMoreError(errorMessage);
       console.error('Failed to load more:', err);
     }
   };
@@ -282,7 +286,7 @@ export const CashbackTracking: React.FC<CashbackTrackingProps> = ({
 
         {/* Breakdown by source */}
         <div className="grid grid-cols-2 gap-3">
-          {Object.entries(balance?.breakdown || {}).map(([source, amount]) => (
+          {Object.entries(balance?.breakdown ?? {}).map(([source, amount]) => (
             <div key={source} className="bg-white/10 rounded-lg px-3 py-2">
               <div className="flex items-center gap-2">
                 <div className={cn('w-6 h-6 rounded-md flex items-center justify-center', SOURCE_COLORS[source] || 'bg-gray-100')}>
@@ -290,7 +294,7 @@ export const CashbackTracking: React.FC<CashbackTrackingProps> = ({
                 </div>
                 <div>
                   <p className="text-xs text-white/70">{SOURCE_LABELS[source] || source}</p>
-                  <p className="font-semibold">{formatCurrency(amount, 'AED')}</p>
+                  <p className="font-semibold">{formatCurrency(amount ?? 0, 'AED')}</p>
                 </div>
               </div>
             </div>
@@ -475,6 +479,11 @@ export const CashbackTracking: React.FC<CashbackTrackingProps> = ({
         {/* Load more */}
         {hasMore && (
           <div className="p-4 border-t border-gray-100">
+            {loadMoreError && (
+              <div className="mb-3 p-2 bg-red-50 border border-red-200 rounded-lg text-sm text-red-600">
+                {loadMoreError}
+              </div>
+            )}
             <button
               onClick={loadMore}
               className="w-full py-2 text-nilin-coral hover:bg-nilin-blush/30 rounded-lg transition-colors flex items-center justify-center gap-2"

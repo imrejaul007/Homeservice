@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import mongoose from 'mongoose';
 import Service from '../models/service.model';
 import ServiceCategory from '../models/serviceCategory.model';
 import ProviderProfile from '../models/providerProfile.model';
@@ -17,6 +18,7 @@ import {
   GeoSearchOptions,
 } from '../services/search.service';
 import { escapeRegex } from '../utils/formatBookingListItem';
+import { resolveCategoryFilters, buildCaseInsensitiveNameFilter } from '../utils/categoryResolver';
 
 // ===================================
 // INTERFACES & TYPES
@@ -82,6 +84,9 @@ interface SearchFilters {
   page: number;
   limit: number;
   isActive: boolean;
+  providerId?: string;
+  tier?: 'elite' | 'premium' | 'standard';
+  verified?: boolean;
 }
 
 // ===================================
@@ -100,8 +105,8 @@ export const searchServices = asyncHandler(async (req: Request, res: Response) =
     // Extract tenant context for service calls
     const tenantContext: TenantContext = getTenantContext(req);
 
-    // Parse and validate query parameters
-    const filters = parseSearchFilters(req.query);
+    // Parse and validate query parameters, then resolve slugs to canonical names
+    const filters = await normalizeSearchFilters(parseSearchFilters(req.query));
 
     // Get previous query from session/header for refinement tracking
     const previousQuery = req.headers['x-previous-query'] as string | undefined;
@@ -148,6 +153,7 @@ export const searchServices = asyncHandler(async (req: Request, res: Response) =
         sortBy: (filters.sortBy === 'price' ? 'price_asc' :
                 filters.sortBy === 'price_desc' ? 'price_desc' :
                 filters.sortBy === 'rating' ? 'rating' : 'popular') as 'price_asc' | 'price_desc' | 'rating' | 'popular',
+        providerId: filters.providerId,
       };
 
       const searchResults = await meiliSearchServices(filters.q || '', searchOptions, previousQuery);
@@ -450,9 +456,287 @@ export const getSearchFilters = asyncHandler(async (req: Request, res: Response)
   }
 });
 
+/**
+ * Search providers with filtering and sorting
+ * GET /api/search/providers
+ */
+export const searchProviders = asyncHandler(async (req: Request, res: Response) => {
+  const startTime = Date.now();
+  const tenantContext: TenantContext = getTenantContext(req);
+  const filters = await normalizeSearchFilters(parseSearchFilters(req.query));
+
+  try {
+    const page = filters.page || 1;
+    const limit = filters.limit || 12;
+    const skip = (page - 1) * limit;
+
+    // Build service query to find providers with matching services
+    const serviceQuery: any = {
+      isActive: true,
+      status: 'active',
+    };
+
+    if (!tenantContext.isAdmin && tenantContext.tenantId) {
+      serviceQuery.tenantId = tenantContext.tenantId;
+    }
+
+    if (filters.category) {
+      serviceQuery.category = buildCaseInsensitiveNameFilter(filters.category);
+    }
+
+    if (filters.subcategory) {
+      serviceQuery.subcategory = buildCaseInsensitiveNameFilter(filters.subcategory);
+    }
+
+    if (filters.q) {
+      serviceQuery.name = { $regex: new RegExp(escapeRegex(filters.q), 'i') };
+    }
+
+    if (filters.minPrice !== undefined || filters.maxPrice !== undefined) {
+      serviceQuery['price.amount'] = {};
+      if (filters.minPrice !== undefined) {
+        serviceQuery['price.amount'].$gte = filters.minPrice;
+      }
+      if (filters.maxPrice !== undefined) {
+        serviceQuery['price.amount'].$lte = filters.maxPrice;
+      }
+    }
+
+    // Collect provider IDs from matching services
+    let providerIdSet: Set<string> | null = null;
+    const hasServiceFilters = !!(
+      filters.q || filters.category || filters.subcategory ||
+      filters.minPrice !== undefined || filters.maxPrice !== undefined
+    );
+
+    if (hasServiceFilters) {
+      const matchingServices = await Service.find(serviceQuery).select('providerId').lean();
+      providerIdSet = new Set(matchingServices.map((s: any) => s.providerId.toString()));
+    }
+
+    // Also search provider profiles by name/business when q is provided
+    if (filters.q) {
+      const searchRegex = { $regex: escapeRegex(filters.q), $options: 'i' };
+      const nameMatchedUsers = await User.find({
+        role: 'provider',
+        $or: [
+          { firstName: searchRegex },
+          { lastName: searchRegex },
+        ],
+      }).select('_id').limit(100).lean();
+
+      const profileMatches = await ProviderProfile.find({
+        isActive: true,
+        isDeleted: false,
+        $or: [
+          { 'businessInfo.businessName': searchRegex },
+          { 'businessInfo.tagline': searchRegex },
+          { 'businessInfo.description': searchRegex },
+          { 'instagramStyleProfile.bio': searchRegex },
+          ...(nameMatchedUsers.length > 0
+            ? [{ userId: { $in: nameMatchedUsers.map((u: any) => u._id) } }]
+            : []),
+        ],
+      }).select('userId').lean();
+
+      const profileProviderIds = profileMatches.map((p: any) => p.userId.toString());
+      if (providerIdSet) {
+        profileProviderIds.forEach(id => providerIdSet!.add(id));
+      } else {
+        providerIdSet = new Set(profileProviderIds);
+      }
+    }
+
+    // Build provider profile query
+    const providerQuery: any = {
+      isActive: true,
+      isDeleted: false,
+    };
+
+    if (filters.providerId && mongoose.Types.ObjectId.isValid(filters.providerId)) {
+      providerQuery.userId = new mongoose.Types.ObjectId(filters.providerId);
+    } else if (providerIdSet) {
+      if (providerIdSet.size === 0) {
+        return res.json({
+          success: true,
+          data: {
+            providers: [],
+            pagination: { page, limit, total: 0, pages: 0 },
+            searchMetadata: { query: filters.q, resultCount: 0, searchTime: Date.now() - startTime },
+          },
+        });
+      }
+      providerQuery.userId = { $in: Array.from(providerIdSet) };
+    } else {
+      // Only providers that have at least one active service
+      const allActiveServices = await Service.find({
+        isActive: true,
+        status: 'active',
+        ...(tenantContext.tenantId && !tenantContext.isAdmin ? { tenantId: tenantContext.tenantId } : {}),
+      }).select('providerId').lean();
+      const allProviderIds = [...new Set(allActiveServices.map((s: any) => s.providerId))];
+      if (allProviderIds.length === 0) {
+        return res.json({
+          success: true,
+          data: {
+            providers: [],
+            pagination: { page, limit, total: 0, pages: 0 },
+            searchMetadata: { query: filters.q, resultCount: 0, searchTime: Date.now() - startTime },
+          },
+        });
+      }
+      providerQuery.userId = { $in: allProviderIds };
+    }
+
+    const effectiveMinRating = filters.minRating;
+    if (effectiveMinRating) {
+      providerQuery['reviewsData.averageRating'] = { $gte: effectiveMinRating };
+    }
+
+    if (filters.city) {
+      providerQuery['locationInfo.primaryAddress.city'] = { $regex: escapeRegex(filters.city), $options: 'i' };
+    }
+
+    if (filters.tier) {
+      providerQuery.tier = filters.tier;
+    }
+
+    if (filters.verified) {
+      providerQuery.$or = [
+        { 'instagramStyleProfile.isVerified': true },
+        { 'verificationStatus.overall': 'approved' },
+        { 'verificationStatus.overall': 'verified' },
+      ];
+    }
+
+    // Sort
+    let sort: any = {};
+    switch (filters.sortBy) {
+      case 'price':
+        sort['analytics.performanceMetrics.averagePrice'] = 1;
+        break;
+      case 'price_desc':
+        sort['analytics.performanceMetrics.averagePrice'] = -1;
+        break;
+      case 'newest':
+        sort.createdAt = -1;
+        break;
+      case 'rating':
+        sort['reviewsData.averageRating'] = -1;
+        sort['reviewsData.totalReviews'] = -1;
+        break;
+      case 'popularity':
+      default:
+        sort['reviewsData.averageRating'] = -1;
+        sort['instagramStyleProfile.followersCount'] = -1;
+        sort['reviewsData.totalReviews'] = -1;
+        break;
+    }
+
+    const [providers, totalCount] = await Promise.all([
+      ProviderProfile.find(providerQuery).sort(sort).skip(skip).limit(limit).lean(),
+      ProviderProfile.countDocuments(providerQuery),
+    ]);
+
+    const userIds = providers.map((p: any) => p.userId);
+    const [users, providerServices] = await Promise.all([
+      User.find({ _id: { $in: userIds } }).select('firstName lastName').lean(),
+      Service.find({
+        providerId: { $in: userIds },
+        isActive: true,
+        status: 'active',
+        ...(filters.category ? { category: buildCaseInsensitiveNameFilter(filters.category) } : {}),
+        ...(filters.subcategory ? { subcategory: buildCaseInsensitiveNameFilter(filters.subcategory) } : {}),
+      }).lean(),
+    ]);
+
+    const userMap = new Map(users.map((u: any) => [u._id.toString(), u]));
+    const servicesByProvider = new Map<string, any[]>();
+    providerServices.forEach((s: any) => {
+      const pid = s.providerId.toString();
+      if (!servicesByProvider.has(pid)) servicesByProvider.set(pid, []);
+      servicesByProvider.get(pid)!.push(s);
+    });
+
+    const formattedProviders = providers.map((provider: any) => {
+      const user = userMap.get(provider.userId.toString());
+      const services = servicesByProvider.get(provider.userId.toString()) || [];
+      const prices = services.map((s: any) => s.price?.amount || 0).filter((p: number) => p > 0);
+
+      return {
+        id: provider.userId,
+        _id: provider.userId.toString(),
+        firstName: user?.firstName || '',
+        lastName: user?.lastName || '',
+        businessName: provider.businessInfo?.businessName || `${user?.firstName || ''} ${user?.lastName || ''}`.trim(),
+        tagline: provider.businessInfo?.tagline || '',
+        profilePhoto: provider.instagramStyleProfile?.profilePhoto || '',
+        tier: provider.tier || 'standard',
+        isVerified: provider.instagramStyleProfile?.isVerified || provider.verificationStatus?.overall === 'approved',
+        location: provider.locationInfo?.primaryAddress ? {
+          city: provider.locationInfo.primaryAddress.city,
+          state: provider.locationInfo.primaryAddress.state,
+        } : null,
+        rating: provider.reviewsData?.averageRating || 0,
+        reviewCount: provider.reviewsData?.totalReviews || 0,
+        startingPrice: prices.length > 0 ? Math.min(...prices) : null,
+        maxPrice: prices.length > 0 ? Math.max(...prices) : null,
+        servicesCount: services.length,
+        specializations: [...new Set(services.map((s: any) => s.category).filter(Boolean))],
+        completionRate: provider.analytics?.performanceMetrics?.completionRate || 0,
+      };
+    });
+
+    // Post-sort by price if needed (price is computed from services)
+    if (filters.sortBy === 'price') {
+      formattedProviders.sort((a, b) => (a.startingPrice || 0) - (b.startingPrice || 0));
+    } else if (filters.sortBy === 'price_desc') {
+      formattedProviders.sort((a, b) => (b.startingPrice || 0) - (a.startingPrice || 0));
+    }
+
+    const searchTime = Date.now() - startTime;
+
+    return res.json({
+      success: true,
+      data: {
+        providers: formattedProviders,
+        pagination: {
+          page,
+          limit,
+          total: totalCount,
+          pages: Math.ceil(totalCount / limit),
+        },
+        searchMetadata: {
+          query: filters.q,
+          resultCount: totalCount,
+          searchTime,
+        },
+      },
+    });
+  } catch (error: any) {
+    logger.error('Provider search error', {
+      context: 'SearchController',
+      action: 'PROVIDER_SEARCH_ERROR',
+      error: error.message,
+    });
+    throw new ApiError(500, 'Provider search operation failed', error.message);
+  }
+});
+
 // ===================================
 // HELPER FUNCTIONS
 // ===================================
+
+async function normalizeSearchFilters(filters: SearchFilters): Promise<SearchFilters> {
+  if (!filters.category && !filters.subcategory) return filters;
+
+  const resolved = await resolveCategoryFilters(filters.category, filters.subcategory);
+  return {
+    ...filters,
+    category: resolved.categoryName || filters.category,
+    subcategory: resolved.subcategoryName || filters.subcategory,
+  };
+}
 
 function parseSearchFilters(query: any): SearchFilters {
   return {
@@ -470,7 +754,10 @@ function parseSearchFilters(query: any): SearchFilters {
     sortBy: (query.sortBy as 'popularity' | 'price' | 'price_desc' | 'rating' | 'distance' | 'newest') || 'popularity',
     page: query.page ? Math.max(1, Number(query.page)) : 1,
     limit: query.limit ? Math.min(100, Math.max(1, Number(query.limit))) : 20,
-    isActive: query.isActive !== 'false' // Default to true unless explicitly false
+    isActive: query.isActive !== 'false', // Default to true unless explicitly false
+    providerId: query.providerId ? String(query.providerId) : undefined,
+    tier: query.tier ? String(query.tier) as 'elite' | 'premium' | 'standard' : undefined,
+    verified: query.verified === true || query.verified === 'true' ? true : undefined,
   };
 }
 
@@ -498,15 +785,23 @@ function buildServiceSearchQuery(filters: SearchFilters, tenantContext: TenantCo
     countQuery.$text = { $search: filters.q };
   }
 
-  // Category filters
+  // Category filters (case-insensitive name match)
   if (filters.category) {
-    query.category = filters.category;
-    countQuery.category = filters.category;
+    const categoryFilter = buildCaseInsensitiveNameFilter(filters.category);
+    query.category = categoryFilter;
+    countQuery.category = categoryFilter;
   }
-  
+
   if (filters.subcategory) {
-    query.subcategory = filters.subcategory;
-    countQuery.subcategory = filters.subcategory;
+    const subcategoryFilter = buildCaseInsensitiveNameFilter(filters.subcategory);
+    query.subcategory = subcategoryFilter;
+    countQuery.subcategory = subcategoryFilter;
+  }
+
+  if (filters.providerId && mongoose.Types.ObjectId.isValid(filters.providerId)) {
+    const providerObjectId = new mongoose.Types.ObjectId(filters.providerId);
+    query.providerId = providerObjectId;
+    countQuery.providerId = providerObjectId;
   }
 
   // Price range filter
@@ -599,8 +894,19 @@ async function processSearchResults(services: any[], filters: SearchFilters) {
     // Handle both Mongoose documents (with toJSON) and plain objects
     const result = typeof service.toJSON === 'function' ? service.toJSON() : { ...service };
 
-    // Add computed fields
-    result.provider = result.provider || {};
+    // Transform providerId to provider object for frontend compatibility
+    if (result.providerId && !result.provider) {
+      result.provider = {
+        _id: result.providerId._id || result.providerId,
+        firstName: result.providerId.firstName || '',
+        lastName: result.providerId.lastName || '',
+        avatar: result.providerId.avatar || '',
+        rating: result.providerId.rating || 0,
+        location: result.providerId.location || null,
+      };
+    } else {
+      result.provider = result.provider || {};
+    }
     result.fullLocation = service.fullLocation;
     
     // Add distance if it's a geographic search
@@ -798,6 +1104,70 @@ export const getServiceById = asyncHandler(async (req: Request, res: Response) =
 });
 
 /**
+ * Get multiple services by IDs (batch lookup)
+ * GET /api/search/services/batch?ids=id1,id2,id3
+ * FIX: Replaces need for admin endpoint in customer-facing code
+ */
+export const getServicesByIds = async (req: Request, res: Response): Promise<void> => {
+  try {
+    // Extract tenant context for service calls
+    const tenantContext: TenantContext = getTenantContext(req);
+    const { ids } = req.query;
+
+    if (!ids || typeof ids !== 'string') {
+      res.status(400).json({ success: false, message: 'Service IDs are required' });
+      return;
+    }
+
+    const serviceIds = ids.split(',').filter(Boolean);
+
+    if (serviceIds.length === 0) {
+      res.json({ success: true, data: [] });
+      return;
+    }
+
+    if (serviceIds.length > 50) {
+      res.status(400).json({ success: false, message: 'Maximum 50 service IDs allowed per request' });
+      return;
+    }
+
+    // Build tenant-scoped query
+    const serviceQuery: Record<string, unknown> = {
+      _id: { $in: serviceIds },
+      isActive: true,
+      status: 'active'
+    };
+    if (!tenantContext.isAdmin && tenantContext.tenantId) {
+      serviceQuery.tenantId = tenantContext.tenantId;
+    }
+
+    // Projection for limited fields
+    const serviceProjection = {
+      name: 1,
+      category: 1,
+      subcategory: 1,
+      shortDescription: 1,
+      price: 1,
+      duration: 1,
+      images: 1,
+      rating: 1,
+      thumbnail: 1,
+      providerId: 1,
+    };
+
+    const services = await Service.find(serviceQuery, serviceProjection).lean();
+
+    res.json({
+      success: true,
+      data: services,
+    });
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : 'Failed to get services';
+    res.status(500).json({ success: false, message: errorMessage });
+  }
+};
+
+/**
  * Track service click
  * POST /api/search/service/:id/click
  */
@@ -865,7 +1235,7 @@ export const getPopularServices = asyncHandler(async (req: Request, res: Respons
  */
 export const getServicesByCategory = asyncHandler(async (req: Request, res: Response) => {
   const { category } = req.params;
-  const filters = parseSearchFilters({ ...req.query, category });
+  const filters = await normalizeSearchFilters(parseSearchFilters({ ...req.query, category }));
   const tenantContext: TenantContext = getTenantContext(req);
 
   try {
@@ -1151,6 +1521,7 @@ export const getZeroResultSearches = asyncHandler(async (req: Request, res: Resp
 // Export all functions
 export default {
   searchServices,
+  searchProviders,
   getSearchSuggestions,
   getTrendingServices,
   getSearchFilters,

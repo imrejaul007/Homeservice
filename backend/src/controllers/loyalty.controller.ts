@@ -330,6 +330,7 @@ export const redeemPoints = asyncHandler(async (req: Request, res: Response) => 
       tier: 'bronze',
       referralCode: '',
       streakDays: 0,
+      longestStreak: 0,
       totalEarned: 0,
       totalSpent: 0,
       pointsHistory: [],

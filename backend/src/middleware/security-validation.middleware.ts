@@ -9,7 +9,8 @@ export const sanitizeInput = (req: Request, _res: Response, next: NextFunction):
   const sanitizeValue = (value: unknown): unknown => {
     if (typeof value === 'string') {
       return value
-        .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+        // Safe non-greedy regex without nested quantifiers (prevents ReDoS)
+        .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
         .replace(/javascript:/gi, '')
         .replace(/on\w+=/gi, '')
         .replace(/<iframe/gi, '&lt;iframe')
@@ -91,11 +92,18 @@ export const validateOrigin = (allowedOrigins: string[]) => {
 
     const origin = req.headers.origin || req.headers.referer || '';
 
-    if (process.env.NODE_ENV === 'development') {
-      return next();
+    // Reject requests with missing Origin/Referer header for state-changing operations
+    if (!origin) {
+      logger.warn('Missing origin header', {
+        ip: req.ip,
+        path: req.path,
+        method: req.method,
+        action: 'MISSING_ORIGIN',
+      });
+      return next(new ApiError(403, 'Origin header required for this operation'));
     }
 
-    if (origin && !allowedOrigins.includes(origin as string)) {
+    if (!allowedOrigins.includes(origin as string)) {
       logger.warn('Invalid origin', {
         ip: req.ip,
         path: req.path,
@@ -111,17 +119,27 @@ export const validateOrigin = (allowedOrigins: string[]) => {
 
 /**
  * Block common attack patterns
+ * NOTE: Primary defense against SQL injection is parameterized queries.
+ * These patterns are defense-in-depth only.
  */
 export const blockAttackPatterns = (req: Request, _res: Response, next: NextFunction): void => {
   const suspiciousPatterns = [
     { pattern: /\.\.\//, name: 'Path traversal' },
     { pattern: /<script/i, name: 'XSS' },
-    { pattern: /union.*select/i, name: 'SQL injection' },
-    { pattern: /drop\s+table/i, name: 'SQL injection' },
+    // SQL injection patterns - handles bypasses: UNION/**/SELECT, UNION%09SELECT, UNION%0aSELECT, etc.
+    { pattern: /union[\s\S]*?select/i, name: 'SQL injection' },
+    { pattern: /union[\s]*((\%09|\%0a|\%0b|\%0c|\%0d|\%20|\/\*|\-\-|\#)[\s\S]*?)*select/i, name: 'SQL injection' },
+    // DROP TABLE with comment bypass: drop/**/table, drop%09table, etc.
+    { pattern: /drop[\s]*((\%09|\%0a|\%0b|\%0c|\%0d|\%20|\/\*|\-\-|\#)[\s]*)*table/i, name: 'SQL injection' },
+    { pattern: /delete[\s]*((\%09|\%0a|\%0b|\%0c|\%0d|\%20|\/\*|\-\-|\#)[\s]*)*from/i, name: 'SQL injection' },
+    { pattern: /insert[\s]*((\%09|\%0a|\%0b|\%0c|\%0d|\%20|\/\*|\-\-|\#)[\s]*)*into/i, name: 'SQL injection' },
+    { pattern: /update[\s\S]*?set/i, name: 'SQL injection' },
     { pattern: /exec\s*\(/i, name: 'Command injection' },
     { pattern: /eval\s*\(/i, name: 'Code injection' },
     { pattern: /\x00/, name: 'Null byte' },
     { pattern: /%00/, name: 'URL encoded null byte' },
+    // Additional SQL keywords that are dangerous
+    { pattern: /(select|insert|update|delete|drop|alter|create|truncate)[\s]*((\%09|\%0a|\%0b|\%0c|\%0d|\%20|\/\*|\-\-|\#)[\s\S]*?)*(from|into|table|database|where)/i, name: 'SQL injection' },
   ];
 
   const checkValue = (value: unknown, path: string): { detected: boolean; pattern?: string } => {
@@ -168,6 +186,17 @@ export const blockAttackPatterns = (req: Request, _res: Response, next: NextFunc
       path: req.path,
       pattern: queryResult.pattern,
       action: 'SUSPICIOUS_PATTERN_QUERY',
+    });
+    return next(new ApiError(400, 'Invalid input detected'));
+  }
+
+  const paramsResult = checkValue(req.params, 'params');
+  if (paramsResult.detected) {
+    logger.warn('Suspicious pattern in params', {
+      ip: req.ip,
+      path: req.path,
+      pattern: paramsResult.pattern,
+      action: 'SUSPICIOUS_PATTERN_PARAMS',
     });
     return next(new ApiError(400, 'Invalid input detected'));
   }

@@ -752,8 +752,8 @@ export class WhatsAppService {
         if (message.type === 'text') {
           const body = message.text?.body?.trim().toUpperCase() || '';
 
-          // Handle STOP/UNSUBSCRIBE
-          if (['STOP', 'STOPALL', 'UNSUBSCRIBE', 'CANCEL', 'END'].includes(body)) {
+          // Handle STOP/UNSUBSCRIBE (case-insensitive via toUpperCase on line 753)
+          if (['STOP', 'STOPALL', 'UNSUBSCRIBE', 'CANCEL', 'END', 'QUIT', 'OPTOUT'].includes(body)) {
             await this.optOutUser(cleanedPhone);
             result.actions.set(from, 'unsubscribed');
             logger.info('User opted out via WhatsApp', {

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
   Search,
@@ -15,25 +15,30 @@ import {
   Star,
   ChevronRight,
   Share2,
-  ArrowLeft
+  ArrowLeft,
+  RefreshCw
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import NavigationHeader from '../../components/layout/NavigationHeader';
 import Footer from '../../components/layout/Footer';
 import Breadcrumb from '../../components/common/Breadcrumb';
 import ExperienceSubmissionForm from '../../components/experience/ExperienceSubmissionForm';
+import CancellationModal from '../../components/booking/CancellationModal';
+import RescheduleModal from '../../components/booking/RescheduleModal';
 import { useAuthStore } from '../../stores/authStore';
 import { api } from '../../services/api';
 import { experienceApi } from '../../services/experienceApi';
+import { socketService, type BookingEvent } from '../../services/socket';
 
 interface PricingInfo {
   basePrice?: number;
   addOns?: Array<{ name: string; price: number }>;
-  discounts?: Array<{ type: string; amount: number; description: string }>;
+  discounts?: Array<{ type: string; code?: string; amount: number; description: string }>;
   subtotal?: number;
   tax?: number;
   totalAmount: number;
   currency: string;
+  couponDiscount?: number;
 }
 
 interface LocationInfo {
@@ -113,11 +118,121 @@ const TrackBookingPage: React.FC = () => {
   const [hasExperience, setHasExperience] = useState(false);
   const [checkingExperience, setCheckingExperience] = useState(false);
 
+  // Cancellation and reschedule modal state
+  const [showCancellationModal, setShowCancellationModal] = useState(false);
+  const [showRescheduleModal, setShowRescheduleModal] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [rescheduling, setRescheduling] = useState(false);
+
+  // Socket connection state
+  const [isConnected, setIsConnected] = useState(false);
+  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
+
+  // Socket cleanup ref
+  const socketCleanupRef = useCallback(() => {}, []);
+
   useEffect(() => {
     if (urlBookingNumber) {
       fetchTracking(urlBookingNumber);
     }
   }, [urlBookingNumber]);
+
+  // Setup Socket.IO connection for real-time updates
+  useEffect(() => {
+    if (!tracking?._id || !isAuthenticated) return;
+
+    let unsubscribeStatusChange: (() => void) | undefined;
+    let unsubscribeConfirmed: (() => void) | undefined;
+    let unsubscribeCancelled: (() => void) | undefined;
+    let unsubscribeRescheduled: (() => void) | undefined;
+    let unsubscribeCompleted: (() => void) | undefined;
+
+    const setupSocketListeners = async () => {
+      try {
+        // Connect to socket if not already connected
+        if (!socketService.isConnected()) {
+          await socketService.connect();
+        }
+        setIsConnected(true);
+
+        // Join the booking room to receive updates
+        socketService.joinBookingRoom(tracking._id!);
+
+        // Listen for booking status changes
+        unsubscribeStatusChange = socketService.onBookingStatusChanged((event: BookingEvent) => {
+          if (event.bookingId === tracking._id) {
+            handleStatusUpdate(event);
+          }
+        });
+
+        // Listen for specific status events
+        unsubscribeConfirmed = socketService.on('booking:confirmed', (event: BookingEvent) => {
+          if (event.bookingId === tracking._id) {
+            handleStatusUpdate(event);
+            toast.success('Your booking has been confirmed!');
+          }
+        });
+
+        unsubscribeCancelled = socketService.on('booking:cancelled', (event: BookingEvent) => {
+          if (event.bookingId === tracking._id) {
+            handleStatusUpdate(event);
+            toast.error('Your booking has been cancelled.');
+          }
+        });
+
+        unsubscribeRescheduled = socketService.on('booking:rescheduled', (event: BookingEvent) => {
+          if (event.bookingId === tracking._id) {
+            handleStatusUpdate(event);
+            toast.success('Your booking has been rescheduled.');
+            // Refresh tracking data
+            fetchTracking(tracking.bookingNumber);
+          }
+        });
+
+        unsubscribeCompleted = socketService.on('booking:completed', (event: BookingEvent) => {
+          if (event.bookingId === tracking._id) {
+            handleStatusUpdate(event);
+            toast.success('Your booking has been completed!');
+          }
+        });
+      } catch (error) {
+        console.error('Failed to setup socket listeners:', error);
+      }
+    };
+
+    setupSocketListeners();
+
+    // Cleanup function
+    return () => {
+      if (tracking._id) {
+        socketService.leaveBookingRoom(tracking._id);
+      }
+      unsubscribeStatusChange?.();
+      unsubscribeConfirmed?.();
+      unsubscribeCancelled?.();
+      unsubscribeRescheduled?.();
+      unsubscribeCompleted?.();
+    };
+  }, [tracking?._id, isAuthenticated]);
+
+  // Handle real-time status updates
+  const handleStatusUpdate = (event: BookingEvent) => {
+    setLastUpdate(new Date());
+    setTracking((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        status: event.status,
+        statusHistory: [
+          {
+            status: event.status,
+            timestamp: new Date(event.timestamp).toISOString(),
+          },
+          ...prev.statusHistory,
+        ],
+      };
+    });
+  };
 
   // Check if user has submitted experience for completed booking
   useEffect(() => {
@@ -157,6 +272,60 @@ const TrackBookingPage: React.FC = () => {
       setLoading(false);
     }
   };
+
+  // Handle cancellation
+  const handleCancelBooking = async (reason: string) => {
+    if (!tracking?._id) return;
+
+    setCancelling(true);
+    try {
+      const response = await api.patch(`/bookings/${tracking._id}/cancel`, { reason });
+
+      if (response.data.success) {
+        toast.success('Booking cancelled successfully');
+        setShowCancellationModal(false);
+        // Refresh to get updated status
+        await fetchTracking(tracking.bookingNumber);
+      } else {
+        toast.error(response.data.message || 'Failed to cancel booking');
+      }
+    } catch (err: any) {
+      toast.error(err.response?.data?.message || 'Failed to cancel booking');
+    } finally {
+      setCancelling(false);
+    }
+  };
+
+  // Handle reschedule
+  const handleRescheduleBooking = async (newDate: string, newTime: string, reason: string) => {
+    if (!tracking?._id) return;
+
+    setRescheduling(true);
+    try {
+      const response = await api.patch(`/bookings/${tracking._id}/reschedule`, {
+        scheduledDate: newDate,
+        scheduledTime: newTime,
+        reason,
+      });
+
+      if (response.data.success) {
+        toast.success('Booking rescheduled successfully');
+        setShowRescheduleModal(false);
+        // Refresh to get updated status and new time
+        await fetchTracking(tracking.bookingNumber);
+      } else {
+        toast.error(response.data.message || 'Failed to reschedule booking');
+      }
+    } catch (err: any) {
+      toast.error(err.response?.data?.message || 'Failed to reschedule booking');
+    } finally {
+      setRescheduling(false);
+    }
+  };
+
+  // Check if booking can be cancelled/rescheduled
+  const canCancel = ['pending', 'confirmed'].includes(tracking?.status || '');
+  const canReschedule = ['pending', 'confirmed'].includes(tracking?.status || '');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -387,10 +556,19 @@ const TrackBookingPage: React.FC = () => {
                     ))}
                     {tracking.pricing.discounts?.map((discount, idx) => (
                       <div key={idx} className="flex justify-between text-green-600">
-                        <span>{discount.description || 'Discount'}</span>
+                        <span>
+                          {discount.description || 'Discount'}
+                          {discount.code && <span className="text-xs ml-1">({discount.code})</span>}
+                        </span>
                         <span>-{tracking.pricing.currency} {discount.amount.toFixed(2)}</span>
                       </div>
                     ))}
+                    {tracking.pricing.couponDiscount && tracking.pricing.couponDiscount > 0 && !tracking.pricing.discounts?.some(d => d.code) && (
+                      <div className="flex justify-between text-green-600">
+                        <span>Coupon Discount</span>
+                        <span>-{tracking.pricing.currency} {tracking.pricing.couponDiscount.toFixed(2)}</span>
+                      </div>
+                    )}
                     {tracking.pricing.subtotal != null && (
                       <div className="flex justify-between text-nilin-warmGray pt-2 border-t border-nilin-border">
                         <span>Subtotal</span>
@@ -407,6 +585,72 @@ const TrackBookingPage: React.FC = () => {
                       <span>Total</span>
                       <span>{tracking.pricing.currency} {tracking.pricing.totalAmount.toFixed(2)}</span>
                     </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Offer Details Section */}
+              {(tracking.pricing.couponDiscount || (tracking.pricing.discounts && tracking.pricing.discounts.length > 0)) && (
+                <div className="p-6 border-b border-nilin-border">
+                  <h4 className="font-semibold text-nilin-charcoal mb-4 flex items-center gap-2">
+                    <svg className="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
+                    </svg>
+                    Offer Applied
+                  </h4>
+                  <div className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-xl p-4 border border-green-200">
+                    {tracking.pricing.discounts?.map((discount, idx) => (
+                      <div key={idx} className="flex items-center justify-between">
+                        <div>
+                          <p className="font-semibold text-green-800">
+                            {discount.description || 'Special Offer'}
+                          </p>
+                          <p className="text-xs text-green-600 mt-1">
+                            {discount.code && <span className="font-mono">Code: {discount.code}</span>}
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-lg font-bold text-green-600">
+                            -{tracking.pricing.currency} {discount.amount.toFixed(2)}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                    {!tracking.pricing.discounts?.length && tracking.pricing.couponDiscount && (
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="font-semibold text-green-800">Promo Code Discount</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-lg font-bold text-green-600">
+                            -{tracking.pricing.currency} {tracking.pricing.couponDiscount.toFixed(2)}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Price Comparison with Strikethrough */}
+                    {tracking.pricing.basePrice != null && tracking.pricing.couponDiscount > 0 && (
+                      <div className="mt-4 pt-4 border-t border-green-200">
+                        <div className="text-center">
+                          <p className="text-sm text-green-700 mb-1">You Save</p>
+                          <p className="text-3xl font-bold text-green-600">
+                            -{tracking.pricing.currency} {tracking.pricing.couponDiscount?.toFixed(2) || tracking.pricing.discounts?.[0]?.amount.toFixed(2)}
+                          </p>
+                          <div className="flex items-center justify-center gap-2 mt-2">
+                            <span className="text-lg text-green-700 line-through">
+                              {tracking.pricing.currency} {tracking.pricing.basePrice.toFixed(2)}
+                            </span>
+                            <svg className="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                            </svg>
+                            <span className="text-xl font-bold text-green-800">
+                              {tracking.pricing.currency} {tracking.pricing.totalAmount.toFixed(2)}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -451,6 +695,36 @@ const TrackBookingPage: React.FC = () => {
 
               {/* Action Buttons */}
               <div className="p-6 bg-nilin-cream border-t border-nilin-border">
+                {/* Real-time update indicator */}
+                {isConnected && lastUpdate && (
+                  <div className="flex items-center gap-2 text-xs text-green-600 mb-4">
+                    <RefreshCw className="w-3 h-3" />
+                    <span>Live updates active</span>
+                  </div>
+                )}
+
+                {/* Cancel and Reschedule Buttons */}
+                {canCancel && isAuthenticated && (
+                  <div className="flex flex-wrap gap-3 mb-4">
+                    {canReschedule && (
+                      <button
+                        onClick={() => setShowRescheduleModal(true)}
+                        className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-white border border-nilin-border text-nilin-charcoal rounded-nilin font-medium hover:bg-nilin-blush/30 transition-colors"
+                      >
+                        <Calendar className="w-4 h-4" />
+                        Reschedule
+                      </button>
+                    )}
+                    <button
+                      onClick={() => setShowCancellationModal(true)}
+                      className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-red-50 border border-red-200 text-red-600 rounded-nilin font-medium hover:bg-red-100 transition-colors"
+                    >
+                      <AlertCircle className="w-4 h-4" />
+                      Cancel Booking
+                    </button>
+                  </div>
+                )}
+
                 {/* Completed - Share Experience */}
                 {tracking.status === 'completed' && isAuthenticated && !checkingExperience && (
                   <div className="mb-4">
@@ -531,6 +805,28 @@ const TrackBookingPage: React.FC = () => {
             setShowExperienceForm(false);
             setHasExperience(true);
           }}
+        />
+      )}
+
+      {/* Cancellation Modal */}
+      {showCancellationModal && tracking && (
+        <CancellationModal
+          isOpen={showCancellationModal}
+          onClose={() => setShowCancellationModal(false)}
+          booking={tracking}
+          onConfirm={handleCancelBooking}
+          isLoading={cancelling}
+        />
+      )}
+
+      {/* Reschedule Modal */}
+      {showRescheduleModal && tracking && (
+        <RescheduleModal
+          isOpen={showRescheduleModal}
+          onClose={() => setShowRescheduleModal(false)}
+          booking={tracking}
+          onConfirm={handleRescheduleBooking}
+          isLoading={rescheduling}
         />
       )}
     </div>

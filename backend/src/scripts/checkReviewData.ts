@@ -8,8 +8,8 @@ import mongoose from 'mongoose';
  */
 
 async function check() {
-  const baseUri = 'mongodb+srv://nilimraj_db_user:aXJBzxFtRJosdxEc@cluster0.wnjcyp1.mongodb.net/';
-  const uri = `${baseUri}test?appName=Cluster0`;
+  const baseUri = process.env.MONGODB_URI || 'mongodb://localhost:27017/';
+  const uri = baseUri.endsWith('/') ? `${baseUri}test` : `${baseUri}/test`;
 
   await mongoose.connect(uri, { maxPoolSize: 5, serverSelectionTimeoutMS: 10000 });
 

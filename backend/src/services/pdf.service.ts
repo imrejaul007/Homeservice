@@ -932,6 +932,472 @@ export class PDFService {
     ].filter(Boolean);
     return parts.join(', ');
   }
+
+  // ============================================
+  // Package PDF Generation
+  // ============================================
+
+  /**
+   * Generate a professional PDF document for package details
+   */
+  async generatePackagePDF(data: PackagePDFData): Promise<Buffer> {
+    return new Promise(async (resolve, reject) => {
+      try {
+        const doc = new PDFDocument({ margin: 50, size: 'A4' });
+        const chunks: Buffer[] = [];
+
+        doc.on('data', (chunk: Buffer) => chunks.push(chunk));
+        doc.on('end', () => resolve(Buffer.concat(chunks)));
+        doc.on('error', reject);
+
+        // Draw header
+        this.drawPackageHeader(doc, data);
+
+        // Draw package title and basic info
+        this.drawPackageInfo(doc, data);
+
+        // Draw pricing section
+        this.drawPackagePricing(doc, data);
+
+        // Draw features/inclusions
+        this.drawPackageFeatures(doc, data);
+
+        // Draw exclusions if any
+        if (data.exclusions && data.exclusions.length > 0) {
+          this.drawPackageExclusions(doc, data.exclusions);
+        }
+
+        // Draw add-ons if any
+        if (data.addOns && data.addOns.length > 0) {
+          this.drawPackageAddOns(doc, data.addOns, data.pricing.currency);
+        }
+
+        // Draw provider info
+        this.drawPackageProvider(doc, data.provider);
+
+        // Draw terms if any
+        if (data.terms) {
+          this.drawPackageTerms(doc, data.terms);
+        }
+
+        // Draw footer
+        this.drawPackageFooter(doc, data);
+
+        doc.end();
+      } catch (error) {
+        logger.error('Error generating package PDF', { error, packageName: data.name });
+        reject(error);
+      }
+    });
+  }
+
+  // Package PDF drawing methods - Modern Professional Design
+  private drawPackageHeader(doc: typeof PDFDocument.prototype, data: PackagePDFData): void {
+    const { colors } = COMPANY_BRANDING;
+
+    // Gradient-style header bar at top
+    doc.rect(0, 0, 595, 80).fill(colors.primary);
+
+    // Company name
+    doc.fillColor('#FFFFFF')
+       .fontSize(26)
+       .text(COMPANY_BRANDING.name, 50, 25);
+
+    // Tagline
+    doc.fillColor('rgba(255,255,255,0.8)')
+       .fontSize(11)
+       .text(COMPANY_BRANDING.tagline, 50, 52);
+
+    // Package badge on right
+    doc.fillColor('rgba(255,255,255,0.2)')
+       .roundedRect(420, 20, 130, 40, 8)
+       .fill();
+    doc.fillColor('#FFFFFF')
+       .fontSize(14)
+       .text('PACKAGE DETAILS', 435, 32, { width: 100, align: 'center' });
+  }
+
+  private drawPackageInfo(doc: typeof PDFDocument.prototype, data: PackagePDFData): void {
+    const { colors } = COMPANY_BRANDING;
+    const startY = 100;
+
+    // Package name with elegant styling
+    const packageName = data.name || 'Package Details';
+    doc.fillColor(colors.text)
+       .fontSize(26)
+       .text(packageName, 50, startY);
+
+    // Decorative line
+    doc.strokeColor(colors.primary)
+       .lineWidth(3)
+       .moveTo(50, startY + 35)
+       .lineTo(150, startY + 35)
+       .stroke();
+
+    // Category badge
+    const category = data.category || 'Package';
+    const badgeWidth = Math.min(category.length * 8 + 30, 150);
+    doc.fillColor(colors.primary)
+       .roundedRect(50, startY + 48, badgeWidth, 28, 6)
+       .fill();
+    doc.fillColor('#FFFFFF')
+       .fontSize(11)
+       .text(category.toUpperCase(), 60, startY + 55);
+
+    // Description
+    if (data.description && data.description.length > 0) {
+      doc.fillColor(colors.lightText)
+         .fontSize(12)
+         .text(data.description, 50, startY + 95, { width: 495, lineGap: 4 });
+    }
+  }
+
+  private drawPackagePricing(doc: typeof PDFDocument.prototype, data: PackagePDFData): void {
+    const { colors } = COMPANY_BRANDING;
+    const startY = 200;
+
+    // Pricing card with rounded corners
+    doc.fillColor(colors.background)
+       .roundedRect(50, startY, 495, 90, 12)
+       .fill();
+    doc.strokeColor(colors.border)
+       .lineWidth(1)
+       .roundedRect(50, startY, 495, 90, 12)
+       .stroke();
+
+    // Left side - Price
+    if (data.pricing.currentPrice > 0) {
+      // Current price
+      doc.fillColor(colors.primary)
+         .fontSize(36)
+         .text(this.formatCurrency(data.pricing.currentPrice, data.pricing.currency), 70, startY + 15);
+
+      // Original price with strikethrough
+      if (data.pricing.originalPrice > data.pricing.currentPrice && data.pricing.originalPrice > 0) {
+        doc.fillColor(colors.lightText)
+           .fontSize(16)
+           .text(this.formatCurrency(data.pricing.originalPrice, data.pricing.currency), 70, startY + 55);
+
+        // Savings badge
+        const savingsPct = data.pricing.savingsPercentage ?? 0;
+        if (savingsPct > 0) {
+          doc.fillColor('#10B981')
+             .roundedRect(250, startY + 15, 80, 28, 6)
+             .fill();
+          doc.fillColor('#FFFFFF')
+             .fontSize(12)
+             .text(`SAVE ${savingsPct}%`, 258, startY + 22);
+        }
+      }
+
+      // Duration info on right side
+      if (data.duration?.totalMinutes && data.duration.totalMinutes > 0) {
+        doc.fillColor(colors.lightText)
+           .fontSize(11)
+           .text('Duration:', 350, startY + 20);
+        doc.fillColor(colors.text)
+           .fontSize(14)
+           .text(data.duration.formatted, 350, startY + 38);
+      }
+
+      // Rating on right
+      if (data.reviews && data.reviews.totalReviews > 0 && data.reviews.averageRating > 0) {
+        const stars = '★'.repeat(Math.round(data.reviews.averageRating));
+        doc.fillColor('#F59E0B')
+           .fontSize(14)
+           .text(stars, 350, startY + 55);
+        doc.fillColor(colors.lightText)
+           .fontSize(11)
+           .text(`(${data.reviews.totalReviews} reviews)`, 400, startY + 57);
+      }
+    } else {
+      doc.fillColor(colors.primary)
+         .fontSize(20)
+         .text('Contact for Pricing', 70, startY + 35);
+    }
+  }
+
+  private drawPackageFeatures(doc: typeof PDFDocument.prototype, data: PackagePDFData): void {
+    const { colors } = COMPANY_BRANDING;
+    const startY = 310;
+
+    doc.fillColor(colors.text)
+       .fontSize(16)
+       .text("What's Included", 50, startY);
+
+    // Decorative dot
+    doc.fillColor(colors.primary)
+       .circle(195, startY + 8, 4)
+       .fill();
+
+    // Collect all features
+    const features: string[] = [];
+    if (data.features && data.features.length > 0) {
+      data.features.forEach(f => {
+        if (f.included) features.push(f.name);
+      });
+    }
+    if (data.includedItems && data.includedItems.length > 0) {
+      features.push(...data.includedItems);
+    }
+
+    if (features.length === 0) {
+      doc.fillColor(colors.lightText)
+         .fontSize(11)
+         .text('Premium package with quality services', 50, startY + 35);
+      return;
+    }
+
+    // Draw features as elegant list
+    let yPos = startY + 35;
+    features.forEach((feature, index) => {
+      // Checkmark circle
+      doc.fillColor(colors.primary)
+         .circle(60, yPos + 6, 8)
+         .fill();
+      doc.fillColor('#FFFFFF')
+         .fontSize(10)
+         .text('✓', 56, yPos + 1, { width: 10, align: 'center' });
+
+      // Feature text
+      doc.fillColor(colors.text)
+         .fontSize(12)
+         .text(feature, 80, yPos);
+
+      yPos += 28;
+    });
+  }
+
+  private drawPackageExclusions(doc: typeof PDFDocument.prototype, exclusions: string[]): void {
+    if (!exclusions || exclusions.length === 0) return;
+
+    const { colors } = COMPANY_BRANDING;
+    const startY = 450;
+
+    doc.fillColor(colors.text)
+       .fontSize(14)
+       .text('Not Included', 50, startY);
+
+    doc.strokeColor(colors.border)
+       .lineWidth(0.5)
+       .moveTo(50, startY + 20)
+       .lineTo(545, startY + 20)
+       .stroke();
+
+    exclusions.slice(0, 4).forEach((exclusion, index) => {
+      const yPos = startY + 35 + (index * 22);
+
+      // X circle
+      doc.fillColor('#EF4444')
+         .circle(60, yPos + 6, 8)
+         .fill();
+      doc.fillColor('#FFFFFF')
+         .fontSize(10)
+         .text('✕', 56, yPos + 1, { width: 10, align: 'center' });
+
+      doc.fillColor(colors.lightText)
+         .fontSize(11)
+         .text(exclusion, 80, yPos);
+    });
+  }
+
+  private drawPackageAddOns(doc: typeof PDFDocument.prototype, addOns: PackageAddOn[], currency: string): void {
+    if (!addOns || addOns.length === 0) return;
+
+    const { colors } = COMPANY_BRANDING;
+    const startY = 540;
+
+    doc.fillColor(colors.text)
+       .fontSize(14)
+       .text('Available Add-Ons', 50, startY);
+
+    doc.strokeColor(colors.border)
+       .lineWidth(0.5)
+       .moveTo(50, startY + 20)
+       .lineTo(545, startY + 20)
+       .stroke();
+
+    addOns.slice(0, 4).forEach((addon, index) => {
+      const yPos = startY + 35 + (index * 30);
+
+      // Add-on box
+      doc.fillColor(index % 2 === 0 ? '#FFFFFF' : colors.background)
+         .roundedRect(50, yPos - 5, 495, 28, 6)
+         .fill();
+
+      // Plus icon
+      doc.fillColor(colors.primary)
+         .circle(65, yPos + 10, 8)
+         .fill();
+      doc.fillColor('#FFFFFF')
+         .fontSize(12)
+         .text('+', 61, yPos + 4, { width: 10, align: 'center' });
+
+      doc.fillColor(colors.text)
+         .fontSize(11)
+         .text(addon.name, 85, yPos);
+
+      doc.fillColor(colors.primary)
+         .fontSize(12)
+         .text(`+${this.formatCurrency(addon.price, currency)}`, 500, yPos, { align: 'right' });
+    });
+  }
+
+  private drawPackageProvider(doc: typeof PDFDocument.prototype, provider: PackagePDFData['provider']): void {
+    const { colors } = COMPANY_BRANDING;
+    const startY = 600;
+
+    doc.fontSize(14).fillColor(colors.text)
+       .text('Service Provider', 50, startY);
+
+    doc.strokeColor(colors.border)
+       .lineWidth(0.5)
+       .moveTo(50, startY + 25)
+       .lineTo(545, startY + 25)
+       .stroke();
+
+    // Provider info box
+    doc.rect(50, startY + 30, 495, 50).fill(colors.background);
+
+    // Provider name or default - use full name from providerName passed by controller
+    const providerName = provider.name && provider.name.trim() ? provider.name.trim() : 'Service Provider';
+    const initial = providerName.charAt(0).toUpperCase();
+
+    // Provider initial circle
+    doc.fillColor(colors.primary)
+       .circle(75, startY + 55, 15)
+       .fill();
+
+    doc.fillColor('#FFFFFF').fontSize(12)
+       .text(initial, 70, startY + 48, { width: 20, align: 'center' });
+
+    // Provider name - show full name
+    doc.fillColor(colors.text).fontSize(12)
+       .text(providerName, 100, startY + 48);
+
+    // Only show rating if we have meaningful data (less than 1000 reviews is realistic for a local service)
+    const reviewsCount = provider.totalReviews || 0;
+    // Sanity check: cap at 999 reviews and only show if rating is between 1-5
+    const providerRating = provider.rating || 0;
+    const validRating = providerRating >= 1 && providerRating <= 5;
+    const reasonableReviews = reviewsCount > 0 && reviewsCount <= 999;
+
+    if (validRating && reasonableReviews) {
+      doc.fillColor(colors.lightText).fontSize(10)
+         .text(`★ ${providerRating.toFixed(1)} (${reviewsCount} reviews)`, 100, startY + 62);
+    } else if (validRating) {
+      // Has rating but unreasonable review count - just show the rating
+      doc.fillColor(colors.lightText).fontSize(10)
+         .text(`★ ${providerRating.toFixed(1)}`, 100, startY + 62);
+    } else {
+      // No rating, show placeholder
+      doc.fillColor(colors.lightText).fontSize(10)
+         .text('Premium service provider', 100, startY + 62);
+    }
+  }
+
+  private drawPackageTerms(doc: typeof PDFDocument.prototype, terms: string): void {
+    const { colors } = COMPANY_BRANDING;
+    const startY = 670;
+
+    doc.fontSize(12).fillColor(colors.text)
+       .text('Terms & Conditions', 50, startY);
+
+    doc.fontSize(9).fillColor(colors.lightText)
+       .text(terms.substring(0, 500), 50, startY + 15, { width: 495, lineGap: 2 });
+  }
+
+  private drawPackageFooter(doc: typeof PDFDocument.prototype, data: PackagePDFData): void {
+    const { colors } = COMPANY_BRANDING;
+    const footerY = 750;
+
+    doc.moveTo(50, footerY - 10).lineTo(545, footerY - 10).stroke();
+
+    // Printed date
+    doc.fontSize(9).fillColor(colors.lightText)
+       .text(`Document generated on ${new Date().toLocaleString('en-AE')}`, 50, footerY);
+
+    // Source URL
+    doc.text(`${COMPANY_BRANDING.website}/packages/${data.packageId}`, 400, footerY);
+
+    // Disclaimer
+    doc.fontSize(8).fillColor(colors.lightText)
+       .text('This is a promotional document. Prices and availability are subject to change.', 50, footerY + 15);
+  }
+}
+
+// ============================================
+// Package PDF Types & Interface
+// ============================================
+
+export interface PackageFeature {
+  name: string;
+  included: boolean;
+}
+
+export interface PackageAddOn {
+  name: string;
+  price: number;
+  description?: string;
+}
+
+export interface PackageDurationOption {
+  duration: number;
+  price: number;
+  label: string;
+}
+
+export interface PackagePDFData {
+  // Package basic info
+  packageId: string;
+  name: string;
+  description: string;
+  category: string;
+
+  // Pricing
+  pricing: {
+    originalPrice: number;
+    currentPrice: number;
+    currency: string;
+    type: 'fixed' | 'hourly' | 'custom';
+    savings?: number;
+    savingsPercentage?: number;
+  };
+
+  // Duration
+  duration: {
+    totalMinutes: number;
+    formatted: string;
+  };
+
+  // Provider info
+  provider: {
+    id: string;
+    name: string;
+    avatar?: string;
+    rating?: number;
+    totalReviews?: number;
+  };
+
+  // Package content
+  features?: PackageFeature[];
+  includedItems?: string[];
+  exclusions?: string[];
+  addOns?: PackageAddOn[];
+  durationOptions?: PackageDurationOption[];
+
+  // Reviews summary
+  reviews?: {
+    averageRating: number;
+    totalReviews: number;
+  };
+
+  // Terms
+  terms?: string;
+
+  // Print settings
+  printedAt?: Date;
+  printedBy?: string;
 }
 
 // ============================================

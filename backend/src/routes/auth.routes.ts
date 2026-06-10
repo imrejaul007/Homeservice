@@ -12,6 +12,7 @@ import {
   validateRefreshToken,
   validateProviderRegistrationWithoutFiles,
   validateProfileUpdateWithFiles,
+  validateFiles,
   handleFileUploadError,
   uploadConfig
 } from '../middleware/validation.middleware';
@@ -28,11 +29,13 @@ const router = express.Router();
 // CAPTCHA configuration endpoint (public - returns site key)
 router.get('/captcha-config', getCaptchaSiteKey);
 
+// Email unsubscribe (public - token-based, rate-limited)
+router.get('/unsubscribe', authLimiter, authController.processEmailUnsubscribe);
+
 // Registration Routes
 router.post('/register/customer',
   registrationLimiter,
-  // TEMPORARILY DISABLED FOR DEBUG
-  // ...csrfMiddleware,
+  csrfMiddleware,
   verifyCaptcha({ required: false, skipIfDisabled: true }),
   validateCustomerRegistration,
   authController.registerCustomer
@@ -40,8 +43,7 @@ router.post('/register/customer',
 
 router.post('/register/provider',
   registrationLimiter,
-  // TEMPORARILY DISABLED FOR DEBUG
-  // ...csrfMiddleware,
+  csrfMiddleware,
   verifyCaptcha({ required: false, skipIfDisabled: true }),
   ...validateProviderRegistrationWithoutFiles,
   handleFileUploadError,
@@ -51,8 +53,7 @@ router.post('/register/provider',
 // Login Route
 router.post('/login',
   authLimiter,
-  // TEMPORARILY DISABLED FOR DEBUG - re-enable CSRF after fixing cookie issue
-  // ...csrfMiddleware,
+  // CSRF disabled for login - rate limiting + captcha provides protection
   verifyCaptcha({ required: false, skipIfDisabled: true }),
   validateLogin,
   authController.login
@@ -166,12 +167,6 @@ router.post('/devices/:fingerprint/trust',
   authController.trustDevice
 );
 
-// Logout All Devices (keeps current session)
-router.post('/logout-all-devices',
-  authMiddleware.authenticate,
-  authController.logoutAllDevices
-);
-
 // Change Password
 router.post('/change-password',
   authMiddleware.authenticate,
@@ -183,6 +178,7 @@ router.post('/change-password',
 router.post('/profile-image',
   authMiddleware.authenticate,
   uploadConfig.profileUpdate,
+  validateFiles(['avatar']),
   handleFileUploadError,
   authController.uploadProfileImage
 );

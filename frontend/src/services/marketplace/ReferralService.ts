@@ -1,5 +1,8 @@
 // Referral & Growth Service - Viral growth loops and rewards
 import { create } from 'zustand';
+
+const DEFAULT_REFERRER_REWARD = 500;
+const DEFAULT_REFEREE_REWARD = 250;
 import { persist } from 'zustand/middleware';
 import { useCallback } from 'react';
 import { analytics } from '../product/AnalyticsService';
@@ -16,12 +19,30 @@ export interface ReferralCode {
   };
 }
 
+// Unified ReferralData interface shared across all files
+export interface ReferralData {
+  referralCode: string;
+  referralUrl?: string;
+  referrerReward?: number;
+  refereeReward?: number;
+  totalReferrals?: number;
+  successfulReferrals?: number;
+  totalRewardsEarned?: number;
+}
+
 export interface ReferralMetrics {
   referralCode: string;
   totalInvites: number;
   successfulReferrals: number;
   totalEarned: number;
   conversionRate: number;
+}
+
+// Get referral source (for deep link tracking) - defined before use to avoid hoisting issues
+function getSource(): string {
+  if (typeof window === 'undefined') return 'direct';
+  const params = new URLSearchParams(window.location.search);
+  return params.get('utm_source') || params.get('ref') || 'direct';
 }
 
 interface ReferralState {
@@ -104,11 +125,11 @@ export const useReferralStore = create<ReferralState>()(
               referralCode: {
                 code: codeResponse.data.code,
                 userId: '', // Not provided by API
-                createdAt: new Date(codeResponse.data.createdAt).getTime(),
+                createdAt: codeResponse.data.createdAt ? new Date(codeResponse.data.createdAt).getTime() : Date.now(),
                 uses: codeResponse.data.totalUses || 0,
                 rewards: {
-                  referrer: 100,
-                  referee: 100,
+                  referrer: codeResponse.data.referrerReward || DEFAULT_REFERRER_REWARD,
+                  referee: codeResponse.data.refereeReward || DEFAULT_REFEREE_REWARD,
                 },
               },
             });
@@ -148,15 +169,30 @@ export function calculateReferralReward(referralCount: number): number {
 }
 
 // Share message templates
-export function getShareMessage(referralCode: string): string {
-  return `Hey! Get ₹100 off your first booking on NILIN! Use my code: ${referralCode} - You get ₹100, I get ₹100 too! Win-win! 🎉\n\nDownload app: https://nilin.app/invite/${referralCode}`;
+export function getShareMessage(referralCode: string, refereeReward?: number, referrerReward?: number): string {
+  // Import currency config dynamically to avoid circular dependencies
+  const { symbol } = getCurrencyConfig();
+  const actualRefereeReward = refereeReward || DEFAULT_REFEREE_REWARD;
+  const actualReferrerReward = referrerReward || DEFAULT_REFERRER_REWARD;
+  const formattedRefereeReward = `${symbol}${actualRefereeReward}`;
+  const formattedReferrerReward = `${symbol}${actualReferrerReward}`;
+  return `Hey! Get ${formattedRefereeReward} off your first booking on NILIN! Use my code: ${referralCode} - You get ${formattedRefereeReward}, I get ${formattedReferrerReward} too! Win-win! 🎉\n\nDownload app: https://nilin.app/invite/${referralCode}`;
 }
 
-// Get referral source (for deep link tracking)
-export function getSource(): string {
-  // Check UTM parameters or defaults
-  const params = new URLSearchParams(window.location.search);
-  return params.get('utm_source') || params.get('ref') || 'direct';
+// Get currency configuration from environment
+function getCurrencyConfig(): { code: string; symbol: string } {
+  const symbols: Record<string, string> = {
+    AED: 'د.إ',
+    USD: '$',
+    EUR: '€',
+    GBP: '£',
+    INR: '₹',
+    SAR: 'ر.س',
+  };
+  return {
+    code: import.meta.env.VITE_CURRENCY_CODE || 'AED',
+    symbol: import.meta.env.VITE_CURRENCY_SYMBOL || symbols[import.meta.env.VITE_CURRENCY_CODE || 'AED'] || 'د.إ',
+  };
 }
 
 // Get deep link for referral
@@ -167,9 +203,11 @@ export function getDeepLink(referralCode: string): string {
 // Share to platform
 export async function shareToPlatform(
   platform: 'whatsapp' | 'sms' | 'copy',
-  referralCode: string
+  referralCode: string,
+  refereeReward?: number,
+  referrerReward?: number
 ): Promise<boolean> {
-  const message = getShareMessage(referralCode);
+  const message = getShareMessage(referralCode, refereeReward, referrerReward);
 
   switch (platform) {
     case 'whatsapp':
@@ -177,11 +215,11 @@ export async function shareToPlatform(
         `https://wa.me/?text=${encodeURIComponent(message)}`,
         '_blank'
       );
-      break;
+      return true;
 
     case 'sms':
       window.open(`sms:?body=${encodeURIComponent(message)}`, '_blank');
-      break;
+      return true;
 
     case 'copy':
       try {
@@ -194,8 +232,6 @@ export async function shareToPlatform(
     default:
       return false;
   }
-
-  return true;
 }
 
 // Growth milestones

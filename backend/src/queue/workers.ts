@@ -6,6 +6,7 @@ import { QUEUE_NAMES, areQueuesEnabled, getQueue, storeFailedJob } from './index
 import { queueResilience } from '../services/queueResilience.service';
 import { ApiError, ERROR_CODES } from '../utils/ApiError';
 import User from '../models/user.model';
+import { REFERRAL_REWARDS } from '../config/constants';
 import dotenv from 'dotenv';
 import path from 'path';
 
@@ -136,6 +137,16 @@ const emailProcessor = async (job: Job<EmailJobData>) => {
       case 'payout_processed':
         // Payout processed notification - log for now, can add email template later
         logger.info(`Payout processed notification for ${to}: ${metadata?.amount}`);
+        break;
+
+      case 'contact_acknowledgement':
+      case 'contact_team_notification':
+        await emailService.sendEmail(
+          to,
+          (metadata?.subject as string) || 'NILIN Support',
+          (metadata?.html as string) || '',
+          metadata?.text as string | undefined
+        );
         break;
 
       default:
@@ -278,7 +289,15 @@ const checkAndUpgradeTier = async (userId: string): Promise<void> => {
 };
 
 const loyaltyProcessor = async (job: Job<LoyaltyJobData>) => {
-  const { userId, action, metadata } = job.data;
+  const { userId } = job.data;
+  // Producers pass action as job name; normalize metadata from top-level fields
+  const action = job.data.action || job.name;
+  const metadata: Record<string, unknown> = {
+    ...(job.data.metadata || {}),
+    ...('amount' in job.data ? { amount: (job.data as any).amount } : {}),
+    ...('relatedBooking' in job.data ? { relatedBooking: (job.data as any).relatedBooking } : {}),
+    ...('description' in job.data ? { description: (job.data as any).description } : {}),
+  };
   const startTime = Date.now();
 
   logger.info(`Processing loyalty job: ${job.id}`, {
@@ -393,6 +412,17 @@ const loyaltyProcessor = async (job: Job<LoyaltyJobData>) => {
   }
 };
 
+const MAX_PROCESSED_JOB_IDS = 500;
+
+function trackProcessedJobId(loyaltySystem: { processedJobIds?: string[] }, jobId: string | undefined): void {
+  if (!jobId) return;
+  loyaltySystem.processedJobIds = loyaltySystem.processedJobIds || [];
+  loyaltySystem.processedJobIds.push(jobId);
+  if (loyaltySystem.processedJobIds.length > MAX_PROCESSED_JOB_IDS) {
+    loyaltySystem.processedJobIds = loyaltySystem.processedJobIds.slice(-MAX_PROCESSED_JOB_IDS);
+  }
+}
+
 /**
  * Process a loyalty action (helper function to avoid code duplication in transaction)
  */
@@ -411,18 +441,15 @@ async function processLoyaltyAction(user: any, action: string, metadata: any, jo
       user.loyaltySystem.coins += SIGNUP_BONUS;
       user.loyaltySystem.totalEarned += SIGNUP_BONUS;
       user.loyaltySystem.tier = calculateTier(user.loyaltySystem.totalEarned);
-      // Track the job ID for idempotency
-      if (jobId) {
-        user.loyaltySystem.processedJobIds.push(jobId);
-      }
+      trackProcessedJobId(user.loyaltySystem, jobId);
       await user.save();
       await checkAndUpgradeTier(user._id.toString());
       break;
     }
 
     case 'award_booking_points': {
-      const amount = (metadata?.amount as number) || 0;
-      const POINTS_PER_AED = 0.1; // 1 point per 10 AED
+      // Producers pass pre-computed points (floor(bookingAmount / 10)) as amount
+      const basePoints = (metadata?.amount as number) || 0;
 
       // Tier multipliers for booking points
       const TIER_MULTIPLIERS: Record<string, number> = {
@@ -436,7 +463,6 @@ async function processLoyaltyAction(user: any, action: string, metadata: any, jo
       const currentTier = user.loyaltySystem?.tier || 'bronze';
       const tierMultiplier = TIER_MULTIPLIERS[currentTier] || 1;
 
-      const basePoints = Math.floor(amount * POINTS_PER_AED);
       const points = Math.floor(basePoints * tierMultiplier);
       user.loyaltySystem = user.loyaltySystem || {
         coins: 0,
@@ -449,10 +475,7 @@ async function processLoyaltyAction(user: any, action: string, metadata: any, jo
       user.loyaltySystem.coins += points;
       user.loyaltySystem.totalEarned += points;
       user.loyaltySystem.tier = calculateTier(user.loyaltySystem.totalEarned);
-      // Track the job ID for idempotency
-      if (jobId) {
-        user.loyaltySystem.processedJobIds.push(jobId);
-      }
+      trackProcessedJobId(user.loyaltySystem, jobId);
       await user.save();
       await checkAndUpgradeTier(user._id.toString());
       break;
@@ -471,10 +494,7 @@ async function processLoyaltyAction(user: any, action: string, metadata: any, jo
       user.loyaltySystem.coins += REVIEW_BONUS;
       user.loyaltySystem.totalEarned += REVIEW_BONUS;
       user.loyaltySystem.tier = calculateTier(user.loyaltySystem.totalEarned);
-      // Track the job ID for idempotency
-      if (jobId) {
-        user.loyaltySystem.processedJobIds.push(jobId);
-      }
+      trackProcessedJobId(user.loyaltySystem, jobId);
       await user.save();
       await checkAndUpgradeTier(user._id.toString());
       break;
@@ -517,7 +537,7 @@ async function processLoyaltyAction(user: any, action: string, metadata: any, jo
           if (reward.referrerId && reward.type === 'referral_bonus') {
             const referrer = await User.findById(reward.referrerId);
             if (referrer) {
-              const REFERRER_BONUS = 500;
+              const REFERRER_BONUS = REFERRAL_REWARDS.REFERRER_REWARD;
               referrer.loyaltySystem = referrer.loyaltySystem || {
                 coins: 0,
                 totalEarned: 0,
@@ -552,10 +572,7 @@ async function processLoyaltyAction(user: any, action: string, metadata: any, jo
 
       user.loyaltySystem.tier = calculateTier(user.loyaltySystem.totalEarned);
 
-      // Track the job ID for idempotency
-      if (jobId) {
-        user.loyaltySystem.processedJobIds.push(jobId);
-      }
+      trackProcessedJobId(user.loyaltySystem, jobId);
       await user.save();
       await checkAndUpgradeTier(user._id.toString());
 

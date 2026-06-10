@@ -312,7 +312,13 @@ const RETRY_DELAY = 1000;
 // ============================================
 
 // HMAC key for signing unsubscribe tokens - should be set via environment variable
-const UNSUBSCRIBE_SECRET = process.env.UNSUBSCRIBE_SECRET || process.env.CSRF_SECRET || 'default-unsubscribe-secret';
+const UNSUBSCRIBE_SECRET = process.env.UNSUBSCRIBE_SECRET || process.env.CSRF_SECRET || (
+  process.env.NODE_ENV === 'production' ? '' : 'default-unsubscribe-secret'
+);
+
+if (process.env.NODE_ENV === 'production' && !UNSUBSCRIBE_SECRET) {
+  throw new Error('UNSUBSCRIBE_SECRET must be set in production');
+}
 
 /**
  * Generate an unsubscribe URL for marketing emails
@@ -2675,41 +2681,38 @@ export const processUnsubscribeToken = async (token: string): Promise<{
   error?: string;
 }> => {
   try {
-    // Decode the token
-    const decoded = Buffer.from(token, 'base64url').toString('utf-8');
-    const payload: UnsubscribePayload = JSON.parse(decoded);
-
-    // Validate payload structure
-    if (!payload.userId || !payload.emailType) {
-      return { success: false, error: 'Invalid token format' };
+    const validated = validateUnsubscribeTokenFromUrl(token);
+    if (!validated) {
+      return { success: false, error: 'Invalid or expired token' };
     }
 
-    // Check token age (max 7 days)
-    const maxAge = 7 * 24 * 60 * 60 * 1000; // 7 days in ms
-    if (Date.now() - payload.timestamp > maxAge) {
-      return { success: false, error: 'Token expired' };
+    const { userId, emailType } = validated;
+    const allowedTypes = ['marketing', 'promotions', 'newsletters'] as const;
+    if (!allowedTypes.includes(emailType as typeof allowedTypes[number])) {
+      return { success: false, error: 'Invalid email type' };
     }
 
-    // Update user preferences based on email type
-    const user = await User.findById(payload.userId);
+    const user = await User.findById(userId);
     if (!user) {
       return { success: false, error: 'User not found' };
     }
 
-    // Set the appropriate preference to false
-    const prefPath = `communicationPreferences.${payload.emailType}`;
-    await User.findByIdAndUpdate(payload.userId, { $set: { [prefPath]: false } });
+    const prefPath = `communicationPreferences.email.${emailType}`;
+    await User.findByIdAndUpdate(userId, { $set: { [prefPath]: false } });
+
+    const { bustUserChannelCache } = await import('./notificationTrigger.service');
+    await bustUserChannelCache(userId);
 
     logger.info('User unsubscribed from email type', {
-      userId: payload.userId,
-      emailType: payload.emailType,
+      userId,
+      emailType,
       action: 'UNSUBSCRIBE_SUCCESS',
     });
 
     return {
       success: true,
-      userId: payload.userId,
-      emailType: payload.emailType,
+      userId,
+      emailType,
     };
   } catch (error) {
     logger.error('Failed to process unsubscribe token', { error, token });

@@ -28,11 +28,12 @@ export interface BatchBookingFilters {
 }
 
 /**
- * Validate booking IDs and ensure they belong to the provider
+ * Validate booking IDs and ensure they belong to the provider and tenant
  */
 async function validateBookingIds(
   bookingIds: string[],
-  providerId?: string
+  providerId?: string,
+  tenantId?: string
 ): Promise<{ valid: string[]; invalid: string[] }> {
   const validIds: string[] = [];
   const invalidIds: string[] = [];
@@ -46,6 +47,9 @@ async function validateBookingIds(
     const query: Record<string, unknown> = { _id: new mongoose.Types.ObjectId(id) };
     if (providerId) {
       query.providerId = new mongoose.Types.ObjectId(providerId);
+    }
+    if (tenantId) {
+      query.tenantId = new mongoose.Types.ObjectId(tenantId);
     }
 
     const booking = await Booking.findOne(query).select('_id');

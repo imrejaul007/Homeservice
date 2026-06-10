@@ -36,7 +36,7 @@ const SAMPLE_SERVICES = [
   {
     name: 'Luxury Haircut & Styling',
     category: 'Hair',
-    subcategory: 'Haircut & Styling',
+    subcategory: "Women's Haircut",
     description: 'Premium haircut with wash, style, and finishing. Includes consultation and scalp massage.',
     duration: 60,
     price: { amount: 150, currency: 'AED', type: 'fixed' },
@@ -50,7 +50,7 @@ const SAMPLE_SERVICES = [
   {
     name: 'Balayage Color Treatment',
     category: 'Hair',
-    subcategory: 'Hair Coloring',
+    subcategory: 'Coloring',
     description: 'Hand-painted balayage for a natural, sun-kissed look. Includes toner and deep conditioning.',
     duration: 180,
     price: { amount: 550, currency: 'AED', type: 'fixed' },
@@ -64,7 +64,7 @@ const SAMPLE_SERVICES = [
   {
     name: 'Keratin Blowout',
     category: 'Hair',
-    subcategory: 'Hair Treatment',
+    subcategory: 'Treatments',
     description: 'Professional keratin treatment for smooth, frizz-free hair lasting up to 3 months.',
     duration: 120,
     price: { amount: 400, currency: 'AED', type: 'fixed' },
@@ -79,7 +79,7 @@ const SAMPLE_SERVICES = [
   {
     name: 'Bridal Makeup',
     category: 'Makeup',
-    subcategory: 'Bridal Makeup',
+    subcategory: 'Bridal',
     description: 'Complete bridal look including trial session, day-of makeup, and touch-up kit.',
     duration: 120,
     price: { amount: 800, currency: 'AED', type: 'fixed' },
@@ -93,7 +93,7 @@ const SAMPLE_SERVICES = [
   {
     name: 'Glam Evening Makeup',
     category: 'Makeup',
-    subcategory: 'Special Occasion',
+    subcategory: 'Party & Event',
     description: 'Stunning makeup for parties, events, and special occasions with lash application.',
     duration: 60,
     price: { amount: 300, currency: 'AED', type: 'fixed' },
@@ -137,7 +137,7 @@ const SAMPLE_SERVICES = [
   {
     name: 'Hydrafacial Elite',
     category: 'Skin & Aesthetics',
-    subcategory: 'Facial Treatment',
+    subcategory: 'Facial',
     description: 'Deep cleansing, exfoliation, extraction, and hydration with antioxidants.',
     duration: 75,
     price: { amount: 450, currency: 'AED', type: 'fixed' },
@@ -151,7 +151,7 @@ const SAMPLE_SERVICES = [
   {
     name: 'LED Light Therapy',
     category: 'Skin & Aesthetics',
-    subcategory: 'Skin Rejuvenation',
+    subcategory: 'Anti-Aging',
     description: 'Advanced LED therapy for anti-aging, acne treatment, and skin healing.',
     duration: 30,
     price: { amount: 200, currency: 'AED', type: 'fixed' },
@@ -166,7 +166,7 @@ const SAMPLE_SERVICES = [
   {
     name: 'Swedish Massage',
     category: 'Massage & Body',
-    subcategory: 'Relaxation Massage',
+    subcategory: 'Swedish',
     description: 'Classic full-body massage using long, flowing strokes for ultimate relaxation.',
     duration: 60,
     price: { amount: 250, currency: 'AED', type: 'fixed' },
@@ -180,7 +180,7 @@ const SAMPLE_SERVICES = [
   {
     name: 'Deep Tissue Massage',
     category: 'Massage & Body',
-    subcategory: 'Therapeutic Massage',
+    subcategory: 'Deep Tissue',
     description: 'Intensive massage targeting deep muscle layers for chronic pain and tension.',
     duration: 90,
     price: { amount: 350, currency: 'AED', type: 'fixed' },
@@ -195,7 +195,7 @@ const SAMPLE_SERVICES = [
   {
     name: 'Signature Brow Design',
     category: 'Personal Care',
-    subcategory: 'Brow Services',
+    subcategory: 'Brow Shaping',
     description: 'Expert brow mapping, shaping, tinting, and lamination for perfect arches.',
     duration: 45,
     price: { amount: 100, currency: 'AED', type: 'fixed' },
@@ -209,7 +209,7 @@ const SAMPLE_SERVICES = [
   {
     name: 'Luxury Lash Extensions',
     category: 'Personal Care',
-    subcategory: 'Lash Services',
+    subcategory: 'Lash Extensions',
     description: 'Full set of classic or volume lash extensions with professional aftercare.',
     duration: 120,
     price: { amount: 350, currency: 'AED', type: 'fixed' },

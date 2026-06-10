@@ -2,7 +2,7 @@
  * UpcomingBookings Component
  * Shows the next upcoming bookings with quick actions
  */
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Calendar,
@@ -27,6 +27,7 @@ import { toast } from 'react-hot-toast';
 import type { Booking, BookingStatus } from '../../types/booking.types';
 import { useBookingStore } from '../../stores/bookingStore';
 import { useAuthStore } from '../../stores/authStore';
+import { useSocketEvent } from '../../hooks/useSocket';
 
 // =============================================================================
 // Types
@@ -154,7 +155,6 @@ const UpcomingBookings: React.FC<UpcomingBookingsProps> = ({
   const {
     customerBookings,
     isLoading,
-    errors,
     getCustomerBookings,
     cancelBooking,
   } = useBookingStore();
@@ -163,8 +163,10 @@ const UpcomingBookings: React.FC<UpcomingBookingsProps> = ({
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [showCancelModal, setShowCancelModal] = useState<string | null>(null);
   const [cancelReason, setCancelReason] = useState<Record<string, string>>({});
+  const isMountedRef = useRef(true);
 
   const fetchBookings = useCallback(async () => {
+    if (!isMountedRef.current) return;
     try {
       await getCustomerBookings({
         limit: 10,
@@ -173,12 +175,36 @@ const UpcomingBookings: React.FC<UpcomingBookingsProps> = ({
       });
     } catch (err) {
       console.error('Failed to fetch bookings:', err);
+      if (isMountedRef.current) {
+        toast.error('Failed to load bookings. Please try again.');
+      }
     }
   }, []); // Filters are static, no need to depend on getCustomerBookings (Zustand stable reference)
 
   useEffect(() => {
+    // Initial fetch
     fetchBookings();
+
+    // Auto-refresh every 30 seconds
+    const interval = setInterval(() => {
+      fetchBookings();
+    }, 30000);
+
+    // Cleanup: clear interval and cancel any pending fetch on unmount
+    return () => {
+      isMountedRef.current = false;
+      clearInterval(interval);
+    };
   }, [fetchBookings]);
+
+  // Real-time socket listeners for booking updates
+  useSocketEvent('booking:status_changed', () => {
+    fetchBookings();
+  });
+
+  useSocketEvent('booking:new_request', () => {
+    fetchBookings();
+  });
 
   const handleRefresh = async () => {
     setIsRefreshing(true);

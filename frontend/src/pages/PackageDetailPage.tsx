@@ -13,6 +13,12 @@ import {
   Calendar,
   User,
   MessageSquare,
+  Scale,
+  Edit3,
+  Calculator,
+  Printer,
+  Download,
+  Package,
 } from 'lucide-react';
 import NavigationHeader from '../components/layout/NavigationHeader';
 import Footer from '../components/layout/Footer';
@@ -20,39 +26,16 @@ import Breadcrumb from '../components/common/Breadcrumb';
 import Button from '../components/common/Button';
 import { api as apiClient } from '../services/api';
 import { useAuthStore } from '../stores/authStore';
-
-interface Package {
-  _id: string;
-  name: string;
-  description: string;
-  price: number;
-  originalPrice?: number;
-  duration: number;
-  category: string;
-  subcategory?: string;
-  provider: {
-    _id: string;
-    name: string;
-    rating: number;
-    reviewCount: number;
-    verified: boolean;
-    responseTime?: string;
-    completedJobs?: number;
-    avatar?: string;
-    bio?: string;
-    location?: string;
-  };
-  rating: number;
-  reviewCount: number;
-  images?: string[];
-  features: string[];
-  inclusions: string[];
-  exclusions: string[];
-  terms?: string;
-  isFeatured?: boolean;
-  isPopular?: boolean;
-  createdAt: string;
-}
+import toast from 'react-hot-toast';
+import { normalizeFeatures } from '../services/packageApi';
+import { PackagePriceCalculator } from '../components/price-calculator';
+import type { PriceBreakdown } from '../services/priceCalculatorApi';
+import ProviderAvailabilityWidget from '../components/provider/ProviderAvailabilityWidget';
+import { WritePackageReviewModal } from '../components/customer/WritePackageReviewModal';
+import { ShareModal } from '../components/common/ShareModal';
+import { wishlistApi } from '../services/wishlistApi';
+import { PrintButton } from '../components/common/PrintButton';
+import PackageBookingWizard from '../components/booking/PackageBookingWizard';
 
 interface Review {
   _id: string;
@@ -65,23 +48,112 @@ interface Review {
   createdAt: string;
 }
 
+/**
+ * Backend ServicePackage format - returned from API
+ * Note: provider is flattened as providerId and providerName
+ */
+interface BackendServicePackage {
+  _id: string;
+  name: string;
+  description: string;
+  category: string;
+  basePrice?: number;
+  discountedPrice?: number;
+  pricing: {
+    originalPrice: number;
+    currentPrice: number;
+    currency: string;
+    type: 'fixed' | 'hourly' | 'custom';
+  };
+  duration: {
+    totalMinutes: number;
+    formatted: string;
+  };
+  features?: Array<{ name: string; included: boolean }>;
+  includedItems?: string[];
+  services?: Array<{ serviceId: string; serviceName: string; duration: number; originalPrice: number }>;
+  images?: string[];
+  isActive: boolean;
+  isFeatured: boolean;
+  isPopular?: boolean;
+  providerId: string;
+  providerName: string;
+  providerAvatar?: string;
+  averageRating?: number;
+  totalReviews?: number;
+  inclusions?: string[];
+  exclusions?: string[];
+  terms?: string;
+  addOns?: Array<{ name: string; price: number; description?: string }>;
+  durationOptions?: Array<{ duration: number; price: number; label: string }>;
+}
+
 const PackageDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { isAuthenticated, user } = useAuthStore();
 
-  const [pkg, setPkg] = useState<Package | null>(null);
+  const [pkg, setPkg] = useState<BackendServicePackage | null>(null);
   const [reviews, setReviews] = useState<Review[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isFavorite, setIsFavorite] = useState(false);
   const [selectedImageIndex, setSelectedImageIndex] = useState(0);
+  const [selectedDate, setSelectedDate] = useState<string | undefined>();
+  const [selectedSlot, setSelectedSlot] = useState<string | undefined>();
+  const [showAvailabilityCalendar, setShowAvailabilityCalendar] = useState(false);
+  const [showReviewModal, setShowReviewModal] = useState(false);
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [showPriceCalculator, setShowPriceCalculator] = useState(false);
+  const [calculatedPrice, setCalculatedPrice] = useState<PriceBreakdown | null>(null);
+  const [showPackageWizard, setShowPackageWizard] = useState(false);
+  const [wizardSelectedAddOns, setWizardSelectedAddOns] = useState<Array<{ id: string; name: string; price: number; description?: string }>>([]);
 
   useEffect(() => {
     if (id) {
       fetchPackageDetails();
+      if (isAuthenticated) {
+        fetchWishlistStatus();
+      }
     }
-  }, [id]);
+  }, [id, isAuthenticated]);
+
+  const fetchWishlistStatus = async () => {
+    if (!id) return;
+
+    try {
+      const response = await wishlistApi.checkWishlist(id);
+      setIsFavorite(response.data.isInWishlist);
+    } catch (error) {
+      console.error('Failed to check wishlist status:', error);
+      // Default to not favorited if check fails
+      setIsFavorite(false);
+    }
+  };
+
+  const handleToggleWishlist = async () => {
+    if (!isAuthenticated) {
+      navigate('/login', { state: { returnTo: `/packages/${id}` } });
+      return;
+    }
+
+    if (!id) return;
+
+    try {
+      const response = await wishlistApi.toggleWishlist(id);
+      setIsFavorite(response.data.isInWishlist);
+
+      if (response.data.isInWishlist) {
+        toast.success('Package added to wishlist');
+      } else {
+        toast.success('Package removed from wishlist');
+      }
+    } catch (error: any) {
+      console.error('Failed to toggle wishlist:', error);
+      const message = error?.response?.data?.message || 'Failed to update wishlist';
+      toast.error(message);
+    }
+  };
 
   const fetchPackageDetails = async () => {
     setIsLoading(true);
@@ -107,22 +179,52 @@ const PackageDetailPage: React.FC = () => {
     navigate(`/book-package/${id}`);
   };
 
-  const handleShare = async () => {
-    if (navigator.share) {
-      try {
-        await navigator.share({
-          title: pkg?.name,
-          text: `Check out this service package: ${pkg?.name}`,
-          url: window.location.href,
-        });
-      } catch (err) {
-        // User cancelled or share failed
-      }
-    } else {
-      // Fallback: copy to clipboard
-      navigator.clipboard.writeText(window.location.href);
-      alert('Link copied to clipboard!');
+  const handleContactProvider = () => {
+    if (!isAuthenticated) {
+      navigate('/login', { state: { returnTo: `/packages/${id}` } });
+      return;
     }
+    if (pkg?.providerId) {
+      // Navigate to new message page with provider info
+      const providerName = encodeURIComponent(pkg.providerName || 'Provider');
+      navigate(`/customer/messages/new?providerId=${pkg.providerId}&providerName=${providerName}`);
+    } else {
+      toast.error('Unable to contact provider. Please try again later.');
+    }
+  };
+
+  const handleShare = () => {
+    setShowShareModal(true);
+  };
+
+  const handleSlotSelect = (slot: any, date: string) => {
+    setSelectedDate(date);
+    setSelectedSlot(slot.id);
+    // Show toast with selected date/time for confirmation
+    const slotTime = slot.startTime;
+    const formattedDate = new Date(date + 'T00:00:00').toLocaleDateString('en-AE', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    });
+    toast.success(
+      <div>
+        <p className="font-medium">Selected: {formattedDate}</p>
+        <p className="text-sm opacity-80">{slotTime}</p>
+      </div>
+    );
+  };
+
+  const handleBookWithSelectedSlot = () => {
+    // Always navigate to booking page - user can select date/time there
+    // Only require authentication
+    if (!isAuthenticated) {
+      navigate('/login', { state: { returnTo: `/packages/${id}` } });
+      return;
+    }
+    // Navigate to package booking flow
+    navigate(`/book-package/${id}`);
   };
 
   const formatPrice = (price: number) => {
@@ -144,6 +246,73 @@ const PackageDetailPage: React.FC = () => {
   const getDiscountPercentage = (original: number, current: number) => {
     return Math.round(((original - current) / original) * 100);
   };
+
+  const handleWriteReview = () => {
+    if (!isAuthenticated) {
+      navigate('/login', { state: { returnTo: `/packages/${id}` } });
+      return;
+    }
+    setShowReviewModal(true);
+  };
+
+  const handleReviewSubmitted = (reviewId: string) => {
+    toast.success('Review submitted! It will appear after admin approval.');
+    // Refresh the page to show the new review (after approval)
+    fetchPackageDetails();
+  };
+
+  const handlePriceChange = (breakdown: PriceBreakdown) => {
+    setCalculatedPrice(breakdown);
+  };
+
+  const handleBookEntirePackage = () => {
+    if (!isAuthenticated) {
+      navigate('/login', { state: { returnTo: `/packages/${id}` } });
+      return;
+    }
+
+    // Get selected add-ons from the calculator if it's shown
+    // The calculator component tracks its own selected add-ons internally
+    // We'll pass whatever add-ons were selected in the calculator
+
+    // If there's a price breakdown with add-ons, extract them
+    const selectedAddOns = calculatedPrice?.addOns?.map((addon, index) => ({
+      id: `addon-${index}`,
+      name: addon.name,
+      price: addon.price,
+    })) || calculatorAddOns.filter(addon => {
+      // Only include add-ons that might have been selected
+      // In a real implementation, we'd track which add-ons are actually selected
+      return true;
+    });
+
+    setWizardSelectedAddOns(selectedAddOns);
+    setShowPackageWizard(true);
+  };
+
+  const handlePackageWizardComplete = (bookingId: string, bookingNumber?: string) => {
+    toast.success('Package booked successfully!');
+    // Navigate to booking confirmation or tracking page
+    if (bookingNumber) {
+      navigate(`/track/${bookingNumber}`);
+    } else if (bookingId) {
+      navigate(`/customer/bookings/${bookingId}`);
+    } else {
+      navigate('/customer/bookings');
+    }
+  };
+
+  const handlePackageWizardCancel = () => {
+    setShowPackageWizard(false);
+  };
+
+  // Transform addOns to match calculator component format
+  const calculatorAddOns = pkg?.addOns?.map((addon, index) => ({
+    id: `addon-${index}`,
+    name: addon.name,
+    price: addon.price,
+    description: addon.description,
+  })) || [];
 
   if (isLoading) {
     return (
@@ -217,27 +386,38 @@ const PackageDetailPage: React.FC = () => {
                   {/* Actions */}
                   <div className="absolute top-4 right-4 flex gap-2">
                     <button
-                      onClick={() => setIsFavorite(!isFavorite)}
+                      onClick={handleToggleWishlist}
                       className={`p-3 rounded-full ${
                         isFavorite
                           ? 'bg-red-500 text-white'
                           : 'bg-white/90 text-nilin-warmGray hover:text-red-500'
                       } transition-colors`}
+                      aria-label={isFavorite ? 'Remove from wishlist' : 'Add to wishlist'}
                     >
                       <Heart className={`w-5 h-5 ${isFavorite ? 'fill-current' : ''}`} />
                     </button>
+                    <PrintButton
+                      packageId={pkg._id}
+                      packageName={pkg.name}
+                      variant="icon"
+                      size="md"
+                      className="!p-3"
+                      label="Save as PDF"
+                      useDownloadIcon={true}
+                    />
                     <button
                       onClick={handleShare}
                       className="p-3 rounded-full bg-white/90 text-nilin-warmGray hover:text-nilin-coral transition-colors"
+                      aria-label="Share package"
                     >
                       <Share2 className="w-5 h-5" />
                     </button>
                   </div>
 
                   {/* Discount Badge */}
-                  {pkg.originalPrice && pkg.originalPrice > pkg.price && (
+                  {pkg.pricing.originalPrice && pkg.pricing.originalPrice > pkg.pricing.currentPrice && (
                     <div className="absolute bottom-4 left-4 bg-green-500 text-white font-bold px-4 py-2 rounded-lg">
-                      {getDiscountPercentage(pkg.originalPrice, pkg.price)}% OFF
+                      {getDiscountPercentage(pkg.pricing.originalPrice, pkg.pricing.currentPrice)}% OFF
                     </div>
                   )}
                 </div>
@@ -248,38 +428,39 @@ const PackageDetailPage: React.FC = () => {
                 <h1 className="text-3xl font-serif text-nilin-charcoal mb-4">{pkg.name}</h1>
 
                 {/* Provider Info */}
-                <Link
-                  to={`/provider/${pkg.provider._id}`}
-                  className="flex items-center gap-4 p-4 bg-gray-50 rounded-xl mb-6 hover:bg-gray-100 transition-colors"
-                >
-                  <div className="w-14 h-14 bg-nilin-coral/20 rounded-full flex items-center justify-center">
-                    <span className="text-xl font-bold text-nilin-coral">
-                      {pkg.provider.name.charAt(0)}
-                    </span>
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                      <h3 className="font-medium text-nilin-charcoal">{pkg.provider.name}</h3>
-                      {pkg.provider.verified && (
-                        <span className="text-blue-500 text-sm">✓ Verified</span>
+                {pkg.providerId && (
+                  <Link
+                    to={`/provider/${pkg.providerId}`}
+                    className="flex items-center gap-4 p-4 bg-gray-50 rounded-xl mb-6 hover:bg-gray-100 transition-colors"
+                  >
+                    <div className="w-14 h-14 bg-nilin-coral/20 rounded-full flex items-center justify-center overflow-hidden">
+                      {pkg.providerAvatar ? (
+                        <img src={pkg.providerAvatar} alt="" className="w-full h-full object-cover" />
+                      ) : (
+                        <span className="text-xl font-bold text-nilin-coral">
+                          {(pkg.providerName || 'P').charAt(0)}
+                        </span>
                       )}
                     </div>
-                    <div className="flex items-center gap-4 text-sm text-nilin-warmGray mt-1">
-                      <div className="flex items-center gap-1">
-                        <Star className="w-4 h-4 text-yellow-400 fill-yellow-400" />
-                        <span>{pkg.provider.rating.toFixed(1)}</span>
-                        <span>({pkg.provider.reviewCount})</span>
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2">
+                        <h3 className="font-medium text-nilin-charcoal">
+                          {pkg.providerName || 'Provider'}
+                        </h3>
                       </div>
-                      {pkg.provider.completedJobs && (
-                        <span>{pkg.provider.completedJobs} jobs</span>
-                      )}
-                      {pkg.provider.responseTime && (
-                        <span>Responds {pkg.provider.responseTime}</span>
-                      )}
+                      <div className="flex items-center gap-4 text-sm text-nilin-warmGray mt-1">
+                        {pkg.averageRating !== undefined && pkg.averageRating > 0 && (
+                          <div className="flex items-center gap-1">
+                            <Star className="w-4 h-4 text-yellow-400 fill-yellow-400" />
+                            <span>{pkg.averageRating.toFixed(1)}</span>
+                            <span>({pkg.totalReviews || 0})</span>
+                          </div>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                  <ChevronRight className="w-5 h-5 text-nilin-warmGray" />
-                </Link>
+                    <ChevronRight className="w-5 h-5 text-nilin-warmGray" />
+                  </Link>
+                )}
 
                 {/* Description */}
                 <div className="mb-6">
@@ -291,12 +472,12 @@ const PackageDetailPage: React.FC = () => {
                 <div className="flex items-center gap-6 py-4 border-y border-gray-100">
                   <div className="flex items-center gap-2">
                     <Clock className="w-5 h-5 text-nilin-coral" />
-                    <span className="text-nilin-charcoal">{pkg.duration} minutes</span>
+                    <span className="text-nilin-charcoal">{pkg.duration.totalMinutes} minutes</span>
                   </div>
                   <div className="flex items-center gap-2">
                     <Star className="w-5 h-5 text-yellow-400 fill-yellow-400" />
-                    <span className="text-nilin-charcoal font-medium">{pkg.rating.toFixed(1)}</span>
-                    <span className="text-nilin-warmGray">({pkg.reviewCount} reviews)</span>
+                    <span className="text-nilin-charcoal font-medium">{pkg.averageRating?.toFixed(1) || 'N/A'}</span>
+                    <span className="text-nilin-warmGray">({pkg.totalReviews || 0} reviews)</span>
                   </div>
                   <div className="flex items-center gap-2">
                     <Shield className="w-5 h-5 text-green-600" />
@@ -308,10 +489,10 @@ const PackageDetailPage: React.FC = () => {
                 <div className="py-6">
                   <h2 className="text-lg font-medium text-nilin-charcoal mb-4">What's included</h2>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {pkg.features.map((feature, index) => (
+                    {normalizeFeatures(pkg.features || pkg.includedItems).map((feature, index) => (
                       <div key={index} className="flex items-start gap-3">
                         <Check className="w-5 h-5 text-green-500 flex-shrink-0 mt-0.5" />
-                        <span className="text-nilin-warmGray">{feature}</span>
+                        <span className="text-nilin-warmGray">{feature.name}</span>
                       </div>
                     ))}
                   </div>
@@ -360,19 +541,30 @@ const PackageDetailPage: React.FC = () => {
               <div className="bg-white rounded-xl p-6">
                 <div className="flex items-center justify-between mb-6">
                   <h2 className="text-lg font-medium text-nilin-charcoal">
-                    Customer Reviews ({pkg.reviewCount})
+                    Customer Reviews ({reviews.length})
                   </h2>
-                  <div className="flex items-center gap-1">
-                    {[...Array(5)].map((_, i) => (
-                      <Star
-                        key={i}
-                        className={`w-5 h-5 ${
-                          i < Math.round(pkg.rating)
-                            ? 'text-yellow-400 fill-yellow-400'
-                            : 'text-gray-300'
-                        }`}
-                      />
-                    ))}
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-1">
+                      {[...Array(5)].map((_, i) => (
+                        <Star
+                          key={i}
+                          className={`w-5 h-5 ${
+                            i < Math.round(pkg.averageRating || 0)
+                              ? 'text-yellow-400 fill-yellow-400'
+                              : 'text-gray-300'
+                          }`}
+                        />
+                      ))}
+                    </div>
+                    {isAuthenticated && (
+                      <button
+                        onClick={handleWriteReview}
+                        className="flex items-center gap-2 px-4 py-2 bg-nilin-coral text-white rounded-lg hover:bg-nilin-rose transition-colors text-sm font-medium"
+                      >
+                        <Edit3 className="w-4 h-4" />
+                        Write a Review
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -420,41 +612,104 @@ const PackageDetailPage: React.FC = () => {
             </div>
 
             {/* Sidebar - Booking Card */}
-            <div className="lg:col-span-1">
-              <div className="bg-white rounded-xl p-6 shadow-sm sticky top-4">
-                {/* Price */}
-                <div className="mb-6">
-                  <div className="flex items-baseline gap-3">
-                    <span className="text-3xl font-bold text-nilin-charcoal">
-                      {formatPrice(pkg.price)}
-                    </span>
-                    {pkg.originalPrice && (
-                      <span className="text-lg text-nilin-warmGray line-through">
-                        {formatPrice(pkg.originalPrice)}
+            <div className="lg:col-span-1 space-y-4">
+              {/* Price Calculator */}
+              {(showPriceCalculator || calculatorAddOns.length > 0 || (pkg.durationOptions && pkg.durationOptions.length > 0)) && (
+                <PackagePriceCalculator
+                  packageId={pkg._id}
+                  basePrice={pkg.pricing.currentPrice}
+                  currency={pkg.pricing.currency}
+                  addOns={calculatorAddOns}
+                  durationOptions={pkg.durationOptions}
+                  defaultDuration={pkg.duration.totalMinutes}
+                  onPriceChange={handlePriceChange}
+                />
+              )}
+
+              {/* Standard Booking Card (shown when calculator is hidden) */}
+              {!showPriceCalculator && calculatorAddOns.length === 0 && !(pkg.durationOptions && pkg.durationOptions.length > 0) && (
+                <div className="bg-white rounded-xl p-6 shadow-sm sticky top-4">
+                  {/* Price */}
+                  <div className="mb-6">
+                    <div className="flex items-baseline gap-3">
+                      <span className="text-3xl font-bold text-nilin-charcoal">
+                        {formatPrice(calculatedPrice?.totalAmount || pkg.pricing.currentPrice)}
+                      </span>
+                      {pkg.pricing.originalPrice > pkg.pricing.currentPrice && (
+                        <span className="text-lg text-nilin-warmGray line-through">
+                          {formatPrice(pkg.pricing.originalPrice)}
+                        </span>
+                      )}
+                    </div>
+                    {pkg.pricing.originalPrice > pkg.pricing.currentPrice && (
+                      <span className="text-green-600 font-medium text-sm">
+                        Save {formatPrice(pkg.pricing.originalPrice - pkg.pricing.currentPrice)}
                       </span>
                     )}
                   </div>
-                  {pkg.originalPrice && (
-                    <span className="text-green-600 font-medium text-sm">
-                      Save {formatPrice(pkg.originalPrice - pkg.price)}
-                    </span>
-                  )}
-                </div>
 
                 {/* Book Button */}
                 <Button
-                  onClick={handleBookNow}
-                  className="w-full mb-4"
+                  onClick={handleBookWithSelectedSlot}
+                  className="w-full mb-3"
                   size="lg"
                 >
-                  Book Now
+                  {selectedDate && selectedSlot ? 'Continue to Booking' : 'Book Now'}
                 </Button>
 
+                {/* Book Entire Package Button */}
+                {(pkg.services && pkg.services.length > 1) && (
+                  <Button
+                    onClick={handleBookEntirePackage}
+                    variant="secondary"
+                    className="w-full mb-4 bg-gradient-to-r from-nilin-coral/10 to-nilin-blush/10 border-nilin-coral/30 hover:from-nilin-coral/20 hover:to-nilin-blush/20"
+                    size="lg"
+                  >
+                    <Package className="w-5 h-5 mr-2" />
+                    Book Entire Package
+                  </Button>
+                )}
+
+                {/* Compare Button */}
+                <button
+                  onClick={() => {
+                    // Store current package ID in session storage and navigate to compare page
+                    const existingIds = sessionStorage.getItem('comparePackageIds');
+                    let currentIds: string[] = existingIds ? JSON.parse(existingIds) : [];
+
+                    // Add current package if not already there
+                    if (id && !currentIds.includes(id)) {
+                      currentIds.push(id);
+                      sessionStorage.setItem('comparePackageIds', JSON.stringify(currentIds));
+                    }
+
+                    navigate('/packages/compare');
+                  }}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-3 border border-nilin-coral text-nilin-coral rounded-xl hover:bg-nilin-coral/5 transition-colors mb-4"
+                >
+                  <Scale className="w-5 h-5" />
+                  <span>Add to Compare</span>
+                </button>
+
                 {/* Contact Provider */}
-                <button className="w-full flex items-center justify-center gap-2 px-4 py-3 border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors mb-6">
+                <button
+                  onClick={handleContactProvider}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-3 border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors mb-4"
+                >
                   <MessageSquare className="w-5 h-5 text-nilin-warmGray" />
                   <span className="text-nilin-charcoal">Contact Provider</span>
                 </button>
+
+                {/* Save as PDF Button */}
+                <PrintButton
+                  packageId={pkg._id}
+                  packageName={pkg.name}
+                  variant="icon-text"
+                  size="lg"
+                  className="w-full mb-4"
+                  label="Save as PDF"
+                  useDownloadIcon={true}
+                />
 
                 {/* Quick Info */}
                 <div className="space-y-4 pt-6 border-t border-gray-100">
@@ -462,7 +717,7 @@ const PackageDetailPage: React.FC = () => {
                     <Clock className="w-5 h-5 text-nilin-warmGray" />
                     <div>
                       <p className="text-sm text-nilin-warmGray">Duration</p>
-                      <p className="font-medium text-nilin-charcoal">{pkg.duration} minutes</p>
+                      <p className="font-medium text-nilin-charcoal">{pkg.duration.formatted}</p>
                     </div>
                   </div>
 
@@ -470,20 +725,43 @@ const PackageDetailPage: React.FC = () => {
                     <Calendar className="w-5 h-5 text-nilin-warmGray" />
                     <div>
                       <p className="text-sm text-nilin-warmGray">Availability</p>
-                      <p className="font-medium text-nilin-charcoal">Check available dates</p>
+                      <button
+                        onClick={() => setShowAvailabilityCalendar(!showAvailabilityCalendar)}
+                        className="font-medium text-nilin-coral hover:underline"
+                      >
+                        {selectedDate ? 'Date selected' : 'Check available dates'}
+                      </button>
                     </div>
                   </div>
 
-                  {pkg.provider.location && (
-                    <div className="flex items-center gap-3">
-                      <MapPin className="w-5 h-5 text-nilin-warmGray" />
-                      <div>
-                        <p className="text-sm text-nilin-warmGray">Service Area</p>
-                        <p className="font-medium text-nilin-charcoal">{pkg.provider.location}</p>
-                      </div>
-                    </div>
+                  {/* Toggle Calculator Button */}
+                  {(calculatorAddOns.length > 0 || (pkg.durationOptions && pkg.durationOptions.length > 0)) && (
+                    <button
+                      onClick={() => setShowPriceCalculator(!showPriceCalculator)}
+                      className="w-full flex items-center justify-center gap-2 px-4 py-2 text-nilin-coral hover:bg-nilin-coral/5 rounded-lg transition-colors"
+                    >
+                      <Calculator className="w-4 h-4" />
+                      <span className="text-sm font-medium">
+                        {showPriceCalculator ? 'Hide Calculator' : 'Customize & Calculate Price'}
+                      </span>
+                    </button>
                   )}
+
                 </div>
+
+                {/* Availability Calendar */}
+                {showAvailabilityCalendar && pkg.providerId && (
+                  <div className="mt-4 pt-6 border-t border-gray-100">
+                    <ProviderAvailabilityWidget
+                      providerId={pkg.providerId}
+                      selectedDate={selectedDate}
+                      selectedSlot={selectedSlot}
+                      onSlotSelect={handleSlotSelect}
+                      compact={false}
+                      showCalendar={true}
+                    />
+                  </div>
+                )}
 
                 {/* Safety Note */}
                 <div className="mt-6 p-4 bg-green-50 rounded-xl">
@@ -498,12 +776,101 @@ const PackageDetailPage: React.FC = () => {
                   </div>
                 </div>
               </div>
+              )}
             </div>
           </div>
         </div>
       </div>
 
       <Footer />
+
+      {/* Write Review Modal */}
+      {pkg && (
+        <WritePackageReviewModal
+          open={showReviewModal}
+          onOpenChange={setShowReviewModal}
+          packageId={pkg._id}
+          packageName={pkg.name}
+          onReviewSubmitted={handleReviewSubmitted}
+        />
+      )}
+
+      {/* Package Booking Wizard Modal */}
+      {showPackageWizard && pkg && (
+        <div className="fixed inset-0 z-50 overflow-auto">
+          <div className="min-h-screen">
+            <PackageBookingWizard
+              packageData={{
+                id: pkg._id,
+                name: pkg.name,
+                services: (pkg.services || []).map((s) => ({
+                  // Normalize from backend Bundle format (serviceId, serviceName, originalPrice)
+                  // to frontend Service format (_id, name, price)
+                  _id: s.serviceId || '',
+                  name: s.serviceName || 'Service',
+                  duration: s.duration || 60,
+                  price: s.originalPrice || 0,
+                  category: pkg.category,
+                  description: pkg.description || '',
+                  providerId: pkg.providerId,
+                  provider: {
+                    _id: pkg.providerId,
+                    firstName: pkg.providerName || 'Provider',
+                    lastName: '',
+                    isVerified: true,
+                  },
+                  rating: pkg.averageRating,
+                  reviewCount: pkg.totalReviews,
+                  images: pkg.images || [],
+                  isActive: pkg.isActive,
+                  variants: [],
+                  variantDetails: null,
+                  selectedVariant: 0,
+                  location: { type: 'provider', coordinates: [0, 0] },
+                  tags: [],
+                  createdAt: '',
+                  updatedAt: '',
+                })),
+                basePrice: pkg.pricing.currentPrice,
+                provider: {
+                  _id: pkg.providerId,
+                  firstName: pkg.providerName || 'Provider',
+                  lastName: '',
+                  isVerified: true,
+                  rating: pkg.averageRating,
+                  avatar: pkg.providerAvatar,
+                },
+              }}
+              selectedAddOns={wizardSelectedAddOns.map((addon: any) => ({
+                _id: addon.id,
+                name: addon.name,
+                price: addon.price,
+                description: addon.description,
+              }))}
+              calculatedPrice={{
+                subtotal: calculatedPrice?.subtotal || pkg.pricing.currentPrice,
+                addOnsTotal: calculatedPrice?.addOnsTotal || 0,
+                discount: calculatedPrice?.discount || 0,
+                tax: calculatedPrice?.tax || 0,
+                total: calculatedPrice?.totalAmount || pkg.pricing.currentPrice,
+              }}
+              onComplete={handlePackageWizardComplete}
+              onCancel={handlePackageWizardCancel}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Share Modal */}
+      <ShareModal
+        isOpen={showShareModal}
+        onClose={() => setShowShareModal(false)}
+        title={pkg?.name || 'Package'}
+        description={pkg?.description}
+        url={typeof window !== 'undefined' ? window.location.href : ''}
+        itemType="package"
+        itemId={pkg?._id}
+      />
     </div>
   );
 };

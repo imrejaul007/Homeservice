@@ -666,8 +666,8 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
 
       try {
         const response = await bookingService.getProviderBookings({
-          dateFrom: new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).toISOString(),
-          dateTo: new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).toISOString(),
+          startDate: new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).toISOString(),
+          endDate: new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).toISOString(),
           limit: 100,
         });
 
@@ -758,8 +758,8 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
     if (isMountedRef.current) {
       try {
         const response = await bookingService.getProviderBookings({
-          dateFrom: new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).toISOString(),
-          dateTo: new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).toISOString(),
+          startDate: new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).toISOString(),
+          endDate: new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).toISOString(),
           limit: 100,
         });
 

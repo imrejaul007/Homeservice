@@ -10,6 +10,7 @@
  */
 
 import mongoose, { Document, Schema } from 'mongoose';
+import { randomBytes } from 'crypto';
 import User from '../models/user.model';
 import Booking from '../models/booking.model';
 import Coupon from '../models/coupon.model';
@@ -132,6 +133,9 @@ const achievementBadgeSchema = new Schema<IAchievementBadge>(
   { timestamps: true }
 );
 
+// Unique compound index to prevent duplicate badges (prevents race conditions)
+achievementBadgeSchema.index({ userId: 1, badgeId: 1 }, { unique: true });
+
 const leaderboardEntrySchema = new Schema<ILeaderboardEntry>(
   {
     userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
@@ -174,6 +178,9 @@ const referralMilestoneSchema = new Schema<IReferralMilestone>(
   },
   { timestamps: true }
 );
+
+// Unique compound index to prevent duplicate milestones (prevents race conditions)
+referralMilestoneSchema.index({ userId: 1, milestoneType: 1, threshold: 1 }, { unique: true });
 
 // Models
 const ReferralGamification = mongoose.model<IReferralGamification>('ReferralGamification', referralGamificationSchema);
@@ -268,15 +275,13 @@ const CONFIG = {
 };
 
 /**
- * Generate unique referral code
+ * Generate unique referral code using cryptographically secure random bytes.
+ * Format: 8 alphanumeric characters (no user ID to prevent enumeration attacks).
  */
-function generateReferralCode(userId: string): string {
+function generateReferralCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let code = '';
-  for (let i = 0; i < 6; i++) {
-    code += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return `${code}-${userId.slice(-4).toUpperCase()}`;
+  const bytes = randomBytes(8);
+  return Array.from(bytes).map(b => chars[b % chars.length]).join('');
 }
 
 /**
@@ -388,8 +393,8 @@ async function awardReferralRewards(referral: IReferralGamification): Promise<vo
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + 30);
 
-    // Award to referrer
-    const referrerCouponCode = `REFER${Date.now().toString(36).toUpperCase()}`;
+    // Award to referrer (use crypto for unpredictable codes)
+    const referrerCouponCode = `REFER${randomBytes(8).toString('hex').toUpperCase()}`;
     await Coupon.create({
       code: referrerCouponCode,
       type: CONFIG.referralReward.referrer.type,
@@ -409,7 +414,7 @@ async function awardReferralRewards(referral: IReferralGamification): Promise<vo
     });
 
     // Award to referred user
-    const referredCouponCode = `WELCOME${Date.now().toString(36).toUpperCase()}`;
+    const referredCouponCode = `WELCOME${randomBytes(8).toString('hex').toUpperCase()}`;
     await Coupon.create({
       code: referredCouponCode,
       type: CONFIG.referralReward.referred.type,
@@ -471,6 +476,7 @@ async function awardReferralRewards(referral: IReferralGamification): Promise<vo
 
 /**
  * Check and award badges based on referral activity
+ * Uses atomic findOneAndUpdate with upsert to prevent race conditions
  */
 export async function checkAndAwardBadges(userId: mongoose.Types.ObjectId): Promise<IAchievementBadge[]> {
   const awardedBadges: IAchievementBadge[] = [];
@@ -482,73 +488,36 @@ export async function checkAndAwardBadges(userId: mongoose.Types.ObjectId): Prom
       status: { $in: ['completed', 'rewarded'] },
     });
 
-    // Check for first referral badge
-    if (referralCount >= 1) {
-      const existing = await AchievementBadge.findOne({ userId, badgeId: 'first_referral' });
-      if (!existing) {
-        const badge = await AchievementBadge.create({
-          userId,
-          ...BADGES.first_referral,
-          unlockedAt: new Date(),
-        });
-        awardedBadges.push(badge);
-        await sendBadgeNotification(userId, BADGES.first_referral);
-      }
-    }
+    // Badge checks with atomic upsert operations
+    const badgeChecks = [
+      { condition: referralCount >= 1, badge: BADGES.first_referral, badgeId: 'first_referral' },
+      { condition: referralCount >= 5, badge: BADGES.referral_champion_5, badgeId: 'referral_champion_5' },
+      { condition: referralCount >= 10, badge: BADGES.referral_master_10, badgeId: 'referral_master_10' },
+      { condition: referralCount >= 25, badge: BADGES.referral_legend_25, badgeId: 'referral_legend_25' },
+      { condition: referralCount >= 50, badge: BADGES.referral_royalty_50, badgeId: 'referral_royalty_50' },
+    ];
 
-    // Check for 5 referrals
-    if (referralCount >= 5) {
-      const existing = await AchievementBadge.findOne({ userId, badgeId: 'referral_champion_5' });
-      if (!existing) {
-        const badge = await AchievementBadge.create({
-          userId,
-          ...BADGES.referral_champion_5,
-          unlockedAt: new Date(),
-        });
-        awardedBadges.push(badge);
-        await sendBadgeNotification(userId, BADGES.referral_champion_5);
-      }
-    }
+    for (const check of badgeChecks) {
+      if (check.condition) {
+        // Atomic upsert: only creates if badge doesn't exist, returns the doc (new or existing)
+        // Use rawResult to detect if document was upserted
+        const result = await AchievementBadge.findOneAndUpdate(
+          { userId, badgeId: check.badgeId },
+          {
+            $setOnInsert: {
+              userId,
+              ...check.badge,
+              unlockedAt: new Date(),
+            },
+          },
+          { upsert: true, new: true, rawResult: true }
+        ) as unknown as { lastErrorObject?: { upserted?: string }; value?: IAchievementBadge };
 
-    // Check for 10 referrals
-    if (referralCount >= 10) {
-      const existing = await AchievementBadge.findOne({ userId, badgeId: 'referral_master_10' });
-      if (!existing) {
-        const badge = await AchievementBadge.create({
-          userId,
-          ...BADGES.referral_master_10,
-          unlockedAt: new Date(),
-        });
-        awardedBadges.push(badge);
-        await sendBadgeNotification(userId, BADGES.referral_master_10);
-      }
-    }
-
-    // Check for 25 referrals
-    if (referralCount >= 25) {
-      const existing = await AchievementBadge.findOne({ userId, badgeId: 'referral_legend_25' });
-      if (!existing) {
-        const badge = await AchievementBadge.create({
-          userId,
-          ...BADGES.referral_legend_25,
-          unlockedAt: new Date(),
-        });
-        awardedBadges.push(badge);
-        await sendBadgeNotification(userId, BADGES.referral_legend_25);
-      }
-    }
-
-    // Check for 50 referrals
-    if (referralCount >= 50) {
-      const existing = await AchievementBadge.findOne({ userId, badgeId: 'referral_royalty_50' });
-      if (!existing) {
-        const badge = await AchievementBadge.create({
-          userId,
-          ...BADGES.referral_royalty_50,
-          unlockedAt: new Date(),
-        });
-        awardedBadges.push(badge);
-        await sendBadgeNotification(userId, BADGES.referral_royalty_50);
+        // If result is new (upserted), it was created now
+        if (result.lastErrorObject?.upserted) {
+          awardedBadges.push(result.value as IAchievementBadge);
+          await sendBadgeNotification(userId, check.badge);
+        }
       }
     }
 
@@ -585,6 +554,7 @@ async function sendBadgeNotification(
 
 /**
  * Update referral milestones
+ * Uses atomic findOneAndUpdate with upsert to prevent race conditions
  */
 export async function updateReferralMilestones(userId: mongoose.Types.ObjectId): Promise<void> {
   try {
@@ -595,21 +565,29 @@ export async function updateReferralMilestones(userId: mongoose.Types.ObjectId):
 
     for (const milestone of MILESTONE_THRESHOLDS) {
       if (referralCount >= milestone.threshold) {
-        const existing = await ReferralMilestone.findOne({
-          userId,
-          milestoneType: milestone.type,
-          threshold: milestone.threshold,
-        });
-
-        if (!existing) {
-          await ReferralMilestone.create({
+        // Atomic upsert: only creates milestone if it doesn't exist
+        const result = await ReferralMilestone.findOneAndUpdate(
+          {
             userId,
-            ...milestone,
-            currentValue: referralCount,
-            achieved: true,
-            achievedAt: new Date(),
-          });
+            milestoneType: milestone.type,
+            threshold: milestone.threshold,
+          },
+          {
+            $setOnInsert: {
+              userId,
+              milestoneType: milestone.type,
+              threshold: milestone.threshold,
+              currentValue: referralCount,
+              achieved: true,
+              achievedAt: new Date(),
+              reward: milestone.reward,
+            },
+          },
+          { upsert: true, new: true, rawResult: true }
+        ) as unknown as { lastErrorObject?: { upserted?: string } };
 
+        // If milestone was newly created (upserted), award rewards and notify
+        if (result.lastErrorObject?.upserted) {
           // Award milestone reward
           if (milestone.reward.type === 'points') {
             await addJob('loyalty-queue', 'award_milestone_bonus', {

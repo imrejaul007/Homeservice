@@ -13,6 +13,7 @@ import {
 import { authenticate, requireRole } from '../middleware/auth.middleware';
 import { asyncHandler } from '../utils/asyncHandler';
 import ServiceCategory from '../models/serviceCategory.model';
+import { getTenantContext, TenantContext } from '../utils/tenantFilter';
 import logger from '../utils/logger';
 
 const router = Router();
@@ -37,8 +38,9 @@ router.get('/id/:id', getCategoryById);
 // Query params: q (search query)
 router.get('/search', searchCategories);
 
-// GET /api/categories/:slug - Get category by slug with full details
-router.get('/:slug', getCategoryBySlug);
+// ============================================
+// ROUTES WITH :slug - Specific routes BEFORE parameterized /:slug
+// ============================================
 
 // GET /api/categories/:slug/subcategories - Get subcategories for a category
 router.get('/:slug/subcategories', getSubcategories);
@@ -51,6 +53,9 @@ router.get('/:slug/services', getCategoryServices);
 router.put('/:slug/subcategories/:subSlug', authenticate, requireRole('admin'), updateSubcategory);
 router.delete('/:slug/subcategories/:subSlug', authenticate, requireRole('admin'), deleteSubcategory);
 
+// GET /api/categories/:slug - Get category by slug with full details (must be last for /:slug routes)
+router.get('/:slug', getCategoryBySlug);
+
 /**
  * FIX: Get service categories for frontend dropdown
  * GET /api/service-categories
@@ -58,7 +63,15 @@ router.delete('/:slug/subcategories/:subSlug', authenticate, requireRole('admin'
  */
 router.get('/service-categories/list', asyncHandler(async (req, res) => {
   try {
-    const categories = await ServiceCategory.find({ isActive: true })
+    const tenantContext: TenantContext = getTenantContext(req);
+
+    // Build query with tenant filter for non-admin requests
+    const query: Record<string, unknown> = { isActive: true };
+    if (!tenantContext.isAdmin && tenantContext.tenantId) {
+      query.tenantId = tenantContext.tenantId;
+    }
+
+    const categories = await ServiceCategory.find(query)
       .select('name slug')
       .sort({ name: 1 })
       .lean();
@@ -70,6 +83,7 @@ router.get('/service-categories/list', asyncHandler(async (req, res) => {
       context: 'CategoryRoutes',
       action: 'FETCH_SERVICE_CATEGORIES',
       count: categoryNames.length,
+      tenantId: tenantContext.tenantId || 'none',
     });
 
     res.json({

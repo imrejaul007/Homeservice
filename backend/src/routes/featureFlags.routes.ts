@@ -19,6 +19,10 @@ router.get('/enabled', async (req, res) => {
   res.json({ flags });
 });
 
+// ============================================
+// ROUTES WITH :key - Specific routes BEFORE parameterized /:key
+// ============================================
+
 // Update flag (admin only)
 router.put('/:key', authenticate, async (req, res) => {
   if (!req.user || req.user.role !== 'admin') {
@@ -28,7 +32,7 @@ router.put('/:key', authenticate, async (req, res) => {
   return res.json({ success: true });
 });
 
-// Check flag status
+// Check flag status (must be before /:key to avoid being matched as a key)
 router.get('/:key/status', async (req, res) => {
   const context = req.query.userId
     ? { userId: req.query.userId as string }

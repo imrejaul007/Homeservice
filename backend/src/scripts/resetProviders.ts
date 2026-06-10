@@ -155,27 +155,38 @@ async function reset() {
     { street: 'Palm Jumeirah, Golden Mile', lat: 25.1124, lng: 55.1390 },
   ];
 
-  const timeSlotStructure = (start: string, end: string) => ({
-    startTime: start,
-    endTime: end,
-    isBooked: false,
-    maxBookings: 3,
-    currentBookings: 0
-  });
+  // Helper function to create individual 30-min time slots
+  const create30MinSlots = (startHour: number, endHour: number) => {
+    const slots = [];
+    for (let hour = startHour; hour < endHour; hour++) {
+      for (let min = 0; min < 60; min += 30) {
+        const startTime = `${hour.toString().padStart(2, '0')}:${min.toString().padStart(2, '0')}`;
+        const endMin = min + 30;
+        const endHourAdjusted = endMin >= 60 ? hour + 1 : hour;
+        const endMinAdjusted = endMin % 60;
+        const endTime = `${endHourAdjusted.toString().padStart(2, '0')}:${endMinAdjusted.toString().padStart(2, '0')}`;
+        slots.push({
+          startTime,
+          endTime,
+          isBooked: false,
+          maxBookings: 3,
+          currentBookings: 0
+        });
+      }
+    }
+    return slots;
+  };
 
   const defaultSchedule: Record<string, any> = {};
   for (const day of ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']) {
     defaultSchedule[day] = {
       isAvailable: true,
-      timeSlots: [
-        timeSlotStructure('09:00', '12:00'),
-        timeSlotStructure('13:00', '18:00')
-      ]
+      timeSlots: create30MinSlots(9, 18) // 09:00-18:00 in 30-min intervals
     };
   }
   defaultSchedule['saturday'] = {
     isAvailable: true,
-    timeSlots: [timeSlotStructure('10:00', '16:00')]
+    timeSlots: create30MinSlots(10, 16) // 10:00-16:00 in 30-min intervals
   };
   defaultSchedule['sunday'] = { isAvailable: false, timeSlots: [] };
 
@@ -315,14 +326,36 @@ async function reset() {
   // ============================================================
   console.log('\n=== Step 5: Seeding services with real provider IDs ===');
 
+  // Helper function to create individual 30-min time slots for services
+  const createService30MinSlots = (startHour: number, endHour: number) => {
+    const slots = [];
+    for (let hour = startHour; hour < endHour; hour++) {
+      for (let min = 0; min < 60; min += 30) {
+        const startTime = `${hour.toString().padStart(2, '0')}:${min.toString().padStart(2, '0')}`;
+        const endMin = min + 30;
+        const endHourAdjusted = endMin >= 60 ? hour + 1 : hour;
+        const endMinAdjusted = endMin % 60;
+        const endTime = `${endHourAdjusted.toString().padStart(2, '0')}:${endMinAdjusted.toString().padStart(2, '0')}`;
+        slots.push({
+          startTime,
+          endTime,
+          isBooked: false,
+          maxBookings: 2,
+          currentBookings: 0
+        });
+      }
+    }
+    return slots;
+  };
+
   const defaultAvailability = {
     schedule: {
-      monday: { isAvailable: true, timeSlots: ['09:00-12:00', '13:00-18:00'] },
-      tuesday: { isAvailable: true, timeSlots: ['09:00-12:00', '13:00-18:00'] },
-      wednesday: { isAvailable: true, timeSlots: ['09:00-12:00', '13:00-18:00'] },
-      thursday: { isAvailable: true, timeSlots: ['09:00-12:00', '13:00-18:00'] },
-      friday: { isAvailable: true, timeSlots: ['09:00-12:00', '13:00-18:00'] },
-      saturday: { isAvailable: true, timeSlots: ['10:00-16:00'] },
+      monday: { isAvailable: true, timeSlots: createService30MinSlots(9, 18) },
+      tuesday: { isAvailable: true, timeSlots: createService30MinSlots(9, 18) },
+      wednesday: { isAvailable: true, timeSlots: createService30MinSlots(9, 18) },
+      thursday: { isAvailable: true, timeSlots: createService30MinSlots(9, 18) },
+      friday: { isAvailable: true, timeSlots: createService30MinSlots(9, 18) },
+      saturday: { isAvailable: true, timeSlots: createService30MinSlots(10, 16) },
       sunday: { isAvailable: false, timeSlots: [] }
     },
     exceptions: [],

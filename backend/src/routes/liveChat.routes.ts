@@ -102,6 +102,72 @@ router.post(
   })
 );
 
+// ============================================
+// STATIC ROUTES (must be before /:sessionId)
+// ============================================
+
+router.get(
+  '/agents/available',
+  authenticate,
+  asyncHandler(async (_req: Request, res: Response) => {
+    const agents = await liveChatService.getAvailableAgents();
+    res.json({ success: true, data: agents });
+  })
+);
+
+router.patch(
+  '/agents/status',
+  authenticate,
+  requireRole('admin'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const agentId = req.user!._id.toString();
+    const { status } = req.body;
+    if (!['available', 'busy', 'away', 'offline'].includes(status)) {
+      throw new ApiError(400, 'Invalid status');
+    }
+    await liveChatService.setAgentStatus(agentId, status);
+    res.json({ success: true, message: 'Agent status updated' });
+  })
+);
+
+router.get(
+  '/queue/status',
+  authenticate,
+  asyncHandler(async (_req: Request, res: Response) => {
+    const status = await liveChatService.getQueueStatus();
+    res.json({ success: true, data: status });
+  })
+);
+
+router.get(
+  '/history',
+  authenticate,
+  asyncHandler(async (req: Request, res: Response) => {
+    const userId = req.user!._id.toString();
+    const { limit = '20', offset = '0' } = req.query;
+    const result = await liveChatService.getChatHistory(
+      userId,
+      parseInt(limit as string, 10),
+      parseInt(offset as string, 10)
+    );
+    res.json({ success: true, data: { sessions: result.sessions, total: result.total } });
+  })
+);
+
+router.get(
+  '/stats',
+  authenticate,
+  requireRole('admin'),
+  asyncHandler(async (_req: Request, res: Response) => {
+    const stats = await liveChatService.getStats();
+    res.json({ success: true, data: stats });
+  })
+);
+
+// ============================================
+// SESSION ROUTES (parameterized)
+// ============================================
+
 /**
  * GET /api/support/chat/:sessionId
  * Get chat session details
@@ -331,129 +397,5 @@ router.get(
     });
   })
 );
-
-// ============================================
-// AGENT ROUTES
-// ============================================
-
-/**
- * GET /api/support/chat/agents/available
- * Get available agents
- */
-router.get(
-  '/agents/available',
-  authenticate,
-  asyncHandler(async (_req: Request, res: Response) => {
-    const agents = await liveChatService.getAvailableAgents();
-
-    res.json({
-      success: true,
-      data: agents
-    });
-  })
-);
-
-/**
- * PATCH /api/support/chat/agents/status
- * Update agent status
- */
-router.patch(
-  '/agents/status',
-  authenticate,
-  requireRole('admin'),
-  asyncHandler(async (req: Request, res: Response) => {
-    const agentId = req.user!._id.toString();
-    const { status } = req.body;
-
-    if (!['available', 'busy', 'away', 'offline'].includes(status)) {
-      throw new ApiError(400, 'Invalid status');
-    }
-
-    await liveChatService.setAgentStatus(agentId, status);
-
-    res.json({
-      success: true,
-      message: 'Agent status updated'
-    });
-  })
-);
-
-// ============================================
-// QUEUE ROUTES
-// ============================================
-
-/**
- * GET /api/support/chat/queue/status
- * Get queue status
- */
-router.get(
-  '/queue/status',
-  authenticate,
-  asyncHandler(async (_req: Request, res: Response) => {
-    const status = await liveChatService.getQueueStatus();
-
-    res.json({
-      success: true,
-      data: status
-    });
-  })
-);
-
-// ============================================
-// HISTORY ROUTES
-// ============================================
-
-/**
- * GET /api/support/chat/history
- * Get user's chat history
- */
-router.get(
-  '/history',
-  authenticate,
-  asyncHandler(async (req: Request, res: Response) => {
-    const userId = req.user!._id.toString();
-    const { limit = '20', offset = '0' } = req.query;
-
-    const result = await liveChatService.getChatHistory(
-      userId,
-      parseInt(limit as string, 10),
-      parseInt(offset as string, 10)
-    );
-
-    res.json({
-      success: true,
-      data: {
-        sessions: result.sessions,
-        total: result.total
-      }
-    });
-  })
-);
-
-// ============================================
-// STATISTICS ROUTES (Admin)
-// ============================================
-
-/**
- * GET /api/support/chat/stats
- * Get chat statistics
- */
-router.get(
-  '/stats',
-  authenticate,
-  requireRole('admin'),
-  asyncHandler(async (_req: Request, res: Response) => {
-    const stats = await liveChatService.getStats();
-
-    res.json({
-      success: true,
-      data: stats
-    });
-  })
-);
-
-// ============================================
-// EXPORT
-// ============================================
 
 export default router;

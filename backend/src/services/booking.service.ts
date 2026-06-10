@@ -2,6 +2,7 @@
 import crypto from 'crypto';
 import Booking from '../models/booking.model';
 import BookingNotification from '../models/bookingNotification.model';
+import { notificationService } from './notification.service';
 import User from '../models/user.model';
 import Service from '../models/service.model';
 import ProviderProfile from '../models/providerProfile.model';
@@ -11,7 +12,8 @@ import { eventBus, EVENT_TYPES } from '../event-bus';
 import logger from '../utils/logger';
 import { enrichBookingLocation } from './bookingLocation.service';
 import { addTenantFilter, getTenantContext } from '../utils/tenantFilter';
-import { cache, isRedisAvailable } from '../config/redis';
+import { applyTenantToBookingQuery } from '../utils/tenantBookingQuery';
+import { cache, isCacheRedisReady, isRedisAvailable } from '../config/redis';
 import { DEFAULT_MONGO_TRANSACTION_OPTIONS } from '../config/database';
 import { calculateCommission, getCommissionRate, DEFAULT_PLATFORM_FEE_CONFIG } from './settlement.service';
 import { getSocketServer } from '../socket';
@@ -37,6 +39,7 @@ import {
   calculateTaxAmount,
   getEffectiveBufferMinutes,
 } from './platformSettingsPolicy.service';
+import { OfferService } from './offer.service';
 
 // ============================================
 // Slot Locking Constants
@@ -88,17 +91,24 @@ function validateStateTransition(currentStatus: string, newStatus: string): void
 /**
  * Strip HTML tags to prevent XSS attacks
  * Used for user-provided text fields like specialRequests and accessInstructions
+ * NOTE: For production use, consider using DOMPurify for more comprehensive sanitization
+ * DOMPurify can be installed via: npm install dompurify
+ * and used as: import DOMPurify from 'dompurify'; return DOMPurify.sanitize(input);
  */
 function stripHtmlTags(input: string): string {
   if (!input) return input;
   return input
     .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+    .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, '') // Prevent iframe injection
+    .replace(/<object\b[^<]*(?:(?!<\/object>)<[^<]*)*<\/object>/gi, '') // Prevent object embedding
+    .replace(/<embed\b[^<]*(?:(?!<\/embed>)<^<]*)*/gi, '') // Prevent embed tags
     .replace(/<[^>]*>/g, '')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&amp;/g, '&')
     .replace(/javascript:/gi, '')
     .replace(/on\w+\s*=/gi, '')
+    .replace(/\s+on\w+\s*=/gi, ' ') // Handle spaces around event handlers
     .trim();
 }
 
@@ -120,8 +130,7 @@ async function assertBookingPolicy(
     scheduledTime: string;
     providerId: string;
     guestEmail?: string;
-  },
-  service: { availability?: { instantBooking?: boolean } }
+  }
 ): Promise<void> {
   const policy = getPlatformPolicySync();
 
@@ -180,9 +189,8 @@ async function assertBookingPolicy(
     );
   }
 
-  if (!policy.instantBooking && service?.availability?.instantBooking) {
-    throw new ApiError(400, 'Instant booking is disabled platform-wide');
-  }
+  // Service instantBooking only affects auto-confirm via resolveInitialBookingStatus.
+  // Scheduled future bookings must still be allowed when platform instant booking is off.
 }
 
 function resolveInitialBookingStatus(
@@ -280,10 +288,9 @@ async function acquireSlotLock(
   const lockKey = generateSlotLockKey(providerId, scheduledDate, scheduledTime);
 
   try {
-    // Check if Redis is available
-    if (!isRedisAvailable()) {
-      // SECURITY FIX: Fail closed when Redis is unavailable
-      // Proceeding without locking could allow double-booking
+    const redisReady = await isCacheRedisReady();
+    if (!redisReady) {
+      // SECURITY: Fail closed when Redis is unavailable
       logger.error('Redis unavailable for slot lock, failing closed', {
         action: 'SLOT_LOCK_REDIS_UNAVAILABLE',
         providerId,
@@ -292,7 +299,7 @@ async function acquireSlotLock(
       });
       return {
         acquired: false,
-        reason: 'Service temporarily unavailable. Please try again.',
+        reason: 'Booking is temporarily unavailable. Please wait a moment and try again.',
       };
     }
 
@@ -306,7 +313,7 @@ async function acquireSlotLock(
       });
       return {
         acquired: false,
-        reason: 'Service temporarily unavailable. Please try again.',
+        reason: 'Booking is temporarily unavailable. Please wait a moment and try again.',
       };
     }
 
@@ -410,7 +417,11 @@ async function acquireSlotLock(
         requestedBy: sessionId,
         retryAfterSeconds,
       });
-      return { acquired: false, retryAfterSeconds };
+      return {
+        acquired: false,
+        reason: 'This time slot is currently being booked. Please wait a moment and try again.',
+        retryAfterSeconds,
+      };
     }
   } catch (error) {
     logger.error('Slot lock acquisition error', {
@@ -422,7 +433,7 @@ async function acquireSlotLock(
     // Proceeding without locking could allow double-booking
     return {
       acquired: false,
-      reason: 'Service temporarily unavailable. Please try again.',
+      reason: 'Booking is temporarily unavailable. Please wait a moment and try again.',
     };
   }
 }
@@ -774,7 +785,8 @@ export class BookingService {
   // ========================================
 
   async createCustomerBooking(customerId: string, data: BookingInputDTO): Promise<BookingResult> {
-    const isGuestBooking = isGuestBookingCustomer(customerId);
+    const normalizedCustomerId = String(customerId ?? '').trim();
+    const isGuestBooking = isGuestBookingCustomer(normalizedCustomerId);
     const rawGuestInfo = (data as GuestBookingInputDTO).guestInfo;
     const guestInfo = rawGuestInfo
       ? {
@@ -783,6 +795,27 @@ export class BookingService {
           phone: rawGuestInfo.phone.trim(),
         }
       : undefined;
+
+    if (isGuestBooking && !guestInfo?.phone) {
+      throw new ApiError(400, 'Phone number is required for guest bookings');
+    }
+
+    let resolvedCustomerInfo = { ...data.customerInfo };
+    if (!isGuestBooking) {
+      const customer = await User.findById(normalizedCustomerId)
+        .select('firstName lastName email phone')
+        .lean();
+      if (customer) {
+        resolvedCustomerInfo = {
+          firstName: resolvedCustomerInfo?.firstName || customer.firstName || '',
+          lastName: resolvedCustomerInfo?.lastName || customer.lastName || '',
+          email: resolvedCustomerInfo?.email || customer.email || '',
+          phone: resolvedCustomerInfo?.phone || customer.phone || '',
+          specialRequests: resolvedCustomerInfo?.specialRequests,
+          accessInstructions: resolvedCustomerInfo?.accessInstructions,
+        };
+      }
+    }
 
     const { getPlatformPolicySync } = await import('./platformSettingsPolicy.service');
     const {
@@ -844,24 +877,59 @@ export class BookingService {
     };
     // Only add customerId filter for actual customers, not guests
     if (!isGuestBooking) {
-      existingBookingQuery.customerId = customerId;
+      existingBookingQuery.customerId = normalizedCustomerId;
     }
     const existingBooking = await Booking.findOne(existingBookingQuery);
     if (existingBooking) {
-      logger.info('Duplicate booking request detected', {
+      const existingDateStr =
+        existingBooking.scheduledDate instanceof Date
+          ? existingBooking.scheduledDate.toISOString().split('T')[0]
+          : String(existingBooking.scheduledDate).split('T')[0];
+      const requestDateStr = String(data.scheduledDate).split('T')[0];
+      const existingCoupon = (
+        existingBooking.couponReservation?.couponCode ||
+        existingBooking.pricing?.discounts?.find((d) => d.type === 'coupon')?.code ||
+        ''
+      ).toUpperCase();
+      const requestCoupon = (data.couponCode || '').toUpperCase();
+      const payloadMatches =
+        existingDateStr === requestDateStr &&
+        existingBooking.scheduledTime === data.scheduledTime &&
+        existingCoupon === requestCoupon;
+
+      if (payloadMatches) {
+        logger.info('Duplicate booking request detected', {
+          bookingId: existingBooking._id.toString(),
+          idempotencyKey,
+          wasClientProvided: !!clientIdempotencyKey,
+        });
+        return {
+          booking: existingBooking,
+          message: 'Booking already exists',
+          isDuplicate: true,
+        };
+      }
+
+      logger.warn('Idempotency key reused with different booking payload — creating new booking', {
         bookingId: existingBooking._id.toString(),
         idempotencyKey,
-        wasClientProvided: !!clientIdempotencyKey,
+        existingDate: existingDateStr,
+        existingTime: existingBooking.scheduledTime,
+        existingCoupon,
+        requestDate: requestDateStr,
+        requestTime: data.scheduledTime,
+        requestCoupon,
       });
-      return {
-        booking: existingBooking,
-        message: 'Booking already exists',
-      };
     }
 
     // RACE CONDITION FIX: Pre-validate coupon BEFORE acquiring lock to prevent holding lock during external calls
     let preValidatedCouponDiscount = 0;
     let preValidatedCouponCode = data.couponCode;
+    logger.info('Booking service received couponCode', {
+      context: 'BookingService',
+      couponCode: preValidatedCouponCode,
+      serviceId: data.serviceId,
+    });
     if (preValidatedCouponCode && isGuestBooking) {
       throw new ApiError(400, 'Coupon codes cannot be applied to guest bookings. Please sign in to use a promo code.');
     }
@@ -879,27 +947,62 @@ export class BookingService {
             undefined,
             data.metadata
           );
+          logger.info('Coupon validation pricing info', {
+            context: 'BookingService',
+            couponCode: preValidatedCouponCode,
+            tempPricingSubtotal: tempPricing.subtotal,
+            tempPricingTotal: tempPricing.totalAmount,
+          });
           // Check for existing discounts to prevent coupon stacking
           if (tempPricing.discounts && tempPricing.discounts.length > 0) {
             throw new ApiError(400, 'Only one coupon can be applied per booking');
           }
           // Validate coupon against total amount
-          const validation = await offerService.validatePromoCode(preValidatedCouponCode, customerId, tempPricing.totalAmount);
-          if (validation.valid && validation.discount) {
-            preValidatedCouponDiscount = validation.discount;
+          const validation = await offerService.validatePromoCode(
+            preValidatedCouponCode,
+            normalizedCustomerId,
+            tempPricing.totalAmount,
+            data.serviceId,
+            tempService.category?.toString?.() ?? (tempService.category as string | undefined),
+            data.providerId
+          );
+          logger.info('Coupon validation result', {
+            context: 'BookingService',
+            couponCode: preValidatedCouponCode,
+            validationValid: validation.valid,
+            validationDiscount: validation.discountAmount,
+            validationMessage: validation.message,
+          });
+          if (validation.valid && validation.discountAmount) {
+            preValidatedCouponDiscount = validation.discountAmount;
+          } else if (!validation.valid) {
+            throw new ApiError(400, validation.message || 'Invalid or expired promo code');
           }
+        } else {
+          logger.warn('Coupon service not found for validation', {
+            context: 'BookingService',
+            couponCode: preValidatedCouponCode,
+            serviceId: data.serviceId,
+          });
         }
       } catch (error) {
         if (error instanceof ApiError) throw error; // Re-throw our ApiError
         logger.error('Coupon pre-validation error', {
           context: 'BookingService',
           action: 'COUPON_PRE_VALIDATION_ERROR',
-          customerId,
+          customerId: normalizedCustomerId,
           couponCode: preValidatedCouponCode,
           error: error instanceof Error ? error.message : String(error),
         });
       }
     }
+
+    // DEBUG: Log final coupon discount
+    logger.info('Final coupon discount values', {
+      context: 'BookingService',
+      couponCode: preValidatedCouponCode,
+      couponDiscount: preValidatedCouponDiscount,
+    });
 
     // Log saga start
     logSagaStep('pending', 'PENDING', 'slot_lock_acquisition', 'started', {
@@ -984,11 +1087,11 @@ export class BookingService {
 
     const requestedDate = new Date(data.scheduledDate);
 
-    await assertBookingPolicy(customerId, {
+    await assertBookingPolicy(normalizedCustomerId, {
       ...data,
       providerId: resolvedProviderId,
       guestEmail: guestInfo?.email,
-    }, service);
+    });
 
     // Calculate pricing (done outside transaction - read-only operation)
     const pricing = this.calculatePricing(
@@ -1010,6 +1113,13 @@ export class BookingService {
     const couponDiscount = preValidatedCouponDiscount;
     const couponCode = preValidatedCouponCode;
 
+    // FIX: Properly apply coupon discount BEFORE tax calculation
+    // Tax should be calculated on the discounted subtotal, not the full subtotal
+    const discountedSubtotal = couponDiscount > 0 ? Math.max(0, pricing.subtotal - couponDiscount) : pricing.subtotal;
+    const policy = getPlatformPolicySync();
+    const discountedTax = calculateTaxAmount(discountedSubtotal, policy);
+    const finalTotalAmount = Math.round((discountedSubtotal + discountedTax) * 100) / 100;
+
     // Calculate times
     const [hours, minutes] = data.scheduledTime.split(':').map(Number);
     const serviceStart = new Date(requestedDate);
@@ -1020,7 +1130,7 @@ export class BookingService {
 
     // Process and enrich location from booking input + customer/provider profiles
     const processedLocation = await enrichBookingLocation(
-      isGuestBooking ? undefined : customerId,
+      isGuestBooking ? undefined : normalizedCustomerId,
       data.providerId,
       data.location,
       data.locationType
@@ -1029,8 +1139,8 @@ export class BookingService {
     // Create booking object (will be saved within transaction)
     const bookingData: Record<string, unknown> = {
       bookingNumber,
-      ...(isGuestBooking ? {} : { customerId }),
-      isGuestBooking,
+      ...(isGuestBooking ? {} : { customerId: normalizedCustomerId }),
+      isGuestBooking: Boolean(isGuestBooking),
       ...(isGuestBooking && guestInfo ? { guestInfo } : {}),
       providerId: data.providerId,
       serviceId: data.serviceId,
@@ -1052,18 +1162,18 @@ export class BookingService {
           amount: couponDiscount
         }] : [],
         subtotal: pricing.subtotal,
-        tax: pricing.tax,
-        totalAmount: Math.max(0, pricing.totalAmount - couponDiscount),
+        tax: discountedTax, // FIX: Use tax calculated on discounted subtotal
+        totalAmount: finalTotalAmount, // FIX: Use corrected total
         couponDiscount: couponDiscount,
         currency: pricing.currency,
       },
       customerInfo: {
-        firstName: data.customerInfo?.firstName || '',
-        lastName: data.customerInfo?.lastName || '',
-        email: data.customerInfo?.email || '',
-        phone: data.customerInfo?.phone || '',
-        specialRequests: stripHtmlTags(data.customerInfo?.specialRequests || data.specialRequests || ''),
-        accessInstructions: stripHtmlTags(data.customerInfo?.accessInstructions || ''),
+        firstName: resolvedCustomerInfo?.firstName || '',
+        lastName: resolvedCustomerInfo?.lastName || '',
+        email: resolvedCustomerInfo?.email || '',
+        phone: resolvedCustomerInfo?.phone || '',
+        specialRequests: stripHtmlTags(resolvedCustomerInfo?.specialRequests || data.specialRequests || ''),
+        accessInstructions: stripHtmlTags(resolvedCustomerInfo?.accessInstructions || ''),
       },
       cancellationPolicy: {
         allowedUntil: cancellationDeadline,
@@ -1078,6 +1188,10 @@ export class BookingService {
       },
       status: resolveInitialBookingStatus(service),
     };
+
+    if (data.tenantId && mongoose.Types.ObjectId.isValid(data.tenantId)) {
+      bookingData.tenantId = new mongoose.Types.ObjectId(data.tenantId);
+    }
 
     // Use transaction to prevent race condition (TOCTOU vulnerability fix)
     // The partial unique index on (providerId, scheduledDate, scheduledTime, status)
@@ -1096,6 +1210,7 @@ export class BookingService {
         scheduledDate: data.scheduledDate,
         scheduledTime: data.scheduledTime,
         serviceDurationMinutes: pricing.bookingDuration,
+        serviceId: data.serviceId,
         session,
       });
 
@@ -1121,37 +1236,57 @@ export class BookingService {
       booking = new Booking(bookingData);
       await booking.save({ session });
 
-      // FIX: Mark coupon as used INSIDE the transaction to ensure atomicity
-      // This prevents scenarios where booking succeeds but coupon marking fails
+      // FIX: Reserve coupon at booking creation (NOT mark as used)
+      // Coupon will be marked as used only after successful payment
+      // If payment fails, the reservation will be released
+      // Store coupon info on booking for later use
       if (couponCode && couponDiscount > 0 && !isGuestBooking) {
-        try {
-          const { OfferService } = await import("./offer.service");
-          const offerService = new OfferService();
-          // Pass session for transactional consistency
-          const couponMarked = await offerService.markCouponAsUsedAtomic(
-            couponCode,
-            customerId,
-            booking._id.toString(),
-            session
-          );
-          if (!couponMarked) {
-            // Coupon marking failed within transaction - abort
-            await session.abortTransaction();
-            logger.warn('Coupon marking failed, booking aborted', {
-              context: 'BookingService',
-              action: 'COUPON_ATOMIC_FAILED',
-              couponCode,
-              bookingId: booking._id.toString(),
-            });
-            throw new ApiError(400, 'Coupon could not be applied. Please try again without the coupon.');
-          }
-        } catch (couponError) {
-          await session.abortTransaction();
-          throw couponError;
-        }
+        booking.couponReservation = {
+          couponCode,
+          userId: normalizedCustomerId,
+          reservedAt: new Date(),
+        };
+        await booking.save({ session });
       }
 
       await session.commitTransaction();
+
+      // Cash bookings: redeem coupon immediately (no Stripe webhook)
+      if (
+        couponCode &&
+        couponDiscount > 0 &&
+        !isGuestBooking &&
+        data.paymentMethod === 'cash' &&
+        booking.couponReservation &&
+        !booking.couponReservation.usedAt
+      ) {
+        try {
+          const redeemSession = await mongoose.startSession();
+          await redeemSession.withTransaction(async () => {
+            const { OfferService } = await import('./offer.service');
+            const offerService = new OfferService();
+            const marked = await offerService.markCouponAsUsedAtomic(
+              couponCode,
+              normalizedCustomerId,
+              booking._id.toString(),
+              redeemSession,
+              couponDiscount
+            );
+            if (marked) {
+              booking.couponReservation!.usedAt = new Date();
+              await booking.save({ session: redeemSession });
+            }
+          });
+          redeemSession.endSession();
+        } catch (redeemError) {
+          logger.error('Cash booking coupon redemption failed', {
+            context: 'BookingService',
+            bookingId: booking._id.toString(),
+            couponCode,
+            error: redeemError instanceof Error ? redeemError.message : String(redeemError),
+          });
+        }
+      }
 
       // Log successful booking creation with status transition
       logStatusTransition({
@@ -1301,6 +1436,12 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
         throw new ApiError(404, 'Booking not found');
       }
 
+      // Cross-tenant IDOR prevention: The booking was fetched using tenant-filtered queries
+      // in the controller layer. If we reach here with a valid booking from a different tenant,
+      // it means the original query didn't include tenant filtering.
+      // Note: For guest bookings, we rely on the email/token verification above.
+      // For authenticated users, the controller's query already filters by customerId + tenant.
+
       // Authorization check
       // FIX: Handle guest bookings where customerId is null
       // For guest bookings, we need to verify via booking email or other means
@@ -1420,6 +1561,62 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
 
       await booking.save({ session });
 
+      // FIX: Handle coupon rollback when booking is cancelled
+      // If coupon was marked as used (payment succeeded), we need to rollback the usage
+      // If coupon was just reserved (payment never happened), we just clear the reservation
+      if (booking.couponReservation?.couponCode) {
+        const couponCode = booking.couponReservation.couponCode;
+        const customerId = (booking.couponReservation.userId?.toString() || booking.customerId?.toString()) as string;
+
+        if (booking.couponReservation.usedAt) {
+          // Payment was made and coupon was used - rollback the coupon usage
+          // Use atomic rollback within the same transaction
+          const offerService = new OfferService();
+          try {
+            const rollbackSuccess = await offerService.rollbackCouponUsageAtomic(
+              couponCode,
+              customerId,
+              booking._id.toString(),
+              'booking_cancelled',
+              session
+            );
+
+            if (rollbackSuccess) {
+              logger.info('Coupon usage rolled back on booking cancellation', {
+                bookingId: booking._id,
+                couponCode,
+                refundAmount,
+                sagaStep: 'coupon_usage_rolled_back',
+              });
+            } else {
+              logger.warn('Coupon rollback returned false - may have already been rolled back or not found', {
+                bookingId: booking._id,
+                couponCode,
+                sagaStep: 'coupon_rollback_warning',
+              });
+            }
+          } catch (rollbackError) {
+            // Log but don't fail the cancellation - coupon rollback can be retried
+            logger.error('Failed to rollback coupon usage on cancellation', {
+              bookingId: booking._id,
+              couponCode,
+              error: rollbackError instanceof Error ? rollbackError.message : String(rollbackError),
+              sagaStep: 'coupon_rollback_error',
+            });
+          }
+        } else {
+          logger.info('Coupon reservation cleared - payment never processed', {
+            bookingId: booking._id,
+            couponCode,
+            sagaStep: 'coupon_reservation_cleared',
+          });
+        }
+
+        // Clear the coupon reservation after rollback
+        booking.couponReservation = undefined;
+        await booking.save({ session });
+      }
+
       // ATOMIC: Commit transaction only AFTER both booking cancellation AND refund record are saved
       await session.commitTransaction();
 
@@ -1483,23 +1680,12 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
 
   /**
    * Generate unique refund number for cancellation-initiated refunds
+   * Uses atomic RefundCounter (O(1) findOneAndUpdate with $inc)
+   * Replaces the previous O(n) countDocuments() scan.
    */
   private async generateRefundNumberForCancellation(): Promise<string> {
-    const RefundRequest = mongoose.model('RefundRequest');
-    const now = new Date();
-    const year = now.getFullYear().toString().slice(-2);
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    const day = String(now.getDate()).padStart(2, '0');
-
-    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const endOfDay = new Date(startOfDay.getTime() + 24 * 60 * 60 * 1000);
-
-    const count = await RefundRequest.countDocuments({
-      createdAt: { $gte: startOfDay, $lt: endOfDay },
-    });
-
-    const sequence = String(count + 1).padStart(4, '0');
-    return `REF-${year}${month}${day}-${sequence}`;
+    const { generateRefundNumber } = await import('../models/refundCounter.model');
+    return generateRefundNumber();
   }
 
   // ========================================
@@ -1580,6 +1766,7 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
         scheduledDate: data.scheduledDate,
         scheduledTime: data.scheduledTime,
         serviceDurationMinutes: booking.duration,
+        serviceId: booking.serviceId?.toString(),
         session,
       });
 
@@ -1762,10 +1949,10 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
     // Emit socket events for real-time updates
     const socketServer = getSocketServer();
     if (socketServer) {
-      // Emit to provider
-      socketServer.emitBookingNoShow(booking._id.toString(), booking.providerId.toString(), booking.customerId?.toString() || '');
-      // Emit to customer
-      socketServer.emitBookingNoShowToCustomer(booking._id.toString(), booking.customerId?.toString() || '');
+      // Emit to provider (bookingId, bookingNumber, providerId, customerId)
+      socketServer.emitBookingNoShow(booking._id.toString(), booking.bookingNumber || '', booking.providerId.toString(), booking.customerId?.toString() || '');
+      // Emit to customer (bookingId, bookingNumber, customerId)
+      socketServer.emitBookingNoShowToCustomer(booking._id.toString(), booking.bookingNumber || '', booking.customerId?.toString() || '');
     }
 
     return booking;
@@ -1869,10 +2056,10 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
     // Emit socket events for real-time updates
     const socketServer = getSocketServer();
     if (socketServer) {
-      // Emit to provider (they were reported as no-show)
-      socketServer.emitBookingNoShow(booking._id.toString(), booking.providerId.toString(), booking.customerId?.toString() || '');
-      // Emit to customer (confirmation that provider was reported)
-      socketServer.emitBookingNoShowToCustomer(booking._id.toString(), booking.customerId?.toString() || '');
+      // Emit to provider (bookingId, bookingNumber, providerId, customerId)
+      socketServer.emitBookingNoShow(booking._id.toString(), booking.bookingNumber || '', booking.providerId.toString(), booking.customerId?.toString() || '');
+      // Emit to customer (bookingId, bookingNumber, customerId)
+      socketServer.emitBookingNoShowToCustomer(booking._id.toString(), booking.bookingNumber || '', booking.customerId?.toString() || '');
     }
 
     return booking;
@@ -2073,7 +2260,22 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
 
     const query: any = { customerId: new mongoose.Types.ObjectId(customerId), deletedAt: { $exists: false } }; // FIX: Exclude deleted bookings
 
-    if (filters?.status) {
+    if (options?.tenantContext?.tenantId && !options.tenantContext.isAdmin) {
+      applyTenantToBookingQuery(query, options.tenantContext.tenantId);
+    }
+
+    if (filters?.reviewable) {
+      query.status = 'completed';
+      query.$and = [
+        ...(Array.isArray(query.$and) ? query.$and : []),
+        {
+          $or: [
+            { customerReview: { $exists: false } },
+            { customerReview: null },
+          ],
+        },
+      ];
+    } else if (filters?.status) {
       query.status = filters.status;
     }
     if (filters?.startDate || filters?.endDate) {
@@ -2083,7 +2285,7 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
     }
     if (filters?.search) {
       query.$or = [
-        { bookingNumber: { $regex: filters.search, $options: 'i' } }
+        { bookingNumber: { $regex: escapeRegex(filters.search), $options: 'i' } }
       ];
     }
 
@@ -2182,8 +2384,8 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
       // Standard query without category filter
       const [bookingsResult, countResult] = await Promise.all([
         Booking.find(baseQuery, projection)
-          .populate('serviceId', 'name category images')
-          .populate('providerId', 'firstName lastName')
+          .populate('service', 'name category images')
+          .populate('provider', 'firstName lastName avatar')
           .sort({ createdAt: -1 })
           .skip(skip)
           .limit(limit)
@@ -2367,7 +2569,7 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
     }
     if (filters?.search) {
       query.$or = [
-        { bookingNumber: { $regex: filters.search, $options: 'i' } }
+        { bookingNumber: { $regex: escapeRegex(filters.search), $options: 'i' } }
       ];
     }
 
@@ -2452,7 +2654,8 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
         throw new ApiError(403, 'Booking does not belong to this provider');
       }
 
-      // 2. Check for time slot conflicts WITHIN transaction (atomic check)
+      // FIX: Race condition fix - First check for conflicts, then do atomic update
+      // The key fix is that we do conflict check BEFORE any status change
       const conflictResult = await this.checkForTimeSlotConflicts(
         providerId,
         bookingId,
@@ -2465,8 +2668,9 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
         throw new ApiError(409, 'Time slot conflict with existing booking');
       }
 
-      // 3. Update booking status atomically - only if still 'pending'
-      // CRITICAL: This findOneAndUpdate ensures only ONE provider can accept
+      // FIX: Use atomic update with findOneAndUpdate to prevent race conditions
+      // The condition status:'pending' ensures only ONE provider can accept
+      // If another provider already accepted, this update will return null
       const confirmedBooking = await Booking.findOneAndUpdate(
         {
           _id: bookingId,
@@ -2494,8 +2698,35 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
       );
 
       if (!confirmedBooking) {
-        // Another process already accepted this booking
+        // Another process already accepted this booking - this is the race condition protection
         throw new ApiError(409, 'Booking already accepted by another provider');
+      }
+
+      // FIX: Defense-in-depth - Verify no conflicts after update (catches edge cases)
+      // This is a safety check in case a conflict was created between our check and update
+      const postUpdateConflictCheck = await this.checkForTimeSlotConflicts(
+        providerId,
+        bookingId,
+        confirmedBooking.scheduledDate,
+        confirmedBooking.scheduledTime,
+        confirmedBooking.duration
+      );
+
+      if (postUpdateConflictCheck.hasConflict) {
+        // Rollback the confirmation - edge case where race occurred during our transaction
+        await Booking.findByIdAndUpdate(bookingId, {
+          status: 'pending',
+          providerId: booking.providerId,
+          $push: {
+            statusHistory: {
+              status: 'pending',
+              timestamp: new Date(),
+              reason: 'Auto-reverted due to slot conflict detected post-update',
+              updatedBy: 'system'
+            }
+          }
+        }).session(session);
+        throw new ApiError(409, 'Time slot conflict detected - please select a different time');
       }
 
       // 4. Create notifications for booking confirmation
@@ -2517,9 +2748,7 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
       await session.abortTransaction();
       throw error;
     } finally {
-      if (session && !session.hasEnded) {
-        await session.endSession();
-      }
+      await session.endSession();
     }
   }
 
@@ -2638,6 +2867,60 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
         await booking.save({ session });
       }
 
+      // FIX: Handle coupon rollback when provider rejects booking
+      // If coupon was marked as used (payment succeeded), we need to rollback the usage
+      // If coupon was just reserved (payment never happened), we just clear the reservation
+      if (booking.couponReservation?.couponCode) {
+        const couponCode = booking.couponReservation.couponCode;
+        const customerId = (booking.couponReservation.userId?.toString() || booking.customerId?.toString()) as string;
+
+        if (booking.couponReservation.usedAt) {
+          // Payment was made and coupon was used - rollback the coupon usage
+          const offerService = new OfferService();
+          try {
+            const rollbackSuccess = await offerService.rollbackCouponUsageAtomic(
+              couponCode,
+              customerId,
+              booking._id.toString(),
+              'booking_cancelled',
+              session
+            );
+
+            if (rollbackSuccess) {
+              logger.info('Coupon usage rolled back on provider rejection', {
+                bookingId: booking._id,
+                couponCode,
+                sagaStep: 'coupon_usage_rolled_back',
+              });
+            } else {
+              logger.warn('Coupon rollback returned false on rejection', {
+                bookingId: booking._id,
+                couponCode,
+                sagaStep: 'coupon_rollback_warning',
+              });
+            }
+          } catch (rollbackError) {
+            // Log but don't fail the rejection - coupon rollback can be retried
+            logger.error('Failed to rollback coupon usage on provider rejection', {
+              bookingId: booking._id,
+              couponCode,
+              error: rollbackError instanceof Error ? rollbackError.message : String(rollbackError),
+              sagaStep: 'coupon_rollback_error',
+            });
+          }
+        } else {
+          logger.info('Coupon reservation cleared on provider rejection - payment never processed', {
+            bookingId: booking._id,
+            couponCode,
+            sagaStep: 'coupon_reservation_cleared',
+          });
+        }
+
+        // Clear the coupon reservation after rollback
+        booking.couponReservation = undefined;
+        await booking.save({ session });
+      }
+
       await session.commitTransaction();
       void this.syncProviderAnalytics(providerId);
       return booking;
@@ -2715,8 +2998,10 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
       // Emit socket events for real-time updates
       const socketServer = getSocketServer();
       if (socketServer) {
-        socketServer.emitBookingStarted(booking._id.toString(), booking.providerId.toString());
-        socketServer.emitBookingStartedToCustomer(booking._id.toString(), booking.customerId?.toString() || '', booking.providerId.toString());
+        // emitBookingStarted: (bookingId, bookingNumber, providerId)
+        socketServer.emitBookingStarted(booking._id.toString(), booking.bookingNumber || '', booking.providerId.toString());
+        // emitBookingStartedToCustomer: (bookingId, bookingNumber, customerId, providerId)
+        socketServer.emitBookingStartedToCustomer(booking._id.toString(), booking.bookingNumber || '', booking.customerId?.toString() || '', booking.providerId.toString());
       }
 
       return booking;
@@ -2869,7 +3154,11 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
         customerId: booking.customerId,
         providerId: booking.providerId,
         totalAmount: booking.pricing?.totalAmount,
+        tenantId: booking.tenantId,
       });
+
+      // Trigger automated review request scheduling after booking completion
+      this.scheduleReviewRequest(booking._id);
 
       void this.syncProviderAnalytics(providerId);
 
@@ -3143,8 +3432,16 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
       ].filter(Boolean);
 
       await Promise.all(
-        notificationsToCreate.map(data =>
-          new BookingNotification(data!).save()
+        notificationsToCreate.map((data) =>
+          notificationService.createInAppNotification({
+            bookingId: data!.bookingId?.toString(),
+            recipientId: data!.recipientId?.toString(),
+            type: data!.type,
+            title: data!.title,
+            message: data!.message,
+            metadata: data!.metadata,
+            tenantId: booking.tenantId?.toString(),
+          })
         )
       );
     } catch (error) {
@@ -3160,9 +3457,9 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
 
   private async createMessageNotification(booking: any, recipientId: any): Promise<void> {
     try {
-      const notification = new BookingNotification({
-        bookingId: booking._id,
-        recipientId,
+      await notificationService.createInAppNotification({
+        bookingId: booking._id.toString(),
+        recipientId: recipientId.toString(),
         type: 'message_received',
         title: 'New Message',
         message: `You have a new message about booking ${booking.bookingNumber}`,
@@ -3172,8 +3469,8 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
           bookingNumber: booking.bookingNumber,
           serviceName: booking.service?.name,
         },
+        tenantId: booking.tenantId?.toString(),
       });
-      await notification.save();
     } catch (error) {
       logger.error('Error creating message notification', {
         context: 'BookingService',
@@ -3408,7 +3705,7 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
    */
   async getCustomerBookingCount(
     customerId: string,
-    options?: { status?: string; activeOnly?: boolean }
+    options?: { status?: string; activeOnly?: boolean; tenantId?: string }
   ): Promise<{ count: number; statusCounts?: Record<string, number> }> {
     // SECURITY FIX: Input validation for customer ID
     if (!mongoose.Types.ObjectId.isValid(customerId)) {
@@ -3419,6 +3716,10 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
       customerId: new mongoose.Types.ObjectId(customerId),
       deletedAt: { $exists: false }
     };
+
+    if (options?.tenantId) {
+      applyTenantToBookingQuery(query, options.tenantId);
+    }
 
     // Handle status filtering
     if (options?.status) {
@@ -3435,13 +3736,17 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
 
     // If activeOnly is true, also return breakdown by status
     if (options?.activeOnly || options?.status === 'active') {
+      const breakdownMatch: Record<string, unknown> = {
+        customerId: new mongoose.Types.ObjectId(customerId),
+        deletedAt: { $exists: false },
+        status: { $nin: ['cancelled', 'completed', 'no_show'] },
+      };
+      if (options?.tenantId) {
+        applyTenantToBookingQuery(breakdownMatch, options.tenantId);
+      }
       const statusBreakdown = await Booking.aggregate([
         {
-          $match: {
-            customerId: new mongoose.Types.ObjectId(customerId),
-            deletedAt: { $exists: false },
-            status: { $nin: ['cancelled', 'completed', 'no_show'] }
-          }
+          $match: breakdownMatch,
         },
         {
           $group: {
@@ -3522,6 +3827,131 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
     }
 
     return { count };
+  }
+
+  // ========================================
+  // Automated Review Request Scheduling
+  // ========================================
+
+  /**
+   * Schedule automated review request after booking completion
+   * This triggers the review request automation system to send review requests
+   */
+  private async scheduleReviewRequest(bookingId: mongoose.Types.ObjectId): Promise<void> {
+    try {
+      // Import dynamically to avoid circular dependency
+      const { scheduleReviewRequests } = await import('../automation/reviewRequestTiming');
+
+      // Schedule review requests with optimal timing
+      await scheduleReviewRequests(bookingId);
+
+      logger.info('Review request scheduled for booking', {
+        context: 'BookingService',
+        action: 'REVIEW_REQUEST_SCHEDULED',
+        bookingId: bookingId.toString(),
+      });
+    } catch (error) {
+      // Log but don't fail - review scheduling is not critical
+      logger.warn('Failed to schedule review request', {
+        context: 'BookingService',
+        action: 'REVIEW_REQUEST_SCHEDULE_FAILED',
+        bookingId: bookingId.toString(),
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  // ========================================
+  // Review Analytics & Trends
+  // ========================================
+
+  /**
+   * Get review analytics for a provider
+   * Returns rating trends, response rates, and other metrics
+   */
+  async getProviderReviewAnalytics(providerId: string): Promise<{
+    summary: {
+      totalReviews: number;
+      averageRating: number;
+      responseRate: number;
+      thisMonth: number;
+      lastMonth: number;
+    };
+    trends: Array<{
+      month: string;
+      averageRating: number;
+      count: number;
+    }>;
+    ratingDistribution: Record<number, number>;
+  }> {
+    const Review = mongoose.model('Review');
+
+    // Get all approved reviews for this provider
+    const reviews = await Review.find({
+      revieweeId: new mongoose.Types.ObjectId(providerId),
+      reviewerType: 'customer',
+      isHidden: false,
+      moderationStatus: 'approved',
+    }).sort({ createdAt: -1 });
+
+    // Calculate summary stats
+    const totalReviews = reviews.length;
+    const averageRating = totalReviews > 0
+      ? reviews.reduce((sum, r) => sum + r.rating, 0) / totalReviews
+      : 0;
+
+    // Calculate response rate (reviews with provider responses)
+    const respondedReviews = reviews.filter(r => r.response).length;
+    const responseRate = totalReviews > 0 ? (respondedReviews / totalReviews) * 100 : 0;
+
+    // This month vs last month
+    const now = new Date();
+    const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0);
+
+    const thisMonthReviews = reviews.filter(r => new Date(r.createdAt) >= thisMonthStart);
+    const lastMonthReviews = reviews.filter(r =>
+      new Date(r.createdAt) >= lastMonthStart && new Date(r.createdAt) <= lastMonthEnd
+    );
+
+    // Calculate rating distribution
+    const ratingDistribution: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+    reviews.forEach(r => {
+      ratingDistribution[r.rating] = (ratingDistribution[r.rating] || 0) + 1;
+    });
+
+    // Calculate monthly trends (last 12 months)
+    const trends: Array<{ month: string; averageRating: number; count: number }> = [];
+    for (let i = 11; i >= 0; i--) {
+      const monthDate = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const monthEnd = new Date(now.getFullYear(), now.getMonth() - i + 1, 0);
+      const monthReviews = reviews.filter(r => {
+        const d = new Date(r.createdAt);
+        return d >= monthDate && d <= monthEnd;
+      });
+
+      if (monthReviews.length > 0) {
+        const monthAvg = monthReviews.reduce((sum, r) => sum + r.rating, 0) / monthReviews.length;
+        trends.push({
+          month: monthDate.toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
+          averageRating: Math.round(monthAvg * 10) / 10,
+          count: monthReviews.length,
+        });
+      }
+    }
+
+    return {
+      summary: {
+        totalReviews,
+        averageRating: Math.round(averageRating * 10) / 10,
+        responseRate: Math.round(responseRate),
+        thisMonth: thisMonthReviews.length,
+        lastMonth: lastMonthReviews.length,
+      },
+      trends,
+      ratingDistribution,
+    };
   }
 }
 

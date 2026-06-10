@@ -20,6 +20,7 @@ import {
   ArrowUpRight,
   ArrowDownRight,
   Percent,
+  Download,
 } from 'lucide-react';
 import NavigationHeader from '../../components/layout/NavigationHeader';
 import Footer from '../../components/layout/Footer';
@@ -59,6 +60,8 @@ const OfferAnalyticsPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [dateRange, setDateRange] = useState<DateRange>({ label: 'Last 30 Days', value: '30d', days: 30 });
   const [activeTab, setActiveTab] = useState<'overview' | 'trends' | 'attention'>('overview');
+  // FIX: Export state
+  const [isExporting, setIsExporting] = useState(false);
 
   // Auth check
   useEffect(() => {
@@ -248,6 +251,25 @@ const OfferAnalyticsPage: React.FC = () => {
                 title="Refresh"
               >
                 <RefreshCw className="w-5 h-5" />
+              </button>
+
+              {/* FIX: Export Button */}
+              <button
+                onClick={async () => {
+                  setIsExporting(true);
+                  try {
+                    await offerAnalyticsApi.exportOffers({ format: 'csv' });
+                  } catch {
+                    setError('Failed to export data');
+                  } finally {
+                    setIsExporting(false);
+                  }
+                }}
+                disabled={isExporting}
+                className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg disabled:opacity-50"
+                title="Export to CSV"
+              >
+                {isExporting ? <Loader2 className="w-5 h-5 animate-spin" /> : <Download className="w-5 h-5" />}
               </button>
             </div>
           </div>

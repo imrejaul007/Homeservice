@@ -138,6 +138,10 @@ cashbackSchema.index({ userId: 1, source: 1 });
 cashbackSchema.index({ userId: 1, expiresAt: 1 }, { expireAfterSeconds: 0 }); // TTL index for auto-expiry
 cashbackSchema.index({ tenantId: 1, userId: 1, status: 1 });
 cashbackSchema.index({ userId: 1, earnedAt: -1 });
+cashbackSchema.index(
+  { userId: 1, source: 1, sourceId: 1 },
+  { unique: true, sparse: true, partialFilterExpression: { sourceId: { $exists: true, $ne: null } } }
+);
 
 // Soft delete indexes
 cashbackSchema.index({ isDeleted: 1, createdAt: -1 });

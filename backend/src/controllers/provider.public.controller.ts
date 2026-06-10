@@ -51,9 +51,45 @@ export const getProviderById = asyncHandler(async (req: Request, res: Response):
       status: 'active'
     }).lean();
 
+    // Track profile view (non-blocking)
+    void (async () => {
+      try {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const profileDoc = await ProviderProfile.findOne({ userId: id }).select('analytics.profileViews').lean();
+        if (!profileDoc) return;
+
+        const views = [...(profileDoc.analytics?.profileViews || [])];
+        const todayEntry = views.find((v: { date: Date }) => {
+          const d = new Date(v.date);
+          d.setHours(0, 0, 0, 0);
+          return d.getTime() === today.getTime();
+        });
+
+        if (todayEntry) {
+          todayEntry.views += 1;
+          todayEntry.uniqueViews += 1;
+        } else {
+          views.push({ date: today, views: 1, uniqueViews: 1 });
+        }
+
+        await ProviderProfile.updateOne(
+          { userId: id },
+          { $set: { 'analytics.profileViews': views } }
+        );
+      } catch (err) {
+        logger.warn('Failed to track profile view', {
+          context: 'ProviderPublicController',
+          providerId: id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    })();
+
     // Format response for frontend
     const provider = {
       id: providerProfile.userId,
+      _id: providerProfile.userId?.toString?.() ?? id,
 
       // Basic Info
       firstName: user.firstName,
@@ -123,6 +159,7 @@ export const getProviderById = asyncHandler(async (req: Request, res: Response):
         totalReviews: providerProfile.reviewsData?.totalReviews || 0,
         ratingDistribution: providerProfile.reviewsData?.ratingDistribution || { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 },
         recentReviews: (providerProfile.reviewsData?.recentReviews || []).slice(0, 10).map((review: any) => ({
+          _id: review._id,
           rating: review.rating,
           title: review.title,
           comment: review.comment,
@@ -132,6 +169,7 @@ export const getProviderById = asyncHandler(async (req: Request, res: Response):
           response: review.response
             ? {
                 comment: review.response.content,
+                text: review.response.content,
                 createdAt: review.response.createdAt,
               }
             : undefined,

@@ -7,6 +7,7 @@ import { eventBus, EVENT_TYPES } from '../event-bus';
 import Booking from '../models/booking.model';
 import User, { IUser } from '../models/user.model';
 import Service from '../models/service.model';
+import Bundle from '../models/bundle.model';
 import Review from '../models/review.model';
 import Joi from 'joi';
 import logger from '../utils/logger';
@@ -15,6 +16,8 @@ import {
   getPlatformPolicySync,
   calculateTaxAmount,
 } from '../services/platformSettingsPolicy.service';
+import { LOCATION_TYPES, OBJECT_ID_PATTERN, IDEMPOTENCY_KEY_PATTERN } from '../validation/schemas';
+import { LocationType } from '../interfaces/service.interface';
 
 // Email service imports
 import {
@@ -36,6 +39,18 @@ const locationSchema = Joi.object({
     state: Joi.string(),
     zipCode: Joi.string(),
     country: Joi.string(),
+  }).custom((value, helpers) => {
+    // If type is customer_address, require at least city and country
+    const type = helpers.state.ancestors[0]?.type;
+    if (type === 'customer_address') {
+      if (!value?.city) {
+        return helpers.error('any.required', { message: 'City is required for customer address' });
+      }
+      if (!value?.country) {
+        return helpers.error('any.required', { message: 'Country is required for customer address' });
+      }
+    }
+    return value;
   }),
   notes: Joi.string(),
 });
@@ -56,37 +71,51 @@ const addOnSchema = Joi.object({
   description: Joi.string(),
 });
 
-const bookingInputSchema = Joi.object({
-  serviceId: Joi.string().required(),
-  providerId: Joi.string().optional(),
-  scheduledDate: Joi.string().required(),
-  scheduledTime: Joi.string().required(),
+/**
+ * Unified booking input schema using centralized LOCATION_TYPES
+ * Re-exported for backward compatibility
+ */
+export const bookingInputSchema = Joi.object({
+  serviceId: Joi.string().pattern(OBJECT_ID_PATTERN).required().messages({
+    'string.pattern.base': 'Invalid service ID format',
+  }),
+  providerId: Joi.string().pattern(OBJECT_ID_PATTERN).optional().messages({
+    'string.pattern.base': 'Invalid provider ID format',
+  }),
+  scheduledDate: Joi.string().isoDate().required().messages({
+    'string.isoDate': 'Please provide a valid date',
+  }),
+  scheduledTime: Joi.string().pattern(/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/).required().messages({
+    'string.pattern.base': 'Please provide a valid time in HH:MM format',
+  }),
   location: locationSchema.required(),
   customerInfo: customerInfoSchema,
   addOns: Joi.array().items(addOnSchema),
-  specialRequests: Joi.string(),
+  specialRequests: Joi.string().max(1000).allow('').optional(),
+  // FIX: Add couponCode field for promo code application
+  couponCode: Joi.string().max(50).uppercase().optional().messages({
+    'string.max': 'Coupon code cannot exceed 50 characters',
+  }),
   metadata: Joi.object({
-    bookingSource: Joi.string(),
-    deviceType: Joi.string(),
-    sessionId: Joi.string(),
+    bookingSource: Joi.string().max(100).allow('').optional(),
+    deviceType: Joi.string().max(50).allow('').optional(),
+    sessionId: Joi.string().max(255).allow('').optional(),
     variantDuration: Joi.number().integer().min(15).max(480),
     variantPrice: Joi.number().min(0),
     selectedVariantIndex: Joi.number().integer().min(0),
-    // FIX: Make idempotencyKey REQUIRED to prevent double-booking
     idempotencyKey: Joi.string()
-      .min(16)
-      .max(64)
-      .pattern(/^[a-zA-Z0-9_-]+$/)
+      .pattern(IDEMPOTENCY_KEY_PATTERN)
       .required()
       .messages({
-        'string.min': 'Idempotency key must be at least 16 characters',
-        'string.max': 'Idempotency key cannot exceed 64 characters',
+        'string.pattern.base': 'Idempotency key must be 16-64 alphanumeric characters',
         'any.required': 'Idempotency key is required to prevent duplicate bookings'
       })
   }).required(),
-  locationType: Joi.string().valid('at_home', 'at_provider', 'at_hotel'),
+  // Use centralized location types
+  locationType: Joi.string().valid(...LOCATION_TYPES),
   selectedDuration: Joi.number(),
   genderPreference: Joi.string().valid('male', 'female', 'no_preference').default('no_preference'),
+  professionalPreference: Joi.string().valid('male', 'female', 'no_preference').optional(),
   experiencePreference: Joi.string().valid('no_preference', 'specific', 'any_experience').default('no_preference'),
   paymentMethod: Joi.string(),
 });
@@ -113,19 +142,16 @@ const guestBookingInputSchema = Joi.object({
     variantDuration: Joi.number().integer().min(15).max(480),
     variantPrice: Joi.number().min(0),
     selectedVariantIndex: Joi.number().integer().min(0),
-    // FIX: Make idempotencyKey REQUIRED for guest bookings too
     idempotencyKey: Joi.string()
-      .min(16)
-      .max(64)
-      .pattern(/^[a-zA-Z0-9_-]+$/)
+      .pattern(IDEMPOTENCY_KEY_PATTERN)
       .required()
       .messages({
-        'string.min': 'Idempotency key must be at least 16 characters',
-        'string.max': 'Idempotency key cannot exceed 64 characters',
+        'string.pattern.base': 'Idempotency key must be 16-64 alphanumeric characters',
         'any.required': 'Idempotency key is required to prevent duplicate bookings'
       })
   }).required(),
-  locationType: Joi.string().valid('at_home', 'at_provider', 'at_hotel'),
+  // Use centralized location types
+  locationType: Joi.string().valid(...LOCATION_TYPES),
   selectedDuration: Joi.number(),
   genderPreference: Joi.string().valid('male', 'female', 'no_preference').default('no_preference'),
   experiencePreference: Joi.string().valid('no_preference', 'specific', 'any_experience').default('no_preference'),
@@ -141,6 +167,7 @@ const bookingFiltersSchema = Joi.object({
   sortBy: Joi.string().valid('createdAt', 'scheduledDate', 'status', 'totalAmount', 'updatedAt').default('createdAt'),
   sortOrder: Joi.string().valid('asc', 'desc').default('desc'),
   search: Joi.string().min(1).max(200),
+  reviewable: Joi.boolean(),
 }).options({ stripUnknown: true });
 
 const acceptBookingSchema = Joi.object({
@@ -222,8 +249,8 @@ const formatBookingForEmail = async (
       Promise.resolve(service || booking.service || booking._doc?.service).then(async (s) => {
         if (s) return s;
         if (booking.serviceId) {
-          const services = await Service.find({ _id: booking.serviceId }).select('name duration').lean();
-          return services[0];
+          const service = await Service.findOne({ _id: booking.serviceId }).select('name duration').lean();
+          return service;
         }
         return null;
       }),
@@ -231,8 +258,8 @@ const formatBookingForEmail = async (
       Promise.resolve(provider || booking.provider || booking._doc?.provider).then(async (p) => {
         if (p) return p;
         if (booking.providerId) {
-          const providers = await User.find({ _id: booking.providerId }).select('firstName lastName email').lean();
-          return providers[0];
+          const provider = await User.findOne({ _id: booking.providerId }).select('firstName lastName email').lean();
+          return provider;
         }
         return null;
       }),
@@ -403,8 +430,54 @@ export const createBooking = asyncHandler(async (req: Request, res: Response) =>
     throw new ApiError(400, error.details[0].message);
   }
 
-  const customerId = (req.user as IUser)._id.toString();
-  const result = await bookingService.createCustomerBooking(customerId, value);
+  // FIX: COLLECTION MISMATCH BUG - Check Bundle (packages) first, then Service (individual services)
+  // Package data is stored in Bundle collection, not Service collection
+  let service = null;
+  let isPackageBooking = false;
+
+  // First, check if this is a package booking (check Bundle collection)
+  const bundle = await Bundle.findOne({ _id: value.serviceId, tenantId: (req as any).tenantId, isActive: true });
+  if (bundle) {
+    isPackageBooking = true;
+    // Transform bundle to match service-like structure for consistent processing
+    service = {
+      ...bundle.toObject(),
+      _id: bundle._id,
+      name: bundle.name,
+      price: bundle.bundlePrice,
+      isPackage: true,
+    };
+  } else {
+    // Fall back to Service collection for individual services
+    service = await Service.findOne({ _id: value.serviceId, tenantId: (req as any).tenantId, isActive: true });
+  }
+
+  if (!service) {
+    throw new ApiError(400, 'Service or package not found or inactive');
+  }
+
+  const bookingPayload = {
+    ...value,
+    professionalPreference:
+      value.professionalPreference ?? value.genderPreference ?? 'no_preference',
+    tenantId: (req as any).tenantId,
+  };
+
+  const userId = (req.user as IUser)?._id ?? (req.user as { id?: unknown })?.id;
+  if (!userId) {
+    throw new ApiError(401, 'Invalid customer session');
+  }
+  const customerId = String(userId);
+  logger.info('Create booking request received', {
+    context: 'BookingController',
+    customerId,
+    serviceId: value.serviceId,
+    scheduledDate: value.scheduledDate,
+    scheduledTime: value.scheduledTime,
+    couponCode: value.couponCode,
+    idempotencyKey: value.metadata?.idempotencyKey,
+  });
+  const result = await bookingService.createCustomerBooking(customerId, bookingPayload);
 
   // Publish booking.created event
   await eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
@@ -423,10 +496,13 @@ export const createBooking = asyncHandler(async (req: Request, res: Response) =>
     userAgent: req.get('user-agent'),
   });
 
-  res.status(201).json({
+  res.status(result.isDuplicate ? 200 : 201).json({
     success: true,
-    message: 'Booking request submitted, awaiting provider confirmation',
-    data: { booking: result.booking },
+    message: result.message || 'Booking request submitted, awaiting provider confirmation',
+    data: {
+      booking: result.booking,
+      isDuplicate: Boolean(result.isDuplicate),
+    },
   });
 });
 
@@ -445,7 +521,7 @@ export const getCustomerBookings = asyncHandler(async (req: Request, res: Respon
   // CRITICAL: Pass tenant context to prevent cross-tenant data access
   const userRole = (req.user as IUser)?.role;
   const tenantContext = {
-    tenantId: req.tenantId,
+    tenantId: (req as any).tenantId,
     isAdmin: userRole === 'admin'
   };
 
@@ -905,7 +981,7 @@ export const addBookingMessage = asyncHandler(async (req: Request, res: Response
   }
 
   const isCustomer = booking.customerId && booking.customerId.toString() === user._id.toString();
-  const isProvider = booking.providerId.toString() === user._id.toString();
+  const isProvider = booking.providerId && booking.providerId.toString() === user._id.toString();
 
   // SECURITY: Enforce role-based access - providers must go through provider routes
   // Customers can only add messages to their own bookings
@@ -981,7 +1057,10 @@ export const createGuestBooking = asyncHandler(async (req: Request, res: Respons
     throw new ApiError(400, error.details[0].message);
   }
 
-  const result = await bookingService.createGuestBooking(value);
+  const result = await bookingService.createGuestBooking({
+    ...value,
+    tenantId: (req as any).tenantId,
+  });
 
   res.status(201).json({
     success: true,
@@ -1124,9 +1203,13 @@ export const rateBooking = asyncHandler(async (req: Request, res: Response) => {
 // COUPON OPERATIONS
 // ============================================
 
+// FIX: Import discount stacking utility
+import { checkDiscountStacking, DISCOUNT_PRIORITY } from '../utils/discountStacking';
+
 /**
  * Apply coupon to a booking
  * POST /api/bookings/:id/coupon
+ * FIX: Integrated with discount stacking rules
  */
 export const applyCouponToBooking = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
@@ -1181,15 +1264,14 @@ export const applyCouponToBooking = asyncHandler(async (req: Request, res: Respo
     throw new ApiError(400, 'Cannot apply coupon to this booking');
   }
 
-  // Check if any discount already exists (prevents stacking coupons with other discounts)
-  const existingDiscounts = booking.pricing.discounts || [];
-  if (existingDiscounts.length > 0) {
-    throw new ApiError(400, 'A discount has already been applied to this booking. Only one discount can be applied per booking.');
-  }
+  // FIX: Check existing discounts with stacking rules
+  const currentDiscounts = booking.pricing.discounts || [];
+  const existingCoupon = currentDiscounts.find((d: any) => d.type === 'coupon');
 
   // Also check the legacy couponDiscount field for backwards compatibility
-  if ((booking.pricing as any).couponDiscount > 0) {
-    throw new ApiError(400, 'A coupon has already been applied to this booking');
+  if (existingCoupon || (booking.pricing as any).couponDiscount > 0) {
+    // If replacing an existing coupon, that's allowed (coupon has highest priority)
+    // But we need to check stacking rules first
   }
 
   // Find coupon
@@ -1225,19 +1307,42 @@ export const applyCouponToBooking = asyncHandler(async (req: Request, res: Respo
   const discountAmount = couponAny.calculateDiscount(orderValue);
   const discountDetails = couponAny.getDiscountObject(orderValue);
 
+  // FIX: Check discount stacking rules before applying coupon
+  const stackingCheck = await checkDiscountStacking(id, 'coupon');
+  if (!stackingCheck.canApply) {
+    // If there are conflicting discounts, inform the user
+    if (stackingCheck.conflictingDiscounts && stackingCheck.conflictingDiscounts.length > 0) {
+      const conflictNames = stackingCheck.conflictingDiscounts
+        .map(c => `${c.description} (${c.type})`)
+        .join(', ');
+      throw new ApiError(
+        400,
+        `Cannot apply coupon: Another discount (${conflictNames}) is already applied. Only one discount can be used at a time.`
+      );
+    }
+    throw new ApiError(400, stackingCheck.reason || 'Cannot apply coupon at this time');
+  }
+
   // Calculate new pricing
   const newSubtotal = orderValue - discountAmount;
   const policy = getPlatformPolicySync();
   const newTax = calculateTaxAmount(newSubtotal, policy);
   const newTotal = Math.round((newSubtotal + newTax) * 100) / 100;
 
-  // Add coupon to discounts array
-  const discounts = booking.pricing.discounts || [];
-  discounts.push({
-    type: 'coupon',
-    amount: discountAmount,
-    description: coupon.code,
-  });
+  // FIX: Remove any existing coupon discounts before applying new one
+  // (Coupon has highest priority, so we replace any existing coupon)
+  const existingDiscounts = booking.pricing.discounts || [];
+  const nonCouponDiscounts = existingDiscounts.filter((d: any) => d.type !== 'coupon');
+
+  // Add coupon to discounts array (replacing any existing coupon)
+  const discounts = [
+    ...nonCouponDiscounts,
+    {
+      type: 'coupon' as const,
+      amount: discountAmount,
+      description: coupon.code,
+    }
+  ];
 
   // Update booking pricing within a transaction to prevent race conditions
   const session = await mongoose.startSession();
@@ -1410,7 +1515,8 @@ export const getCustomerBookingCount = asyncHandler(async (req: Request, res: Re
 
   const options = {
     status: value.status,
-    activeOnly: value.includeBreakdown || value.status === 'active'
+    activeOnly: value.includeBreakdown || value.status === 'active',
+    tenantId: (req as any).tenantId,
   };
 
   const result = await bookingService.getCustomerBookingCount(customerId, options);

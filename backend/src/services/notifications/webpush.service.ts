@@ -11,6 +11,8 @@
  */
 
 import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
 import User from '../../models/user.model';
 import BookingNotification from '../../models/bookingNotification.model';
 import { withRetry, retryConfigs } from '../../utils/retry.util';
@@ -97,13 +99,44 @@ const getVapidKeys = (): VapidKeys | null => {
     return { publicKey: storedPublicKey, privateKey: storedPrivateKey };
   }
 
-  // For development, generate temporary keys
+  // For development, generate and persist keys to file
   if (process.env.NODE_ENV !== 'production') {
-    logger.warn('Web Push VAPID keys not configured - using generated keys (not suitable for production)', {
-      context: 'WebPushService',
-      action: 'VAPID_KEYS_NOT_CONFIGURED',
-    });
-    return generateVapidKeys();
+    const keysPath = path.join(process.cwd(), '.vapid-keys.json');
+
+    // Try to load existing keys from file
+    if (fs.existsSync(keysPath)) {
+      try {
+        const keysData = JSON.parse(fs.readFileSync(keysPath, 'utf8'));
+        if (keysData.publicKey && keysData.privateKey) {
+          logger.debug('Loaded VAPID keys from file', {
+            context: 'WebPushService',
+            action: 'VAPID_KEYS_LOADED',
+          });
+          return keysData;
+        }
+      } catch (error) {
+        logger.warn('Failed to parse existing VAPID keys file, generating new keys', {
+          context: 'WebPushService',
+          action: 'VAPID_KEYS_PARSE_ERROR',
+        });
+      }
+    }
+
+    // Generate new keys and persist to file
+    const keys = generateVapidKeys();
+    try {
+      fs.writeFileSync(keysPath, JSON.stringify(keys), { mode: 0o600 });
+      logger.info('Generated new VAPID keys and saved to .vapid-keys.json', {
+        context: 'WebPushService',
+        action: 'VAPID_KEYS_GENERATED',
+      });
+    } catch (error) {
+      logger.warn('Failed to persist VAPID keys to file', {
+        context: 'WebPushService',
+        action: 'VAPID_KEYS_PERSIST_ERROR',
+      });
+    }
+    return keys;
   }
 
   // In production without keys, return null (service disabled)
@@ -346,7 +379,12 @@ function serializeSubscription(subscription: PushSubscription): string {
  * Deserialize push subscription from storage
  */
 function deserializeSubscription(data: string): PushSubscription {
-  return JSON.parse(data) as PushSubscription;
+  const parsed = JSON.parse(data);
+  if (parsed && typeof parsed === 'object') {
+    delete parsed.__proto__;
+    delete parsed.constructor;
+  }
+  return parsed as PushSubscription;
 }
 
 // ============================================
@@ -669,7 +707,9 @@ export class WebPushService {
       // Create VAPID JWT
       const jwt = createVapidJwt(vapidKeys.privateKey, audience);
 
-      // Send to push gateway
+      // Send to push gateway with 30-second timeout
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 30000);
       const response = await fetch(subscription.endpoint, {
         method: 'POST',
         headers: {
@@ -680,7 +720,9 @@ export class WebPushService {
           'Authorization': `vapid t=${jwt}, k=${vapidKeys.publicKey}`,
         },
         body: Buffer.concat([salt, nonce, ciphertext]),
+        signal: controller.signal,
       });
+      clearTimeout(timeout);
 
       if (response.ok) {
         logger.debug('Push notification sent successfully', {

@@ -5,6 +5,25 @@ import { handleApiError, ServiceError } from './errors';
 // Type Definitions
 // ============================================
 
+/**
+ * CustomerTier is a FRONTEND-ONLY risk classification derived from trustScore.
+ * This is NOT the same as backend loyalty tiers (e.g., bronze/silver/gold).
+ *
+ * Design Intent:
+ * - Backend customerOpsService calculates these tiers dynamically from metrics
+ * - Tiers are derived from trustScore ranges and abuse patterns
+ * - This is a RISK classification system, not a loyalty program
+ *
+ * Backend Tier Calculation (customerOpsService):
+ * - trustScore >= 80 + no flags -> 'trusted'
+ * - trustScore >= 50 + no flags -> 'regular'
+ * - trustScore < 50 OR has unresolved flags -> 'flagged'
+ * - isBlocked = true -> 'banned'
+ * - first booking within 30 days -> 'new'
+ *
+ * Note: If backend returns different tier values, they are normalized here
+ * before being used by frontend components.
+ */
 export type CustomerTier = 'new' | 'regular' | 'trusted' | 'flagged' | 'banned';
 export type RiskLevel = 'low' | 'medium' | 'high' | 'critical';
 export type AbuseFlagType =

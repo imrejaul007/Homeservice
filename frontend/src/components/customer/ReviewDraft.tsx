@@ -81,7 +81,7 @@ export interface ReviewDraftListProps {
 
 // Star Rating Component
 interface StarRatingProps {
-  value: number;
+  value?: number;
   onChange: (rating: number) => void;
   readonly?: boolean;
   size?: 'sm' | 'md' | 'lg';
@@ -643,7 +643,7 @@ export const ReviewDraftList: React.FC<ReviewDraftListProps> = ({
           Your Review Drafts ({drafts.length})
         </h3>
         <p className="text-sm text-gray-500">
-          Drafts expire 30 days after creation
+          Drafts expire 30 days after creation • Reviews must be submitted within 14 days of service completion
         </p>
       </div>
 

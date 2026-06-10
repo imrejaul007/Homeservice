@@ -4,6 +4,16 @@ import { CookieOptions } from 'express';
 import logger from '../utils/logger';
 import { cache, isRedisAvailable } from '../config/redis';
 
+// Extend Express Request type with typed user for type safety
+interface AuthenticatedUser {
+  _id: string | unknown;
+}
+
+// Use declaration merging or just use Request directly with optional user
+interface TypedRequest extends Request {
+  csrfToken?: string;
+}
+
 // CSRF token configuration
 const CSRF_TOKEN_LENGTH = 32; // 32 bytes = 64 hex characters
 const CSRF_TOKEN_EXPIRY_HOURS = 24;
@@ -18,19 +28,78 @@ interface CSRFTokenEntry {
 }
 
 // In-memory fallback for single-instance deployments without Redis
+// Bounded LRU cache to prevent memory exhaustion DoS
+const MAX_MEMORY_STORE_ENTRIES = parseInt(process.env.CSRF_MAX_MEMORY_ENTRIES || '10000');
 const memoryTokenStore = new Map<string, CSRFTokenEntry>();
+// Track access order for LRU eviction (entries added to end, evicted from front)
+const memoryStoreAccessOrder: string[] = [];
 
-// Environment-based configuration
-const getConfig = () => ({
-  tokenLength: parseInt(process.env.CSRF_TOKEN_LENGTH || String(CSRF_TOKEN_LENGTH)),
-  tokenExpiryHours: parseInt(process.env.CSRF_TOKEN_EXPIRY_HOURS || String(CSRF_TOKEN_EXPIRY_HOURS)),
+/**
+ * Add entry to memory store with LRU eviction if at capacity
+ */
+function memoryStoreSet(key: string, entry: CSRFTokenEntry): void {
+  // If key exists, remove from access order first (will be re-added)
+  const existingIdx = memoryStoreAccessOrder.indexOf(key);
+  if (existingIdx !== -1) {
+    memoryStoreAccessOrder.splice(existingIdx, 1);
+  }
+
+  // Evict oldest entries if at capacity (LRU eviction)
+  while (memoryTokenStore.size >= MAX_MEMORY_STORE_ENTRIES && memoryStoreAccessOrder.length > 0) {
+    const oldestKey = memoryStoreAccessOrder.shift();
+    if (oldestKey) {
+      memoryTokenStore.delete(oldestKey);
+      logger.warn('LRU eviction: removed oldest CSRF token from memory store', {
+        evictedKey: oldestKey.substring(0, 8) + '...',
+        currentSize: memoryTokenStore.size,
+        maxSize: MAX_MEMORY_STORE_ENTRIES,
+      });
+    }
+  }
+
+  // Add to store and track access order
+  memoryTokenStore.set(key, entry);
+  memoryStoreAccessOrder.push(key);
+}
+
+/**
+ * Get entry from memory store and update LRU order
+ */
+function memoryStoreGet(key: string): CSRFTokenEntry | undefined {
+  const entry = memoryTokenStore.get(key);
+  if (entry) {
+    // Move to end of access order (most recently used)
+    const idx = memoryStoreAccessOrder.indexOf(key);
+    if (idx !== -1) {
+      memoryStoreAccessOrder.splice(idx, 1);
+      memoryStoreAccessOrder.push(key);
+    }
+  }
+  return entry;
+}
+
+/**
+ * Delete entry from memory store
+ */
+function memoryStoreDelete(key: string): boolean {
+  const idx = memoryStoreAccessOrder.indexOf(key);
+  if (idx !== -1) {
+    memoryStoreAccessOrder.splice(idx, 1);
+  }
+  return memoryTokenStore.delete(key);
+}
+
+// Environment-based configuration (cached at module load - env vars don't change at runtime)
+const csrfConfig = {
+  tokenLength: parseInt(process.env.CSRF_TOKEN_LENGTH || String(CSRF_TOKEN_LENGTH), 10),
+  tokenExpiryHours: parseInt(process.env.CSRF_TOKEN_EXPIRY_HOURS || String(CSRF_TOKEN_EXPIRY_HOURS), 10),
   cookieName: process.env.CSRF_COOKIE_NAME || 'csrf_token',
   headerName: process.env.CSRF_HEADER_NAME || 'x-csrf-token',
   sameSite: (process.env.CSRF_SAME_SITE ||
     (process.env.NODE_ENV === 'development' ? 'lax' : 'strict')) as 'strict' | 'lax' | 'none',
   secure: process.env.NODE_ENV === 'production',
   rotateOnAuth: process.env.CSRF_ROTATE_ON_AUTH !== 'false', // Default true
-});
+};
 
 // ============================================
 // Redis-based CSRF Token Storage
@@ -66,7 +135,7 @@ async function storeToken(key: string, entry: CSRFTokenEntry, ttlMs: number): Pr
     }
   }
   // Fallback to memory
-  memoryTokenStore.set(key, entry);
+  memoryStoreSet(key, entry);
 }
 
 /**
@@ -96,7 +165,7 @@ async function getToken(key: string): Promise<CSRFTokenEntry | null> {
     }
   }
   // Fallback to memory
-  return memoryTokenStore.get(key) || null;
+  return memoryStoreGet(key) || null;
 }
 
 /**
@@ -116,15 +185,16 @@ async function deleteToken(key: string): Promise<void> {
     }
   }
   // Fallback to memory
-  memoryTokenStore.delete(key);
+  memoryStoreDelete(key);
 }
 
 /**
  * Generate a cryptographically secure CSRF token
  * Uses crypto.randomBytes for secure random generation
+ * MUST be awaited to ensure token is stored before response is sent (race condition fix)
  */
-export function generateCsrfToken(req: Request, res: Response): string {
-  const config = getConfig();
+export async function generateCsrfToken(req: TypedRequest, res: Response): Promise<string> {
+  const config = csrfConfig;
 
   // Generate random bytes and convert to hex
   const randomBytes = crypto.randomBytes(config.tokenLength);
@@ -142,14 +212,12 @@ export function generateCsrfToken(req: Request, res: Response): string {
     rotated: false,
   };
 
-  // Store token with expiry
+  // Store token with expiry - MUST await to prevent race condition
+  // Client receives token but server must have it stored before response
   const expiryTime = config.tokenExpiryHours * 60 * 60 * 1000;
-  const storeKey = generateStoreKey(req, token);
+  const storeKey = generateStoreKey(req, token, userId);
 
-  // Store asynchronously (don't block response)
-  storeToken(storeKey, tokenEntry, expiryTime).catch(err => {
-    logger.error('Failed to store CSRF token', { error: (err as Error).message });
-  });
+  await storeToken(storeKey, tokenEntry, expiryTime);
 
   // Set CSRF cookie
   const cookieOptions = csrfCookieOptions();
@@ -171,8 +239,8 @@ export function generateCsrfToken(req: Request, res: Response): string {
  * Validate CSRF token from request
  * Checks both header and body sources
  */
-export function validateCsrfToken(req: Request, res: Response, next: NextFunction): void {
-  const config = getConfig();
+export function validateCsrfToken(req: TypedRequest, res: Response, next: NextFunction): void {
+  const config = csrfConfig;
 
   // Only validate state-changing methods
   if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
@@ -231,13 +299,13 @@ export function validateCsrfToken(req: Request, res: Response, next: NextFunctio
  * Async token validation with Redis support
  */
 async function validateTokenAsync(
-  req: Request,
+  req: TypedRequest,
   res: Response,
   next: NextFunction,
   storeKey: string,
   token: string
 ): Promise<void> {
-  const config = getConfig();
+  const config = csrfConfig;
   const tokenEntry = await getToken(storeKey);
 
   if (!tokenEntry) {
@@ -310,7 +378,7 @@ async function validateTokenAsync(
   });
 
   // Attach validated token to request for downstream use
-  (req as any).csrfToken = token;
+  (req as TypedRequest).csrfToken = token;
 
   return next();
 }
@@ -321,7 +389,7 @@ async function validateTokenAsync(
  * The cookie is still protected by SameSite and HTTPS in production
  */
 export function csrfCookieOptions(): CookieOptions {
-  const config = getConfig();
+  const config = csrfConfig;
 
   const options: CookieOptions = {
     httpOnly: false, // MUST be false so frontend can read the token for header
@@ -342,7 +410,7 @@ export function csrfCookieOptions(): CookieOptions {
  * Validate Origin/Referer headers for CSRF protection
  * Should be used alongside token validation
  */
-export function validateOriginHeader(req: Request, res: Response, next: NextFunction): void {
+export function validateOriginHeader(req: TypedRequest, res: Response, next: NextFunction): void {
   // Only validate state-changing methods
   if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
     return next();
@@ -374,7 +442,22 @@ export function validateOriginHeader(req: Request, res: Response, next: NextFunc
 
   // Validate origin matches expected origin
   const allowedOrigins = getAllowedOrigins();
-  const requestOrigin = origin || (referer ? new URL(referer).origin : null);
+  let requestOrigin: string | null = null;
+  if (origin) {
+    requestOrigin = origin;
+  } else if (referer) {
+    try {
+      requestOrigin = new URL(referer).origin;
+    } catch {
+      // Malformed referer (e.g., relative path like '/path') - cannot validate origin
+      logger.warn('CSRF origin check: Malformed referer header, skipping validation', {
+        path: req.path,
+        method: req.method,
+        ip: req.ip,
+        referer: referer.substring(0, 100), // truncate for logging
+      });
+    }
+  }
 
   if (requestOrigin && allowedOrigins.length > 0 && !allowedOrigins.includes(requestOrigin)) {
     logger.warn('CSRF origin validation failed: Origin mismatch', {
@@ -397,12 +480,19 @@ export function validateOriginHeader(req: Request, res: Response, next: NextFunc
 
 /**
  * Get list of allowed origins from environment
+ * Only allows localhost origins in development/test, never in production
  */
 function getAllowedOrigins(): string[] {
   const origins = process.env.ALLOWED_ORIGINS?.split(',').map(o => o.trim()) || [];
   const corsOrigins = process.env.CORS_ORIGIN ? [process.env.CORS_ORIGIN] : [];
 
-  return [...new Set([...origins, ...corsOrigins, 'http://localhost:3000', 'http://localhost:5173'])];
+  // Only allow localhost in non-production environments to prevent CSRF bypass
+  const isProduction = process.env.NODE_ENV === 'production';
+  const localhostOrigins = isProduction
+    ? []
+    : ['http://localhost:3000', 'http://localhost:5173'];
+
+  return [...new Set([...origins, ...corsOrigins, ...localhostOrigins])];
 }
 
 /**
@@ -410,12 +500,12 @@ function getAllowedOrigins(): string[] {
  * Creates a new token and invalidates the old one
  */
 async function rotateCsrfToken(
-  req: Request,
+  req: TypedRequest,
   res: Response,
   oldStoreKey: string,
   oldEntry: CSRFTokenEntry
 ): Promise<void> {
-  const config = getConfig();
+  const config = csrfConfig;
 
   // Generate new token
   const newToken = crypto.randomBytes(config.tokenLength).toString('hex');
@@ -441,13 +531,19 @@ async function rotateCsrfToken(
     maxAge: expiryTime,
   });
 
-  // Mark old entry as rotated and schedule deletion
+  // Mark old entry as rotated and update Redis immediately
+  // This prevents concurrent requests with the old token from passing validation
   oldEntry.rotated = true;
 
-  // Remove old token after short grace period (5 minutes)
+  // Update the old token in Redis with rotated=true immediately
+  // Use a shorter TTL (10 minutes) for the grace period
+  const gracePeriodMs = 10 * 60 * 1000;
+  await storeToken(oldStoreKey, oldEntry, gracePeriodMs);
+
+  // Schedule final deletion (also handles memory store cleanup)
   setTimeout(async () => {
     await deleteToken(oldStoreKey);
-  }, 5 * 60 * 1000);
+  }, gracePeriodMs);
 
   logger.debug('CSRF token rotated', {
     userId,
@@ -458,17 +554,18 @@ async function rotateCsrfToken(
 /**
  * Generate a unique store key for the token
  * Combines token with user identifier for extra security
+ * Optionally accepts pre-computed userId to avoid redundant hashing
  */
-function generateStoreKey(req: Request, token: string): string {
-  const userId = getUserIdentifier(req);
-  return crypto.createHash('sha256').update(`${userId}:${token}`).digest('hex');
+function generateStoreKey(req: TypedRequest, token: string, userId?: string): string {
+  const identifier = userId ?? getUserIdentifier(req);
+  return crypto.createHash('sha256').update(`${identifier}:${token}`).digest('hex');
 }
 
 /**
  * Get user identifier from request
  * Uses user ID if authenticated, otherwise generates fingerprint from IP and user agent
  */
-function getUserIdentifier(req: Request): string {
+function getUserIdentifier(req: TypedRequest): string {
   if (req.user?._id) {
     return `user:${req.user._id.toString()}`;
   }
@@ -486,7 +583,7 @@ function getUserIdentifier(req: Request): string {
  * Must be a hex string of correct length
  */
 function isValidTokenFormat(token: string): boolean {
-  const config = getConfig();
+  const config = csrfConfig;
   const expectedLength = config.tokenLength * 2; // hex string is 2x the byte length
 
   if (!token || typeof token !== 'string') {
@@ -517,17 +614,24 @@ export function cleanupExpiredTokens(): void {
     return; // Redis handles expiration via TTL
   }
 
-  const config = getConfig();
+  const config = csrfConfig;
   const expiryTime = config.tokenExpiryHours * 60 * 60 * 1000;
   const now = Date.now();
 
   let cleanedCount = 0;
+  const keysToDelete: string[] = [];
 
   for (const [key, entry] of memoryTokenStore.entries()) {
-    if (now - entry.createdAt.getTime() > expiryTime) {
-      memoryTokenStore.delete(key);
-      cleanedCount++;
+    // Clean up tokens that are either expired by age OR marked as rotated
+    // (rotated tokens have been superseded and should be removed regardless of age)
+    if (now - entry.createdAt.getTime() > expiryTime || entry.rotated) {
+      keysToDelete.push(key);
     }
+  }
+
+  for (const key of keysToDelete) {
+    memoryStoreDelete(key);
+    cleanedCount++;
   }
 
   if (cleanedCount > 0) {
@@ -552,17 +656,18 @@ export const csrfMiddleware = [
 /**
  * Get current CSRF token from request cookies
  */
-export function getCsrfTokenFromRequest(req: Request): string | undefined {
-  const config = getConfig();
+export function getCsrfTokenFromRequest(req: TypedRequest): string | undefined {
+  const config = csrfConfig;
   return req.cookies?.[config.cookieName];
 }
 
 /**
  * Middleware to provide CSRF token to client
  * Typically called on GET requests to /csrf-token endpoint
+ * MUST be async to await token storage before sending response
  */
-export const provideCsrfToken = (req: Request, res: Response): void => {
-  const token = generateCsrfToken(req, res);
+export const provideCsrfToken = async (req: TypedRequest, res: Response): Promise<void> => {
+  const token = await generateCsrfToken(req, res);
   res.json({
     success: true,
     csrfToken: token,

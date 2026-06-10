@@ -57,7 +57,14 @@
             </intent-filter>
 
             <!-- Deep Links -->
-            <intent-filter android:autoVerify="true">
+            <!-- NOTE: For autoVerify to work, you must add the assetlinks.json file to your backend hosting
+                 at https://homeservice-1.onrender.com/.well-known/assetlinks.json
+                 See: https://developer.android.com/training/app-links/verify-site-associations
+
+                 For local development, autoVerify is disabled to allow testing without domain verification.
+                 Before publishing to Play Store, configure proper domain verification.
+            -->
+            <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />

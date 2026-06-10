@@ -36,12 +36,9 @@ router.get('/check/:providerId',
   favoritesController.checkFavorite
 );
 
-// Add to favorites
-router.post('/:providerId',
-  authMiddleware.authenticate,
-  validate(addFavoriteSchema),
-  favoritesController.addFavorite
-);
+// ============================================
+// ROUTES WITH :providerId - Specific routes BEFORE parameterized /:providerId
+// ============================================
 
 // Update favorite notes
 router.patch('/:providerId',
@@ -54,6 +51,13 @@ router.patch('/:providerId',
 router.delete('/:providerId',
   authMiddleware.authenticate,
   favoritesController.removeFavorite
+);
+
+// Add to favorites (must be last for /:providerId routes)
+router.post('/:providerId',
+  authMiddleware.authenticate,
+  validate(addFavoriteSchema),
+  favoritesController.addFavorite
 );
 
 export default router;

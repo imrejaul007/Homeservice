@@ -6,9 +6,54 @@ import Booking from '../models/booking.model';
 import User from '../models/user.model';
 import ProviderProfile from '../models/providerProfile.model';
 import { subscriptionService } from '../services/subscription.service';
+import { CUSTOMER_SUBSCRIPTION_PLANS } from '../constants/subscriptionPlans';
 import logger from '../utils/logger';
+import type { ICustomerProfile } from '../models/customerProfile.model';
+import mongoose from 'mongoose';
 
 const router = Router();
+
+// Helper function to create dynamic Invoice model (same pattern as invoice.routes.ts)
+const createInvoiceSchema = () => {
+  const InvoiceSchema = new mongoose.Schema({
+    invoiceNumber: { type: String, required: true, unique: true },
+    customerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    providerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    bookingId: { type: mongoose.Schema.Types.ObjectId, ref: 'Booking' },
+    type: {
+      type: String,
+      enum: ['booking', 'subscription', 'refund', 'adjustment'],
+      default: 'booking'
+    },
+    status: {
+      type: String,
+      enum: ['draft', 'pending', 'sent', 'viewed', 'paid', 'overdue', 'cancelled', 'refunded'],
+      default: 'pending'
+    },
+    lineItems: [{
+      description: { type: String, required: true },
+      quantity: { type: Number, default: 1 },
+      unitPrice: { type: Number, required: true },
+      total: { type: Number, required: true }
+    }],
+    subtotal: { type: Number, default: 0 },
+    taxRate: { type: Number, default: 0 },
+    taxAmount: { type: Number, default: 0 },
+    discount: { type: Number, default: 0 },
+    total: { type: Number, default: 0 },
+    currency: { type: String, default: 'AED' },
+    dueDate: { type: Date },
+    paidAt: { type: Date },
+    sentAt: { type: Date },
+    notes: { type: String },
+    terms: { type: String },
+    pdfUrl: { type: String }
+  }, {
+    timestamps: true
+  });
+
+  return mongoose.models.Invoice || mongoose.model('Invoice', InvoiceSchema);
+};
 
 // ============================================
 // BOOKING ENDPOINTS
@@ -210,21 +255,94 @@ router.post('/payments/refund/:bookingId', authenticate, asyncHandler(async (req
 
 /**
  * @route   GET /api/payments/methods
- * @desc    Get user's saved payment methods
+ * @desc    Get user's saved payment methods (from both CustomerProfile and Stripe)
  * @access  Private
  */
 router.get('/payments/methods', authenticate, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).user._id;
 
   // Get customer profile for saved payment methods
-  const CustomerProfile = (await import('../models/customerProfile.model')).default;
-  const customerProfile = await CustomerProfile.findOne({ userId });
+  const CustomerProfileModel = (await import('../models/customerProfile.model')).default;
+  const customerProfile = await CustomerProfileModel.findOne({ userId }) as ICustomerProfile | null;
+
+  // Also get Stripe payment methods if user has a Stripe customer ID
+  let stripePaymentMethods: any[] = [];
+  try {
+    const UserSubscription = (await import('../models/userSubscription.model')).default;
+    const subscription = await UserSubscription.findByUserId(userId);
+
+    if (subscription?.stripeCustomerId) {
+      // Import Stripe client from subscription service
+      const { getStripeClient } = await import('../services/subscription.service');
+      const stripe = getStripeClient();
+
+      // Fetch customer's payment methods from Stripe
+      const stripeMethods = await stripe.paymentMethods.list({
+        customer: subscription.stripeCustomerId,
+        type: 'card',
+      });
+
+      stripePaymentMethods = stripeMethods.data.map((pm: any) => ({
+        id: pm.id,
+        type: pm.type,
+        brand: pm.card?.brand,
+        last4: pm.card?.last4,
+        expMonth: pm.card?.exp_month,
+        expYear: pm.card?.exp_year,
+        funding: pm.card?.funding,
+        country: pm.card?.country,
+        isDefault: pm.id === subscription.stripePriceId, // Will be enhanced below
+      }));
+
+      // Get the default payment method from the customer
+      const stripeCustomer = await stripe.customers.retrieve(subscription.stripeCustomerId) as any;
+      if (stripeCustomer?.invoice_settings?.default_payment_method) {
+        stripePaymentMethods = stripePaymentMethods.map((pm: any) => ({
+          ...pm,
+          isDefault: pm.id === stripeCustomer.invoice_settings.default_payment_method,
+        }));
+      }
+    }
+  } catch (stripeError) {
+    // Log but don't fail - Stripe might not be configured
+    logger.warn('Failed to fetch Stripe payment methods', {
+      userId,
+      error: (stripeError as Error).message,
+      action: 'STRIPE_PAYMENT_METHODS_FETCH_FAILED'
+    });
+  }
+
+  // Combine local and Stripe payment methods, prioritizing Stripe methods
+  const combinedMethods = [...stripePaymentMethods];
+
+  // Add any local payment methods that aren't in Stripe
+  const stripeMethodIds = stripePaymentMethods.map((pm: any) => pm.id);
+  const localMethods = (customerProfile?.paymentMethods || []).filter(
+    (m: any) => !m.stripePaymentMethodId || !stripeMethodIds.includes(m.stripePaymentMethodId)
+  );
+
+  localMethods.forEach((method: any) => {
+    combinedMethods.push({
+      id: method._id,
+      type: method.type,
+      brand: method.brand,
+      last4: method.last4,
+      expMonth: method.expiryMonth,
+      expYear: method.expiryYear,
+      isDefault: method.isDefault && combinedMethods.length === 0,
+      source: 'local',
+    });
+  });
+
+  // Set default method
+  const defaultMethod = combinedMethods.find((m: any) => m.isDefault) || combinedMethods[0];
 
   res.json({
     success: true,
     data: {
-      paymentMethods: customerProfile?.paymentMethods || [],
-      defaultMethod: customerProfile?.paymentMethods?.find((m: any) => m.isDefault)
+      paymentMethods: combinedMethods,
+      defaultMethod,
+      hasStripeCustomer: !!customerProfile?.stripeCustomerId,
     }
   });
 }));
@@ -242,11 +360,11 @@ router.post('/payments/methods', authenticate, asyncHandler(async (req: Request,
     throw new ApiError(400, 'Payment method type and token are required');
   }
 
-  const CustomerProfile = (await import('../models/customerProfile.model')).default;
-  let customerProfile = await CustomerProfile.findOne({ userId });
+  const CustomerProfileModel = (await import('../models/customerProfile.model')).default;
+  let customerProfile = await CustomerProfileModel.findOne({ userId }) as ICustomerProfile | null;
 
   if (!customerProfile) {
-    customerProfile = new CustomerProfile({ userId });
+    customerProfile = new CustomerProfileModel({ userId }) as ICustomerProfile;
   }
 
   // Add new payment method
@@ -294,13 +412,28 @@ router.get('/subscription/current', authenticate, asyncHandler(async (req: Reque
   const subscription = await subscriptionService.getSubscriptionByUserId(userId);
 
   if (!subscription) {
-    // Return free tier subscription
+    // Return full free tier subscription object
     return res.json({
       success: true,
       data: {
+        _id: null,
+        userId: userId,
+        plan: 'free',
         tier: 'free',
         status: 'active',
-        features: ['Basic booking', 'Limited providers'],
+        billingCycle: null,
+        currentPeriodStart: null,
+        currentPeriodEnd: null,
+        price: 0,
+        currency: 'AED',
+        cancelAtPeriodEnd: false,
+        features: CUSTOMER_SUBSCRIPTION_PLANS.free.features,
+        usage: {
+          bookingsThisMonth: 0,
+          bookingsLimit: 2,
+          featuredListingsUsed: 0,
+          featuredListingsLimit: 0
+        },
         limits: {
           bookingsPerMonth: 2,
           featuredListings: 0
@@ -312,7 +445,10 @@ router.get('/subscription/current', authenticate, asyncHandler(async (req: Reque
   return res.json({
     success: true,
     data: {
+      _id: subscription._id,
+      userId: subscription.userId,
       id: subscription._id,
+      plan: subscription.plan,
       tier: subscription.plan,
       status: subscription.status,
       billingCycle: subscription.billingCycle,
@@ -321,7 +457,7 @@ router.get('/subscription/current', authenticate, asyncHandler(async (req: Reque
       price: subscription.price,
       currency: subscription.currency,
       cancelAtPeriodEnd: subscription.cancelAtPeriodEnd,
-      features: getPlanFeatures(subscription.plan),
+      features: CUSTOMER_SUBSCRIPTION_PLANS[subscription.plan]?.features || CUSTOMER_SUBSCRIPTION_PLANS.free.features,
       usage: subscription.usage
     }
   });
@@ -347,6 +483,11 @@ router.post('/subscription/create', authenticate, asyncHandler(async (req: Reque
 
   if (tier !== 'free' && !paymentMethodId) {
     throw new ApiError(400, 'Payment method required for paid plans');
+  }
+
+  const validBillingCycles = ['monthly', 'yearly'];
+  if (billingCycle && !validBillingCycles.includes(billingCycle)) {
+    throw new ApiError(400, 'Invalid billing cycle');
   }
 
   const subscription = await subscriptionService.createSubscription({
@@ -426,6 +567,11 @@ router.post('/subscription/upgrade', authenticate, asyncHandler(async (req: Requ
 
   if (!tier) {
     throw new ApiError(400, 'Target tier is required');
+  }
+
+  const validBillingCycles = ['monthly', 'yearly'];
+  if (billingCycle && !validBillingCycles.includes(billingCycle)) {
+    throw new ApiError(400, 'Invalid billing cycle');
   }
 
   try {
@@ -562,6 +708,170 @@ router.get('/subscription/usage', authenticate, asyncHandler(async (req: Request
   res.json({
     success: true,
     data: usage
+  });
+}));
+
+/**
+ * @route   GET /api/subscriptions/invoices
+ * @desc    Get invoices for the current user's subscription
+ * @access  Private
+ */
+router.get('/subscriptions/invoices', authenticate, asyncHandler(async (req: Request, res: Response) => {
+  const userId = (req as any).user._id;
+  const { page = 1, limit = 10, status } = req.query;
+
+  const pageNum = Math.max(1, parseInt(page as string, 10) || 1);
+  const limitNum = Math.min(50, Math.max(1, parseInt(limit as string, 10) || 10));
+  const skip = (pageNum - 1) * limitNum;
+
+  // Build query for subscription invoices
+  const query: any = {
+    customerId: userId,
+    type: { $in: ['subscription', 'booking'] },
+  };
+
+  // Filter by status if provided
+  if (status && typeof status === 'string') {
+    query.status = status;
+  }
+
+  const Invoice = createInvoiceSchema();
+  const [invoices, total] = await Promise.all([
+    Invoice.find(query)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limitNum)
+      .populate('customerId', 'firstName lastName email')
+      .populate('providerId', 'firstName lastName businessName'),
+    Invoice.countDocuments(query),
+  ]);
+
+  // Transform invoices for frontend
+  const transformedInvoices = invoices.map((inv: any) => ({
+    id: inv._id.toString(),
+    invoiceNumber: inv.invoiceNumber,
+    type: inv.type || 'subscription',
+    status: inv.status,
+    customerId: inv.customerId?._id?.toString() || userId.toString(),
+    customerName: inv.customerId
+      ? `${inv.customerId.firstName || ''} ${inv.customerId.lastName || ''}`.trim()
+      : 'Customer',
+    customerEmail: inv.customerId?.email || '',
+    items: (inv.lineItems || []).map((item: any, index: number) => ({
+      id: `${index}`,
+      description: item.description,
+      quantity: item.quantity,
+      unitPrice: item.unitPrice,
+      totalPrice: item.total,
+    })),
+    subtotal: inv.subtotal || 0,
+    taxRate: inv.taxRate || 0,
+    taxAmount: inv.taxAmount || 0,
+    discountAmount: inv.discount || 0,
+    totalAmount: inv.total || 0,
+    currency: inv.currency || 'AED',
+    dueDate: inv.dueDate?.toISOString(),
+    paidAt: inv.paidAt?.toISOString(),
+    sentAt: inv.sentAt?.toISOString(),
+    notes: inv.notes,
+    pdfUrl: inv.pdfUrl,
+    createdAt: inv.createdAt?.toISOString(),
+    updatedAt: inv.updatedAt?.toISOString(),
+  }));
+
+  res.json({
+    success: true,
+    data: {
+      invoices: transformedInvoices,
+      total,
+      page: pageNum,
+      limit: limitNum,
+      totalPages: Math.ceil(total / limitNum),
+    },
+  });
+}));
+
+/**
+ * @route   GET /api/subscriptions/invoices/:id/pdf
+ * @desc    Download invoice as PDF
+ * @access  Private
+ */
+router.get('/subscriptions/invoices/:id/pdf', authenticate, asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const userId = (req as any).user._id;
+
+  const Invoice = createInvoiceSchema();
+
+  // Find the invoice
+  const invoice = await Invoice.findById(id);
+
+  if (!invoice) {
+    throw new ApiError(404, 'Invoice not found');
+  }
+
+  // Verify ownership
+  if (invoice.customerId?.toString() !== userId.toString()) {
+    throw new ApiError(403, 'Not authorized to access this invoice');
+  }
+
+  // Get PDF service
+  const { pdfService } = await import('../services/pdf.service');
+
+  // Generate or fetch PDF
+  try {
+    const pdfBuffer = await pdfService.generateInvoicePDF(invoice.toObject());
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="invoice-${invoice.invoiceNumber}.pdf"`);
+    res.setHeader('Content-Length', pdfBuffer.length);
+
+    res.send(pdfBuffer);
+  } catch (error) {
+    logger.error('Failed to generate invoice PDF', {
+      invoiceId: id,
+      error: (error as Error).message,
+      action: 'INVOICE_PDF_GENERATION_FAILED'
+    });
+
+    // Fallback: return a simple PDF or error
+    throw new ApiError(500, 'Failed to generate invoice PDF');
+  }
+}));
+
+/**
+ * @route   GET /api/subscriptions/invoices/:id/pdf-url
+ * @desc    Get signed URL for invoice PDF
+ * @access  Private
+ */
+router.get('/subscriptions/invoices/:id/pdf-url', authenticate, asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const userId = (req as any).user._id;
+
+  const Invoice = createInvoiceSchema();
+
+  // Find the invoice
+  const invoice = await Invoice.findById(id);
+
+  if (!invoice) {
+    throw new ApiError(404, 'Invoice not found');
+  }
+
+  // Verify ownership
+  if (invoice.customerId?.toString() !== userId.toString()) {
+    throw new ApiError(403, 'Not authorized to access this invoice');
+  }
+
+  // For simplicity, we'll return a URL that can be used to download the PDF
+  // In production, this would generate a signed URL with expiry
+  const pdfUrl = `/api/subscriptions/invoices/${id}/pdf`;
+  const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour from now
+
+  res.json({
+    success: true,
+    data: {
+      url: pdfUrl,
+      expiresAt: expiresAt.toISOString(),
+    },
   });
 }));
 
@@ -928,41 +1238,5 @@ router.get('/analytics/provider/:providerId', authenticate, asyncHandler(async (
     }
   });
 }));
-
-// ============================================
-// HELPER FUNCTIONS
-// ============================================
-
-function getPlanFeatures(plan: string): string[] {
-  const features: Record<string, string[]> = {
-    free: [
-      'Basic booking',
-      'Limited providers',
-      'Standard support'
-    ],
-    basic: [
-      'Everything in Free',
-      'Up to 10 bookings/month',
-      'Priority support',
-      'Full profiles'
-    ],
-    premium: [
-      'Everything in Basic',
-      'Unlimited bookings',
-      'Featured listings',
-      'Advanced analytics',
-      'Exclusive deals'
-    ],
-    enterprise: [
-      'Everything in Premium',
-      'Dedicated manager',
-      'Custom integrations',
-      'API access',
-      'Volume discounts'
-    ]
-  };
-
-  return features[plan] || features.free;
-}
 
 export default router;

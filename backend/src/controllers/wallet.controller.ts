@@ -8,6 +8,7 @@ import { getSocketServer } from '../socket';
 import logger from '../utils/logger';
 import Wallet from '../models/wallet.model';
 import crypto from 'crypto';
+import { createWalletTopUpIntent, verifyWalletTopUpPayment } from '../services/payment.service';
 
 // Default withdrawal hold period in hours (24 hours)
 const DEFAULT_WITHDRAWAL_HOLD_HOURS = 24;
@@ -26,9 +27,22 @@ const withdrawSchema = Joi.object({
   }).required(),
 });
 
+const topUpIntentSchema = Joi.object({
+  amount: Joi.number().positive().min(10).required(),
+  idempotencyKey: Joi.string().max(100).optional(),
+});
+
 const addMoneySchema = Joi.object({
+  amount: Joi.number().positive().min(10).required(),
+  paymentIntentId: Joi.string().required(),
+  idempotencyKey: Joi.string().max(100).optional(),
+});
+
+const deductSchema = Joi.object({
   amount: Joi.number().positive().min(0.01).required(),
-  paymentMethodId: Joi.string().uuid().required(),
+  reason: Joi.string().min(1).max(255).required(),
+  reference: Joi.string().max(100).optional(),
+  referenceType: Joi.string().valid('booking', 'refund', 'commission', 'fee', 'penalty', 'other').optional(),
   idempotencyKey: Joi.string().max(100).optional(),
 });
 
@@ -64,41 +78,21 @@ export const getTransactions = asyncHandler(async (req: Request, res: Response) 
     matchStage['transactions.type'] = type;
   }
 
-  const result = await Wallet.aggregate([
+  const basePipeline: any[] = [
     { $match: { userId: user._id, isDeleted: { $ne: true } } },
     { $unwind: '$transactions' },
     ...(Object.keys(matchStage).length > 0 ? [{ $match: matchStage }] : []),
-    // Get total count
-    {
-      $group: {
-        _id: null,
-        total: { $sum: 1 },
-        transactions: { $push: '$transactions' },
-      },
-    },
-    // Sort and paginate in memory (still more efficient than loading all)
-    {
-      $project: {
-        _id: 0,
-        total: 1,
-        transactions: {
-          $slice: [
-            {
-              $sortArray: {
-                input: '$transactions',
-                sortBy: { createdAt: -1 },
-              },
-            },
-            skip,
-            limitNum,
-          ],
-        },
-      },
-    },
+    { $replaceRoot: { newRoot: '$transactions' } },
+    { $sort: { createdAt: -1 } },
+  ];
+
+  const [countResult, transactions] = await Promise.all([
+    Wallet.aggregate([...basePipeline, { $count: 'total' }]),
+    Wallet.aggregate([...basePipeline, { $skip: skip }, { $limit: limitNum }]),
   ]);
 
-  // Fallback for empty result
-  const data = result[0] || { total: 0, transactions: [] };
+  const total = countResult[0]?.total || 0;
+  const data = { total, transactions };
 
   res.json({
     success: true,
@@ -362,7 +356,11 @@ export const getEarningsSummary = asyncHandler(async (req: Request, res: Respons
   );
 
   const earnings = periodTransactions
-    .filter(t => t.type === 'credit')
+    .filter(t => t.type === 'credit' && t.referenceType !== 'topup')
+    .reduce((sum, t) => sum + t.amount, 0);
+
+  const creditsAdded = periodTransactions
+    .filter(t => t.type === 'credit' && t.referenceType === 'topup')
     .reduce((sum, t) => sum + t.amount, 0);
 
   const withdrawals = periodTransactions
@@ -374,6 +372,7 @@ export const getEarningsSummary = asyncHandler(async (req: Request, res: Respons
     data: {
       period,
       earnings,
+      creditsAdded,
       withdrawals,
       netEarnings: earnings - withdrawals,
       transactionCount: periodTransactions.length,
@@ -384,7 +383,31 @@ export const getEarningsSummary = asyncHandler(async (req: Request, res: Respons
 });
 
 /**
- * Add money to wallet (top-up)
+ * Create payment intent for wallet top-up
+ */
+export const createTopUpIntent = asyncHandler(async (req: Request, res: Response) => {
+  const user = (req as any).user;
+  const { error, value } = topUpIntentSchema.validate(req.body);
+
+  if (error) {
+    throw new ApiError(400, error.details[0].message);
+  }
+
+  const { amount, idempotencyKey } = value;
+  const intent = await createWalletTopUpIntent(
+    user._id.toString(),
+    amount,
+    idempotencyKey || `topup-intent-${crypto.randomUUID()}`
+  );
+
+  res.json({
+    success: true,
+    data: intent,
+  });
+});
+
+/**
+ * Add money to wallet (top-up) - requires verified payment
  */
 export const addMoney = asyncHandler(async (req: Request, res: Response) => {
   const user = (req as any).user;
@@ -394,26 +417,43 @@ export const addMoney = asyncHandler(async (req: Request, res: Response) => {
     throw new ApiError(400, error.details[0].message);
   }
 
-  const { amount, paymentMethodId, idempotencyKey } = value;
+  const { amount, paymentIntentId, idempotencyKey } = value;
 
-  // For now, simulate successful top-up
-  // In production, this would integrate with Stripe/payment gateway
+  const verification = await verifyWalletTopUpPayment(
+    user._id.toString(),
+    paymentIntentId,
+    amount
+  );
+
+  if (!verification.verified) {
+    throw new ApiError(402, verification.error || 'Payment verification failed');
+  }
+
+  const reference = paymentIntentId || idempotencyKey || `topup-${Date.now()}`;
+
   const result = await creditWallet({
     userId: user._id.toString(),
     type: 'credit',
     amount,
     description: 'Wallet Top-up',
-    reference: idempotencyKey || `topup-${Date.now()}`,
+    reference,
     referenceType: 'topup',
     metadata: {
-      paymentMethodId,
-      source: 'app',
+      paymentIntentId,
+      source: verification.simulated ? 'simulated' : 'stripe',
+    },
+  }, req, {
+    preventDuplicateReference: {
+      reference,
+      referenceType: 'topup',
     },
   });
 
   if (!result.success) {
     throw new ApiError(400, result.error || 'Failed to add money');
   }
+
+  const updatedWallet = await getOrCreateWallet(user._id.toString());
 
   // FIX 2: Emit wallet:balance_updated after successful top-up
   try {
@@ -422,9 +462,9 @@ export const addMoney = asyncHandler(async (req: Request, res: Response) => {
       socketServer.emitToUser(user._id.toString(), 'wallet:balance_updated', {
         userId: user._id.toString(),
         balance: result.newBalance,
-        pendingBalance: 0, // Top-up doesn't affect pending balance
-        availableBalance: result.newBalance,
-        currency: 'AED',
+        pendingBalance: updatedWallet.pendingBalance,
+        availableBalance: result.newBalance - updatedWallet.pendingBalance,
+        currency: updatedWallet.currency || 'AED',
         change: {
           balance: amount,
           type: 'topup',
@@ -451,9 +491,118 @@ export const addMoney = asyncHandler(async (req: Request, res: Response) => {
     data: {
       transactionId: result.transactionId,
       newBalance: result.newBalance,
+      pendingBalance: updatedWallet.pendingBalance,
       amount,
     },
   });
+});
+
+/**
+ * Deduct credits from wallet
+ */
+export const deductCredits = asyncHandler(async (req: Request, res: Response) => {
+  const user = (req as any).user;
+  const { error, value } = deductSchema.validate(req.body);
+
+  if (error) {
+    throw new ApiError(400, error.details[0].message);
+  }
+
+  const { amount, reason, reference, referenceType, idempotencyKey } = value;
+
+  // Check for duplicate request using idempotency key
+  if (idempotencyKey) {
+    const existingWallet = await Wallet.findOne({
+      userId: user._id.toString(),
+      transactions: {
+        $elemMatch: {
+          reference: idempotencyKey,
+          status: 'completed',
+        },
+      },
+    });
+
+    if (existingWallet) {
+      return res.json({
+        success: true,
+        message: 'Deduction already processed',
+        data: {
+          transactionId: idempotencyKey,
+          newBalance: existingWallet.balance,
+          pendingBalance: existingWallet.pendingBalance,
+          amount,
+        },
+      });
+    }
+  }
+
+  // Get user's wallet first to check balance
+  const wallet = await getOrCreateWallet(user._id.toString());
+
+  // Check sufficient available balance
+  const availableBalance = wallet.balance - wallet.pendingBalance;
+  if (amount > availableBalance) {
+    throw new ApiError(400, `Insufficient balance. Available balance: AED ${availableBalance.toFixed(2)}`);
+  }
+
+  // Perform the debit operation
+  const result = await debitWallet({
+    userId: user._id.toString(),
+    type: 'debit',
+    amount,
+    description: reason,
+    reference: reference || idempotencyKey || `deduct-${Date.now()}`,
+    referenceType: referenceType || 'other',
+  });
+
+  if (!result.success) {
+    throw new ApiError(400, result.error || 'Failed to deduct credits');
+  }
+
+  const updatedWallet = await getOrCreateWallet(user._id.toString());
+
+  // Emit wallet:balance_updated after successful deduction
+  try {
+    const socketServer = getSocketServer();
+    if (socketServer) {
+      socketServer.emitToUser(user._id.toString(), 'wallet:balance_updated', {
+        userId: user._id.toString(),
+        balance: result.newBalance,
+        pendingBalance: updatedWallet.pendingBalance,
+        availableBalance: result.newBalance - updatedWallet.pendingBalance,
+        currency: updatedWallet.currency || 'AED',
+        change: {
+          balance: -amount,
+          type: 'deduction',
+        },
+      });
+      logger.info('Emitted wallet:balance_updated after deduction', {
+        userId: user._id.toString(),
+        amount,
+        newBalance: result.newBalance,
+        action: 'SOCKET_DEDUCT_SUCCESS',
+      });
+    }
+  } catch (socketError) {
+    // Don't fail the deduction if socket emission fails
+    logger.error('Failed to emit wallet:balance_updated after deduction', {
+      userId: user._id.toString(),
+      error: socketError instanceof Error ? socketError.message : String(socketError),
+    });
+  }
+
+  res.json({
+    success: true,
+    message: 'Credits deducted successfully',
+    data: {
+      transactionId: result.transactionId,
+      newBalance: result.newBalance,
+      pendingBalance: updatedWallet.pendingBalance,
+      amount,
+    },
+  });
+
+  return res;
 });
 
 export default {
@@ -461,5 +610,7 @@ export default {
   getTransactions,
   requestWithdrawal,
   getEarningsSummary,
+  createTopUpIntent,
   addMoney,
+  deductCredits,
 };

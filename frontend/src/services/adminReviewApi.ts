@@ -1,6 +1,11 @@
 import { api } from './api';
 
-export type ReviewModerationStatus = 'pending' | 'approved' | 'rejected' | 'hidden' | 'flagged';
+// FIX: 'flagged' is a computed status derived from reportCount > 0, NOT a stored value
+// Backend only accepts: 'pending' | 'approved' | 'rejected' | 'hidden'
+export type ReviewModerationStatus = 'pending' | 'approved' | 'rejected' | 'hidden';
+
+// Extended status type used for display purposes only
+export type ReviewDisplayStatus = ReviewModerationStatus | 'flagged';
 
 export interface AdminReviewUser {
   _id: string;
@@ -76,7 +81,9 @@ function normalizeStats(raw: Record<string, unknown>): AdminReviewStats {
   };
 }
 
-export function getReviewDisplayStatus(review: AdminReview): ReviewModerationStatus {
+export function getReviewDisplayStatus(review: AdminReview): ReviewDisplayStatus {
+  // FIX: 'flagged' is a computed/display status, not stored in backend
+  // Backend only stores: 'pending' | 'approved' | 'rejected' | 'hidden'
   if (review.reportCount > 0 && review.moderationStatus !== 'rejected') return 'flagged';
   return review.moderationStatus;
 }

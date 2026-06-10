@@ -400,7 +400,8 @@ export class DisputeService {
   // ========================================
 
   async addEvidence(data: AddEvidenceDTO): Promise<IDispute> {
-    const dispute = await Dispute.findById(data.disputeId);
+    // Get dispute for authorization check first
+    const dispute = await Dispute.findById(data.disputeId).select('_id initiator.respondent status');
     if (!dispute) {
       throw new ApiError(404, 'Dispute not found');
     }
@@ -414,36 +415,39 @@ export class DisputeService {
       throw new ApiError(403, 'Only dispute parties can submit evidence');
     }
 
-    // Check dispute is not closed
-    if (['resolved', 'closed'].includes(dispute.status)) {
-      throw new ApiError(400, 'Cannot add evidence to a closed dispute');
+    // Atomic update - only succeeds if dispute is still open
+    const result = await Dispute.findOneAndUpdate(
+      { _id: data.disputeId, status: { $nin: ['resolved', 'closed'] } },
+      {
+        $push: {
+          evidence: {
+            _id: new Types.ObjectId(),
+            submittedBy: new Types.ObjectId(data.userId),
+            type: data.type,
+            url: data.url,
+            description: data.description,
+            submittedAt: new Date(),
+          },
+          timeline: {
+            action: 'evidence_added',
+            performedBy: new Types.ObjectId(data.userId),
+            performedByRole: dispute.initiator.userId.toString() === data.userId ? dispute.initiator.role : dispute.respondent.role,
+            timestamp: new Date(),
+            details: `New ${data.type} evidence submitted`,
+          },
+        },
+      },
+      { new: true }
+    );
+
+    if (!result) {
+      throw new ApiError(400, 'Cannot add evidence to closed dispute');
     }
-
-    // Add evidence
-    dispute.evidence.push({
-      _id: new Types.ObjectId(),
-      submittedBy: new Types.ObjectId(data.userId),
-      type: data.type,
-      url: data.url,
-      description: data.description,
-      submittedAt: new Date(),
-    });
-
-    // Add timeline entry
-    dispute.timeline.push({
-      action: 'evidence_added',
-      performedBy: new Types.ObjectId(data.userId),
-      performedByRole: dispute.initiator.userId.toString() === data.userId ? dispute.initiator.role : dispute.respondent.role,
-      timestamp: new Date(),
-      details: `New ${data.type} evidence submitted`,
-    });
-
-    await dispute.save();
 
     // Emit event
     eventBus.publish(EVENT_TYPES.DISPUTE_EVIDENCE_ADDED, {
-      disputeId: dispute._id,
-      disputeNumber: dispute.disputeNumber,
+      disputeId: result._id,
+      disputeNumber: result.disputeNumber,
       evidenceType: data.type,
       submittedBy: data.userId,
     });

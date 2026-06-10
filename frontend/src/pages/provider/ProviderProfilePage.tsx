@@ -244,15 +244,13 @@ const ProviderProfilePage: React.FC = () => {
         throw new Error('Authentication required');
       }
 
-      const response = await fetch(`${API_BASE_URL}/auth/profile-image`, {
-        method: 'POST',
+      const response = await api.post('/auth/profile-image', formData, {
         headers: {
-          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'multipart/form-data',
         },
-        body: formData,
       });
 
-      const data = await response.json();
+      const data = response.data;
 
       if (data.success) {
         setSaveMessage('Profile image updated!');

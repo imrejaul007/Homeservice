@@ -1,4 +1,35 @@
-import mongoose, { Document, Schema, Model } from 'mongoose';
+﻿import mongoose, { Document, Schema, Model } from 'mongoose';
+
+// ===================================
+// BOOKING COUNTER â€” atomic sequence generator
+// Eliminates race condition in generateBookingNumber() where concurrent
+// requests could read the same countDocuments() value and produce duplicate
+// booking numbers before the unique index could catch the second insert.
+// ===================================
+interface IBookingCounter extends Document {
+  tenantId?: mongoose.Types.ObjectId;
+  date: string; // "YYYY-MM-DD"
+  sequence: number;
+}
+
+const bookingCounterSchema = new Schema<IBookingCounter>({
+  tenantId: { type: Schema.Types.ObjectId, default: null },
+  date: { type: String, required: true },
+  sequence: { type: Number, default: 0 }
+});
+
+// Compound unique index: one sequence per tenant per day.
+// Upsert + $inc is atomic in MongoDB â€” no two concurrent calls can return
+// the same sequence value for the same tenant+date combination.
+bookingCounterSchema.index({ tenantId: 1, date: 1 }, { unique: true });
+
+let BookingCounter: Model<IBookingCounter>;
+
+try {
+  BookingCounter = mongoose.model<IBookingCounter>('BookingCounter');
+} catch {
+  BookingCounter = mongoose.model<IBookingCounter>('BookingCounter', bookingCounterSchema);
+}
 
 export interface IBooking extends Document {
   // Multi-tenant
@@ -49,7 +80,7 @@ export interface IBooking extends Document {
   };
 
   // Booking Status Workflow
-  status: 'pending' | 'confirmed' | 'in_progress' | 'completed' | 'cancelled' | 'no_show';
+  status: 'pending' | 'confirmed' | 'in_progress' | 'completed' | 'cancelled' | 'no_show' | 'refunded';
   statusHistory: Array<{
     status: string;
     timestamp: Date;
@@ -67,8 +98,9 @@ export interface IBooking extends Document {
     }>;
     discounts: Array<{
       type: string;
+      code?: string;
       amount: number;
-      description: string;
+      description?: string;
     }>;
     couponDiscount: number;
     subtotal: number;
@@ -133,12 +165,21 @@ export interface IBooking extends Document {
     totalRefunded?: number;
   };
 
+  // FIX: Coupon reservation for deferred usage (mark as used only on payment success)
+  couponReservation?: {
+    couponCode: string;
+    userId: mongoose.Types.ObjectId;
+    reservedAt: Date;
+    usedAt?: Date;
+  };
+
   // Metadata & Analytics
   metadata: {
     bookingSource: 'search' | 'profile' | 'recommendation' | 'repeat';
     deviceType: 'mobile' | 'desktop' | 'tablet';
     userAgent?: string;
     sessionId?: string;
+    idempotencyKey?: string;
   };
 
   // Review References (populated after completion)
@@ -205,8 +246,30 @@ const bookingSchema = new Schema<IBooking>(
 
     guestInfo: {
       name: { type: String },
-      email: { type: String },
-      phone: { type: String }
+      email: {
+        type: String,
+        validate: {
+          validator: function(email: string) {
+            if (!email) return true; // Allow empty
+            return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+          },
+          message: 'Invalid email format'
+        }
+      },
+      phone: {
+        type: String,
+        required: function (this: { isGuestBooking?: boolean }) {
+          return this.isGuestBooking === true;
+        },
+        validate: {
+          validator: function (this: { isGuestBooking?: boolean }, phone: string) {
+            if (!this.isGuestBooking) return true;
+            if (!phone) return false;
+            return /^[\+]?[(]?[0-9]{1,4}[)]?[-\s\.]?[(]?[0-9]{1,3}[)]?[-\s\.]?[0-9]{3,6}[-\s\.]?[0-9]{3,6}$/.test(phone);
+          },
+          message: 'Invalid phone format. Please enter a valid phone number',
+        },
+      },
     },
 
     providerId: {
@@ -282,7 +345,7 @@ const bookingSchema = new Schema<IBooking>(
     location: {
       type: {
         type: String,
-        enum: ['customer_address', 'provider_location', 'hotel'],
+        enum: ['customer_address', 'provider_location', 'online', 'hotel'],
         required: [true, 'Location type is required']
       },
       address: {
@@ -335,7 +398,7 @@ const bookingSchema = new Schema<IBooking>(
     // Booking Status
     status: {
       type: String,
-      enum: ['pending', 'confirmed', 'in_progress', 'completed', 'cancelled', 'no_show'],
+      enum: ['pending', 'confirmed', 'in_progress', 'completed', 'cancelled', 'no_show', 'refunded'],
       default: 'pending',
       required: [true, 'Status is required'],
       index: true
@@ -373,8 +436,9 @@ const bookingSchema = new Schema<IBooking>(
       }],
       discounts: [{
         type: { type: String, required: true },
+        code: { type: String },
         amount: { type: Number, required: true },
-        description: { type: String, required: true }
+        description: { type: String }
       }],
       couponDiscount: {
         type: Number,
@@ -421,8 +485,9 @@ const bookingSchema = new Schema<IBooking>(
         type: String,
         validate: {
           validator: function(phone: string) {
-            if (!phone) return true; // Allow empty
-            return /^\+?[\d\s\-\(\)]{7,}$/.test(phone);
+            if (!phone) return true; // Allow empty (customer may not provide)
+            // Lenient validation for customer info (not required for guest bookings)
+            return /^[\+]?[(]?[0-9]{1,4}[)]?[-\s\.]?[(]?[0-9]{1,3}[)]?[-\s\.]?[0-9]{3,6}[-\s\.]?[0-9]{3,6}$/.test(phone);
           },
           message: 'Invalid phone format'
         }
@@ -542,7 +607,8 @@ const bookingSchema = new Schema<IBooking>(
         default: 'desktop'
       },
       userAgent: String,
-      sessionId: String
+      sessionId: String,
+      idempotencyKey: String
     },
 
     // Review References
@@ -573,13 +639,16 @@ const bookingSchema = new Schema<IBooking>(
 
 // Core booking queries (simple indexes already created by field-level index: true)
 // Compound indexes for common query patterns
+bookingSchema.index({ 'metadata.idempotencyKey': 1, serviceId: 1, customerId: 1 }, { sparse: true });
 bookingSchema.index({ customerId: 1, status: 1 });
 bookingSchema.index({ providerId: 1, scheduledDate: 1 });
 bookingSchema.index({ status: 1, scheduledDate: 1 });
 
-// FIX: Add compound index for customer dashboard queries with status filter and creation date
-// Supports queries like: find all bookings for customer X with status Y, newest first
-bookingSchema.index({ customerId: 1, status: 1, createdAt: -1 });
+// Phase 1: Composite booking indexes (task 3)
+// Compound index: (customerId, scheduledDate) for customer booking history by date
+bookingSchema.index({ customerId: 1, scheduledDate: 1 });
+// Compound index: (providerId, status) for provider dashboard with status filter
+bookingSchema.index({ providerId: 1, status: 1 });
 
 // FIX: Add unique compound index for tenant-scoped booking number lookups
 // Ensures booking numbers are unique within each tenant
@@ -605,7 +674,7 @@ bookingSchema.index(
 );
 
 // Location-based queries
-bookingSchema.index({ 'location.address.coordinates': '2dsphere' });
+bookingSchema.index({ 'location.address.coordinates.coordinates': '2dsphere' });
 
 // Time-based queries
 bookingSchema.index({ scheduledDate: 1, status: 1 });
@@ -731,14 +800,29 @@ bookingSchema.virtual('isActive').get(function() {
 // Check if booking can be cancelled
 bookingSchema.virtual('canBeCancelled').get(function() {
   const now = new Date();
-  return this.isActive && now < this.cancellationPolicy.allowedUntil;
+  return this.isActive && now < this.cancellationPolicy?.allowedUntil;
 });
 
 // Calculate time until service
 bookingSchema.virtual('timeUntilService').get(function() {
-  const now = new Date();
-  const serviceTime = new Date(this.scheduledDate);
-  const diffMs = serviceTime.getTime() - now.getTime();
+  // Normalize to UTC to avoid timezone drift
+  const nowUtc = new Date(Date.UTC(
+    new Date().getUTCFullYear(),
+    new Date().getUTCMonth(),
+    new Date().getUTCDate(),
+    new Date().getUTCHours(),
+    new Date().getUTCMinutes(),
+    new Date().getUTCSeconds()
+  ));
+  const serviceTimeUtc = new Date(Date.UTC(
+    new Date(this.scheduledDate).getUTCFullYear(),
+    new Date(this.scheduledDate).getUTCMonth(),
+    new Date(this.scheduledDate).getUTCDate(),
+    new Date(this.scheduledDate).getUTCHours(),
+    new Date(this.scheduledDate).getUTCMinutes(),
+    new Date(this.scheduledDate).getUTCSeconds()
+  ));
+  const diffMs = serviceTimeUtc.getTime() - nowUtc.getTime();
   return Math.floor(diffMs / (1000 * 60)); // Convert to minutes
 });
 
@@ -774,15 +858,18 @@ bookingSchema.methods.generateBookingNumber = async function(): Promise<string> 
     console.log('Could not fetch provider initials, using default RZ');
   }
 
-  // Generate unique sequential number for the day
-  const startOfDay = new Date(year, date.getMonth(), date.getDate());
-  const endOfDay = new Date(year, date.getMonth(), date.getDate() + 1);
+  // Atomic increment: findOneAndUpdate with $inc is atomic in MongoDB.
+  // No two concurrent requests can receive the same sequence value.
+  const dateStr = `${year}${month}${day}`;
+  const tenantId = this.tenantId || null;
 
-  const todayBookingsCount = await mongoose.model('Booking').countDocuments({
-    createdAt: { $gte: startOfDay, $lt: endOfDay }
-  });
+  const counter = await BookingCounter.findOneAndUpdate(
+    { date: dateStr, tenantId },
+    { $inc: { sequence: 1 } },
+    { new: true, upsert: true, setDefaultsOnInsert: true }
+  );
 
-  const sequenceNumber = String(todayBookingsCount + 1).padStart(3, '0');
+  const sequenceNumber = String(counter.sequence).padStart(3, '0');
 
   return `${providerInitials}-${year}${month}${day}-${sequenceNumber}`;
 };
@@ -877,14 +964,11 @@ bookingSchema.methods.canProviderCancel = function(): boolean {
 bookingSchema.methods.markAsCompleted = async function(): Promise<void> {
   await this.updateStatus('completed', 'system', 'Service completed');
 
-  // Update service booking count (integrate with existing Service model)
-  const Service = mongoose.model('Service');
-  await Service.findByIdAndUpdate(
-    this.serviceId,
-    {
-      $inc: { 'searchMetadata.bookingCount': 1 }
-    }
-  );
+  // Update service booking count using the proper static method which:
+  // 1. Recounts actual completed/confirmed bookings (avoids $inc drift)
+  // 2. Recalculates the popularity score afterward
+  const Service = mongoose.model('Service') as any;
+  await Service.updateBookingCount(this.serviceId);
 
   // NOTE: Loyalty points are now awarded via the queue system (loyalty-queue)
   // in event-bus/index.ts for booking completion events.
@@ -904,6 +988,14 @@ bookingSchema.methods.sendNotification = async function(
 // ===================================
 // PRE-SAVE MIDDLEWARE
 // ===================================
+
+// Authenticated bookings must not carry guestInfo (prevents guest-only validators firing)
+bookingSchema.pre('validate', function (next) {
+  if (!this.isGuestBooking) {
+    this.set('guestInfo', undefined);
+  }
+  next();
+});
 
 // Generate booking number before first save
 bookingSchema.pre('save', async function(next) {

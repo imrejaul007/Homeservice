@@ -201,7 +201,8 @@ export const recommendationApi = {
       headers: getAuthHeader(),
       params,
     });
-    return response.data.data.recommendations || [];
+    // Handle both formats: services (from /search/trending) and recommendations (from /recommendations/trending)
+    return response.data.data.services || response.data.data.recommendations || [];
   },
 
   /**

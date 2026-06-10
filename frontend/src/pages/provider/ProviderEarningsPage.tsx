@@ -27,7 +27,7 @@ import NavigationHeader from '../../components/layout/NavigationHeader';
 import Footer from '../../components/layout/Footer';
 import Breadcrumb from '../../components/common/Breadcrumb';
 import { useAuthStore } from '../../stores/authStore';
-import { walletApi } from '../../services/walletApi';
+import { providerWalletApi } from '../../services/walletApi';
 import type { Wallet as WalletType, WalletTransaction, EarningsSummary } from '../../services/walletApi';
 import { socketService } from '../../services/socket';
 import { formatPrice } from '../../utils/currency';
@@ -51,7 +51,7 @@ const MINIMUM_BALANCE_RESERVE = 10; // Minimum balance to maintain after withdra
 
 interface Transaction {
   id: string;
-  type: 'earning' | 'withdrawal' | 'refund' | 'fee' | 'bonus' | 'topup';
+  type: 'earning' | 'withdrawal' | 'refund' | 'fee' | 'bonus' | 'topup' | 'unknown';
   amount: number;
   description: string;
   date: Date;
@@ -128,7 +128,7 @@ const ProviderEarningsPage: React.FC = () => {
   // Redirect if not a provider
   useEffect(() => {
     if (user?.role !== 'provider') {
-      navigate('/customer/dashboard');
+      navigate('/');
     }
   }, [user, navigate]);
 
@@ -136,7 +136,8 @@ const ProviderEarningsPage: React.FC = () => {
   // Handles all WalletTransaction.referenceType values:
   // booking, refund, bonus, payout, topup, commission
   const mapTransactionType = (transaction: WalletTransaction): Transaction['type'] => {
-    const typeMap: Record<WalletTransaction['referenceType'], Transaction['type']> = {
+    // Known type mappings from backend
+    const typeMap: Partial<Record<WalletTransaction['referenceType'], Transaction['type']>> = {
       booking: 'earning',
       payout: 'withdrawal',
       refund: 'refund',
@@ -145,7 +146,26 @@ const ProviderEarningsPage: React.FC = () => {
       topup: 'topup',
     };
 
-    return typeMap[transaction.referenceType] ?? (transaction.type === 'credit' ? 'earning' : 'withdrawal');
+    // Return mapped type or fallback based on transaction direction
+    const mappedType = typeMap[transaction.referenceType];
+    if (mappedType) {
+      return mappedType;
+    }
+
+    // Log warnings for unmapped types instead of silent failure
+    const knownTypes = Object.keys(typeMap);
+    if (transaction.referenceType && !knownTypes.includes(transaction.referenceType)) {
+      console.warn(
+        `[ProviderEarningsPage] Unmapped transaction type: "${transaction.referenceType}"`,
+        'Transaction ID:',
+        transaction.id,
+        'Full transaction:',
+        transaction
+      );
+    }
+
+    // Fallback: use transaction type (credit/debit) to determine type
+    return transaction.type === 'credit' ? 'earning' : 'withdrawal';
   };
 
   // Map API transaction to frontend transaction
@@ -172,10 +192,10 @@ const ProviderEarningsPage: React.FC = () => {
 
       // Fetch wallet, transactions, and summaries in parallel with individual error tracking
       const [walletRes, transactionsRes, weeklyRes, monthlyRes] = await Promise.allSettled([
-        walletApi.getWallet(),
-        walletApi.getTransactions({ page: fetchPage, limit }),
-        walletApi.getEarningsSummary('week'),
-        walletApi.getEarningsSummary('month'),
+        providerWalletApi.getWallet(),
+        providerWalletApi.getTransactions({ page: fetchPage, limit }),
+        providerWalletApi.getEarningsSummary('week'),
+        providerWalletApi.getEarningsSummary('month'),
       ]);
 
       // Handle wallet response independently
@@ -299,7 +319,7 @@ const ProviderEarningsPage: React.FC = () => {
     setWithdrawalError(null);
 
     try {
-      const response = await walletApi.requestWithdrawal({
+      const response = await providerWalletApi.requestWithdrawal({
         amount,
         bankAccount: {
           bankName: withdrawalForm.bankName,

@@ -451,7 +451,13 @@ export const previewNextTopup = async (
     };
   }
 
-  const wallet = await Wallet.findOne({ userId });
+  const tenantId = req ? getTenantIdOptional(req) : undefined;
+
+  const walletQuery: Record<string, unknown> = { userId };
+  if (tenantId) {
+    walletQuery.tenantId = tenantId;
+  }
+  const wallet = await Wallet.findOne(walletQuery);
   const currentBalance = wallet?.balance || 0;
 
   if (currentBalance >= config.thresholdAmount) {

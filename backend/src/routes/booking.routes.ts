@@ -39,7 +39,11 @@ import {
   removeBlockedPeriod,
   getProviderAvailableSlots,
   checkTimeSlotAvailability,
-  getAvailabilityAnalytics
+  getAvailabilityAnalytics,
+  getServiceSchedule,
+  updateServiceSchedule,
+  getAllServiceSchedules,
+  copyGlobalToService
 } from '../controllers/availability.controller';
 
 import {
@@ -83,7 +87,7 @@ router.get('/bookings/provider', authenticate, getProviderBookings);
 
 // Specific booking operations (MUST come after /customer and /provider routes)
 router.get('/bookings/:id', authenticate, getBookingDetails);
-router.patch('/bookings/:id/cancel', authenticate, validateBookingCancellation, cancelBooking);
+router.patch('/bookings/:id/cancel', perUserRateLimiter, authenticate, validateBookingCancellation, cancelBooking);
 router.patch('/bookings/:id/reschedule', authenticate, rescheduleBooking);
 router.patch('/bookings/:id/accept', authenticate, validateBookingAcceptance, acceptBooking);
 router.patch('/bookings/:id/reject', authenticate, validateBookingRejection, rejectBooking);
@@ -115,6 +119,12 @@ router.post('/availability/override', authenticate, validateDateOverride, addDat
 router.delete('/availability/override', authenticate, removeDateOverride);
 router.post('/availability/block', authenticate, validateBlockPeriod, blockTimePeriod);
 router.delete('/availability/block/:blockId', authenticate, removeBlockedPeriod);
+
+// Per-Service / Bundle Availability Management
+router.get('/availability/service/schedules', authenticate, getAllServiceSchedules);
+router.get('/availability/service/:serviceId/schedule', authenticate, getServiceSchedule);
+router.put('/availability/service/:serviceId/schedule', authenticate, updateServiceSchedule);
+router.post('/availability/service/:serviceId/copy-global', authenticate, copyGlobalToService);
 
 // Public Availability Queries
 // FIX: Issue #2 - Support serviceId parameter for per-service availability

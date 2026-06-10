@@ -1,8 +1,23 @@
 import mongoose from 'mongoose';
 
+/**
+ * Check Ad Model Script
+ * Verifies the providerads collection and checks ad data
+ *
+ * Usage:
+ *   MONGODB_URI="mongodb+srv://..." npx ts-node scripts/checkAdModel.ts
+ */
+
+const MONGODB_URI = process.env.MONGODB_URI;
+
+if (!MONGODB_URI) {
+  console.error('❌ MONGODB_URI environment variable is required');
+  console.error('   Usage: MONGODB_URI="mongodb+srv://..." npx ts-node scripts/checkAdModel.ts');
+  process.exit(1);
+}
+
 async function check() {
-  const uri = 'mongodb+srv://nilimraj_db_user:aXJBzxFtRJosdxEc@cluster0.wnjcyp1.mongodb.net/test?appName=Cluster0';
-  await mongoose.connect(uri, { maxPoolSize: 5 });
+  await mongoose.connect(MONGODB_URI, { maxPoolSize: 5 });
   const db = mongoose.connection.db;
   if (!db) {
     throw new Error('Database connection not established');
@@ -11,12 +26,6 @@ async function check() {
   // Check if there are any ads
   const adsCount = await db.collection('providerads').countDocuments();
   console.log('Total ads:', adsCount);
-
-  // Check ads for test provider
-  const userId = '6a13ddce180760005bdb6e37';
-  const oid = new mongoose.Types.ObjectId(userId);
-  const testProviderAds = await db.collection('providerads').find({ providerId: oid }).toArray();
-  console.log('Ads for test provider:', testProviderAds.length);
 
   // Check schema
   const sampleAd = await db.collection('providerads').findOne({});

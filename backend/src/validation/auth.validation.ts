@@ -30,7 +30,7 @@ export const validatePasswordAgainstPolicy = (value: string, helpers: Joi.Custom
   return value;
 };
 
-const passwordSchema = Joi.string()
+export const passwordSchema = Joi.string()
   .max(128)
   .required()
   .custom(validatePasswordAgainstPolicy)
@@ -39,10 +39,10 @@ const passwordSchema = Joi.string()
   });
 
 // Email validation schema
-// FIX: Stricter email validation to prevent typos and improve deliverability
+// FIX: Allow all valid TLDs - reject only invalid/non-existent TLDs
 const emailSchema = Joi.string()
   .email({
-    tlds: { allow: ['com', 'net', 'org', 'edu', 'gov', 'io', 'co', 'ai', 'me', 'info', 'biz'] },
+    tlds: { allow: false },
     minDomainSegments: 2,
     maxDomainSegments: 4,
   })
@@ -409,29 +409,3 @@ export const updateProfileSchema = Joi.object({
   }).optional(),
 });
 
-// Validation middleware factory
-export const validate = (schema: Joi.ObjectSchema) => {
-  return (req: any, res: any, next: any) => {
-    const { error, value } = schema.validate(req.body, {
-      abortEarly: false,
-      allowUnknown: false,
-      stripUnknown: true
-    });
-
-    if (error) {
-      const validationErrors = error.details.map((detail) => ({
-        field: detail.path.join('.'),
-        message: detail.message
-      }));
-
-      return res.status(400).json({
-        success: false,
-        message: 'Validation error',
-        errors: validationErrors
-      });
-    }
-
-    req.body = value;
-    next();
-  };
-};

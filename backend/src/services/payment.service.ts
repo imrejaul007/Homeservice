@@ -12,6 +12,8 @@ import { withRetry, withTimeout, retryConfigs } from '../utils/retry.util';
 import { getPaymentFallbackState, queuePaymentRetry } from './fallback.service';
 import { Money } from '../domain/value-objects/money';
 import { sendPaymentReceiptEmail } from './email.service';
+// FIX: Import offerService for coupon rollback on payment failure
+import { offerService } from './offer.service';
 
 /**
  * Map Stripe decline codes to user-friendly error messages for customers
@@ -899,9 +901,65 @@ export const handleWebhookEvent = async (event: Stripe.Event): Promise<{ handled
         const booking = await Booking.findOne({ 'payment.transactionId': paymentIntent.id });
 
         if (booking && booking.payment.status !== 'completed') {
-          booking.payment.status = 'completed';
-          booking.payment.paidAt = new Date();
-          await booking.save();
+          // FIX: Use atomic transaction for payment + coupon redemption
+          // This ensures both operations succeed or both fail together
+          const mongoSession = await mongoose.startSession();
+          let couponMarked = false;
+
+          try {
+            await mongoSession.withTransaction(async () => {
+              // Step 1: Update payment status
+              booking.payment.status = 'completed';
+              booking.payment.paidAt = new Date();
+              await booking.save({ session: mongoSession });
+
+              // Step 2: Mark coupon as USED atomically within same transaction
+              if (booking.couponReservation && booking.couponReservation.couponCode && !booking.couponReservation.usedAt) {
+                const marked = await offerService.markCouponAsUsedAtomic(
+                  booking.couponReservation.couponCode,
+                  booking.couponReservation.userId.toString(),
+                  booking._id.toString(),
+                  mongoSession,
+                  booking.pricing?.couponDiscount
+                );
+
+                if (marked) {
+                  // Update reservation to mark as used
+                  booking.couponReservation.usedAt = new Date();
+                  await booking.save({ session: mongoSession });
+                  couponMarked = true;
+
+                  logger.info('Coupon marked as used after successful payment', {
+                    bookingId: booking._id,
+                    couponCode: booking.couponReservation.couponCode,
+                    sagaStep: 'coupon_marked_on_payment',
+                  });
+                } else {
+                  logger.warn('Coupon marking returned false - may be exhausted or invalid', {
+                    bookingId: booking._id,
+                    couponCode: booking.couponReservation.couponCode,
+                  });
+                }
+              }
+
+              logger.info('Transaction committed: Payment + Coupon redemption', {
+                bookingId: booking._id,
+                sagaStep: 'payment_with_coupon_transaction',
+              });
+            });
+          } catch (transactionError) {
+            // Transaction rolled back - payment and coupon marking both failed
+            logger.error('Transaction failed - both payment and coupon marking rolled back', {
+              bookingId: booking._id,
+              error: transactionError instanceof Error ? transactionError.message : String(transactionError),
+              sagaStep: 'transaction_rollback',
+            });
+
+            // Re-throw to prevent webhook acknowledgment
+            throw transactionError;
+          } finally {
+            await mongoSession.endSession();
+          }
 
           // Send payment receipt email to customer
           try {
@@ -947,6 +1005,20 @@ export const handleWebhookEvent = async (event: Stripe.Event): Promise<{ handled
             bookingId: booking._id,
             paymentIntentId: paymentIntent.id,
             sagaStep: 'payment_completed',
+            couponMarkedOnPayment: couponMarked,
+          });
+
+          // Publish payment.completed event with coupon information
+          await eventBus.publish(EVENT_TYPES.PAYMENT_COMPLETED, {
+            bookingId: booking._id.toString(),
+            transactionId: paymentIntent.id,
+            amount: paymentIntent.amount / 100,
+            currency: paymentIntent.currency.toUpperCase(),
+            customerId: booking.customerId?.toString(),
+            providerId: booking.providerId?.toString(),
+            bookingNumber: booking.bookingNumber,
+            couponCode: booking.couponReservation?.couponCode,
+            couponRedemption: couponMarked,
           });
         }
 
@@ -979,6 +1051,21 @@ export const handleWebhookEvent = async (event: Stripe.Event): Promise<{ handled
             booking.scheduledTime
           );
 
+          // FIX: Clear coupon reservation on payment failure
+          // Since coupon is not marked as used until payment succeeds,
+          // we just need to clear the reservation
+          const reservedCouponCode = booking.couponReservation?.couponCode;
+          if (booking.couponReservation) {
+            booking.couponReservation = undefined;
+            await booking.save();
+
+            logger.info('Coupon reservation cleared due to payment failure', {
+              bookingId: booking._id,
+              couponCode: reservedCouponCode,
+              sagaStep: 'coupon_reservation_cleared',
+            });
+          }
+
           // Publish payment.failed event with user-friendly message
           await eventBus.publish(EVENT_TYPES.PAYMENT_FAILED, {
             bookingId: booking._id.toString(),
@@ -993,6 +1080,8 @@ export const handleWebhookEvent = async (event: Stripe.Event): Promise<{ handled
             bookingNumber: booking.bookingNumber,
           });
 
+          const paymentFailedCouponRolledBack = !!(booking.pricing?.couponDiscount > 0 && booking.pricing?.discounts);
+
           logger.warn('Webhook: Payment failed', {
             bookingId: booking._id,
             paymentIntentId: paymentIntent.id,
@@ -1002,6 +1091,7 @@ export const handleWebhookEvent = async (event: Stripe.Event): Promise<{ handled
             logContext: declineInfo.logContext,
             sagaStep: 'payment_failed',
             compensationTriggered: true,
+            couponRolledBack: paymentFailedCouponRolledBack,
           });
         }
 
@@ -1018,6 +1108,7 @@ export const handleWebhookEvent = async (event: Stripe.Event): Promise<{ handled
         const charge = event.data.object as Stripe.Charge;
         const paymentIntentId = typeof charge.payment_intent === 'string' ? charge.payment_intent : '';
         const booking = await Booking.findOne({ 'payment.transactionId': paymentIntentId });
+        let couponRolledBack = false;
 
         if (booking) {
           // Check payment intent idempotency for refund
@@ -1039,6 +1130,18 @@ export const handleWebhookEvent = async (event: Stripe.Event): Promise<{ handled
           // Update status based on total refunded vs total amount
           if (booking.payment.totalRefunded >= booking.pricing.totalAmount) {
             booking.payment.status = 'refunded';
+
+            // FIX: On full refund, if coupon was reserved but not yet marked as used, clear reservation
+            // If coupon was already marked as used (payment succeeded before refund), no rollback needed
+            // The coupon has already been used by the customer - refund doesn't change that
+            if (booking.couponReservation && !booking.couponReservation.usedAt) {
+              booking.couponReservation = undefined;
+              logger.info('Coupon reservation cleared on refund', {
+                bookingId: booking._id,
+                refundAmount: refundedAmount,
+                sagaStep: 'coupon_reservation_cleared_on_refund',
+              });
+            }
           }
           booking.payment.refundedAt = new Date();
           await booking.save();
@@ -1048,6 +1151,7 @@ export const handleWebhookEvent = async (event: Stripe.Event): Promise<{ handled
             chargeId: charge.id,
             refundedAmount,
             totalRefunded: booking.payment.totalRefunded,
+            couponRolledBack,
           });
 
           // Mark using payment intent idempotency key
@@ -1348,6 +1452,125 @@ export const verifyWebhookSignature = (payload: string | Buffer, signature: stri
   }
 };
 
+export interface WalletTopUpIntentResult {
+  clientSecret: string;
+  paymentIntentId: string;
+  amount: number;
+  currency: string;
+  simulated?: boolean;
+}
+
+const isStripeConfigured = (): boolean => {
+  return !!(process.env.STRIPE_SECRET_KEY && process.env.STRIPE_SECRET_KEY.length > 0);
+};
+
+const allowSimulatedWalletTopUp = (): boolean => {
+  return process.env.ALLOW_SIMULATED_WALLET_TOPUP === 'true' || process.env.NODE_ENV !== 'production';
+};
+
+/**
+ * Create a Stripe PaymentIntent for wallet top-up
+ */
+export const createWalletTopUpIntent = async (
+  userId: string,
+  amount: number,
+  idempotencyKey?: string
+): Promise<WalletTopUpIntentResult> => {
+  if (amount <= 0) {
+    throw new ApiError(400, 'Amount must be positive');
+  }
+
+  const currency = 'AED';
+  const effectiveIdempotencyKey = idempotencyKey || crypto.randomUUID();
+
+  if (!isStripeConfigured()) {
+    if (!allowSimulatedWalletTopUp()) {
+      throw new ApiError(503, 'Payment service is not configured');
+    }
+    return {
+      clientSecret: `simulated_${effectiveIdempotencyKey}`,
+      paymentIntentId: `sim_topup_${effectiveIdempotencyKey}`,
+      amount,
+      currency,
+      simulated: true,
+    };
+  }
+
+  const amountMoney = Money.fromDecimal(amount, currency as any);
+  const amountInCents = amountMoney.amount;
+
+  const paymentIntent = await stripe.paymentIntents.create(
+    {
+      amount: amountInCents,
+      currency: currency.toLowerCase() as any,
+      metadata: {
+        type: 'wallet_topup',
+        userId,
+        idempotencyKey: effectiveIdempotencyKey,
+      },
+      description: 'Wallet top-up',
+    },
+    { idempotencyKey: `wallet-topup-${effectiveIdempotencyKey}` }
+  );
+
+  return {
+    clientSecret: paymentIntent.client_secret!,
+    paymentIntentId: paymentIntent.id,
+    amount,
+    currency,
+  };
+};
+
+/**
+ * Verify wallet top-up payment before crediting wallet
+ */
+export const verifyWalletTopUpPayment = async (
+  userId: string,
+  paymentIntentId: string,
+  expectedAmount: number
+): Promise<{ verified: boolean; simulated?: boolean; error?: string }> => {
+  if (paymentIntentId.startsWith('sim_topup_')) {
+    if (!allowSimulatedWalletTopUp()) {
+      return { verified: false, error: 'Simulated payments are not allowed in production' };
+    }
+    return { verified: true, simulated: true };
+  }
+
+  if (!isStripeConfigured()) {
+    return { verified: false, error: 'Payment service is not configured' };
+  }
+
+  try {
+    const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+
+    if (paymentIntent.status !== 'succeeded') {
+      return { verified: false, error: `Payment not completed (status: ${paymentIntent.status})` };
+    }
+
+    if (paymentIntent.metadata?.type !== 'wallet_topup') {
+      return { verified: false, error: 'Invalid payment type' };
+    }
+
+    if (paymentIntent.metadata?.userId !== userId) {
+      return { verified: false, error: 'Payment does not belong to this user' };
+    }
+
+    const paidAmount = paymentIntent.amount / 100;
+    if (Math.abs(paidAmount - expectedAmount) > 0.01) {
+      return { verified: false, error: 'Payment amount mismatch' };
+    }
+
+    return { verified: true };
+  } catch (error: any) {
+    logger.error('Wallet top-up verification failed', {
+      userId,
+      paymentIntentId,
+      error: error.message,
+    });
+    return { verified: false, error: 'Payment verification failed' };
+  }
+};
+
 export default {
   createPaymentIntent,
   confirmPayment,
@@ -1358,4 +1581,6 @@ export default {
   queueFailedPayment,
   releaseSlotLockOnPaymentFailure,
   triggerRefundOnBookingFailure,
+  createWalletTopUpIntent,
+  verifyWalletTopUpPayment,
 };

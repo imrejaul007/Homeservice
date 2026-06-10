@@ -29,9 +29,12 @@ import apiKeyAdminRoutes from './apiKeyAdmin.routes';
 import integrationRoutes from './integration.routes';
 import referralRoutes from './referral.routes';
 import favoritesRoutes from './favorites.routes';
+import wishlistRoutes from './wishlist.routes';
 import loyaltyRoutes from './loyalty.routes';
 import customerRoutes from './customer.routes';
 import customerDashboardRoutes from './customerDashboard.routes';
+import packagesPublicRoutes from './packages.public.routes';
+import dashboardCustomerRoutes from './dashboard.customer.routes';
 import reviewRoutes from './review.routes';
 import experienceRoutes from './experience.routes';
 import experienceAdminRoutes from './experience.admin.routes';
@@ -53,6 +56,7 @@ import gdprRoutes from './gdpr.routes';
 import demoRoutes from './demo.routes';
 import supportRoutes from './support.routes';
 import liveChatRoutes from './liveChat.routes';
+import contactRoutes from './contact.routes';
 import marketplaceRoutes from './marketplace.routes';
 import addressRoutes from './address.routes';
 import streakRoutes from './streak.routes';
@@ -60,6 +64,8 @@ import habitRoutes from './habit.routes';
 import featureFlagsRoutes from './featureFlags.routes';
 import twilioWebhookRoutes from './webhooks/twilio.routes';
 import stripeWebhookRoutes from './webhooks/stripe.routes';
+import notificationWebhookRoutes from './webhooks/notificationWebhooks.routes';
+import inboundEmailRoutes from './webhooks/inboundEmail.routes';
 import offerAnalyticsRoutes from './offerAnalytics.routes';
 import apiKeyRoutes from './apiKey.routes';
 import auditRoutes from './audit.routes';
@@ -82,6 +88,9 @@ import automationAdminRoutes from './automationAdmin.routes';
 import healthRoutes from './health.routes';
 import platformRoutes from './platform.routes';
 import iaAgentRoutes from './iaAgent.routes';
+import bundleAdminRoutes from './bundleAdmin.routes';
+import bundleCustomerRoutes from './bundleCustomer.routes';
+import batchRoutes from './batch.routes';
 
 const router = Router();
 
@@ -227,8 +236,11 @@ router.use('/integrations/v1', integrationRoutes);
 // Referral routes
 router.use('/referrals', referralRoutes);
 
-// Favorites routes
+// Favorites routes (providers)
 router.use('/favorites', favoritesRoutes);
+
+// Wishlist routes (packages)
+router.use('/wishlist', wishlistRoutes);
 
 // Loyalty routes
 router.use('/loyalty', loyaltyRoutes);
@@ -239,11 +251,22 @@ router.use('/customers', customerRoutes);
 // Customer Dashboard routes
 router.use('/customer', customerDashboardRoutes);
 
-// Dashboard routes (activity, recommended-pros)
-router.use('/dashboard', customerDashboardRoutes);
+// Customer wallet routes (same handlers as provider wallet; role-agnostic by user id)
+router.use('/customer', walletRoutes);
+
+// Customer dashboard routes (activity, recommended-pros)
+router.use('/dashboard', dashboardCustomerRoutes);
+
+// Package comparison routes
+import packageComparisonRoutes from './packageComparison.routes';
+router.use('/packages/compare', packageComparisonRoutes);
+
+// Package Price Calculator routes
+import packagePriceCalculatorRoutes from './packagePriceCalculator.routes';
+router.use('/packages', packagePriceCalculatorRoutes);
 
 // Packages routes (public listing)
-router.use('/packages', customerDashboardRoutes);
+router.use('/packages', packagesPublicRoutes);
 
 // Reviews routes
 router.use('/reviews', reviewRoutes);
@@ -302,6 +325,9 @@ router.use('/demo', demoRoutes);
 // Support routes
 router.use('/support', supportRoutes);
 
+// Public contact form routes
+router.use('/contact', contactRoutes);
+
 // Live Chat routes
 router.use('/support/chat', liveChatRoutes);
 
@@ -316,6 +342,11 @@ router.use('/webhooks/twilio', twilioWebhookRoutes);
 
 // Stripe webhook routes (payment events with IP allowlist)
 router.use('/webhooks/stripe', stripeWebhookRoutes);
+
+router.use('/webhooks/inbound-email', inboundEmailRoutes);
+
+// WhatsApp & Telegram notification webhooks
+router.use('/webhooks', notificationWebhookRoutes);
 
 // Bundle routes (implemented below)
 // Subscription routes - commented out until properly implemented
@@ -351,6 +382,12 @@ router.use('/chat', chatRoutes);
 
 // Bundle sales routes
 router.use('/bundles', bundleRoutes);
+
+// Admin Bundle management routes
+router.use('/admin/bundles', bundleAdminRoutes);
+
+// Customer Bundle routes (my/bundles)
+router.use('/', bundleCustomerRoutes);
 
 // Invoice routes
 router.use('/invoices', invoiceRoutes);
@@ -405,8 +442,15 @@ router.use('/winback', winbackRoutes);
 // Health check routes (public)
 router.use('/', healthRoutes);
 
+// Batch operations routes (efficient batch fetching)
+router.use('/batch', batchRoutes);
+
 // Admin automation management routes
 router.use('/admin/automation', automationAdminRoutes);
 router.use('/admin/automation/winback', winbackRoutes);
+
+// Share analytics routes
+import shareRoutes from './share.routes';
+router.use('/share', shareRoutes);
 
 export default router;

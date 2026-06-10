@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { api } from '../../services/api';
 
 // Types
 interface SecuritySettings {
@@ -18,7 +19,6 @@ interface SecuritySettings {
 }
 
 interface SecuritySettingsProps {
-  userId: string;
   onSettingsChanged?: (settings: SecuritySettings) => void;
 }
 
@@ -29,7 +29,6 @@ interface ApiResponse<T> {
 }
 
 export const SecuritySettings: React.FC<SecuritySettingsProps> = ({
-  userId,
   onSettingsChanged,
 }) => {
   const [settings, setSettings] = useState<SecuritySettings>({
@@ -56,17 +55,8 @@ export const SecuritySettings: React.FC<SecuritySettingsProps> = ({
       setLoading(true);
       setError(null);
 
-      const response = await fetch(`/api/security/settings?userId=${userId}`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('accessToken')}`,
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to fetch security settings');
-      }
-
-      const result: ApiResponse<SecuritySettings> = await response.json();
+      const response = await api.get('/security/settings');
+      const result: ApiResponse<SecuritySettings> = response.data;
 
       if (result.success && result.data) {
         setSettings(result.data);
@@ -76,7 +66,7 @@ export const SecuritySettings: React.FC<SecuritySettingsProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [userId]);
+  }, []);
 
   useEffect(() => {
     fetchSettings();
@@ -88,20 +78,8 @@ export const SecuritySettings: React.FC<SecuritySettingsProps> = ({
       setSaving(true);
       setError(null);
 
-      const response = await fetch(`/api/security/settings`, {
-        method: 'PATCH',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('accessToken')}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ userId, ...newSettings }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to save settings');
-      }
-
-      const result: ApiResponse<SecuritySettings> = await response.json();
+      const response = await api.patch('/security/settings', newSettings);
+      const result: ApiResponse<SecuritySettings> = response.data;
 
       if (result.success && result.data) {
         setSettings(result.data);
@@ -134,21 +112,9 @@ export const SecuritySettings: React.FC<SecuritySettingsProps> = ({
       setSaving(true);
       setError(null);
 
-      const response = await fetch(`/api/security/2fa/verify`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('accessToken')}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          userId,
-          code: verificationCode,
-        }),
+      await api.post('/security/2fa/verify', {
+        code: verificationCode,
       });
-
-      if (!response.ok) {
-        throw new Error('Invalid verification code');
-      }
 
       setVerificationStep('verify');
     } catch (err) {

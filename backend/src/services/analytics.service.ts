@@ -348,7 +348,7 @@ export class AnalyticsService {
       Service.find({ isActive: true })
         .sort({ totalBookings: -1 })
         .limit(5)
-        .select('title')
+        .select('name')
         .lean(),
     ]);
 

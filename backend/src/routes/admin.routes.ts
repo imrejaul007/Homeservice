@@ -1,12 +1,16 @@
 import express, { Request, Response } from 'express';
+import { checkIndexHealth, createAllIndexes, getIndexSummary } from '../models/indexes';
 import {
   getAdminStats,
   getPendingProviders,
   getProviderForVerification,
   approveProvider,
   rejectProvider,
+  suspendProvider,
+  reactivateProvider,
+  searchProviders,
+  batchProviderAction,
   getVerificationStats,
-  createTestProvider,
   getAllServices,
   getPendingServices,
   updateServiceStatus,
@@ -40,6 +44,7 @@ import {
   getPendingReviews,
   getFlaggedReviews,
   moderateReview,
+  bulkModerateReviews,
   // Withdrawal Management
   getPendingWithdrawals,
   getWithdrawalStats,
@@ -53,6 +58,8 @@ import {
   getChurnSegments,
   refreshChurnCache,
   executeChurnRetentionAction,
+  // Real-time metrics
+  getRealtimeMetrics,
 } from '../controllers/admin.controller';
 import { disputeService } from '../services/dispute.service';
 import { authenticate, requireRole } from '../middleware/auth.middleware';
@@ -200,15 +207,19 @@ router.get('/churn/segments', getChurnSegments);
 router.post('/churn/refresh', refreshChurnCache);
 router.post('/churn/execute/:userId', executeChurnRetentionAction);
 
+// Real-time metrics (must come before /:id routes)
+router.get('/realtime-metrics', getRealtimeMetrics);
+
 // Provider verification routes
 router.get('/providers/pending', getPendingProviders);
 router.get('/providers/stats', getVerificationStats);
+router.get('/providers/search', searchProviders);
 router.get('/providers/:id', getProviderForVerification);
 router.post('/providers/:id/approve', validateApproval, approveProvider);
 router.post('/providers/:id/reject', validateRejection, rejectProvider);
-
-// Test routes
-router.post('/test/create-provider', createTestProvider);
+router.post('/providers/:id/suspend', suspendProvider);
+router.post('/providers/:id/reactivate', reactivateProvider);
+router.post('/providers/batch', batchProviderAction);
 
 // ========================================
 // Service Management Routes
@@ -367,6 +378,7 @@ router.get('/reviews/stats', getReviewStats);
 router.get('/reviews/pending', getPendingReviews);
 router.get('/reviews/flagged', getFlaggedReviews);
 router.patch('/reviews/:id/moderate', moderateReview);
+router.post('/reviews/bulk-moderate', bulkModerateReviews);
 
 // ========================================
 // Disputes Management Routes (Alias for /api/disputes)
@@ -469,5 +481,86 @@ router.post('/withdrawals/:id/approve', validateWithdrawalApproval, approveWithd
 
 // POST /api/admin/withdrawals/:id/reject - Reject a withdrawal
 router.post('/withdrawals/:id/reject', validateWithdrawalRejection, rejectWithdrawal);
+
+// ========================================
+// Database Index Management Routes
+// ========================================
+
+/**
+ * GET /api/admin/indexes/health
+ * Check the health of database indexes
+ * Returns missing or problematic indexes
+ */
+router.get('/indexes/health', asyncHandler(async (req: Request, res: Response) => {
+  const health = await checkIndexHealth();
+
+  res.json({
+    success: true,
+    data: {
+      healthy: health.healthy,
+      summary: health.summary,
+      issues: health.issues.length > 0 ? health.issues : undefined,
+      message: health.healthy
+        ? 'All indexes are healthy'
+        : `${health.issues.length} index issue(s) found`
+    }
+  });
+}));
+
+/**
+ * GET /api/admin/indexes/summary
+ * Get a summary of all configured indexes
+ * Useful for documentation and debugging
+ */
+router.get('/indexes/summary', asyncHandler(async (req: Request, res: Response) => {
+  const summary = getIndexSummary();
+
+  res.json({
+    success: true,
+    data: summary.map(model => ({
+      modelName: model.modelName,
+      collectionName: model.collectionName,
+      indexCount: model.indexes.length,
+      indexes: model.indexes.map(idx => ({
+        type: idx.type,
+        description: idx.description,
+        key: idx.key,
+        options: idx.options
+      }))
+    }))
+  });
+}));
+
+/**
+ * POST /api/admin/indexes/recreate
+ * Force recreation of all indexes (admin only)
+ * Use with caution - can be slow on large collections
+ */
+router.post('/indexes/recreate', asyncHandler(async (req: Request, res: Response) => {
+  // Only allow in non-production environments or with explicit confirmation
+  if (process.env.NODE_ENV === 'production' && !req.body.confirm) {
+    throw new ApiError(
+      400,
+      'Index recreation requires explicit confirmation in production',
+      [],
+      ERROR_CODES.VALIDATION_ERROR
+    );
+  }
+
+  const results = await createAllIndexes({ verbose: true });
+
+  res.json({
+    success: true,
+    data: {
+      message: 'Index recreation completed',
+      results: results.models,
+      summary: {
+        totalCreated: results.totalCreated,
+        totalSkipped: results.totalSkipped,
+        totalErrors: results.totalErrors
+      }
+    }
+  });
+}));
 
 export default router;

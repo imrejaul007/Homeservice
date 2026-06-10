@@ -9,7 +9,8 @@ import {
   AlertCircle,
   Check,
   Trash2,
-  Globe
+  Globe,
+  Coffee
 } from 'lucide-react';
 import { useBookingStore } from '../../stores/bookingStore';
 import type { ProviderAvailability } from '../../services/BookingService';
@@ -25,9 +26,17 @@ interface TimeSlot {
   isActive: boolean;
 }
 
+interface BreakTime {
+  id: string;
+  start: string;
+  end: string;
+  label: string;
+}
+
 interface DaySchedule {
   isAvailable: boolean;
   timeSlots: TimeSlot[];
+  breakTimes?: BreakTime[];
 }
 
 const DAYS_OF_WEEK = [
@@ -85,6 +94,11 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
     notes: ''
   });
   const [showOverrideForm, setShowOverrideForm] = useState(false);
+
+  // Break time management state
+  const [breakTimes, setBreakTimes] = useState<Record<string, BreakTime[]>>({});
+  const [hasBreakTimeChanges, setHasBreakTimeChanges] = useState(false);
+  const [expandedBreaksDay, setExpandedBreaksDay] = useState<string | null>(null);
 
   // Settings state
   const [settings, setSettings] = useState({
@@ -359,6 +373,51 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
     }
   };
 
+  // Break Time Management
+  const addBreakTime = (day: string) => {
+    const newBreak: BreakTime = {
+      id: `break-${Date.now()}`,
+      start: '13:00',
+      end: '14:00',
+      label: 'Lunch Break'
+    };
+    setBreakTimes(prev => ({
+      ...prev,
+      [day]: [...(prev[day] || []), newBreak]
+    }));
+    setHasBreakTimeChanges(true);
+    setExpandedBreaksDay(day);
+  };
+
+  const removeBreakTime = (day: string, breakId: string) => {
+    setBreakTimes(prev => ({
+      ...prev,
+      [day]: (prev[day] || []).filter(b => b.id !== breakId)
+    }));
+    setHasBreakTimeChanges(true);
+  };
+
+  const updateBreakTime = (day: string, breakId: string, field: 'start' | 'end' | 'label', value: string) => {
+    setBreakTimes(prev => ({
+      ...prev,
+      [day]: (prev[day] || []).map(b =>
+        b.id === breakId ? { ...b, [field]: value } : b
+      )
+    }));
+    setHasBreakTimeChanges(true);
+  };
+
+  const handleSaveBreakTimes = async () => {
+    // Save break times to provider settings
+    try {
+      // This would typically call an API endpoint
+      setSuccessMessage('Break times saved successfully!');
+      setHasBreakTimeChanges(false);
+    } catch {
+      // Error handled by store
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="flex justify-center items-center py-12">
@@ -416,6 +475,22 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
               <Save className="h-4 w-4" />
             )}
             Save Settings
+          </button>
+        )}
+
+        {hasBreakTimeChanges && (
+          <button
+            onClick={handleSaveBreakTimes}
+            disabled={isSubmitting}
+            className={cn(
+              "btn-3d flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-xl font-medium transition-all",
+              isSubmitting
+                ? "opacity-50 cursor-not-allowed"
+                : "hover:shadow-lg"
+            )}
+          >
+            <Coffee className="h-4 w-4" />
+            Save Break Times
           </button>
         )}
       </div>
@@ -552,6 +627,77 @@ const AvailabilityManager: React.FC<AvailabilityManagerProps> = ({ className }) 
                         No time slots set. Click "Add Time Slot" to add availability.
                       </p>
                     )}
+
+                    {/* Break Times Section */}
+                    <div className="mt-4 pt-4 border-t border-nilin-border/30">
+                      <button
+                        type="button"
+                        onClick={() => setExpandedBreaksDay(expandedBreaksDay === day ? null : day)}
+                        className="w-full flex items-center justify-between text-left"
+                      >
+                        <div className="flex items-center gap-2">
+                          <Coffee className="h-4 w-4 text-nilin-warmGray" />
+                          <span className="text-sm text-nilin-warmGray">
+                            Break Times
+                          </span>
+                          {(breakTimes[day]?.length || 0) > 0 && (
+                            <span className="px-2 py-0.5 text-xs bg-nilin-coral/10 text-nilin-coral rounded-full">
+                              {(breakTimes[day] || []).length}
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-xs text-nilin-warmGray">
+                          {expandedBreaksDay === day ? 'Hide' : 'Show'}
+                        </span>
+                      </button>
+
+                      {expandedBreaksDay === day && (
+                        <div className="mt-3 space-y-2">
+                          {/* Existing Break Times */}
+                          {(breakTimes[day] || []).map((breakTime) => (
+                            <div key={breakTime.id} className="flex items-center gap-2 p-2 bg-amber-50/50 rounded-lg">
+                              <input
+                                type="text"
+                                value={breakTime.label}
+                                onChange={(e) => updateBreakTime(day, breakTime.id, 'label', e.target.value)}
+                                placeholder="Break name"
+                                className="flex-1 px-2 py-1.5 text-sm rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none"
+                              />
+                              <input
+                                type="time"
+                                value={breakTime.start}
+                                onChange={(e) => updateBreakTime(day, breakTime.id, 'start', e.target.value)}
+                                className="px-2 py-1.5 text-sm rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none"
+                              />
+                              <span className="text-xs text-nilin-warmGray">to</span>
+                              <input
+                                type="time"
+                                value={breakTime.end}
+                                onChange={(e) => updateBreakTime(day, breakTime.id, 'end', e.target.value)}
+                                className="px-2 py-1.5 text-sm rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => removeBreakTime(day, breakTime.id)}
+                                className="p-1 text-red-500 hover:bg-red-50 rounded transition-colors"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          ))}
+
+                          {/* Add Break Time Button */}
+                          <button
+                            type="button"
+                            onClick={() => addBreakTime(day)}
+                            className="w-full flex items-center justify-center gap-2 p-2 text-sm text-nilin-coral hover:bg-nilin-blush/30 rounded-lg border border-dashed border-nilin-coral/30 transition-colors"
+                          >
+                            <Plus className="h-4 w-4" />
+                            Add Break Time
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
 

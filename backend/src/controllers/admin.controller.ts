@@ -17,8 +17,12 @@ import { churnService, ChurnFilters } from '../services/churn.service';
 import { churnPredictionService, RetentionAction } from '../services/churnPrediction.service';
 import crypto from 'crypto';
 
-// Initialize Stripe client
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', {
+// Initialize Stripe client - throw error if secret key is missing
+const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
+if (!stripeSecretKey) {
+  throw new Error('STRIPE_SECRET_KEY environment variable is required but not set');
+}
+const stripe = new Stripe(stripeSecretKey, {
   apiVersion: '2023-10-16' as const,
 });
 
@@ -277,8 +281,9 @@ export const approveProvider = asyncHandler(async (req: Request, res: Response) 
                 type: 'Point',
                 coordinates: [
                   // GeoJSON format: [longitude, latitude]
-                  provider.locationInfo.primaryAddress.coordinates?.coordinates?.[0] || -74.006,
-                  provider.locationInfo.primaryAddress.coordinates?.coordinates?.[1] || 40.7128
+                  // Default to Dubai, UAE coordinates if not available
+                  provider.locationInfo.primaryAddress.coordinates?.coordinates?.[0] || 55.2708,
+                  provider.locationInfo.primaryAddress.coordinates?.coordinates?.[1] || 25.2048
                 ]
               },
               serviceArea: {
@@ -1491,7 +1496,12 @@ export const getProvidersWithServices = asyncHandler(async (req: Request, res: R
     query.tenantId = tenantContext.tenantId;
   }
   if (status && status !== 'all') {
-    query['verificationStatus.overall'] = status;
+    // Handle 'under_review' status mapping - maps to 'in_progress' in verificationStatus.overall
+    if (status === 'under_review') {
+      query['verificationStatus.overall'] = 'in_progress';
+    } else {
+      query['verificationStatus.overall'] = status;
+    }
   }
 
   if (search) {
@@ -2522,6 +2532,9 @@ export const updateCategory = asyncHandler(async (req: Request, res: Response) =
     status: { $in: ['active', 'pending_review'] }
   }).select('_id providerId name category').lean();
 
+  // Sanitize HTML to prevent XSS in socket events
+  const sanitizeHtml = (str: string) => str.replace(/<[^>]*>/g, '');
+
   const socketServer = getSocketServer();
   for (const svc of affectedServices) {
     if (socketServer && updates.name && updates.name !== oldCategoryName) {
@@ -2530,7 +2543,7 @@ export const updateCategory = asyncHandler(async (req: Request, res: Response) =
         svc.providerId?.toString(),
         svc.name,
         oldCategoryName,
-        updates.name
+        sanitizeHtml(updates.name)
       );
     }
   }
@@ -2913,6 +2926,11 @@ export const getFlaggedReviews = asyncHandler(async (req: Request, res: Response
     reportCount: { $gt: 0 }
   };
 
+  // FIX: Apply tenant isolation to prevent cross-tenant data leakage
+  if (tenantContext?.tenantId) {
+    query.tenantId = tenantContext.tenantId;
+  }
+
   if (minReports) {
     query.reportCount = { $gte: parseInt(minReports as string) };
   }
@@ -2935,7 +2953,7 @@ export const getFlaggedReviews = asyncHandler(async (req: Request, res: Response
 
   // Get report breakdown stats
   const stats = await Review.aggregate([
-    { $match: { reportCount: { $gt: 0 } } },
+    { $match: { reportCount: { $gt: 0 }, ...(tenantContext?.tenantId ? { tenantId: tenantContext.tenantId } : {}) } },
     {
       $group: {
         _id: null,
@@ -3178,6 +3196,131 @@ export const moderateReview = asyncHandler(async (req: Request, res: Response) =
     success: true,
     message: `Review ${action}d successfully`,
     data: { review }
+  });
+});
+
+/**
+ * Bulk moderate reviews (approve/reject/hide/delete multiple at once)
+ * POST /api/admin/reviews/bulk-moderate
+ */
+export const bulkModerateReviews = asyncHandler(async (req: Request, res: Response) => {
+  // Extract tenant context
+  const tenantContext: TenantContext = getTenantContext(req);
+  const { reviewIds, action, reason } = req.body;
+  const adminUser = req.user as any;
+
+  // Validate input
+  if (!Array.isArray(reviewIds) || reviewIds.length === 0) {
+    throw new ApiError(400, 'reviewIds must be a non-empty array');
+  }
+
+  if (reviewIds.length > 100) {
+    throw new ApiError(400, 'Cannot moderate more than 100 reviews at once');
+  }
+
+  // Validate action
+  const normalizedAction = action === 'restore' ? 'approve' : action;
+  const validActions = ['approve', 'reject', 'hide', 'delete', 'restore'];
+  if (!validActions.includes(action)) {
+    throw new ApiError(400, `Invalid action. Must be one of: ${validActions.join(', ')}`);
+  }
+
+  // Build query with tenant isolation
+  const query: any = { _id: { $in: reviewIds } };
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    query.tenantId = tenantContext.tenantId;
+  }
+
+  // Get reviews to moderate
+  const reviews = await Review.find(query);
+
+  if (reviews.length === 0) {
+    throw new ApiError(404, 'No reviews found matching the provided IDs');
+  }
+
+  const results = {
+    total: reviews.length,
+    successful: 0,
+    failed: 0,
+    errors: [] as string[],
+  };
+
+  // Collect unique revieweeIds for recalculating stats later
+  const revieweeIds = new Set<string>();
+
+  for (const review of reviews) {
+    try {
+      revieweeIds.add(review.revieweeId.toString());
+
+      switch (normalizedAction) {
+        case 'approve':
+          review.moderationStatus = 'approved';
+          review.isHidden = false;
+          review.moderationReason = reason || null;
+          review.moderatedAt = new Date();
+          review.moderatedBy = adminUser._id;
+          await review.save();
+          await updateServiceRatings(review);
+          break;
+
+        case 'reject':
+          review.moderationStatus = 'rejected';
+          review.isHidden = true;
+          review.moderationReason = reason || 'Rejected by admin';
+          review.moderatedAt = new Date();
+          review.moderatedBy = adminUser._id;
+          await review.save();
+          break;
+
+        case 'hide':
+          review.moderationStatus = 'hidden';
+          review.isHidden = true;
+          review.moderationReason = reason || 'Hidden by admin';
+          review.moderatedAt = new Date();
+          review.moderatedBy = adminUser._id;
+          await review.save();
+          break;
+
+        case 'delete':
+          await Review.findByIdAndDelete(review._id);
+          break;
+      }
+
+      results.successful++;
+    } catch (err) {
+      results.failed++;
+      results.errors.push(`Review ${review._id}: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    }
+  }
+
+  // Recalculate stats for all affected providers
+  for (const revieweeId of revieweeIds) {
+    try {
+      await ProviderProfile.recalculateReviewsData(revieweeId);
+    } catch (syncError) {
+      logger.error('Failed to recalculate provider reviews after bulk moderation', {
+        revieweeId,
+        error: syncError instanceof Error ? syncError.message : String(syncError),
+      });
+    }
+  }
+
+  // Audit logging
+  logger.info('ADMIN_AUDIT: Bulk review moderation', {
+    action: 'BULK_REVIEW_MODERATION',
+    adminId: adminUser._id,
+    adminEmail: adminUser.email,
+    reviewIds,
+    moderationAction: action,
+    results,
+    reason: reason || 'No reason provided',
+    timestamp: new Date().toISOString(),
+  });
+
+  res.json({
+    success: true,
+    message: `Bulk moderation completed: ${results.successful} successful, ${results.failed} failed`,
+    data: { results },
   });
 });
 
@@ -4287,6 +4430,125 @@ export const getChurnStats = asyncHandler(async (req: Request, res: Response) =>
 });
 
 /**
+ * Get real-time metrics for admin dashboard
+ * GET /api/admin/realtime-metrics
+ */
+export const getRealtimeMetrics = asyncHandler(async (req: Request, res: Response) => {
+  const tenantContext: TenantContext = getTenantContext(req);
+
+  // Build tenant-scoped base query
+  const baseQuery: any = {};
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    baseQuery.tenantId = tenantContext.tenantId;
+  }
+
+  const now = new Date();
+  const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const weekStart = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
+  // Execute multiple queries in parallel for performance
+  const [
+    activeUsersCount,
+    todayBookingsCount,
+    pendingBookingsCount,
+    completedTodayCount,
+    weekBookingsCount,
+    monthRevenueResult,
+    pendingProvidersCount,
+    pendingServicesCount,
+    activeDisputesCount,
+  ] = await Promise.all([
+    // Active users in last hour
+    User.countDocuments({
+      ...baseQuery,
+      lastActive: { $gte: oneHourAgo }
+    }),
+    // Today's bookings
+    Booking.countDocuments({
+      ...baseQuery,
+      scheduledDate: { $gte: todayStart }
+    }),
+    // Pending bookings
+    Booking.countDocuments({
+      ...baseQuery,
+      status: 'pending'
+    }),
+    // Completed today
+    Booking.countDocuments({
+      ...baseQuery,
+      status: 'completed',
+      completedAt: { $gte: todayStart }
+    }),
+    // Week bookings
+    Booking.countDocuments({
+      ...baseQuery,
+      scheduledDate: { $gte: weekStart }
+    }),
+    // Monthly revenue
+    Booking.aggregate([
+      {
+        $match: {
+          ...baseQuery,
+          status: 'completed',
+          completedAt: { $gte: monthStart }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          totalRevenue: { $sum: '$pricing.totalAmount' },
+          avgBookingValue: { $avg: '$pricing.totalAmount' }
+        }
+      }
+    ]),
+    // Pending providers
+    ProviderProfile.countDocuments({
+      ...baseQuery,
+      'verificationStatus.overall': { $in: ['pending', 'in_progress'] }
+    }),
+    // Pending services
+    Service.countDocuments({
+      ...baseQuery,
+      status: 'pending_review'
+    }),
+    // Active disputes
+    mongoose.model('Dispute')?.countDocuments({
+      ...baseQuery,
+      status: { $in: ['open', 'under_review'] }
+    }) || Promise.resolve(0),
+  ]);
+
+  const monthlyRevenue = monthRevenueResult[0]?.totalRevenue || 0;
+
+  res.json({
+    success: true,
+    data: {
+      timestamp: now.toISOString(),
+      activeUsers: activeUsersCount,
+      bookings: {
+        today: todayBookingsCount,
+        pending: pendingBookingsCount,
+        completedToday: completedTodayCount,
+        weekTotal: weekBookingsCount,
+      },
+      revenue: {
+        monthly: monthlyRevenue,
+        averageBooking: monthRevenueResult[0]?.avgBookingValue || 0,
+      },
+      pending: {
+        providers: pendingProvidersCount,
+        services: pendingServicesCount,
+      },
+      alerts: {
+        disputes: activeDisputesCount,
+      },
+    },
+  });
+});
+
+/**
  * GET /api/admin/churn/at-risk
  */
 export const getChurnAtRiskCustomers = asyncHandler(async (req: Request, res: Response) => {
@@ -4395,6 +4657,514 @@ export const executeChurnRetentionAction = asyncHandler(async (req: Request, res
   res.json({ success: true, data: result });
 });
 
+/**
+ * Suspend provider
+ * POST /api/admin/providers/:id/suspend
+ */
+export const suspendProvider = asyncHandler(async (req: Request, res: Response) => {
+  const tenantContext: TenantContext = getTenantContext(req);
+  const { id } = req.params;
+  const { reason, type = 'temporary', endDate } = req.body;
+  const adminUser = req.user as any;
+
+  if (!reason) {
+    throw new ApiError(400, 'Suspension reason is required');
+  }
+
+  // Build tenant-scoped query
+  const query: any = { _id: id };
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    query.tenantId = tenantContext.tenantId;
+  }
+
+  const provider = await ProviderProfile.findOne(query).populate('userId', 'email firstName lastName');
+
+  if (!provider) {
+    throw new ApiError(404, 'Provider not found');
+  }
+
+  if (provider.verificationStatus.overall === 'suspended') {
+    throw new ApiError(400, 'Provider is already suspended');
+  }
+
+  const session = await mongoose.startSession();
+  let transactionCommitted = false;
+
+  try {
+    session.startTransaction({
+      readConcern: { level: 'snapshot' },
+      writeConcern: { w: 'majority' }
+    });
+
+    // Update provider verification status
+    provider.verificationStatus.overall = 'suspended';
+    if (provider.verificationStatus.adminNotes !== undefined) {
+      provider.verificationStatus.adminNotes = `Suspended: ${reason}`;
+    }
+
+    // Store suspension details
+    (provider as any).suspensionDetails = {
+      reason,
+      type,
+      suspendedAt: new Date(),
+      suspendedBy: adminUser._id,
+      endDate: endDate ? new Date(endDate) : null,
+      isPermanent: type === 'permanent'
+    };
+
+    await provider.save({ session });
+
+    // Update user account status
+    if (provider.userId) {
+      await User.findByIdAndUpdate(provider.userId, {
+        accountStatus: 'suspended'
+      }).session(session);
+
+      // Invalidate all tokens
+      const userToSuspend = await User.findById(provider.userId).session(session);
+      if (userToSuspend) {
+        await userToSuspend.invalidateAllTokens();
+      }
+
+      // Deactivate all provider services
+      const providerUserId = (provider.userId as any)?._id || provider.userId;
+      await Service.updateMany(
+        { providerId: providerUserId },
+        { isActive: false, status: 'inactive' }
+      ).session(session);
+    }
+
+    await session.commitTransaction();
+    transactionCommitted = true;
+
+    // Emit socket event
+    const socketServer = getSocketServer();
+    if (socketServer) {
+      socketServer.emitProviderSuspended(
+        (provider.userId as any)?._id || provider.userId?.toString() || '',
+        reason,
+        endDate ? new Date(endDate) : undefined
+      );
+    }
+
+    logger.info('ADMIN_AUDIT: Provider suspended', {
+      action: 'PROVIDER_SUSPENDED',
+      adminId: adminUser._id,
+      adminEmail: adminUser.email,
+      providerId: id,
+      providerEmail: (provider.userId as any)?.email,
+      businessName: provider.businessInfo.businessName,
+      reason,
+      type,
+      timestamp: new Date().toISOString()
+    });
+
+    // Create notification
+    try {
+      const notificationService = new NotificationService();
+      await notificationService.createNotification({
+        recipientId: (provider.userId as any)?._id?.toString() || provider.userId?.toString(),
+        type: 'provider_suspended',
+        title: 'Account Suspended',
+        message: `Your provider account has been suspended. Reason: ${reason}`,
+        actionText: 'Contact Support',
+        actionUrl: '/support',
+        metadata: { providerId: id, reason }
+      });
+    } catch (notifError) {
+      logger.error('Failed to create suspension notification', {
+        providerId: id,
+        error: notifError instanceof Error ? notifError.message : String(notifError)
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Provider suspended successfully',
+      data: { provider }
+    });
+  } catch (error) {
+    if (!transactionCommitted) {
+      await session.abortTransaction();
+    }
+    throw error;
+  } finally {
+    session.endSession();
+  }
+});
+
+/**
+ * Reactivate provider
+ * POST /api/admin/providers/:id/reactivate
+ */
+export const reactivateProvider = asyncHandler(async (req: Request, res: Response) => {
+  const tenantContext: TenantContext = getTenantContext(req);
+  const { id } = req.params;
+  const { notes } = req.body;
+  const adminUser = req.user as any;
+
+  // Build tenant-scoped query
+  const query: any = { _id: id };
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    query.tenantId = tenantContext.tenantId;
+  }
+
+  const provider = await ProviderProfile.findOne(query).populate('userId', 'email firstName lastName');
+
+  if (!provider) {
+    throw new ApiError(404, 'Provider not found');
+  }
+
+  if (provider.verificationStatus.overall !== 'suspended') {
+    throw new ApiError(400, 'Provider is not suspended');
+  }
+
+  const session = await mongoose.startSession();
+  let transactionCommitted = false;
+
+  try {
+    session.startTransaction({
+      readConcern: { level: 'snapshot' },
+      writeConcern: { w: 'majority' }
+    });
+
+    // Restore verification status to approved
+    provider.verificationStatus.overall = 'approved';
+    if (provider.verificationStatus.adminNotes !== undefined) {
+      provider.verificationStatus.adminNotes = notes ? `Reactivated: ${notes}` : 'Reactivated by admin';
+    }
+
+    // Clear suspension details
+    delete (provider as any).suspensionDetails;
+
+    await provider.save({ session });
+
+    // Restore user account status
+    if (provider.userId) {
+      await User.findByIdAndUpdate(provider.userId, {
+        accountStatus: 'active'
+      }).session(session);
+
+      // Reactivate provider services
+      const providerUserId = (provider.userId as any)?._id || provider.userId;
+      await Service.updateMany(
+        { providerId: providerUserId },
+        { isActive: true, status: 'active' }
+      ).session(session);
+    }
+
+    await session.commitTransaction();
+    transactionCommitted = true;
+
+    // Emit socket event
+    const socketServer = getSocketServer();
+    if (socketServer) {
+      socketServer.emitProviderApproved(
+        (provider.userId as any)?._id || provider.userId?.toString() || ''
+      );
+    }
+
+    logger.info('ADMIN_AUDIT: Provider reactivated', {
+      action: 'PROVIDER_REACTIVATED',
+      adminId: adminUser._id,
+      adminEmail: adminUser.email,
+      providerId: id,
+      providerEmail: (provider.userId as any)?.email,
+      businessName: provider.businessInfo.businessName,
+      timestamp: new Date().toISOString()
+    });
+
+    // Create notification
+    try {
+      const notificationService = new NotificationService();
+      await notificationService.createNotification({
+        recipientId: (provider.userId as any)?._id?.toString() || provider.userId?.toString(),
+        type: 'provider_approved',
+        title: 'Account Reactivated',
+        message: 'Your provider account has been reactivated. You can now accept bookings again.',
+        actionText: 'View Dashboard',
+        actionUrl: '/provider/dashboard',
+        metadata: { providerId: id }
+      });
+    } catch (notifError) {
+      logger.error('Failed to create reactivation notification', {
+        providerId: id,
+        error: notifError instanceof Error ? notifError.message : String(notifError)
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Provider reactivated successfully',
+      data: { provider }
+    });
+  } catch (error) {
+    if (!transactionCommitted) {
+      await session.abortTransaction();
+    }
+    throw error;
+  } finally {
+    session.endSession();
+  }
+});
+
+/**
+ * Advanced provider search with filters
+ * GET /api/admin/providers/search
+ */
+export const searchProviders = asyncHandler(async (req: Request, res: Response) => {
+  const tenantContext: TenantContext = getTenantContext(req);
+  const {
+    search,
+    status,
+    verificationStatus,
+    city,
+    minQualityScore,
+    maxQualityScore,
+    minRating,
+    hasFraudFlags,
+    dateFrom,
+    dateTo,
+    sortBy = 'createdAt',
+    sortOrder = 'desc',
+    page = 1,
+    limit = 25,
+  } = req.query;
+
+  // Build complex query
+  const query: any = {};
+
+  // Tenant filter
+  if (!tenantContext.isAdmin && tenantContext.tenantId) {
+    query.tenantId = tenantContext.tenantId;
+  }
+
+  // Search query (name, email, business name)
+  if (search && typeof search === 'string') {
+    const searchRegex = { $regex: search, $options: 'i' };
+    query.$or = [
+      { 'businessInfo.businessName': searchRegex },
+      { 'businessInfo.description': searchRegex },
+    ];
+
+    // Also search by user email/phone/name
+    const User = require('../models/user.model').default;
+    const matchedUsers = await User.find({
+      $or: [
+        { email: searchRegex },
+        { firstName: searchRegex },
+        { lastName: searchRegex },
+        { phone: searchRegex },
+      ],
+    }).select('_id').limit(100);
+
+    if (matchedUsers.length > 0) {
+      query.$or.push({ userId: { $in: matchedUsers.map((u: any) => u._id) } });
+    }
+  }
+
+  // Status filters
+  if (status && typeof status === 'string') {
+    if (status === 'active') {
+      query.$or = query.$or || [];
+      query.$or.push({ 'verificationStatus.overall': 'approved' });
+      query.$or.push({ 'verificationStatus.overall': 'verified' });
+    } else if (status !== 'all') {
+      query['verificationStatus.overall'] = status;
+    }
+  }
+
+  // Verification status filter
+  if (verificationStatus && typeof verificationStatus === 'string') {
+    if (verificationStatus === 'verified') {
+      query['instagramStyleProfile.isVerified'] = true;
+    } else if (verificationStatus === 'unverified') {
+      query['instagramStyleProfile.isVerified'] = false;
+    } else if (verificationStatus === 'pending') {
+      query['verificationStatus.overall'] = 'pending';
+    }
+  }
+
+  // City filter
+  if (city && typeof city === 'string') {
+    query['locationInfo.primaryAddress.city'] = { $regex: city, $options: 'i' };
+  }
+
+  // Quality score range
+  if (minQualityScore || maxQualityScore) {
+    query['analytics.performanceMetrics.qualityScore'] = {};
+    if (minQualityScore) {
+      (query['analytics.performanceMetrics.qualityScore'] as any).$gte = Number(minQualityScore);
+    }
+    if (maxQualityScore) {
+      (query['analytics.performanceMetrics.qualityScore'] as any).$lte = Number(maxQualityScore);
+    }
+  }
+
+  // Minimum rating filter
+  if (minRating) {
+    query['reviewsData.averageRating'] = { $gte: Number(minRating) };
+  }
+
+  // Date range filter
+  if (dateFrom || dateTo) {
+    query.createdAt = {};
+    if (dateFrom) {
+      (query.createdAt as any).$gte = new Date(dateFrom as string);
+    }
+    if (dateTo) {
+      (query.createdAt as any).$lte = new Date(dateTo as string);
+    }
+  }
+
+  // Pagination with limits
+  const pageNum = Math.max(1, parseInt(page as string) || 1);
+  const limitNum = Math.min(100, Math.max(1, parseInt(limit as string) || 25));
+
+  // Sort options
+  const sortOptions: any = {};
+  sortOptions[sortBy as string] = sortOrder === 'asc' ? 1 : -1;
+
+  // Execute query with population
+  const providers = await ProviderProfile.find(query)
+    .populate('userId', 'firstName lastName email phone accountStatus createdAt')
+    .sort(sortOptions)
+    .skip((pageNum - 1) * limitNum)
+    .limit(limitNum)
+    .lean();
+
+  const total = await ProviderProfile.countDocuments(query);
+
+  logger.info('ADMIN: Advanced provider search executed', {
+    action: 'PROVIDER_ADVANCED_SEARCH',
+    adminId: (req.user as any)?._id,
+    filters: {
+      search,
+      status,
+      verificationStatus,
+      city,
+      minQualityScore,
+      maxQualityScore,
+      minRating,
+    },
+    resultsCount: providers.length,
+    totalMatches: total
+  });
+
+  res.json({
+    success: true,
+    data: {
+      providers,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        pages: Math.ceil(total / limitNum),
+        hasNext: pageNum * limitNum < total,
+        hasPrev: pageNum > 1
+      }
+    }
+  });
+});
+
+/**
+ * Batch provider operations
+ * POST /api/admin/providers/batch
+ */
+export const batchProviderAction = asyncHandler(async (req: Request, res: Response) => {
+  const tenantContext: TenantContext = getTenantContext(req);
+  const { providerIds, action, reason } = req.body;
+  const adminUser = req.user as any;
+
+  if (!providerIds || !Array.isArray(providerIds) || providerIds.length === 0) {
+    throw new ApiError(400, 'Provider IDs array is required');
+  }
+
+  if (!['suspend', 'activate', 'verify', 'reject'].includes(action)) {
+    throw new ApiError(400, 'Invalid action. Must be one of: suspend, activate, verify, reject');
+  }
+
+  // Limit batch size
+  if (providerIds.length > 50) {
+    throw new ApiError(400, 'Cannot process more than 50 providers at once');
+  }
+
+  const results = {
+    total: providerIds.length,
+    successful: 0,
+    failed: 0,
+    errors: [] as string[],
+  };
+
+  for (const providerId of providerIds) {
+    try {
+      const query: any = { _id: providerId };
+      if (!tenantContext.isAdmin && tenantContext.tenantId) {
+        query.tenantId = tenantContext.tenantId;
+      }
+
+      const provider = await ProviderProfile.findOne(query).populate('userId', 'email');
+
+      if (!provider) {
+        results.failed++;
+        results.errors.push(`Provider ${providerId}: Not found`);
+        continue;
+      }
+
+      switch (action) {
+        case 'suspend':
+          provider.verificationStatus.overall = 'suspended';
+          if (provider.verificationStatus.adminNotes !== undefined) {
+            provider.verificationStatus.adminNotes = `Batch suspended: ${reason || 'No reason provided'}`;
+          }
+          if (provider.userId) {
+            await User.findByIdAndUpdate(provider.userId, { accountStatus: 'suspended' });
+          }
+          break;
+
+        case 'activate':
+        case 'verify':
+          provider.verificationStatus.overall = 'approved';
+          provider.instagramStyleProfile.isVerified = true;
+          if (provider.userId) {
+            await User.findByIdAndUpdate(provider.userId, { accountStatus: 'active' });
+          }
+          break;
+
+        case 'reject':
+          provider.verificationStatus.overall = 'rejected';
+          provider.instagramStyleProfile.isVerified = false;
+          if (provider.userId) {
+            await User.findByIdAndUpdate(provider.userId, { accountStatus: 'suspended' });
+          }
+          break;
+      }
+
+      await provider.save();
+      results.successful++;
+    } catch (err) {
+      results.failed++;
+      results.errors.push(`Provider ${providerId}: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    }
+  }
+
+  logger.info('ADMIN_AUDIT: Batch provider action', {
+    action: 'BATCH_PROVIDER_ACTION',
+    adminId: adminUser._id,
+    adminEmail: adminUser.email,
+    batchAction: action,
+    providerIds,
+    results,
+    timestamp: new Date().toISOString()
+  });
+
+  res.json({
+    success: true,
+    message: `Batch action completed: ${results.successful} successful, ${results.failed} failed`,
+    data: results
+  });
+});
+
 // Default export
 export default {
   // Provider Management
@@ -4402,6 +5172,10 @@ export default {
   getProviderForVerification,
   approveProvider,
   rejectProvider,
+  suspendProvider,
+  reactivateProvider,
+  searchProviders,
+  batchProviderAction,
   getVerificationStats,
   createTestProvider,
   // Service Management
@@ -4438,6 +5212,7 @@ export default {
   getPendingReviews,
   getFlaggedReviews,
   moderateReview,
+  bulkModerateReviews,
   // Withdrawal Management
   getPendingWithdrawals,
   getWithdrawalStats,
@@ -4451,4 +5226,6 @@ export default {
   getChurnSegments,
   refreshChurnCache,
   executeChurnRetentionAction,
+  // Real-time metrics
+  getRealtimeMetrics,
 };

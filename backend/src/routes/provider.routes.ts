@@ -8,6 +8,7 @@ import {
   restoreService,
   getDeletedServices,
   toggleServiceStatus,
+  cloneService,
   getServiceAnalytics,
   getOverviewAnalytics,
   getProviderInsightsAnalytics,
@@ -78,6 +79,9 @@ router.get('/services/:id/analytics', validateServiceId, getServiceAnalytics);
 
 // Soft delete routes (trash management)
 router.get('/services/trash', getDeletedServices);
+
+// Service clone
+router.post('/services/:id/clone', validateServiceId, cloneService);
 
 // Provider Onboarding Routes (no rate limiting for these as they are lightweight)
 router.get('/onboarding', getProviderOnboardingStatus);

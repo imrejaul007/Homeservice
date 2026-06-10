@@ -2,9 +2,15 @@
 // Monetization infrastructure - Real backend integration
 // SECURITY: Wallet balance ONLY comes from backend API, never localStorage
 
+import React from 'react';
 import { create } from 'zustand';
-import { walletApi } from '../walletApi';
-import type { WalletTransaction as WalletTransactionType, Wallet as WalletType } from '../walletApi';
+import { customerWalletApi, providerWalletApi } from '../walletApi';
+
+export type WalletContext = 'customer' | 'provider';
+
+function getWalletApi(context: WalletContext) {
+  return context === 'provider' ? providerWalletApi : customerWalletApi;
+}
 
 export interface Subscription {
   id: string;
@@ -47,6 +53,8 @@ export interface PromoCode {
 interface RevenueState {
   // Wallet state (from backend only - NEVER persisted locally)
   wallet: Wallet;
+  walletContext: WalletContext;
+  monthlyEarnings: number;
   walletLoading: boolean;
   walletError: string | null;
   lastWalletFetch: number | null;
@@ -61,8 +69,10 @@ interface RevenueState {
   autoApplyReferralCredits: boolean;
 
   // Actions
-  fetchWallet: () => Promise<void>;
-  fetchTransactions: (options?: { page?: number; limit?: number; type?: 'credit' | 'debit' }) => Promise<WalletTransaction[]>;
+  setWalletContext: (context: WalletContext) => void;
+  fetchWallet: (options?: { force?: boolean; context?: WalletContext }) => Promise<void>;
+  fetchTransactions: (options?: { page?: number; limit?: number; type?: 'credit' | 'debit'; context?: WalletContext }) => Promise<WalletTransaction[]>;
+  updateWalletBalance: (balance: number, pendingCredits?: number) => void;
   addCredits: (amount: number, reason: string, idempotencyKey?: string) => Promise<{ success: boolean; newBalance: number; error?: string }>;
   deductCredits: (amount: number, reason: string, bookingId?: string) => Promise<{ success: boolean; newBalance: number; error?: string }>;
   applyPromoCode: (code: string, orderValue: number) => Promise<{ valid: boolean; discount: number; message: string }>;
@@ -94,10 +104,12 @@ export const useRevenueStore = create<RevenueState>()(
       balance: 0,
       transactions: [],
       pendingCredits: 0,
-      currency: 'INR',
+      currency: 'AED',
       totalEarned: 0,
       totalSpent: 0,
     },
+    walletContext: 'customer',
+    monthlyEarnings: 0,
     walletLoading: false,
     walletError: null,
     lastWalletFetch: null,
@@ -110,25 +122,47 @@ export const useRevenueStore = create<RevenueState>()(
     selectedPaymentMethod: null,
     autoApplyReferralCredits: true,
 
+    setWalletContext: (context) => {
+      const current = get().walletContext;
+      if (current !== context) {
+        set({ walletContext: context, lastWalletFetch: null });
+      } else {
+        set({ walletContext: context });
+      }
+    },
+
+    updateWalletBalance: (balance, pendingCredits) => {
+      set((state) => ({
+        wallet: {
+          ...state.wallet,
+          balance,
+          ...(pendingCredits !== undefined ? { pendingCredits } : {}),
+        },
+      }));
+    },
+
     /**
      * Fetch wallet balance AND transactions from backend API
      * This is the ONLY source of truth for wallet balance
      */
-    fetchWallet: async () => {
+    fetchWallet: async (options) => {
       const state = get();
+      const context = options?.context ?? state.walletContext;
+      const walletApi = getWalletApi(context);
 
-      // Prevent duplicate fetches within 5 seconds (debounce)
-      if (state.lastWalletFetch && Date.now() - state.lastWalletFetch < 5000) {
+      // Prevent duplicate fetches within 5 seconds (debounce) unless forced
+      if (!options?.force && state.lastWalletFetch && Date.now() - state.lastWalletFetch < 5000) {
         return;
       }
 
-      set({ walletLoading: true, walletError: null });
+      set({ walletLoading: true, walletError: null, walletContext: context });
 
       try {
-        // Fetch wallet balance and transactions in parallel
-        const [walletResponse, transactionsResponse] = await Promise.all([
+        // Fetch wallet balance, transactions, and monthly summary in parallel
+        const [walletResponse, transactionsResponse, summaryResponse] = await Promise.all([
           walletApi.getWallet(),
-          walletApi.getTransactions({ limit: 10 })
+          walletApi.getTransactions({ limit: 10 }),
+          walletApi.getEarningsSummary('month').catch(() => null),
         ]);
 
         if (walletResponse.success && walletResponse.data) {
@@ -159,6 +193,7 @@ export const useRevenueStore = create<RevenueState>()(
 
           set({
             wallet,
+            monthlyEarnings: summaryResponse?.success ? summaryResponse.data.earnings : 0,
             walletLoading: false,
             lastWalletFetch: Date.now(),
           });
@@ -181,7 +216,8 @@ export const useRevenueStore = create<RevenueState>()(
      */
     fetchTransactions: async (options) => {
       try {
-        const response = await walletApi.getTransactions(options);
+        const context = options?.context ?? get().walletContext;
+        const response = await getWalletApi(context).getTransactions(options);
 
         if (response.success && response.data) {
           // Transform backend transactions to frontend format
@@ -212,64 +248,14 @@ export const useRevenueStore = create<RevenueState>()(
     },
 
     /**
-     * Add credits to wallet with optimistic update and rollback on failure
+     * Direct credit additions are disabled — use AddMoneyModal with Stripe verification
      */
-    addCredits: async (amount, reason, idempotencyKey) => {
-      const state = get();
-      const previousBalance = state.wallet.balance;
-      const updateId = idempotencyKey || `add-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-
-      // Store optimistic update for potential rollback
-      pendingOptimisticUpdates.set(updateId, {
-        id: updateId,
-        type: 'add',
-        amount,
-        previousBalance,
-        timestamp: Date.now(),
-      });
-
-      // Optimistic update - immediately show the new balance
-      set({
-        wallet: {
-          ...state.wallet,
-          balance: previousBalance + amount,
-        },
-      });
-
-      try {
-        // Call backend API
-        // Note: If backend has a topup endpoint, use it here
-        // For now, we simulate success since walletApi doesn't have a direct addCredits method
-        // In production, replace this with actual API call
-        console.log('Adding credits via backend:', { amount, reason, idempotencyKey: updateId });
-
-        // Clean up pending update on success
-        pendingOptimisticUpdates.delete(updateId);
-
-        return {
-          success: true,
-          newBalance: previousBalance + amount,
-        };
-      } catch (error) {
-        // Rollback on failure
-        const errorMessage = error instanceof Error ? error.message : 'Failed to add credits';
-
-        set({
-          wallet: {
-            ...state.wallet,
-            balance: previousBalance,
-          },
-          walletError: errorMessage,
-        });
-
-        pendingOptimisticUpdates.delete(updateId);
-
-        return {
-          success: false,
-          newBalance: previousBalance,
-          error: errorMessage,
-        };
-      }
+    addCredits: async (_amount, _reason, _idempotencyKey) => {
+      return {
+        success: false,
+        newBalance: get().wallet.balance,
+        error: 'Direct credit additions are not allowed. Use the Add Money flow with payment verification.',
+      };
     },
 
     /**
@@ -307,17 +293,33 @@ export const useRevenueStore = create<RevenueState>()(
       });
 
       try {
-        // Call backend API to deduct
-        // Note: If backend has a deduct endpoint, use it here
-        // For now, we simulate success
-        console.log('Deducting credits via backend:', { amount, reason, bookingId, idempotencyKey: updateId });
+        // Call backend API to deduct credits
+        const response = await getWalletApi(get().walletContext).deductCredits({
+          amount,
+          reason,
+          reference: bookingId,
+          referenceType: bookingId ? 'booking' : 'other',
+          idempotencyKey: updateId,
+        });
+
+        if (!response.success) {
+          throw new Error(response.message || 'Failed to deduct credits');
+        }
+
+        // Update with actual balance from backend
+        set({
+          wallet: {
+            ...state.wallet,
+            balance: response.data.newBalance,
+          },
+        });
 
         // Clean up pending update on success
         pendingOptimisticUpdates.delete(updateId);
 
         return {
           success: true,
-          newBalance: previousBalance - amount,
+          newBalance: response.data.newBalance,
         };
       } catch (error) {
         // Rollback on failure
@@ -405,16 +407,57 @@ export const useRevenueStore = create<RevenueState>()(
   })
 );
 
-// Periodic cleanup of stale optimistic updates
-setInterval(() => {
-  const now = Date.now();
-  for (const [id, update] of pendingOptimisticUpdates.entries()) {
-    if (now - update.timestamp > CLEANUP_THRESHOLD_MS) {
-      console.warn(`Cleaning up stale optimistic update: ${id}`);
-      pendingOptimisticUpdates.delete(id);
-    }
+// Optimistic update cleanup interval - stored for cleanup
+let cleanupIntervalId: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * Start the periodic cleanup of stale optimistic updates.
+ * Call this when the app initializes.
+ */
+export function startOptimisticUpdateCleanup(): void {
+  if (!cleanupIntervalId) {
+    cleanupIntervalId = setInterval(() => {
+      const now = Date.now();
+      for (const [id, update] of pendingOptimisticUpdates.entries()) {
+        if (now - update.timestamp > CLEANUP_THRESHOLD_MS) {
+          console.warn(`Cleaning up stale optimistic update: ${id}`);
+          pendingOptimisticUpdates.delete(id);
+        }
+      }
+    }, 60000); // Run every minute
   }
-}, 60000); // Run every minute
+}
+
+/**
+ * Stop the periodic cleanup of stale optimistic updates.
+ * Call this when the app unmounts or when cleanup is needed.
+ */
+export function stopOptimisticUpdateCleanup(): void {
+  if (cleanupIntervalId) {
+    clearInterval(cleanupIntervalId);
+    cleanupIntervalId = null;
+  }
+}
+
+// Automatic cleanup on module unload (browser)
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeunload', stopOptimisticUpdateCleanup);
+}
+
+/**
+ * React hook to automatically start/stop optimistic update cleanup.
+ * Call this once at app initialization (e.g., in App.tsx).
+ * Returns cleanup function for manual cleanup if needed.
+ */
+export function useOptimisticUpdateCleanup(): () => void {
+  React.useEffect(() => {
+    startOptimisticUpdateCleanup();
+    return () => {
+      stopOptimisticUpdateCleanup();
+    };
+  }, []);
+  return stopOptimisticUpdateCleanup;
+}
 
 // Subscription tiers configuration
 export const SUBSCRIPTION_TIERS = {
@@ -457,11 +500,11 @@ export const SUBSCRIPTION_TIERS = {
   },
 };
 
-// Referral rewards configuration
+// Referral rewards configuration (aligned with backend REFERRAL_REWARDS)
 export const REFERRAL_CONFIG = {
-  referrerReward: 100, // Credits for referrer
-  refereeReward: 200, // Credits for new user
-  maxCredits: 1000, // Max credits earned
+  referrerReward: 500,
+  refereeReward: 250,
+  maxCredits: 1000,
   minWithdrawAmount: 500,
 };
 
@@ -471,18 +514,26 @@ export function calculateReferralEarnings(referralCount: number): number {
 }
 
 // Hook for wallet - forces re-render and triggers fetch if needed
-export function useWallet() {
+export function useWallet(context: WalletContext = 'customer') {
   const wallet = useRevenueStore((state) => state.wallet);
+  const monthlyEarnings = useRevenueStore((state) => state.monthlyEarnings);
   const fetchWallet = useRevenueStore((state) => state.fetchWallet);
+  const setWalletContext = useRevenueStore((state) => state.setWalletContext);
   const lastFetch = useRevenueStore((state) => state.lastWalletFetch);
+  const walletContext = useRevenueStore((state) => state.walletContext);
   const loading = useRevenueStore((state) => state.walletLoading);
 
-  // Auto-fetch on first access if never fetched
-  if (!lastFetch && !loading) {
-    fetchWallet();
-  }
+  // Auto-fetch on first access if never fetched - use useEffect to prevent infinite loops
+  React.useEffect(() => {
+    if (walletContext !== context) {
+      setWalletContext(context);
+    }
+    if ((!lastFetch || walletContext !== context) && !loading) {
+      fetchWallet({ context });
+    }
+  }, [lastFetch, loading, fetchWallet, context, walletContext, setWalletContext]);
 
-  return wallet;
+  return { ...wallet, monthlyEarnings };
 }
 
 // Hook for subscription
@@ -496,14 +547,37 @@ export function usePromoCodes() {
 }
 
 // Hook to force refresh wallet balance
-export function useRefreshWallet() {
+export function useRefreshWallet(context: WalletContext = 'customer') {
   const fetchWallet = useRevenueStore((state) => state.fetchWallet);
+  const fetchTransactions = useRevenueStore((state) => state.fetchTransactions);
+  const setWalletContext = useRevenueStore((state) => state.setWalletContext);
+  const updateWalletBalance = useRevenueStore((state) => state.updateWalletBalance);
   const loading = useRevenueStore((state) => state.walletLoading);
+  const lastFetch = useRevenueStore((state) => state.lastWalletFetch);
   const error = useRevenueStore((state) => state.walletError);
+  const refreshRef = React.useRef<number>(0);
+
+  React.useEffect(() => {
+    setWalletContext(context);
+  }, [context, setWalletContext]);
+
+  // Track if a refresh is in progress by comparing refreshRef timestamp with lastFetch
+  const isRefreshing = refreshRef.current > 0 && lastFetch !== null && refreshRef.current > lastFetch;
+
+  const refresh = React.useCallback(() => {
+    refreshRef.current = Date.now();
+    return fetchWallet({ force: true, context });
+  }, [fetchWallet, context]);
+
+  const refreshTransactions = React.useCallback(() => {
+    return fetchTransactions({ limit: 10, context });
+  }, [fetchTransactions, context]);
 
   return {
-    refresh: fetchWallet,
-    loading,
+    refresh,
+    refreshTransactions,
+    updateWalletBalance,
+    loading: isRefreshing || loading,
     error,
   };
 }

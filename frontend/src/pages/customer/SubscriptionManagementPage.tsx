@@ -39,6 +39,7 @@ import {
   type PlanType,
   type BillingCycle,
   type MembershipTier,
+  type SubscriptionInvoice,
 } from '../../services/subscriptionApi';
 
 // ============================================
@@ -133,6 +134,9 @@ const SubscriptionManagementPage: React.FC = () => {
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
   const [activeTab, setActiveTab] = useState<'overview' | 'plans' | 'membership' | 'billing'>('overview');
+  const [invoices, setInvoices] = useState<SubscriptionInvoice[]>([]);
+  const [isLoadingInvoices, setIsLoadingInvoices] = useState(false);
+  const [downloadingInvoiceId, setDownloadingInvoiceId] = useState<string | null>(null);
 
   // Auth check
   useEffect(() => {
@@ -142,6 +146,13 @@ const SubscriptionManagementPage: React.FC = () => {
     }
     fetchData();
   }, [isAuthenticated]);
+
+  // Fetch invoices when billing tab is selected
+  useEffect(() => {
+    if (activeTab === 'billing' && invoices.length === 0 && !isLoadingInvoices) {
+      fetchInvoices();
+    }
+  }, [activeTab]);
 
   const fetchData = async () => {
     setIsLoading(true);
@@ -172,6 +183,69 @@ const SubscriptionManagementPage: React.FC = () => {
       }
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  // Fetch invoices for billing tab
+  const fetchInvoices = async () => {
+    setIsLoadingInvoices(true);
+    try {
+      const response = await subscriptionApi.getInvoices({ limit: 20 });
+      if (response.success && response.data) {
+        setInvoices(response.data.invoices);
+      }
+    } catch (err: any) {
+      console.error('Failed to fetch invoices:', err);
+      // Don't show error for invoices - they may simply not exist yet
+    } finally {
+      setIsLoadingInvoices(false);
+    }
+  };
+
+  // Download invoice as PDF
+  const handleDownloadInvoice = async (invoice: SubscriptionInvoice) => {
+    setDownloadingInvoiceId(invoice.id);
+    try {
+      const blob = await subscriptionApi.downloadInvoice(invoice.id);
+
+      // Create download link
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `invoice-${invoice.invoiceNumber}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+
+      setSuccessMessage('Invoice downloaded successfully');
+      setTimeout(() => setSuccessMessage(null), 3000);
+    } catch (err: any) {
+      console.error('Failed to download invoice:', err);
+      setError('Failed to download invoice. Please try again.');
+      setTimeout(() => setError(null), 3000);
+    } finally {
+      setDownloadingInvoiceId(null);
+    }
+  };
+
+  // Open invoice PDF in new tab
+  const handleViewInvoice = async (invoice: SubscriptionInvoice) => {
+    setDownloadingInvoiceId(invoice.id);
+    try {
+      const pdfData = await subscriptionApi.downloadInvoice(invoice.id);
+
+      // Open PDF in new tab
+      const url = window.URL.createObjectURL(pdfData);
+      window.open(url, '_blank');
+
+      setTimeout(() => window.URL.revokeObjectURL(url), 60000);
+    } catch (err: any) {
+      console.error('Failed to view invoice:', err);
+      setError('Failed to open invoice. Please try again.');
+      setTimeout(() => setError(null), 3000);
+    } finally {
+      setDownloadingInvoiceId(null);
     }
   };
 
@@ -733,11 +807,88 @@ const SubscriptionManagementPage: React.FC = () => {
               {/* Download Invoice */}
               <div className="bg-white rounded-xl border border-gray-200 p-6">
                 <h3 className="text-lg font-semibold text-gray-900 mb-4">Invoices</h3>
-                <div className="text-center py-8 text-gray-500">
-                  <Download className="w-12 h-12 mx-auto mb-3 text-gray-300" />
-                  <p>No invoices available yet</p>
-                  <p className="text-sm mt-1">Invoices will appear here after your first payment</p>
-                </div>
+
+                {isLoadingInvoices ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader2 className="w-8 h-8 text-nilin-coral animate-spin" />
+                  </div>
+                ) : invoices.length === 0 ? (
+                  <div className="text-center py-8 text-gray-500">
+                    <Download className="w-12 h-12 mx-auto mb-3 text-gray-300" />
+                    <p>No invoices available yet</p>
+                    <p className="text-sm mt-1">Invoices will appear here after your first payment</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {invoices.map((invoice) => (
+                      <div
+                        key={invoice.id}
+                        className="flex items-center justify-between p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 bg-nilin-coral/10 rounded-lg flex items-center justify-center">
+                            <Download className="w-5 h-5 text-nilin-coral" />
+                          </div>
+                          <div>
+                            <p className="font-medium text-gray-900">
+                              Invoice #{invoice.invoiceNumber}
+                            </p>
+                            <p className="text-sm text-gray-500">
+                              {new Date(invoice.createdAt).toLocaleDateString('en-US', {
+                                year: 'numeric',
+                                month: 'short',
+                                day: 'numeric',
+                              })}
+                              {invoice.type === 'subscription' && ' - Subscription'}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-3">
+                          <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                            invoice.status === 'paid'
+                              ? 'bg-green-100 text-green-700'
+                              : invoice.status === 'pending'
+                                ? 'bg-yellow-100 text-yellow-700'
+                                : invoice.status === 'overdue'
+                                  ? 'bg-red-100 text-red-700'
+                                  : 'bg-gray-100 text-gray-700'
+                          }`}>
+                            {invoice.status.charAt(0).toUpperCase() + invoice.status.slice(1)}
+                          </span>
+
+                          <span className="font-semibold text-gray-900">
+                            {invoice.currency} {invoice.totalAmount.toFixed(2)}
+                          </span>
+
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => handleViewInvoice(invoice)}
+                              disabled={downloadingInvoiceId === invoice.id}
+                              className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-200 rounded-lg transition-colors"
+                              title="View Invoice"
+                            >
+                              <ExternalLink className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => handleDownloadInvoice(invoice)}
+                              disabled={downloadingInvoiceId === invoice.id}
+                              className="flex items-center gap-1.5 px-3 py-1.5 bg-nilin-coral text-white rounded-lg hover:bg-nilin-coral/90 transition-colors disabled:opacity-50"
+                              title="Download Invoice"
+                            >
+                              {downloadingInvoiceId === invoice.id ? (
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                              ) : (
+                                <Download className="w-4 h-4" />
+                              )}
+                              <span className="text-sm font-medium">Download</span>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           )}

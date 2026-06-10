@@ -205,6 +205,7 @@ export interface AuthState {
   clearAuth: () => void;
   getCurrentUser: () => Promise<void>;
   updateProfile: (data: Partial<User>, files?: FormData) => Promise<void>;
+  updateAvatar: (avatarUrl: string) => void;
   changePassword: (currentPassword: string, newPassword: string, confirmPassword: string) => Promise<void>;
   forgotPassword: (email: string) => Promise<void>;
   resetPassword: (token: string, password: string, confirmPassword: string) => Promise<void>;
@@ -393,11 +394,15 @@ export const useAuthStore = create<AuthState>()(
           store._cleanupTokenListener?.();
 
           // FIX 6: Disconnect socket on logout to prevent memory leaks and stale connections
-          try {
-            socketService.disconnect();
-            logger.info('[Auth] Socket disconnected on logout');
-          } catch (socketError) {
-            console.error('Socket disconnect error:', socketError);
+          // Guard against race condition: check socketService exists and is connected
+          if (socketService && typeof socketService.disconnect === 'function') {
+            try {
+              // Clear pending events before disconnect to prevent race condition
+              socketService.disconnect();
+              logger.info('[Auth] Socket disconnected on logout');
+            } catch (socketError) {
+              console.error('Socket disconnect error:', socketError);
+            }
           }
 
           set((state) => {
@@ -423,11 +428,15 @@ export const useAuthStore = create<AuthState>()(
           store._cleanupTokenListener?.();
 
           // FIX 6: Disconnect socket on logout to prevent memory leaks and stale connections
-          try {
-            socketService.disconnect();
-            logger.info('[Auth] Socket disconnected on logout all');
-          } catch (socketError) {
-            console.error('Socket disconnect error:', socketError);
+          // Guard against race condition: check socketService exists and is connected
+          if (socketService && typeof socketService.disconnect === 'function') {
+            try {
+              // Clear pending events before disconnect to prevent race condition
+              socketService.disconnect();
+              logger.info('[Auth] Socket disconnected on logout all');
+            } catch (socketError) {
+              console.error('Socket disconnect error:', socketError);
+            }
           }
 
           set((state) => {
@@ -505,7 +514,7 @@ export const useAuthStore = create<AuthState>()(
           }
 
           set((state) => {
-            state.user = (response as { user: AuthUser }).user;
+            state.user = response.data.user;
             state.isLoading = false;
           });
 
@@ -788,6 +797,14 @@ export const useAuthStore = create<AuthState>()(
         set((state) => {
           state.user = user;
           state.isAuthenticated = !!user;
+        });
+      },
+
+      updateAvatar: (avatarUrl: string) => {
+        set((state) => {
+          if (state.user) {
+            state.user.avatar = avatarUrl;
+          }
         });
       },
 

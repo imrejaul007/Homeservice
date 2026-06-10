@@ -113,6 +113,10 @@ export interface IBookingNotification extends Document {
   processedAt?: Date;
   expiresAt?: Date; // For temporary notifications
 
+  // Digest Tracking
+  includedInDigest: boolean;
+  lastDigestAt?: Date;
+
   // Virtual Properties
   booking?: any; // Will be populated from Booking
   recipient?: any; // Will be populated from User
@@ -145,7 +149,7 @@ const notificationSchema = new Schema<IBookingNotification>(
     bookingId: {
       type: Schema.Types.ObjectId,
       ref: 'Booking',
-      required: [true, 'Booking ID is required'],
+      required: false,
       index: true
     },
 
@@ -162,11 +166,16 @@ const notificationSchema = new Schema<IBookingNotification>(
       enum: [
         'booking_request', 'booking_confirmed', 'booking_cancelled', 'booking_reminder',
         'booking_completed', 'booking_rejected', 'booking_updated', 'payment_received',
-        'review_request', 'provider_arrived', 'service_started', 'message_received',
-        'schedule_changed', 'cancellation_request', 'booking_started', 'booking_rescheduled',
-        'booking_no_show', 'withdrawal_processed', 'withdrawal_approved', 'withdrawal_rejected',
-        'dispute_evidence_added', 'dispute_assigned', 'service_approved', 'service_rejected',
-        'provider_approved', 'provider_rejected'
+        'review_request', 'review_received', 'review_rejected', 'provider_arrived',
+        'service_started', 'message_received', 'schedule_changed', 'cancellation_request',
+        'booking_started', 'booking_rescheduled', 'booking_no_show', 'withdrawal',
+        'withdrawal_processed', 'withdrawal_approved', 'withdrawal_rejected',
+        'dispute_received', 'dispute_created', 'dispute_evidence_added', 'dispute_assigned',
+        'dispute_resolved', 'service_approved', 'service_rejected', 'service_updated',
+        'provider_approved', 'provider_rejected', 'provider_suspended',
+        'provider_document_verified', 'provider_document_rejected',
+        'new_provider_submission', 'new_service_pending',
+        'promotion', 'loyalty_update'
       ],
       required: [true, 'Notification type is required'],
       index: true
@@ -209,7 +218,43 @@ const notificationSchema = new Schema<IBookingNotification>(
       validate: {
         validator: function(url: string) {
           if (!url) return true; // Optional field
-          return /^(https?:\/\/|\/|#)/.test(url);
+
+          // Allow absolute HTTPS/HTTP URLs
+          try {
+            const parsed = new URL(url, 'https://example.com');
+            if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+              return true;
+            }
+          } catch {
+            // URL parsing failed
+          }
+
+          // Allow hash-based paths like /#/bookings
+          if (/^\/#/.test(url)) {
+            return true;
+          }
+
+          // Allow relative paths like /bookings/123 but block path traversal
+          if (url.startsWith('/')) {
+            // Normalize the path to resolve any .. sequences and check if it goes above root
+            const normalized = url.split('/').reduce((acc: string[], part: string) => {
+              if (part === '..') acc.pop();
+              else if (part && part !== '.') acc.push(part);
+              return acc;
+            }, []);
+            // If the path started with / and after normalization has content, it's safe
+            // But we need to ensure no ../ was used to escape root
+            const resolved = '/' + normalized.join('/');
+            // Check if the resolved path differs from original due to .. traversal
+            // This means they tried to escape root
+            if (url.includes('..') && !url.replace(/\.\.\//g, '').startsWith('/')) {
+              return false;
+            }
+            // Check for any remaining .. that could escape
+            return !/(\/\.\.|\/\.\.\/)/.test(url);
+          }
+
+          return false;
         },
         message: 'Invalid URL format'
       }
@@ -358,7 +403,15 @@ const notificationSchema = new Schema<IBookingNotification>(
     expiresAt: {
       type: Date,
       index: { expireAfterSeconds: 0 } // TTL index for automatic cleanup
-    }
+    },
+
+    // Digest Tracking
+    includedInDigest: {
+      type: Boolean,
+      default: false,
+      index: true
+    },
+    lastDigestAt: Date
   },
   {
     timestamps: true,
@@ -376,6 +429,14 @@ notificationSchema.index({ recipientId: 1, status: 1 });
 notificationSchema.index({ type: 1, status: 1 });
 notificationSchema.index({ priority: 1, status: 1 });
 // Note: bookingId compound index removed - bookingId already indexed at field level
+
+// Phase 1: Infrastructure indexes
+// Compound index for bookingId + createdAt (task 1)
+notificationSchema.index({ bookingId: 1, createdAt: -1 });
+// Compound index for userId (recipientId) + status + createdAt (task 1)
+notificationSchema.index({ recipientId: 1, status: 1, createdAt: -1 });
+// Index on status + createdAt for notification status queries (task 1)
+notificationSchema.index({ status: 1, createdAt: -1 });
 
 // Scheduling and delivery
 notificationSchema.index({ scheduled: 1, scheduledFor: 1 });
@@ -397,6 +458,9 @@ notificationSchema.index({ recipientId: 1, type: 1, status: 1 });
 notificationSchema.index({ tenantId: 1, recipientId: 1 });
 notificationSchema.index({ tenantId: 1, type: 1 });
 notificationSchema.index({ tenantId: 1, status: 1 });
+
+// Digest optimization indexes
+notificationSchema.index({ recipientId: 1, includedInDigest: 1, createdAt: -1 });
 
 // ===================================
 // VIRTUAL PROPERTIES

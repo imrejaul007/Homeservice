@@ -84,8 +84,10 @@ class MeiliSearchRestClient implements MeiliSearchClient {
 
   constructor(host: string, apiKey: string) {
     this.host = host.replace(/\/$/, '');
+    const requestTimeoutMs = parseInt(process.env.MEILISEARCH_REQUEST_TIMEOUT_MS || '5000', 10);
     this.client = axios.create({
       baseURL: this.host,
+      timeout: requestTimeoutMs,
       headers: {
         'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json',

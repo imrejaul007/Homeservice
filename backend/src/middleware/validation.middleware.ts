@@ -15,11 +15,236 @@ import {
 import { ApiError, ERROR_CODES } from '../utils/ApiError';
 import multer from 'multer';
 import logger from '../utils/logger';
+import * as fs from 'fs';
+import * as path from 'path';
+import { v4 as uuidv4 } from 'uuid';
 
-// File upload configuration
-const storage = multer.memoryStorage();
+// =============================================================================
+// Upload Configuration - Disk Storage with Size Limits
+// =============================================================================
 
-// File filter for allowed file types
+const UPLOAD_DIR = path.resolve(process.env.UPLOAD_DIR || 'uploads');
+const MAX_DIR_SIZE_BYTES = 500 * 1024 * 1024; // 500MB total storage limit
+const MAX_FILE_AGE_HOURS = 24; // Delete files older than 24 hours
+const STALE_CHECK_INTERVAL_MS = 60 * 60 * 1000; // Check for stale files every hour
+
+// Lazy-initialize upload directory
+function ensureUploadDir(): void {
+  if (!fs.existsSync(UPLOAD_DIR)) {
+    fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+    logger.info('[upload] Created uploads directory', { path: UPLOAD_DIR });
+  }
+}
+
+// Get current directory size in bytes
+function getDirSize(): number {
+  ensureUploadDir();
+  let totalSize = 0;
+  try {
+    const files = fs.readdirSync(UPLOAD_DIR);
+    for (const file of files) {
+      const filePath = path.join(UPLOAD_DIR, file);
+      const stat = fs.statSync(filePath);
+      if (stat.isFile()) {
+        totalSize += stat.size;
+      }
+    }
+  } catch (error) {
+    logger.warn('[upload] Error calculating directory size', { error: (error as Error).message });
+  }
+  return totalSize;
+}
+
+// Delete stale files (older than MAX_FILE_AGE_HOURS)
+async function cleanupStaleFiles(): Promise<number> {
+  ensureUploadDir();
+  const now = Date.now();
+  const maxAgeMs = MAX_FILE_AGE_HOURS * 60 * 60 * 1000;
+  let deletedCount = 0;
+  let freedBytes = 0;
+
+  try {
+    const files = fs.readdirSync(UPLOAD_DIR);
+    for (const file of files) {
+      const filePath = path.join(UPLOAD_DIR, file);
+      try {
+        const stat = fs.statSync(filePath);
+        if (stat.isFile() && (now - stat.mtimeMs) > maxAgeMs) {
+          freedBytes += stat.size;
+          fs.unlinkSync(filePath);
+          deletedCount++;
+          logger.debug('[upload] Deleted stale file', { file, age: `${Math.round((now - stat.mtimeMs) / 3600000)}h` });
+        }
+      } catch {
+        // File might have been deleted by another process, skip
+      }
+    }
+    if (deletedCount > 0) {
+      logger.info('[upload] Cleaned up stale files', { deletedCount, freedMB: (freedBytes / 1024 / 1024).toFixed(2) });
+    }
+  } catch (error) {
+    logger.error('[upload] Error during stale file cleanup', { error: (error as Error).message });
+  }
+  return deletedCount;
+}
+
+// Schedule periodic cleanup
+let cleanupInterval: NodeJS.Timeout | null = null;
+
+function scheduleStaleFileCleanup(): void {
+  if (cleanupInterval) return;
+  cleanupInterval = setInterval(() => {
+    cleanupStaleFiles().catch(err => {
+      logger.error('[upload] Scheduled cleanup failed', { error: (err as Error).message });
+    });
+  }, STALE_CHECK_INTERVAL_MS);
+  cleanupInterval.unref();
+}
+
+// Initialize upload system on first use
+let uploadSystemInitialized = false;
+
+function initializeUploadSystem(): void {
+  if (uploadSystemInitialized) return;
+  uploadSystemInitialized = true;
+  ensureUploadDir();
+  scheduleStaleFileCleanup();
+  cleanupStaleFiles().catch(err => {
+    logger.warn('[upload] Initial cleanup skipped', { error: (err as Error).message });
+  });
+  logger.info('[upload] Upload system initialized', {
+    uploadDir: UPLOAD_DIR,
+    maxDirSizeMB: MAX_DIR_SIZE_BYTES / 1024 / 1024,
+    maxFileAgeHours: MAX_FILE_AGE_HOURS
+  });
+}
+
+// Get upload stats for monitoring
+export function getUploadStats(): { uploadDir: string; currentSizeMB: number; maxSizeMB: number; usedPercent: number } {
+  const currentSize = getDirSize();
+  return {
+    uploadDir: UPLOAD_DIR,
+    currentSizeMB: parseFloat((currentSize / 1024 / 1024).toFixed(2)),
+    maxSizeMB: MAX_DIR_SIZE_BYTES / 1024 / 1024,
+    usedPercent: parseFloat(((currentSize / MAX_DIR_SIZE_BYTES) * 100).toFixed(1))
+  };
+}
+
+// Read file buffer for magic bytes validation (disk storage compatible)
+async function readFileBuffer(filePath: string): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    const stream = fs.createReadStream(filePath, { start: 0, end: 8191 }); // Read first 8KB for magic bytes
+    stream.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+    stream.on('end', () => resolve(Buffer.concat(chunks)));
+    stream.on('error', reject);
+  });
+}
+
+// Disk storage factory with size limit enforcement
+function createDiskStorage(): multer.StorageEngine {
+  return multer.diskStorage({
+    destination: (_req: Request, _file: Express.Multer.File, cb: (error: Error | null, destination: string) => void) => {
+      initializeUploadSystem();
+
+      const currentSize = getDirSize();
+      if (currentSize >= MAX_DIR_SIZE_BYTES) {
+        logger.warn('[upload] Storage limit reached, attempting cleanup', { currentSizeMB: (currentSize / 1024 / 1024).toFixed(2) });
+        cleanupStaleFiles().then(() => {
+          const newSize = getDirSize();
+          if (newSize >= MAX_DIR_SIZE_BYTES) {
+            cb(new Error('Upload storage limit reached. Please try again later.'), UPLOAD_DIR);
+          } else {
+            cb(null, UPLOAD_DIR);
+          }
+        }).catch(() => {
+          cb(new Error('Upload storage temporarily unavailable.'), UPLOAD_DIR);
+        });
+        return;
+      }
+      cb(null, UPLOAD_DIR);
+    },
+    filename: (_req: Request, file: Express.Multer.File, cb: (error: Error | null, filename: string) => void) => {
+      const ext = path.extname(file.originalname).toLowerCase() || '.tmp';
+      const uniqueName = `${uuidv4()}${ext}`;
+      cb(null, uniqueName);
+    }
+  });
+}
+
+// File storage configuration - uses disk storage with size limits (not memory)
+const storage = createDiskStorage();
+
+// Magic bytes (file signatures) for secure file content validation
+// Prevents MIME type spoofing attacks where Content-Type header is faked
+const MAGIC_BYTES: Record<string, { signatures: Buffer[]; offset?: number }> = {
+  'image/jpeg': {
+    signatures: [
+      Buffer.from([0xFF, 0xD8, 0xFF, 0xDB]),
+      Buffer.from([0xFF, 0xD8, 0xFF, 0xE0]),
+      Buffer.from([0xFF, 0xD8, 0xFF, 0xE1]),
+      Buffer.from([0xFF, 0xD8, 0xFF, 0xEE]),
+      Buffer.from([0xFF, 0xD8, 0xFF, 0xE2]),
+      Buffer.from([0xFF, 0xD8, 0xFF, 0xE3]),
+      Buffer.from([0xFF, 0xD8, 0xFF, 0xE8]),
+    ]
+  },
+  'image/png': {
+    signatures: [
+      Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+    ]
+  },
+  'image/webp': {
+    signatures: [
+      // RIFF....WEBP - bytes 4-7 are file size (variable), skip them
+      Buffer.from([0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50])
+    ]
+  },
+  'application/pdf': {
+    signatures: [
+      Buffer.from([0x25, 0x50, 0x44, 0x46]) // %PDF
+    ]
+  }
+};
+
+/**
+ * Validates file content by checking magic bytes (file signatures).
+ * This prevents MIME type spoofing attacks where Content-Type header is faked.
+ * @param buffer - File buffer to check
+ * @param expectedMimeType - Expected MIME type from validation
+ * @returns true if magic bytes match expected type, false otherwise
+ */
+function validateMagicBytes(buffer: Buffer, expectedMimeType: string): boolean {
+  const magicConfig = MAGIC_BYTES[expectedMimeType];
+  if (!magicConfig) {
+    return false;
+  }
+
+  const offset = magicConfig.offset || 0;
+
+  for (const signature of magicConfig.signatures) {
+    if (buffer.length >= offset + signature.length) {
+      let match = true;
+      for (let i = 0; i < signature.length; i++) {
+        // For WebP RIFF header, bytes 4-7 are file size (not fixed)
+        if (expectedMimeType === 'image/webp' && i >= 4 && i <= 7) {
+          continue;
+        }
+        if (buffer[offset + i] !== signature[i]) {
+          match = false;
+          break;
+        }
+      }
+      if (match) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+// File filter for allowed file types (initial fast check before buffer is fully available)
 const fileFilter = (_req: Request, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
   // Define allowed file types for different purposes
   const allowedImageTypes = ['image/jpeg', 'image/png', 'image/webp'];
@@ -41,6 +266,15 @@ const fileFilter = (_req: Request, file: Express.Multer.File, cb: multer.FileFil
   } else {
     cb(new ApiError(400, 'Invalid file field'));
   }
+};
+
+// Allowed MIME types mapped to magic byte signatures for content validation
+const ALLOWED_CONTENT_TYPES: Record<string, string[]> = {
+  'portfolio': ['image/jpeg', 'image/png', 'image/webp'],
+  'avatar': ['image/jpeg', 'image/png', 'image/webp'],
+  'identityDocument': ['application/pdf', 'image/jpeg', 'image/png'],
+  'businessLicense': ['application/pdf', 'image/jpeg', 'image/png'],
+  'certifications': ['application/pdf', 'image/jpeg', 'image/png']
 };
 
 // Configure multer for file uploads
@@ -158,9 +392,9 @@ const validate = (schema: Joi.ObjectSchema, options?: {
   };
 };
 
-// File validation middleware
+// File validation middleware - works with disk storage (reads file from path)
 export const validateFiles = (requiredFiles: string[] = []) => {
-  return (req: Request, res: Response, next: NextFunction): void | Response => {
+  return async (req: Request, res: Response, next: NextFunction): Promise<void | Response> => {
     const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
     const errors: string[] = [];
 
@@ -173,8 +407,10 @@ export const validateFiles = (requiredFiles: string[] = []) => {
 
     // Validate file sizes and types
     if (files) {
-      Object.entries(files).forEach(([fieldName, fileArray]) => {
-        fileArray.forEach((file, index) => {
+      for (const [fieldName, fileArray] of Object.entries(files)) {
+        for (let index = 0; index < fileArray.length; index++) {
+          const file = fileArray[index];
+
           // Check file size (already handled by multer, but we can add custom logic)
           if (file.size === 0) {
             errors.push(`${fieldName}[${index}] is empty`);
@@ -184,8 +420,49 @@ export const validateFiles = (requiredFiles: string[] = []) => {
           if (file.originalname.length > 255) {
             errors.push(`${fieldName}[${index}] filename is too long`);
           }
-        });
-      });
+
+          // Path traversal vulnerability check - reject files with path traversal patterns
+          const filename = file.originalname;
+          const pathTraversalPattern = /(\.\.[\\/])|([\\/]\.\.)|(^\.\.[\\/])/i;
+          if (pathTraversalPattern.test(filename)) {
+            errors.push(`${fieldName}[${index}] filename contains invalid path traversal characters`);
+          }
+
+          // SECURITY: Validate actual file content via magic bytes to prevent MIME spoofing
+          const allowedTypes = ALLOWED_CONTENT_TYPES[fieldName];
+          if (allowedTypes && file.path) {
+            try {
+              const fileBuffer = await readFileBuffer(file.path);
+              let mimeValid = false;
+              for (const allowedType of allowedTypes) {
+                if (validateMagicBytes(fileBuffer, allowedType)) {
+                  // Verify the declared MIME type matches the content
+                  if (file.mimetype === allowedType) {
+                    mimeValid = true;
+                    break;
+                  }
+                }
+              }
+
+              if (!mimeValid) {
+                logger.warn('[validateFiles] MIME type spoofing detected via magic bytes', {
+                  filename: file.originalname,
+                  fieldname: fieldName,
+                  declaredMimeType: file.mimetype,
+                  bufferHex: fileBuffer.slice(0, 16).toString('hex')
+                });
+                errors.push(`${fieldName}[${index}] file content does not match declared type`);
+              }
+            } catch (err) {
+              logger.error('[validateFiles] Failed to read file for validation', {
+                filename: file.originalname,
+                error: (err as Error).message
+              });
+              errors.push(`${fieldName}[${index}] could not validate file content`);
+            }
+          }
+        }
+      }
     }
 
     if (errors.length > 0) {
@@ -295,6 +572,15 @@ export const handleFileUploadError = (err: any, _req: Request, res: Response, ne
     return res.status(400).json({
       success: false,
       message,
+      code: ERROR_CODES.FILE_UPLOAD_ERROR
+    });
+  }
+
+  // Handle storage limit errors from disk storage
+  if (err.message && err.message.includes('storage limit')) {
+    return res.status(507).json({
+      success: false,
+      message: err.message,
       code: ERROR_CODES.FILE_UPLOAD_ERROR
     });
   }

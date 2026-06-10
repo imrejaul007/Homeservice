@@ -1,8 +1,8 @@
 import { Router, Request, Response } from 'express';
 import User from '../models/user.model';
-import CustomerProfile from '../models/customerProfile.model';
 import authMiddleware from '../middleware/auth.middleware';
 import { asyncHandler } from '../utils/asyncHandler';
+import { REFERRAL_REWARDS } from '../config/constants';
 
 const router = Router();
 
@@ -21,13 +21,23 @@ const getMyReferralCode = asyncHandler(async (req: Request, res: Response): Prom
     });
   }
 
+  // Sanitize referral code: only allow alphanumeric, underscore, and hyphen
+  const code = String(userDoc.loyaltySystem.referralCode).replace(/[^a-zA-Z0-9_-]/g, '');
+
+  // Enforce CLIENT_URL in production to prevent hardcoded fallback leaking
+  const clientUrl = process.env.CLIENT_URL;
+  if (!clientUrl && process.env.NODE_ENV === 'production') {
+    throw new Error('CLIENT_URL environment variable is required in production');
+  }
+  const referralBaseUrl = process.env.NODE_ENV === 'production' ? clientUrl : 'http://localhost:5173';
+
   return res.json({
     success: true,
     data: {
-      referralCode: userDoc.loyaltySystem.referralCode,
-      referralUrl: `${process.env.CLIENT_URL || 'http://localhost:5173'}/register/customer?ref=${userDoc.loyaltySystem.referralCode}`,
-      referrerReward: 500, // Coins awarded to referrer
-      refereeReward: 250, // Coins awarded to new user
+      referralCode: code,
+      referralUrl: `${referralBaseUrl}/register/customer?ref=${encodeURIComponent(code)}`,
+      referrerReward: REFERRAL_REWARDS.REFERRER_REWARD,
+      refereeReward: REFERRAL_REWARDS.REFEREE_REWARD,
       terms: 'Share your code with friends. When they sign up and complete their first booking, you both earn reward coins!',
     },
   });

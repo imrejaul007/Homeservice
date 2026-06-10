@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import customerDashboardController from '../controllers/customerDashboard.controller';
-import { authenticate } from '../middleware/auth.middleware';
+import { authenticate, generalRateLimit } from '../middleware/auth.middleware';
 
 const router = Router();
 
@@ -22,6 +22,7 @@ const router = Router();
 // Unified dashboard data endpoint - returns recentBookings, upcomingBookings, stats, loyalty, streak
 router.get(
   '/dashboard',
+  generalRateLimit,
   authenticate,
   customerDashboardController.getDashboard
 );
@@ -30,6 +31,7 @@ router.get(
 // Dashboard statistics only
 router.get(
   '/dashboard/stats',
+  generalRateLimit,
   authenticate,
   customerDashboardController.getDashboardStats
 );
@@ -38,6 +40,7 @@ router.get(
 // Loyalty points data only
 router.get(
   '/dashboard/loyalty',
+  generalRateLimit,
   authenticate,
   customerDashboardController.getDashboardLoyalty
 );
@@ -46,48 +49,12 @@ router.get(
 // Streak data only
 router.get(
   '/dashboard/streak',
+  generalRateLimit,
   authenticate,
   customerDashboardController.getDashboardStreak
 );
 
-// ============================================
-// Service Packages Routes
-// ============================================
-
-// GET /api/packages
-// Service packages available for the customer
-// Public route - no authentication required for browsing
-router.get(
-  '/packages',
-  customerDashboardController.getPackages
-);
-
-// GET /api/packages/:id
-// Get a single service package by ID
-// Public route - no authentication required
-router.get(
-  '/packages/:id',
-  customerDashboardController.getPackageById
-);
-
-// ============================================
-// Activity & Recommendations Routes
-// ============================================
-
-// GET /api/dashboard/activity
-// Recent activity feed (bookings, payments, reviews)
-router.get(
-  '/dashboard/activity',
-  authenticate,
-  customerDashboardController.getActivityFeed
-);
-
-// GET /api/dashboard/recommended-pros
-// Recommended professionals based on user's booking history
-router.get(
-  '/dashboard/recommended-pros',
-  authenticate,
-  customerDashboardController.getRecommendedPros
-);
+// Packages & /dashboard/recommended-pros live in packages.public.routes.ts
+// and dashboard.customer.routes.ts (mounted at /api/dashboard).
 
 export default router;

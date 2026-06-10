@@ -28,6 +28,12 @@ export { ServiceDrafts } from './ServiceDrafts';
 export { ServiceClone } from './ServiceClone';
 export { ServicePauseList as ServicePause } from './ServicePause';
 export { ServicePackages } from './ServicePackages';
+export { BulkServiceUpload } from './BulkServiceUpload';
+export type { BulkServiceUploadProps, UploadResult, ValidationError } from './BulkServiceUpload';
+
+// Profile Completeness
+export { ProviderProfileCompleteness } from './ProviderProfileCompleteness';
+export type { ProviderProfileCompletenessProps, ProfileCompletenessData } from './ProviderProfileCompleteness';
 
 // Calendar & Scheduling
 export { CalendarView } from './CalendarView';

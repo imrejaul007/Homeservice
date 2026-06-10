@@ -447,8 +447,8 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className, hideHead
               <label className="block text-sm font-medium text-nilin-warmGray mb-1">Date From</label>
               <input
                 type="date"
-                value={filters.dateFrom || ''}
-                onChange={(e) => handleFilterChange('dateFrom', e.target.value || undefined)}
+                value={filters.startDate || ''}
+                onChange={(e) => handleFilterChange('startDate', e.target.value || undefined)}
                 className="glass-input w-full px-3 py-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-rose/30 font-sans"
               />
             </div>
@@ -457,8 +457,8 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className, hideHead
               <label className="block text-sm font-medium text-nilin-warmGray mb-1">Date To</label>
               <input
                 type="date"
-                value={filters.dateTo || ''}
-                onChange={(e) => handleFilterChange('dateTo', e.target.value || undefined)}
+                value={filters.endDate || ''}
+                onChange={(e) => handleFilterChange('endDate', e.target.value || undefined)}
                 className="glass-input w-full px-3 py-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-rose/30 font-sans"
               />
             </div>

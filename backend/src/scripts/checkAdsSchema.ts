@@ -1,8 +1,23 @@
 import mongoose from 'mongoose';
 
+/**
+ * Check Ads Schema Script
+ * Verifies the providerads collection schema
+ *
+ * Usage:
+ *   MONGODB_URI="mongodb+srv://..." npx ts-node scripts/checkAdsSchema.ts
+ */
+
+const MONGODB_URI = process.env.MONGODB_URI;
+
+if (!MONGODB_URI) {
+  console.error('❌ MONGODB_URI environment variable is required');
+  console.error('   Usage: MONGODB_URI="mongodb+srv://..." npx ts-node scripts/checkAdsSchema.ts');
+  process.exit(1);
+}
+
 async function check() {
-  const uri = 'mongodb+srv://nilimraj_db_user:aXJBzxFtRJosdxEc@cluster0.wnjcyp1.mongodb.net/test?appName=Cluster0';
-  await mongoose.connect(uri, { maxPoolSize: 5 });
+  await mongoose.connect(MONGODB_URI, { maxPoolSize: 5 });
   const db = mongoose.connection.db;
   if (!db) {
     throw new Error('Database connection not established');
@@ -19,7 +34,7 @@ async function check() {
     // Try to insert a test document
     const testDoc = {
       name: 'Test Ad',
-      providerId: new mongoose.Types.ObjectId('6a13ddce180760005bdb6e37'),
+      providerId: new mongoose.Types.ObjectId(),
       status: 'draft',
       isActive: true,
       content: { title: 'Test', description: 'Test ad' },

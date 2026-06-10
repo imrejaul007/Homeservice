@@ -62,11 +62,9 @@ router.get('/high-risk', anomalyAdminController.getHighRiskEntities);
  */
 router.get('/score/:entityType/:entityId', anomalyAdminController.getBehavioralScore);
 
-/**
- * GET /admin/anomalies/:id
- * Get single anomaly by ID
- */
-router.get('/:id', anomalyAdminController.getAnomalyById);
+// ============================================
+// ROUTES WITH :id - Specific routes BEFORE parameterized /:id
+// ============================================
 
 /**
  * GET /admin/anomalies/:id/tickets
@@ -85,6 +83,12 @@ router.patch('/:id/status', anomalyAdminController.updateAnomalyStatus);
  * Create support ticket for anomaly investigation
  */
 router.post('/:id/ticket', anomalyAdminController.createTicket);
+
+/**
+ * GET /admin/anomalies/:id
+ * Get single anomaly by ID (must be last for /:id routes)
+ */
+router.get('/:id', anomalyAdminController.getAnomalyById);
 
 /**
  * POST /admin/anomalies/bulk-update

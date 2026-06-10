@@ -41,24 +41,9 @@ router.get('/user/:userId', experienceAdminController.getExperiencesByUser);
  */
 router.get('/provider/:providerId', experienceAdminController.getExperiencesByProvider);
 
-/**
- * GET /api/admin/experiences/:id
- * Get single experience by ID
- */
-router.get('/:id', experienceAdminController.getExperienceById);
-
-/**
- * PUT /api/admin/experiences/:id
- * Update an experience (admin edit)
- * Body: title?, description?, rating?, images?, videoUrl?, status?, isFeatured?, adminNotes?
- */
-router.put('/:id', experienceAdminController.updateExperience);
-
-/**
- * DELETE /api/admin/experiences/:id
- * Permanently delete an experience (hard delete)
- */
-router.delete('/:id', experienceAdminController.deleteExperience);
+// ============================================
+// ROUTES WITH :id - Specific routes BEFORE parameterized /:id
+// ============================================
 
 /**
  * POST /api/admin/experiences/:id/approve
@@ -79,6 +64,25 @@ router.post('/:id/reject', experienceAdminController.rejectExperience);
  * Toggle featured status of an experience
  */
 router.patch('/:id/featured', experienceAdminController.toggleFeatured);
+
+/**
+ * PUT /api/admin/experiences/:id
+ * Update an experience (admin edit)
+ * Body: title?, description?, rating?, images?, videoUrl?, status?, isFeatured?, adminNotes?
+ */
+router.put('/:id', experienceAdminController.updateExperience);
+
+/**
+ * DELETE /api/admin/experiences/:id
+ * Permanently delete an experience (hard delete)
+ */
+router.delete('/:id', experienceAdminController.deleteExperience);
+
+/**
+ * GET /api/admin/experiences/:id
+ * Get single experience by ID (must be last for /:id routes)
+ */
+router.get('/:id', experienceAdminController.getExperienceById);
 
 /**
  * POST /api/admin/experiences/batch-action

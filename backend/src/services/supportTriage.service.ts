@@ -227,7 +227,7 @@ SupportTicketSchema.index({ customerId: 1, createdAt: -1 });
 SupportTicketSchema.index({ assignedTo: 1, status: 1 });
 
 export const SupportTicketModel: mongoose.Model<ISupportTicketDocument> =
-  mongoose.models.SupportTicket || mongoose.model<ISupportTicketDocument>('SupportTicket', SupportTicketSchema);
+  mongoose.models.TriageSupportTicket || mongoose.model<ISupportTicketDocument>('TriageSupportTicket', SupportTicketSchema);
 
 // ============================================
 // Support Triage Service

@@ -14,6 +14,7 @@ export interface AutoTopupConfig {
   paymentMethodBrand?: string;
   maxAutoTopupsPerMonth: number;
   maxAutoTopupAmount: number;
+  autoTopupsThisMonth: number;
 }
 
 export interface AutoTopupLog {
@@ -48,6 +49,21 @@ export interface AutoTopupHistoryResponse {
 }
 
 // ============================================
+// Error Types
+// ============================================
+
+export class AutoTopupApiError extends Error {
+  constructor(
+    message: string,
+    public code?: string,
+    public statusCode?: number
+  ) {
+    super(message);
+    this.name = 'AutoTopupApiError';
+  }
+}
+
+// ============================================
 // API Service
 // ============================================
 
@@ -56,24 +72,42 @@ export const autoTopupApi = {
    * Get auto-topup configuration
    */
   getConfig: async (): Promise<AutoTopupConfigResponse> => {
-    const response = await api.get('/auto-topup/config');
-    return response.data.data;
+    try {
+      const response = await api.get('/auto-topup/config');
+      return response.data.data;
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Failed to fetch auto-topup configuration';
+      console.error('AutoTopup API Error - getConfig:', error);
+      throw new AutoTopupApiError(message, 'GET_CONFIG_FAILED');
+    }
   },
 
   /**
    * Update auto-topup configuration
    */
   updateConfig: async (config: AutoTopupConfig): Promise<{ success: boolean; message?: string }> => {
-    const response = await api.put('/auto-topup/config', config);
-    return response.data;
+    try {
+      const response = await api.put('/auto-topup/config', config);
+      return response.data;
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Failed to update auto-topup configuration';
+      console.error('AutoTopup API Error - updateConfig:', error);
+      throw new AutoTopupApiError(message, 'UPDATE_CONFIG_FAILED');
+    }
   },
 
   /**
    * Toggle auto-topup on/off
    */
   toggle: async (enabled: boolean): Promise<{ success: boolean; message?: string }> => {
-    const response = await api.post('/auto-topup/toggle', { enabled });
-    return response.data;
+    try {
+      const response = await api.post('/auto-topup/toggle', { enabled });
+      return response.data;
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Failed to toggle auto-topup';
+      console.error('AutoTopup API Error - toggle:', error);
+      throw new AutoTopupApiError(message, 'TOGGLE_FAILED');
+    }
   },
 
   /**
@@ -83,23 +117,35 @@ export const autoTopupApi = {
     page?: number;
     limit?: number;
   }): Promise<AutoTopupHistoryResponse> => {
-    const params = new URLSearchParams();
-    if (options?.page) params.append('page', options.page.toString());
-    if (options?.limit) params.append('limit', options.limit.toString());
+    try {
+      const params = new URLSearchParams();
+      if (options?.page) params.append('page', options.page.toString());
+      if (options?.limit) params.append('limit', options.limit.toString());
 
-    const queryString = params.toString();
-    const url = queryString ? `/auto-topup/history?${queryString}` : '/auto-topup/history';
+      const queryString = params.toString();
+      const url = queryString ? `/auto-topup/history?${queryString}` : '/auto-topup/history';
 
-    const response = await api.get(url);
-    return response.data.data;
+      const response = await api.get(url);
+      return response.data.data;
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Failed to fetch auto-topup history';
+      console.error('AutoTopup API Error - getHistory:', error);
+      throw new AutoTopupApiError(message, 'GET_HISTORY_FAILED');
+    }
   },
 
   /**
    * Preview next auto-topup
    */
   preview: async (): Promise<AutoTopupPreview> => {
-    const response = await api.get('/auto-topup/preview');
-    return response.data.data;
+    try {
+      const response = await api.get('/auto-topup/preview');
+      return response.data.data;
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Failed to preview auto-topup';
+      console.error('AutoTopup API Error - preview:', error);
+      throw new AutoTopupApiError(message, 'PREVIEW_FAILED');
+    }
   },
 };
 

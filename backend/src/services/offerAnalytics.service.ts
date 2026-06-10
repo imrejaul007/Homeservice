@@ -5,6 +5,31 @@ import Booking from '../models/booking.model';
 import { ApiError } from '../utils/ApiError';
 import logger from '../utils/logger';
 
+// FIX P0-6: Timezone utility for analytics
+// Default to UTC, can be overridden via environment or request header
+const getAnalyticsTimezone = (timezoneHeader?: string): number => {
+  // Check if timezone header is provided (from request)
+  if (timezoneHeader) {
+    const offset = parseInt(timezoneHeader, 10);
+    if (!isNaN(offset) && offset >= -12 && offset <= 14) {
+      return offset; // Return hours offset
+    }
+  }
+  // Fall back to environment variable or UTC
+  return parseInt(process.env.OFFER_ANALYTICS_TIMEZONE || '0', 10);
+};
+
+// Helper to convert UTC date to local in aggregation
+const toLocalDate = (dateField: string, timezoneOffset: number): any => {
+  // MongoDB $add can add hours to convert UTC to local
+  return {
+    $add: [
+      `$${dateField}`,
+      { $multiply: [timezoneOffset * 60, 60 * 1000] } // Convert hours to milliseconds
+    ]
+  };
+};
+
 // ============================================
 // Types
 // ============================================
@@ -139,7 +164,7 @@ export class OfferAnalyticsService {
       },
     ]);
 
-    // Get top performing offers
+    // Get top performing offers with revenue calculation
     const topOffers = await Coupon.aggregate([
       { $match: { ...matchStage, isActive: true } },
       {
@@ -148,6 +173,27 @@ export class OfferAnalyticsService {
           localField: '_id',
           foreignField: 'offerId',
           as: 'claims',
+        },
+      },
+      // Lookup bookings for revenue calculation
+      {
+        $lookup: {
+          from: 'bookings',
+          let: { couponCode: '$code' },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ['$couponReservation.couponCode', '$$couponCode'] },
+                    { $eq: ['$couponReservation.usedAt', { $type: 'date' }] },
+                  ],
+                },
+              },
+            },
+            { $project: { 'pricing.totalAmount': 1, 'pricing.basePrice': 1 } },
+          ],
+          as: 'bookings',
         },
       },
       {
@@ -165,7 +211,52 @@ export class OfferAnalyticsService {
               },
             },
           },
-          discountGiven: { $sum: '$claims.discountAmount' },
+          // FIX: Calculate discount from claims
+          discountGiven: {
+            $sum: {
+              $map: {
+                input: {
+                  $filter: {
+                    input: '$claims',
+                    as: 'claim',
+                    cond: { $eq: ['$$claim.status', 'applied'] },
+                  },
+                },
+                as: 'claim',
+                in: { $ifNull: ['$$claim.discountAmount', 0] },
+              },
+            },
+          },
+          // FIX: Calculate revenue from bookings
+          totalRevenue: {
+            $sum: {
+              $map: {
+                input: '$bookings',
+                as: 'booking',
+                in: { $ifNull: ['$$booking.pricing.totalAmount', 0] },
+              },
+            },
+          },
+          averageOrderValue: {
+            $cond: [
+              { $gt: [{ $size: '$bookings' }, 0] },
+              {
+                $divide: [
+                  {
+                    $sum: {
+                      $map: {
+                        input: '$bookings',
+                        as: 'booking',
+                        in: { $ifNull: ['$$booking.pricing.totalAmount', 0] },
+                      },
+                    },
+                  },
+                  { $size: '$bookings' },
+                ],
+              },
+              0,
+            ],
+          },
         },
       },
       {
@@ -188,7 +279,8 @@ export class OfferAnalyticsService {
       activeOffers: offerStats[0]?.activeOffers || 0,
       totalClaims: claimStats[0]?.totalClaims || 0,
       totalRedemptions: claimStats[0]?.totalRedemptions || 0,
-      totalDiscountGiven: claimStats[0]?.totalDiscount || 0,
+      // FIX: Calculate total discount from all applied claims
+      totalDiscountGiven: claimStats[0]?.totalDiscount || topOffers.reduce((sum, o) => sum + (o.discountGiven || 0), 0),
       averageConversionRate: offerStats[0]?.avgConversion || 0,
       topOffers: topOffers.map((o) => ({
         offerId: o.offerId.toString(),
@@ -198,8 +290,9 @@ export class OfferAnalyticsService {
         redemptions: o.redemptions,
         discountGiven: o.discountGiven || 0,
         conversionRate: o.conversionRate || 0,
-        revenue: 0, // Would need booking data to calculate
-        averageOrderValue: o.claims > 0 ? 0 : 0,
+        // FIX: Now properly calculated from booking data
+        revenue: o.totalRevenue || 0,
+        averageOrderValue: o.averageOrderValue || 0,
       })),
       offersByType: offersByType.reduce((acc, o) => {
         acc[o._id || 'unknown'] = o.count;
@@ -280,6 +373,11 @@ export class OfferAnalyticsService {
     popularHours: Array<{ hour: number; count: number }>;
     trends: OfferTrend[];
   }> {
+    // FIX: Validate ObjectId format before using in aggregation
+    if (!Types.ObjectId.isValid(offerId)) {
+      throw ApiError.badRequest('Invalid offer ID');
+    }
+
     const offer = await Coupon.findById(offerId);
     if (!offer) {
       throw ApiError.notFound('Offer not found');
@@ -301,12 +399,13 @@ export class OfferAnalyticsService {
       },
     ]);
 
-    // Get popular days
+    // FIX P0-6: Get popular days with timezone awareness
+    const timezoneOffset = getAnalyticsTimezone();
     const popularDays = await OfferClaim.aggregate([
       { $match: { offerId: new Types.ObjectId(offerId) } },
       {
         $group: {
-          _id: { $dayOfWeek: '$claimedAt' },
+          _id: { $dayOfWeek: { $add: ['$claimedAt', timezoneOffset * 60 * 60 * 1000] } },
           count: { $sum: 1 },
         },
       },
@@ -319,12 +418,12 @@ export class OfferAnalyticsService {
       count: d.count,
     }));
 
-    // Get popular hours
+    // FIX P0-6: Get popular hours with timezone awareness
     const popularHours = await OfferClaim.aggregate([
       { $match: { offerId: new Types.ObjectId(offerId) } },
       {
         $group: {
-          _id: { $hour: '$claimedAt' },
+          _id: { $hour: { $add: ['$claimedAt', timezoneOffset * 60 * 60 * 1000] } },
           count: { $sum: 1 },
         },
       },
@@ -646,6 +745,228 @@ export class OfferAnalyticsService {
           name: o.name,
           remainingUses: o.remainingUses,
         })),
+    };
+  }
+
+  // FIX: Export functionality for CSV/Excel with pagination
+  async exportCoupons(options: {
+    format: 'csv' | 'json';
+    filters?: {
+      isActive?: boolean;
+      type?: string;
+      startDate?: Date;
+      endDate?: Date;
+    };
+    fields?: string[];
+    // FIX: Add pagination support
+    page?: number;
+    limit?: number;
+    // FIX: Add total count for progress tracking
+    includeStats?: boolean;
+  }): Promise<{
+    data: string;
+    filename: string;
+    contentType: string;
+    pagination?: {
+      page: number;
+      limit: number;
+      total: number;
+      totalPages: number;
+    };
+    stats?: {
+      totalOffers: number;
+      totalClaims: number;
+      totalRedemptions: number;
+      totalDiscountGiven: number;
+    };
+  }> {
+    const { format, filters = {}, fields, page = 1, limit = 1000, includeStats = false } = options;
+    const now = new Date();
+
+    // Build query
+    const query: any = {};
+    query.isDeleted = { $ne: true }; // Always exclude soft-deleted
+
+    if (filters.isActive !== undefined) {
+      query.isActive = filters.isActive;
+    }
+
+    if (filters.type) {
+      query.type = filters.type;
+    }
+
+    if (filters.startDate || filters.endDate) {
+      query.createdAt = {};
+      if (filters.startDate) query.createdAt.$gte = filters.startDate;
+      if (filters.endDate) query.createdAt.$lte = filters.endDate;
+    }
+
+    // FIX: Get total count for pagination
+    const totalCount = await Coupon.countDocuments(query);
+    const totalPages = Math.ceil(totalCount / limit);
+    const skip = (page - 1) * limit;
+
+    // FIX: Apply pagination to query
+    const coupons = await Coupon.find(query)
+      .populate('createdBy', 'firstName lastName email')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    // Fetch claims data for all matching coupons (batch query)
+    const couponIds = coupons.map(c => c._id);
+    const claims = await OfferClaim.aggregate([
+      { $match: { offerId: { $in: couponIds } } },
+      {
+        $group: {
+          _id: '$offerId',
+          totalClaims: { $sum: 1 },
+          usedClaims: {
+            $sum: { $cond: [{ $eq: ['$status', 'applied'] }, 1, 0] },
+          },
+          expiredClaims: {
+            $sum: { $cond: [{ $eq: ['$status', 'expired'] }, 1, 0] },
+          },
+          totalDiscount: { $sum: { $ifNull: ['$discountAmount', 0] } },
+        },
+      },
+    ]);
+
+    // Create claims map
+    const claimsMap = new Map(claims.map(c => [c._id.toString(), c]));
+
+    // FIX: Calculate aggregate stats if requested
+    let stats: any = undefined;
+    if (includeStats) {
+      const allClaims = await OfferClaim.aggregate([
+        { $match: { offerId: { $in: couponIds } } },
+        {
+          $group: {
+            _id: null,
+            totalClaims: { $sum: 1 },
+            totalRedemptions: {
+              $sum: { $cond: [{ $eq: ['$status', 'applied'] }, 1, 0] },
+            },
+            totalDiscount: { $sum: { $ifNull: ['$discountAmount', 0] } },
+          },
+        },
+      ]);
+      stats = {
+        totalOffers: totalCount,
+        totalClaims: allClaims[0]?.totalClaims || 0,
+        totalRedemptions: allClaims[0]?.totalRedemptions || 0,
+        totalDiscountGiven: allClaims[0]?.totalDiscount || 0,
+      };
+    }
+
+    // Default fields for export
+    const defaultFields = [
+      'code',
+      'title',
+      'type',
+      'value',
+      'maxDiscount',
+      'minOrderValue',
+      'isActive',
+      'validFrom',
+      'validUntil',
+      'maxUses',
+      'currentUses',
+      'totalClaims',
+      'redemptions',
+      'conversionRate',
+      'createdBy',
+      'createdAt',
+    ];
+
+    const exportFields = fields || defaultFields;
+
+    // Format data for export
+    const exportData = coupons.map(coupon => {
+      const couponClaims = claimsMap.get(coupon._id.toString()) || {
+        totalClaims: 0,
+        usedClaims: 0,
+        expiredClaims: 0,
+      };
+
+      const row: Record<string, any> = {
+        code: coupon.code,
+        title: coupon.title || coupon.displayTitle,
+        type: coupon.type,
+        value: coupon.value,
+        maxDiscount: coupon.maxDiscount || '',
+        minOrderValue: coupon.minOrderValue,
+        isActive: coupon.isActive ? 'Yes' : 'No',
+        validFrom: new Date(coupon.validFrom).toISOString().split('T')[0],
+        validUntil: new Date(coupon.validUntil).toISOString().split('T')[0],
+        maxUses: coupon.maxUses,
+        currentUses: coupon.currentUses,
+        totalClaims: couponClaims.totalClaims,
+        redemptions: couponClaims.usedClaims,
+        conversionRate: couponClaims.totalClaims > 0
+          ? ((couponClaims.usedClaims / couponClaims.totalClaims) * 100).toFixed(2) + '%'
+          : '0%',
+        createdBy: (coupon.createdBy as any)?.email || '',
+        createdAt: new Date(coupon.createdAt).toISOString(),
+      };
+
+      // Filter to requested fields
+      if (exportFields !== defaultFields) {
+        const filteredRow: Record<string, any> = {};
+        exportFields.forEach(field => {
+          if (row[field] !== undefined) {
+            filteredRow[field] = row[field];
+          }
+        });
+        return filteredRow;
+      }
+
+      return row;
+    });
+
+    if (format === 'json') {
+      return {
+        data: JSON.stringify(exportData, null, 2),
+        filename: `offers-export-${now.toISOString().split('T')[0]}.json`,
+        contentType: 'application/json',
+        pagination: {
+          page,
+          limit,
+          total: totalCount,
+          totalPages,
+        },
+        stats,
+      };
+    }
+
+    // CSV format
+    const headers = Object.keys(exportData[0] || {});
+    const csvRows = [
+      headers.join(','),
+      ...exportData.map(row =>
+        headers.map(h => {
+          const val = row[h];
+          // Escape quotes and wrap in quotes if contains comma
+          const str = String(val ?? '');
+          return str.includes(',') || str.includes('"') || str.includes('\n')
+            ? `"${str.replace(/"/g, '""')}"`
+            : str;
+        }).join(',')
+      ),
+    ];
+
+    return {
+      data: csvRows.join('\n'),
+      filename: `offers-export-${now.toISOString().split('T')[0]}-page${page}.csv`,
+      contentType: 'text/csv',
+      pagination: {
+        page,
+        limit,
+        total: totalCount,
+        totalPages,
+      },
+      stats,
     };
   }
 }

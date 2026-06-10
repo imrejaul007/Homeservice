@@ -8,13 +8,29 @@ import {
   AlertCircle,
   Loader2,
   Tag as TagIcon,
-  MapPin
+  MapPin,
+  Layers,
+  ChevronDown,
+  ChevronUp,
+  Trash2
 } from 'lucide-react';
 import authService from '../../services/AuthService';
 import { useCategories } from '../../hooks/useCategories';
 import { useToastActions } from '../common/Toast';
 import { parseApiValidationError } from '../../utils/apiError';
 import type { Subcategory } from '../../types/category';
+
+interface DurationVariant {
+  duration: number;
+  price: number;
+  label: string;
+}
+
+interface AddOn {
+  name: string;
+  price: number;
+  description?: string;
+}
 
 interface ServiceResponse {
   _id: string;
@@ -24,6 +40,8 @@ interface ServiceResponse {
   description: string;
   shortDescription: string;
   duration: number;
+  durationOptions?: DurationVariant[];
+  addOns?: AddOn[];
   price: {
     amount: number;
     currency: string;
@@ -47,6 +65,8 @@ interface ServiceFormData {
   description: string;
   shortDescription: string;
   duration: number;
+  durationOptions: DurationVariant[];
+  addOns: AddOn[];
   price: {
     amount: number;
     currency: string;
@@ -89,6 +109,8 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
     description: '',
     shortDescription: '',
     duration: 60,
+    durationOptions: [],
+    addOns: [],
     price: {
       amount: 0,
       currency: 'AED',
@@ -97,6 +119,16 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
     tags: [],
     status: 'active'
   });
+
+  // UI state for collapsible sections
+  const [showDurationVariants, setShowDurationVariants] = useState(false);
+  const [showAddOns, setShowAddOns] = useState(false);
+
+  // State for adding new duration variant
+  const [newVariant, setNewVariant] = useState<DurationVariant>({ duration: 30, price: 0, label: '' });
+
+  // State for adding new add-on
+  const [newAddOn, setNewAddOn] = useState<AddOn>({ name: '', price: 0, description: '' });
 
   // Find currently selected category object (AFTER formData state)
   const selectedCategory = useMemo(() => {
@@ -111,12 +143,16 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
       description: '',
       shortDescription: '',
       duration: 60,
+      durationOptions: [],
+      addOns: [],
       price: { amount: 0, currency: 'AED', type: 'fixed' },
       tags: [],
       status: 'active'
     });
     setErrors({});
     setCurrentTag('');
+    setShowDurationVariants(false);
+    setShowAddOns(false);
   };
 
   // Load service data when modal opens
@@ -137,6 +173,8 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
           description: service.description || '',
           shortDescription: service.shortDescription || '',
           duration: service.duration || 60,
+          durationOptions: service.durationOptions || [],
+          addOns: service.addOns || [],
           price: {
             amount: service.price?.amount || 0,
             currency: service.price?.currency || 'AED',
@@ -145,6 +183,14 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
           tags: service.tags || [],
           status: service.status || 'active'
         });
+
+        // Show sections if they have data
+        if (service.durationOptions && service.durationOptions.length > 0) {
+          setShowDurationVariants(true);
+        }
+        if (service.addOns && service.addOns.length > 0) {
+          setShowAddOns(true);
+        }
       }
     } catch (error: unknown) {
       console.error('Error loading service data:', error);
@@ -195,7 +241,7 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleInputChange = (field: string, value: string | number | boolean | string[]) => {
+  const handleInputChange = (field: string, value: any) => {
     setFormData(prev => {
       const keys = field.split('.');
       if (keys.length === 1) {
@@ -261,6 +307,40 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
     handleInputChange('tags', formData.tags.filter(tag => tag !== tagToRemove));
   };
 
+  // Duration Variants Management
+  const addDurationVariant = () => {
+    if (!newVariant.label.trim()) return;
+    handleInputChange('durationOptions', [...formData.durationOptions, { ...newVariant }]);
+    setNewVariant({ duration: 30, price: 0, label: '' });
+  };
+
+  const removeDurationVariant = (index: number) => {
+    handleInputChange('durationOptions', formData.durationOptions.filter((_, i) => i !== index));
+  };
+
+  const updateDurationVariant = (index: number, field: keyof DurationVariant, value: string | number) => {
+    const updated = [...formData.durationOptions];
+    updated[index] = { ...updated[index], [field]: value };
+    handleInputChange('durationOptions', updated);
+  };
+
+  // Add-Ons Management
+  const addAddOn = () => {
+    if (!newAddOn.name.trim()) return;
+    handleInputChange('addOns', [...formData.addOns, { ...newAddOn }]);
+    setNewAddOn({ name: '', price: 0, description: '' });
+  };
+
+  const removeAddOn = (index: number) => {
+    handleInputChange('addOns', formData.addOns.filter((_, i) => i !== index));
+  };
+
+  const updateAddOn = (index: number, field: keyof AddOn, value: string | number) => {
+    const updated = [...formData.addOns];
+    updated[index] = { ...updated[index], [field]: value };
+    handleInputChange('addOns', updated);
+  };
+
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -270,11 +350,19 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
     try {
       const { status: _status, ...editableFields } = formData;
       const payload = {
-        ...editableFields,
+        name: editableFields.name,
+        category: editableFields.category,
+        subcategory: editableFields.subcategory,
+        description: editableFields.description,
+        shortDescription: editableFields.shortDescription,
+        duration: editableFields.duration,
+        durationOptions: editableFields.durationOptions.length > 0 ? editableFields.durationOptions : undefined,
+        addOns: editableFields.addOns.length > 0 ? editableFields.addOns : undefined,
         price:
           formData.price.type === 'custom'
             ? { ...formData.price, amount: 0 }
             : formData.price,
+        tags: editableFields.tags,
       };
       const data = await authService.put<{success: boolean}>(`/provider/services/${serviceId}`, payload);
 
@@ -607,6 +695,236 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({
                 <Plus className="w-5 h-5" />
               </button>
             </div>
+          </div>
+
+          {/* Duration Variants */}
+          <div className="border-t border-nilin-border pt-6">
+            <button
+              type="button"
+              onClick={() => setShowDurationVariants(!showDurationVariants)}
+              className="w-full flex items-center justify-between text-left"
+            >
+              <div className="flex items-center gap-2">
+                <Layers className="w-5 h-5 text-nilin-coral" />
+                <span className="text-sm font-medium text-nilin-charcoal">
+                  Duration Variants
+                </span>
+                {formData.durationOptions.length > 0 && (
+                  <span className="px-2 py-0.5 text-xs bg-nilin-coral/10 text-nilin-coral rounded-full">
+                    {formData.durationOptions.length}
+                  </span>
+                )}
+              </div>
+              {showDurationVariants ? (
+                <ChevronUp className="w-5 h-5 text-nilin-warmGray" />
+              ) : (
+                <ChevronDown className="w-5 h-5 text-nilin-warmGray" />
+              )}
+            </button>
+
+            {showDurationVariants && (
+              <div className="mt-4 space-y-4">
+                <p className="text-xs text-nilin-warmGray">
+                  Offer multiple service options with different durations and prices.
+                </p>
+
+                {formData.durationOptions.length > 0 && (
+                  <div className="space-y-2">
+                    {formData.durationOptions.map((variant, index) => (
+                      <div key={index} className="flex items-center gap-3 p-3 bg-nilin-muted/30 rounded-xl">
+                        <div className="flex-1 grid grid-cols-3 gap-2">
+                          <input
+                            type="text"
+                            value={variant.label}
+                            onChange={(e) => updateDurationVariant(index, 'label', e.target.value)}
+                            placeholder="Label"
+                            className="px-3 py-2 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
+                          />
+                          <div className="relative">
+                            <Clock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-nilin-warmGray" />
+                            <input
+                              type="number"
+                              value={variant.duration}
+                              onChange={(e) => updateDurationVariant(index, 'duration', parseInt(e.target.value) || 0)}
+                              min="15"
+                              max="480"
+                              className="w-full pl-10 pr-3 py-2 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
+                            />
+                          </div>
+                          <div className="relative">
+                            <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-nilin-warmGray" />
+                            <input
+                              type="number"
+                              value={variant.price}
+                              onChange={(e) => updateDurationVariant(index, 'price', parseFloat(e.target.value) || 0)}
+                              min="0"
+                              className="w-full pl-10 pr-3 py-2 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
+                            />
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => removeDurationVariant(index)}
+                          className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="flex items-end gap-3">
+                  <div className="flex-1 grid grid-cols-3 gap-2">
+                    <input
+                      type="text"
+                      value={newVariant.label}
+                      onChange={(e) => setNewVariant({ ...newVariant, label: e.target.value })}
+                      placeholder="Label"
+                      className="px-3 py-2 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
+                    />
+                    <div className="relative">
+                      <Clock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-nilin-warmGray" />
+                      <input
+                        type="number"
+                        value={newVariant.duration}
+                        onChange={(e) => setNewVariant({ ...newVariant, duration: parseInt(e.target.value) || 0 })}
+                        min="15"
+                        max="480"
+                        placeholder="Min"
+                        className="w-full pl-10 pr-3 py-2 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
+                      />
+                    </div>
+                    <div className="relative">
+                      <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-nilin-warmGray" />
+                      <input
+                        type="number"
+                        value={newVariant.price}
+                        onChange={(e) => setNewVariant({ ...newVariant, price: parseFloat(e.target.value) || 0 })}
+                        min="0"
+                        placeholder="Price"
+                        className="w-full pl-10 pr-3 py-2 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
+                      />
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={addDurationVariant}
+                    disabled={!newVariant.label.trim()}
+                    className="px-4 py-2 bg-nilin-coral/10 text-nilin-coral rounded-lg hover:bg-nilin-coral/20 transition-colors disabled:opacity-50 flex items-center gap-1"
+                  >
+                    <Plus className="w-4 h-4" /> Add
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Add-Ons */}
+          <div className="border-t border-nilin-border pt-6">
+            <button
+              type="button"
+              onClick={() => setShowAddOns(!showAddOns)}
+              className="w-full flex items-center justify-between text-left"
+            >
+              <div className="flex items-center gap-2">
+                <Plus className="w-5 h-5 text-nilin-coral" />
+                <span className="text-sm font-medium text-nilin-charcoal">
+                  Add-Ons
+                </span>
+                {formData.addOns.length > 0 && (
+                  <span className="px-2 py-0.5 text-xs bg-nilin-coral/10 text-nilin-coral rounded-full">
+                    {formData.addOns.length}
+                  </span>
+                )}
+              </div>
+              {showAddOns ? (
+                <ChevronUp className="w-5 h-5 text-nilin-warmGray" />
+              ) : (
+                <ChevronDown className="w-5 h-5 text-nilin-warmGray" />
+              )}
+            </button>
+
+            {showAddOns && (
+              <div className="mt-4 space-y-4">
+                <p className="text-xs text-nilin-warmGray">
+                  Offer optional extras that customers can add to their booking.
+                </p>
+
+                {formData.addOns.length > 0 && (
+                  <div className="space-y-2">
+                    {formData.addOns.map((addon, index) => (
+                      <div key={index} className="flex items-start gap-3 p-3 bg-nilin-muted/30 rounded-xl">
+                        <div className="flex-1 grid grid-cols-2 gap-2">
+                          <input
+                            type="text"
+                            value={addon.name}
+                            onChange={(e) => updateAddOn(index, 'name', e.target.value)}
+                            placeholder="Name"
+                            className="px-3 py-2 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
+                          />
+                          <div className="relative">
+                            <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-nilin-warmGray" />
+                            <input
+                              type="number"
+                              value={addon.price}
+                              onChange={(e) => updateAddOn(index, 'price', parseFloat(e.target.value) || 0)}
+                              min="0"
+                              className="w-full pl-10 pr-3 py-2 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
+                            />
+                          </div>
+                        </div>
+                        <input
+                          type="text"
+                          value={addon.description || ''}
+                          onChange={(e) => updateAddOn(index, 'description', e.target.value)}
+                          placeholder="Description (optional)"
+                          className="w-full px-3 py-2 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => removeAddOn(index)}
+                          className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="flex items-start gap-3">
+                  <div className="flex-1 grid grid-cols-2 gap-2">
+                    <input
+                      type="text"
+                      value={newAddOn.name}
+                      onChange={(e) => setNewAddOn({ ...newAddOn, name: e.target.value })}
+                      placeholder="Add-on name"
+                      className="px-3 py-2 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
+                    />
+                    <div className="relative">
+                      <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-nilin-warmGray" />
+                      <input
+                        type="number"
+                        value={newAddOn.price}
+                        onChange={(e) => setNewAddOn({ ...newAddOn, price: parseFloat(e.target.value) || 0 })}
+                        min="0"
+                        placeholder="Price"
+                        className="w-full pl-10 pr-3 py-2 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
+                      />
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={addAddOn}
+                    disabled={!newAddOn.name.trim()}
+                    className="px-4 py-2 bg-nilin-coral/10 text-nilin-coral rounded-lg hover:bg-nilin-coral/20 transition-colors disabled:opacity-50 flex items-center gap-1"
+                  >
+                    <Plus className="w-4 h-4" /> Add
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Error Messages */}

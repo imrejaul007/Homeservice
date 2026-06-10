@@ -1,5 +1,6 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import crypto from 'crypto';
+import { API_KEY_PERMISSIONS } from '../constants/apiKeyPermissions';
 
 /**
  * Admin API Key Model
@@ -56,16 +57,10 @@ const adminApiKeySchema = new Schema<IAdminApiKey, IAdminApiKeyModel>(
     },
     permissions: [{
       type: String,
-      enum: [
-        'read',
-        'write',
-        'delete',
-        'admin',
-        'analytics',
-        'webhooks',
-        'broadcast',
-        'coupons',
-      ],
+      enum: {
+        values: API_KEY_PERMISSIONS,
+        message: 'Invalid permission: {VALUE}. Valid permissions are: ' + API_KEY_PERMISSIONS.join(', '),
+      },
     }],
     expiresAt: {
       type: Date,

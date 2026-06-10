@@ -61,25 +61,32 @@ router.get('/my-reviews',
   reviewController.getMyReviews
 );
 
-// Submit a review for a completed booking
-router.post('/booking/:bookingId',
+// Submit review for a completed booking (customer)
+router.post(
+  '/booking/:bookingId',
   authMiddleware.authenticate,
   validate(submitReviewSchema),
   reviewsController.submitReview
 );
 
-// Update a review
-router.patch('/:reviewId',
+// Submit review for a package (directly from package detail page)
+router.post(
+  '/package/:packageId',
   authMiddleware.authenticate,
-  validate(updateReviewSchema),
-  reviewController.updateReview
+  validate(submitReviewSchema),
+  reviewsController.submitPackageReview
 );
 
-// Delete a review
-router.delete('/:reviewId',
+// Get package review eligibility (check if user can review a package)
+router.get(
+  '/package/:packageId/eligibility',
   authMiddleware.authenticate,
-  reviewController.deleteReview
+  reviewsController.getPackageReviewEligibility
 );
+
+// ============================================
+// ROUTES WITH :reviewId - Specific routes BEFORE parameterized /:reviewId
+// ============================================
 
 // Reply to a review (provider only)
 router.post('/:reviewId/reply',
@@ -127,12 +134,14 @@ router.post('/:reviewId/reply',
       const ProviderProfile = (await import('../models/providerProfile.model')).default;
       await ProviderProfile.recalculateReviewsData(review.revieweeId);
 
+      // FIX: Return response.comment to match frontend expectations
       return res.json({
         success: true,
         message: 'Reply submitted successfully',
         data: {
           response: {
-            comment: comment.trim(),
+            comment: comment.trim(),  // Frontend expects 'comment'
+            content: comment.trim(),   // Keep for backwards compatibility
             createdAt: review.response.createdAt.toISOString(),
           },
         },
@@ -142,14 +151,29 @@ router.post('/:reviewId/reply',
         context: 'ReviewRoutes',
         action: 'SUBMIT_REPLY_ERROR',
         error: error instanceof Error ? error.message : String(error),
+        reviewId: req.params.reviewId,
+        userId: (req.user as any)?._id,
       });
       return res.status(500).json({
         success: false,
-        message: 'Server error',
+        message: 'Server error while submitting reply',
         error: process.env.NODE_ENV === 'development' ? (error instanceof Error ? error.message : String(error)) : undefined,
       });
     }
   }
+);
+
+// Update a review (must be after /:reviewId/reply)
+router.patch('/:reviewId',
+  authMiddleware.authenticate,
+  validate(updateReviewSchema),
+  reviewController.updateReview
+);
+
+// Delete a review
+router.delete('/:reviewId',
+  authMiddleware.authenticate,
+  reviewController.deleteReview
 );
 
 export default router;

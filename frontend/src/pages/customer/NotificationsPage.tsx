@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useEffect, useCallback } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Bell,
   Check,
@@ -12,20 +12,48 @@ import {
   Package,
   MessageSquare,
   Gift,
+  Settings,
+  BellRing,
+  Mail,
+  Smartphone,
 } from 'lucide-react';
 import NavigationHeader from '../../components/layout/NavigationHeader';
 import Footer from '../../components/layout/Footer';
 import Breadcrumb from '../../components/common/Breadcrumb';
+import DigestPreferences from '../../components/notifications/DigestPreferences';
 import { useAuthStore } from '../../stores/authStore';
-import { notificationApi, type Notification } from '../../services/notificationApi';
+import { notificationApi, normalizeBackendNotificationType, type Notification } from '../../services/notificationApi';
+import { useSocketEvent } from '../../hooks/useSocket';
+import type { NotificationEvent } from '../../services/socket';
+import { cn } from '../../lib/utils';
+
+type TabType = 'notifications' | 'digest';
 
 const NotificationsPage: React.FC = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { isAuthenticated } = useAuthStore();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const initialTab = searchParams.get('tab') === 'digest' ? 'digest' : 'notifications';
+  const [activeTab, setActiveTab] = useState<TabType>(initialTab);
+
+  const fetchNotifications = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const response = await notificationApi.getNotifications({ limit: 50 });
+      setNotifications(response.data.notifications);
+      setUnreadCount(response.data.unreadCount);
+    } catch (err: unknown) {
+      const axiosErr = err as { response?: { data?: { message?: string } } };
+      setError(axiosErr.response?.data?.message || 'Failed to load notifications');
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -33,33 +61,42 @@ const NotificationsPage: React.FC = () => {
       return;
     }
     fetchNotifications();
-  }, [isAuthenticated]);
+  }, [isAuthenticated, navigate, fetchNotifications]);
 
-  const fetchNotifications = async () => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const response = await notificationApi.getNotifications({ limit: 50 });
-      setNotifications(response.data.notifications);
-      setUnreadCount(response.data.unreadCount);
-    } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to load notifications');
-    } finally {
-      setIsLoading(false);
+  useSocketEvent('notification:new', (data: NotificationEvent) => {
+    const normalizedType = normalizeBackendNotificationType(data.type);
+    const newNotification: Notification = {
+      id: data.id,
+      userId: data.userId,
+      type: normalizedType,
+      title: data.title,
+      message: data.message,
+      isRead: data.read ?? false,
+      data: data.data,
+      createdAt: new Date(data.timestamp).toISOString(),
+    };
+
+    setNotifications((prev) => {
+      if (prev.some((n) => n.id === newNotification.id)) return prev;
+      return [newNotification, ...prev];
+    });
+    if (!newNotification.isRead) {
+      setUnreadCount((prev) => prev + 1);
     }
-  };
+  });
 
   const handleMarkAsRead = async (notificationId: string) => {
     try {
       await notificationApi.markAsRead(notificationId);
       setNotifications(prev =>
         prev.map(n =>
-          n._id === notificationId ? { ...n, isRead: true, readAt: new Date().toISOString() } : n
+          n.id === notificationId ? { ...n, isRead: true, readAt: new Date().toISOString() } : n
         )
       );
       setUnreadCount(prev => Math.max(0, prev - 1));
-    } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to mark as read');
+    } catch (err: unknown) {
+      const axiosErr = err as { response?: { data?: { message?: string } } };
+      setError(axiosErr.response?.data?.message || 'Failed to mark as read');
     }
   };
 
@@ -68,37 +105,69 @@ const NotificationsPage: React.FC = () => {
       await notificationApi.markAllAsRead();
       setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
       setUnreadCount(0);
-    } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to mark all as read');
+    } catch (err: unknown) {
+      const axiosErr = err as { response?: { data?: { message?: string } } };
+      setError(axiosErr.response?.data?.message || 'Failed to mark all as read');
     }
   };
 
   const handleDelete = async (notificationId: string) => {
     try {
       await notificationApi.deleteNotification(notificationId);
-      const deleted = notifications.find(n => n._id === notificationId);
-      setNotifications(prev => prev.filter(n => n._id !== notificationId));
+      const deleted = notifications.find(n => n.id === notificationId);
+      setNotifications(prev => prev.filter(n => n.id !== notificationId));
       if (deleted && !deleted.isRead) {
         setUnreadCount(prev => Math.max(0, prev - 1));
       }
-    } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to delete notification');
+    } catch (err: unknown) {
+      const axiosErr = err as { response?: { data?: { message?: string } } };
+      setError(axiosErr.response?.data?.message || 'Failed to delete notification');
     }
   };
 
   const handleNotificationClick = (notification: Notification) => {
     if (!notification.isRead) {
-      handleMarkAsRead(notification._id);
+      handleMarkAsRead(notification.id);
     }
-    // Navigate based on notification type
-    if (notification.data?.bookingId) {
-      navigate(`/customer/bookings/${notification.data.bookingId}`);
+    const data = notification.data || {};
+    if (data.bookingId) {
+      navigate(`/customer/bookings/${data.bookingId}`);
+      return;
+    }
+    if (data.serviceId) {
+      navigate(`/services/${data.serviceId}`);
+      return;
+    }
+    if (data.providerId) {
+      navigate(`/provider/${data.providerId}`);
+      return;
+    }
+    if (
+      notification.type === 'booking' ||
+      (typeof notification.type === 'string' && notification.type.startsWith('booking_'))
+    ) {
+      navigate('/customer/bookings');
+      return;
+    }
+    if (notification.type === 'payment') {
+      navigate('/customer/payment-methods');
+      return;
+    }
+    if (notification.type === 'review') {
+      navigate('/customer/reviews');
     }
   };
 
   const getNotificationIcon = (type: string) => {
     switch (type) {
       case 'booking':
+      case 'booking_request':
+      case 'booking_confirmed':
+      case 'booking_cancelled':
+      case 'booking_rejected':
+      case 'booking_started':
+      case 'booking_completed':
+      case 'booking_reminder':
         return <Calendar className="w-5 h-5" />;
       case 'payment':
         return <CreditCard className="w-5 h-5" />;
@@ -106,6 +175,10 @@ const NotificationsPage: React.FC = () => {
         return <Star className="w-5 h-5" />;
       case 'promotion':
         return <Gift className="w-5 h-5" />;
+      case 'message':
+        return <MessageSquare className="w-5 h-5" />;
+      case 'system':
+        return <Settings className="w-5 h-5" />;
       default:
         return <Bell className="w-5 h-5" />;
     }
@@ -114,6 +187,13 @@ const NotificationsPage: React.FC = () => {
   const getTypeColor = (type: string) => {
     switch (type) {
       case 'booking':
+      case 'booking_request':
+      case 'booking_confirmed':
+      case 'booking_cancelled':
+      case 'booking_rejected':
+      case 'booking_started':
+      case 'booking_completed':
+      case 'booking_reminder':
         return 'bg-blue-100 text-blue-600';
       case 'payment':
         return 'bg-green-100 text-green-600';
@@ -121,6 +201,10 @@ const NotificationsPage: React.FC = () => {
         return 'bg-yellow-100 text-yellow-600';
       case 'promotion':
         return 'bg-purple-100 text-purple-600';
+      case 'message':
+        return 'bg-cyan-100 text-cyan-600';
+      case 'system':
+        return 'bg-gray-100 text-gray-600';
       default:
         return 'bg-nilin-coral/20 text-nilin-coral';
     }
@@ -164,7 +248,7 @@ const NotificationsPage: React.FC = () => {
       <div className="flex-1">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
           {/* Header */}
-          <div className="flex items-center justify-between mb-8">
+          <div className="flex items-center justify-between mb-6">
             <div className="flex items-center gap-3">
               <div className="w-12 h-12 rounded-full bg-nilin-coral/20 flex items-center justify-center">
                 <Bell className="w-6 h-6 text-nilin-coral" />
@@ -187,11 +271,61 @@ const NotificationsPage: React.FC = () => {
             )}
           </div>
 
+          {/* Tabs */}
+          <div className="flex gap-2 mb-6 border-b border-gray-200">
+            <button
+              onClick={() => setActiveTab('notifications')}
+              className={cn(
+                'flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors',
+                activeTab === 'notifications'
+                  ? 'border-nilin-coral text-nilin-coral'
+                  : 'border-transparent text-nilin-warmGray hover:text-nilin-charcoal'
+              )}
+            >
+              <Bell className="w-4 h-4" />
+              All Notifications
+            </button>
+            <button
+              onClick={() => setActiveTab('digest')}
+              className={cn(
+                'flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors',
+                activeTab === 'digest'
+                  ? 'border-nilin-coral text-nilin-coral'
+                  : 'border-transparent text-nilin-warmGray hover:text-nilin-charcoal'
+              )}
+            >
+              <BellRing className="w-4 h-4" />
+              Digest Settings
+            </button>
+          </div>
+
+          {/* Tab Content */}
+          {activeTab === 'digest' ? (
+            <div className="glass-nilin rounded-nilin-lg p-6">
+              <div className="mb-6">
+                <h2 className="text-xl font-serif text-nilin-charcoal mb-2">Notification Digest</h2>
+                <p className="text-nilin-warmGray">
+                  Receive a summary of your notifications instead of individual alerts. Choose when and how you want to be notified.
+                </p>
+              </div>
+              <DigestPreferences />
+            </div>
+          ) : (
+          <>
           {/* Error Message */}
           {error && (
-            <div className="mb-6 p-4 rounded-nilin bg-red-50 border border-red-200 flex items-center gap-3">
-              <AlertCircle className="w-5 h-5 text-red-500" />
-              <span className="text-red-800">{error}</span>
+            <div className="mb-6 p-4 rounded-nilin bg-red-50 border border-red-200 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <AlertCircle className="w-5 h-5 text-red-500" />
+                <span className="text-red-800">{error}</span>
+              </div>
+              <button
+                type="button"
+                onClick={fetchNotifications}
+                className="px-4 py-2 text-sm font-medium text-red-800 border border-red-300 rounded-lg hover:bg-red-100"
+              >
+                Retry
+              </button>
             </div>
           )}
 
@@ -210,7 +344,7 @@ const NotificationsPage: React.FC = () => {
             <div className="space-y-2">
               {notifications.map((notification) => (
                 <div
-                  key={notification._id}
+                  key={notification.id}
                   onClick={() => handleNotificationClick(notification)}
                   className={`glass-nilin rounded-nilin-lg p-4 hover-lift transition-all cursor-pointer ${
                     !notification.isRead ? 'bg-nilin-blush/30' : ''
@@ -245,7 +379,7 @@ const NotificationsPage: React.FC = () => {
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
-                                handleMarkAsRead(notification._id);
+                                handleMarkAsRead(notification.id);
                               }}
                               className="p-2 rounded-lg hover:bg-nilin-muted transition-colors text-nilin-warmGray hover:text-nilin-charcoal"
                               title="Mark as read"
@@ -256,7 +390,7 @@ const NotificationsPage: React.FC = () => {
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              handleDelete(notification._id);
+                              handleDelete(notification.id);
                             }}
                             className="p-2 rounded-lg hover:bg-red-50 transition-colors text-nilin-warmGray hover:text-red-500"
                             title="Delete"
@@ -280,8 +414,9 @@ const NotificationsPage: React.FC = () => {
                   try {
                     await notificationApi.deleteAllRead();
                     setNotifications(prev => prev.filter(n => !n.isRead));
-                  } catch (err) {
-                    setError('Failed to clear read notifications');
+                  } catch (err: unknown) {
+                    const axiosErr = err as { response?: { data?: { message?: string } } };
+                    setError(axiosErr.response?.data?.message || 'Failed to clear read notifications');
                   }
                 }}
                 className="text-sm text-nilin-warmGray hover:text-nilin-coral transition-colors"
@@ -289,6 +424,8 @@ const NotificationsPage: React.FC = () => {
                 Clear all read notifications
               </button>
             </div>
+          )}
+          </>
           )}
         </div>
       </div>

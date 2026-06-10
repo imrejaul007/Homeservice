@@ -272,9 +272,9 @@ const ChangePassword: React.FC<ChangePasswordProps> = ({ onSuccess, onCancel }) 
             <ul className="space-y-1 text-sm text-gray-600">
               <li className="flex items-center">
                 <CheckCircle className={`h-4 w-4 mr-2 ${
-                  watchedNewPassword && watchedNewPassword.length >= 8 ? 'text-green-500' : 'text-gray-300'
+                  watchedNewPassword && watchedNewPassword.length >= 12 ? 'text-green-500' : 'text-gray-300'
                 }`} />
-                At least 8 characters
+                At least 12 characters
               </li>
               <li className="flex items-center">
                 <CheckCircle className={`h-4 w-4 mr-2 ${

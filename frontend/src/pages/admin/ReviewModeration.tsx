@@ -20,6 +20,8 @@ import {
   RefreshCw,
   Info,
   Link2,
+  ThumbsUp,
+  TrendingUp,
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { AdminPageShell } from '../../components/admin/AdminPageShell';
@@ -395,6 +397,77 @@ const ReviewModeration: React.FC = () => {
                   </p>
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* Rating Distribution and Helpful Votes */}
+          {stats && stats.total > 0 && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {/* Rating Distribution */}
+              <div className="glass glass-blur rounded-2xl border border-nilin-border/50 p-5">
+                <div className="flex items-center gap-2 mb-4">
+                  <TrendingUp className="w-5 h-5 text-nilin-coral" />
+                  <h4 className="text-sm font-semibold text-nilin-charcoal">Rating Distribution</h4>
+                </div>
+                <div className="space-y-2">
+                  {[5, 4, 3, 2, 1].map((rating) => {
+                    const count = stats.ratingDistribution[rating] || 0;
+                    const percentage = stats.total > 0
+                      ? Math.round((count / stats.total) * 100)
+                      : 0;
+
+                    return (
+                      <div key={rating} className="flex items-center gap-3">
+                        <div className="flex items-center gap-1 w-12">
+                          <span className="text-sm font-medium text-nilin-charcoal">{rating}</span>
+                          <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
+                        </div>
+                        <div className="flex-1 h-2 bg-nilin-muted rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-gradient-to-r from-amber-400 to-amber-500 rounded-full transition-all duration-500"
+                            style={{ width: `${percentage}%` }}
+                          />
+                        </div>
+                        <span className="text-sm text-nilin-warmGray w-12 text-right">{count} ({percentage}%)</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Top Helpful Reviews */}
+              <div className="glass glass-blur rounded-2xl border border-nilin-border/50 p-5">
+                <div className="flex items-center gap-2 mb-4">
+                  <ThumbsUp className="w-5 h-5 text-emerald-600" />
+                  <h4 className="text-sm font-semibold text-nilin-charcoal">Helpful Reviews</h4>
+                </div>
+                {reviews.filter(r => r.helpfulVotes > 0).length > 0 ? (
+                  <div className="space-y-2">
+                    {reviews
+                      .filter(r => r.helpfulVotes > 0)
+                      .sort((a, b) => b.helpfulVotes - a.helpfulVotes)
+                      .slice(0, 5)
+                      .map((review) => (
+                        <div key={review._id} className="flex items-center justify-between p-2 bg-nilin-muted/30 rounded-lg">
+                          <div className="flex items-center gap-2">
+                            <StarRating rating={review.rating} size={14} />
+                            <span className="text-sm text-nilin-charcoal truncate max-w-[200px]">
+                              {review.title || review.comment.substring(0, 30)}
+                            </span>
+                          </div>
+                          <span className="flex items-center gap-1 text-sm text-emerald-600">
+                            <ThumbsUp className="w-3.5 h-3.5" />
+                            {review.helpfulVotes}
+                          </span>
+                        </div>
+                      ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-nilin-warmGray text-center py-4">
+                    No helpful votes yet
+                  </p>
+                )}
+              </div>
             </div>
           )}
 

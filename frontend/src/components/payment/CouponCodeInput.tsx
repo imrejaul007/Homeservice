@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Tag, CheckCircle, XCircle, Loader2 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
@@ -35,6 +35,17 @@ const CouponCodeInput: React.FC<CouponCodeInputProps> = ({
   const [success, setSuccess] = useState<string | null>(null);
   const [isExpanded, setIsExpanded] = useState(false);
 
+  // FIX: Add debounce for code input
+  const [debouncedCode, setDebouncedCode] = useState('');
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedCode(code);
+    }, 500); // 500ms debounce
+
+    return () => clearTimeout(timer);
+  }, [code]);
+
   const formatAmount = (amount: number) => {
     return new Intl.NumberFormat('en-AE', {
       style: 'currency',
@@ -60,6 +71,7 @@ const CouponCodeInput: React.FC<CouponCodeInputProps> = ({
       if (result.valid) {
         setSuccess(result.message || `Coupon applied: ${formatAmount(result.discountAmount || 0)} off`);
         setCode('');
+        setDebouncedCode('');
         setIsExpanded(false);
       } else {
         setError(result.message || 'Invalid coupon code');
@@ -167,6 +179,8 @@ const CouponCodeInput: React.FC<CouponCodeInputProps> = ({
                 onKeyDown={handleKeyDown}
                 placeholder="Enter coupon code"
                 disabled={disabled || isValidating}
+                // FIX: Show format hint (6+ alphanumeric characters)
+                title="Enter 6 or more alphanumeric characters"
                 className={cn(
                   "w-full px-4 py-2.5 rounded-xl border-2 transition-colors",
                   "bg-white text-gray-900 placeholder-gray-400",
@@ -176,6 +190,12 @@ const CouponCodeInput: React.FC<CouponCodeInputProps> = ({
                 )}
                 maxLength={20}
               />
+              {/* FIX: Show format guidance */}
+              {!code && (
+                <p className="text-xs text-nilin-warmGray mt-1">
+                  Enter 6+ alphanumeric characters (e.g., SUMMER20)
+                </p>
+              )}
               {isValidating && (
                 <div className="absolute right-3 top-1/2 -translate-y-1/2">
                   <Loader2 className="w-5 h-5 text-nilin-rose animate-spin" />

@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import User from '../models/user.model';
+import BookingNotification from '../models/bookingNotification.model';
 import authMiddleware from '../middleware/auth.middleware';
 import { asyncHandler } from '../utils/asyncHandler';
 import Joi from 'joi';
@@ -7,6 +8,7 @@ import { ApiError, ERROR_CODES } from '../utils/ApiError';
 import logger from '../utils/logger';
 import { notificationAnalyticsService } from '../services/notificationAnalytics.service';
 import { notificationService, NotificationType } from '../services/notification.service';
+import { formatNotificationForApi } from '../utils/notificationHelpers';
 
 const router = Router();
 
@@ -15,14 +17,14 @@ const router = Router();
 // ============================================
 
 const registerDeviceSchema = Joi.object({
-  deviceToken: Joi.string().required().min(1).messages({
-    'string.empty': 'deviceToken is required',
-    'any.required': 'deviceToken is required',
-  }),
+  deviceToken: Joi.string().min(1),
+  token: Joi.string().min(1),
   platform: Joi.string().required().valid('ios', 'android', 'web').messages({
     'any.only': 'platform must be one of: ios, android, web',
     'any.required': 'platform is required',
   }),
+}).or('deviceToken', 'token').messages({
+  'object.missing': 'deviceToken or token is required',
 });
 
 const unregisterDeviceSchema = Joi.object({
@@ -33,9 +35,10 @@ const unregisterDeviceSchema = Joi.object({
 });
 
 const notificationIdParamSchema = Joi.object({
-  notificationId: Joi.string().required().messages({
+  notificationId: Joi.string().regex(/^[0-9a-fA-F]{24}$/).required().messages({
     'string.empty': 'Notification ID is required',
     'any.required': 'Notification ID is required',
+    'string.pattern.base': 'Invalid notification ID format',
   }),
 });
 
@@ -84,17 +87,22 @@ const updatePreferencesSchema = Joi.object({
     reminders: Joi.boolean(),
     newsletters: Joi.boolean(),
     promotions: Joi.boolean(),
+    reviews: Joi.boolean(),
+    paymentUpdates: Joi.boolean(),
+    loyaltyUpdates: Joi.boolean(),
   }),
   sms: Joi.object({
     bookingUpdates: Joi.boolean(),
     reminders: Joi.boolean(),
     promotions: Joi.boolean(),
+    newMessages: Joi.boolean(),
   }),
   push: Joi.object({
     bookingUpdates: Joi.boolean(),
     reminders: Joi.boolean(),
     newMessages: Joi.boolean(),
     promotions: Joi.boolean(),
+    marketing: Joi.boolean(),
   }),
   quietHours: Joi.object({
     enabled: Joi.boolean(),
@@ -103,9 +111,12 @@ const updatePreferencesSchema = Joi.object({
     timezone: Joi.string(),
   }),
   language: Joi.string().valid('en', 'ar', 'fr', 'es', 'de', 'zh'),
-  timezone: Joi.string(),
+  timezone: Joi.string().valid(
+    'Asia/Dubai', 'Asia/Riyadh', 'Asia/Kolkata', 'Europe/London',
+    'America/New_York', 'America/Los_Angeles', 'UTC'
+  ),
   currency: Joi.string().valid('AED', 'USD', 'EUR', 'GBP'),
-});
+}).min(1);
 
 // ============================================
 // GET Notification Preferences
@@ -122,16 +133,18 @@ const getPreferences = asyncHandler(async (req: Request, res: Response): Promise
     });
   }
 
+  const prefs = userDoc.communicationPreferences ?? {};
+
   return res.json({
     success: true,
     data: {
-      email: userDoc.communicationPreferences.email,
-      sms: userDoc.communicationPreferences.sms,
-      push: userDoc.communicationPreferences.push,
-      quietHours: userDoc.communicationPreferences.quietHours,
-      language: userDoc.communicationPreferences.language,
-      timezone: userDoc.communicationPreferences.timezone,
-      currency: userDoc.communicationPreferences.currency,
+      email: prefs.email ?? {},
+      sms: prefs.sms ?? {},
+      push: prefs.push ?? {},
+      quietHours: prefs.quietHours ?? { enabled: false, startTime: '22:00', endTime: '08:00', timezone: 'UTC' },
+      language: prefs.language ?? 'en',
+      timezone: prefs.timezone ?? 'Asia/Dubai',
+      currency: prefs.currency ?? 'AED',
     },
   });
 });
@@ -202,6 +215,9 @@ const updatePreferences = asyncHandler(async (req: Request, res: Response): Prom
 
   await userDoc.save({ validateBeforeSave: false });
 
+  const { bustUserChannelCache } = await import('../services/notificationTrigger.service');
+  await bustUserChannelCache(user._id.toString());
+
   return res.json({
     success: true,
     message: 'Notification preferences updated successfully',
@@ -222,8 +238,8 @@ const updatePreferences = asyncHandler(async (req: Request, res: Response): Prom
 // ============================================
 
 interface Notification {
-  _id: string;
-  type: 'booking' | 'payment' | 'review' | 'system' | 'promotion';
+  id: string; // Maps _id to id for frontend compatibility
+  type: 'booking' | 'payment' | 'review' | 'system' | 'promotion' | 'message';
   title: string;
   message: string;
   isRead: boolean;
@@ -232,45 +248,30 @@ interface Notification {
   readAt?: Date;
 }
 
-// Get notifications
+// Get notifications (unified BookingNotification store)
 const getNotifications = asyncHandler(async (req: Request, res: Response) => {
   const user = req.user as any;
   const { page = '1', limit = '20', unreadOnly } = req.query;
 
-  const userDoc = await User.findById(user._id);
-  if (!userDoc) {
-    throw ApiError.notFound('User not found', ERROR_CODES.USER_NOT_FOUND);
-  }
+  await notificationService.migrateLegacyNotifications(user._id.toString());
 
-  let notifications: Notification[] = (userDoc as any).notifications || [];
+  const pageNum = Math.max(1, parseInt(page as string, 10) || 1);
+  const limitNum = Math.min(Math.max(1, parseInt(limit as string, 10) || 20), 100);
 
-  // Filter unread only if requested
-  if (unreadOnly === 'true') {
-    notifications = notifications.filter(n => !n.isRead);
-  }
-
-  // Sort by createdAt descending
-  notifications.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-
-  // Pagination
-  const pageNum = parseInt(page as string, 10);
-  const limitNum = parseInt(limit as string, 10);
-  const startIndex = (pageNum - 1) * limitNum;
-  const endIndex = startIndex + limitNum;
-
-  const paginatedNotifications = notifications.slice(startIndex, endIndex);
-
-  // Count unread
-  const unreadCount = (userDoc as any).notifications?.filter((n: Notification) => !n.isRead).length || 0;
+  const result = await notificationService.getUserNotifications(user._id.toString(), {
+    page: pageNum,
+    limit: limitNum,
+    unreadOnly: unreadOnly === 'true',
+  });
 
   res.json({
     success: true,
     data: {
-      notifications: paginatedNotifications,
-      total: notifications.length,
-      unreadCount,
-      page: pageNum,
-      pages: Math.ceil(notifications.length / limitNum),
+      notifications: result.notifications.map(formatNotificationForApi),
+      total: result.pagination.total,
+      unreadCount: result.unreadCount,
+      page: result.pagination.page,
+      pages: result.pagination.pages,
     },
   });
 });
@@ -279,17 +280,15 @@ const getNotifications = asyncHandler(async (req: Request, res: Response) => {
 const getUnreadCount = asyncHandler(async (req: Request, res: Response): Promise<Response> => {
   const user = req.user as any;
 
-  const userDoc = await User.findById(user._id);
-  if (!userDoc) {
-    return res.json({ success: true, data: { count: 0 } });
-  }
-
-  const notifications: Notification[] = (userDoc as any).notifications || [];
-  const unreadCount = notifications.filter(n => !n.isRead).length;
+  await notificationService.migrateLegacyNotifications(user._id.toString());
+  const result = await notificationService.getUserNotifications(user._id.toString(), {
+    page: 1,
+    limit: 1,
+  });
 
   return res.json({
     success: true,
-    data: { count: unreadCount },
+    data: { count: result.unreadCount },
   });
 });
 
@@ -302,52 +301,29 @@ const markAsRead = asyncHandler(async (req: Request, res: Response) => {
   }
   const { notificationId } = value;
 
-  const userDoc = await User.findById(user._id);
-  if (!userDoc) {
-    throw ApiError.notFound('User not found', ERROR_CODES.USER_NOT_FOUND);
-  }
+  const existing = await BookingNotification.findOne({
+    _id: notificationId,
+    recipientId: user._id,
+  });
 
-  const notifications: Notification[] = (userDoc as any).notifications || [];
-  const notificationIndex = notifications.findIndex(n => n._id.toString() === notificationId);
-
-  if (notificationIndex === -1) {
+  if (!existing) {
     throw ApiError.notFound('Notification not found', ERROR_CODES.NOT_FOUND);
   }
 
-  // FIX: Update the notification in place and save
-  notifications[notificationIndex].isRead = true;
-  notifications[notificationIndex].readAt = new Date();
-  (userDoc as any).notifications = notifications;
-  await userDoc.save({ validateBeforeSave: false });
+  await notificationService.markAsRead(notificationId, user._id.toString());
 
+  const updated = await BookingNotification.findById(notificationId);
   res.json({
     success: true,
     message: 'Notification marked as read',
-    data: { notification: notifications[notificationIndex] },
+    data: { notification: formatNotificationForApi(updated) },
   });
 });
 
 // Mark all as read
 const markAllAsRead = asyncHandler(async (req: Request, res: Response) => {
   const user = req.user as any;
-
-  const userDoc = await User.findById(user._id);
-  if (!userDoc) {
-    throw ApiError.notFound('User not found', ERROR_CODES.USER_NOT_FOUND);
-  }
-
-  const notifications: Notification[] = (userDoc as any).notifications || [];
-  const now = new Date();
-
-  notifications.forEach(n => {
-    if (!n.isRead) {
-      n.isRead = true;
-      n.readAt = now;
-    }
-  });
-
-  (userDoc as any).notifications = notifications;
-  await userDoc.save({ validateBeforeSave: false });
+  await notificationService.markAllAsRead(user._id.toString());
 
   res.json({
     success: true,
@@ -364,21 +340,16 @@ const deleteNotification = asyncHandler(async (req: Request, res: Response) => {
   }
   const { notificationId } = value;
 
-  const userDoc = await User.findById(user._id);
-  if (!userDoc) {
-    throw ApiError.notFound('User not found', ERROR_CODES.USER_NOT_FOUND);
-  }
+  const existing = await BookingNotification.findOne({
+    _id: notificationId,
+    recipientId: user._id,
+  });
 
-  const notifications: Notification[] = (userDoc as any).notifications || [];
-  const index = notifications.findIndex(n => n._id.toString() === notificationId);
-
-  if (index === -1) {
+  if (!existing) {
     throw ApiError.notFound('Notification not found', ERROR_CODES.NOT_FOUND);
   }
 
-  notifications.splice(index, 1);
-  (userDoc as any).notifications = notifications;
-  await userDoc.save({ validateBeforeSave: false });
+  await notificationService.deleteNotification(notificationId, user._id.toString());
 
   res.json({
     success: true,
@@ -389,21 +360,12 @@ const deleteNotification = asyncHandler(async (req: Request, res: Response) => {
 // Delete all read notifications
 const deleteAllRead = asyncHandler(async (req: Request, res: Response) => {
   const user = req.user as any;
-
-  const userDoc = await User.findById(user._id);
-  if (!userDoc) {
-    throw ApiError.notFound('User not found', ERROR_CODES.USER_NOT_FOUND);
-  }
-
-  const notifications: Notification[] = (userDoc as any).notifications || [];
-  const unreadNotifications = notifications.filter(n => !n.isRead);
-
-  (userDoc as any).notifications = unreadNotifications;
-  await userDoc.save({ validateBeforeSave: false });
+  const deletedCount = await notificationService.deleteReadNotifications(user._id.toString());
 
   res.json({
     success: true,
     message: 'All read notifications deleted',
+    data: { deletedCount },
   });
 });
 
@@ -415,6 +377,16 @@ const deleteAllRead = asyncHandler(async (req: Request, res: Response) => {
 const trackDelivery = asyncHandler(async (req: Request, res: Response) => {
   const user = req.user as any;
   const { notificationId, channel } = req.body;
+
+  // FIX: IDOR protection - verify notification belongs to authenticated user
+  const notification = await BookingNotification.findOne({
+    _id: notificationId,
+    recipientId: user._id,
+  });
+
+  if (!notification) {
+    throw ApiError.notFound('Notification not found', ERROR_CODES.NOT_FOUND);
+  }
 
   await notificationAnalyticsService.trackDelivery(
     notificationId,
@@ -434,6 +406,16 @@ const trackClick = asyncHandler(async (req: Request, res: Response) => {
   const user = req.user as any;
   const { notificationId, channel } = req.body;
 
+  // FIX: IDOR protection - verify notification belongs to authenticated user
+  const notification = await BookingNotification.findOne({
+    _id: notificationId,
+    recipientId: user._id,
+  });
+
+  if (!notification) {
+    throw ApiError.notFound('Notification not found', ERROR_CODES.NOT_FOUND);
+  }
+
   await notificationAnalyticsService.trackClick(
     notificationId,
     user._id,
@@ -450,6 +432,16 @@ const trackClick = asyncHandler(async (req: Request, res: Response) => {
 const trackView = asyncHandler(async (req: Request, res: Response) => {
   const user = req.user as any;
   const { notificationId, channel } = req.body;
+
+  // FIX: IDOR protection - verify notification belongs to authenticated user
+  const notification = await BookingNotification.findOne({
+    _id: notificationId,
+    recipientId: user._id,
+  });
+
+  if (!notification) {
+    throw ApiError.notFound('Notification not found', ERROR_CODES.NOT_FOUND);
+  }
 
   await notificationAnalyticsService.trackView(
     notificationId,
@@ -500,7 +492,8 @@ const registerDevice = asyncHandler(async (req: Request, res: Response) => {
     });
   }
 
-  const { deviceToken, platform } = value;
+  const deviceToken = value.deviceToken || value.token;
+  const { platform } = value;
   const userId = (req as any).user._id;
 
   const userDoc = await User.findById(userId);
@@ -640,9 +633,10 @@ router.get('/',
   getNotifications
 );
 
-// Send notification endpoint (admin/provider only)
+// Send notification endpoint (admin only - IDOR protection)
 router.post('/send',
   authMiddleware.authenticate,
+  authMiddleware.requireRole('admin'),
   sendNotification
 );
 
@@ -651,14 +645,13 @@ router.get('/unread-count',
   getUnreadCount
 );
 
+// ============================================
+// ROUTES WITH :notificationId - Specific routes BEFORE parameterized /:notificationId
+// ============================================
+
 router.patch('/:notificationId/read',
   authMiddleware.authenticate,
   markAsRead
-);
-
-router.post('/mark-all-read',
-  authMiddleware.authenticate,
-  markAllAsRead
 );
 
 router.delete('/:notificationId',
@@ -666,7 +659,12 @@ router.delete('/:notificationId',
   deleteNotification
 );
 
-router.delete('/read/all',
+router.post('/mark-all-read',
+  authMiddleware.authenticate,
+  markAllAsRead
+);
+
+router.delete('/read',
   authMiddleware.authenticate,
   deleteAllRead
 );
@@ -701,6 +699,336 @@ router.post('/analytics/view',
 router.get('/analytics/summary',
   authMiddleware.authenticate,
   getAnalyticsSummary
+);
+
+// ============================================
+// Digest Routes
+// ============================================
+
+// Get digest preferences
+router.get('/digest/preferences',
+  authMiddleware.authenticate,
+  asyncHandler(async (req: Request, res: Response) => {
+    const user = req.user as any;
+    const { notificationDigestService } = await import('../services/notifications/notificationDigest.service');
+
+    const preferences = await notificationDigestService.getPreferences(user._id);
+
+    res.json({
+      success: true,
+      data: preferences,
+    });
+  })
+);
+
+const digestPreferencesSchema = Joi.object({
+  enabled: Joi.boolean(),
+  frequency: Joi.string().valid('realtime', 'hourly', 'daily', 'weekly'),
+  scheduledTime: Joi.string().pattern(/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/),
+  scheduledDays: Joi.array().items(Joi.number().min(0).max(6)),
+  channels: Joi.object({
+    email: Joi.boolean(),
+    sms: Joi.boolean(),
+    push: Joi.boolean(),
+    whatsapp: Joi.boolean(),
+    telegram: Joi.boolean(),
+  }),
+  types: Joi.object({
+    bookingUpdates: Joi.boolean(),
+    reminders: Joi.boolean(),
+    promotions: Joi.boolean(),
+    messages: Joi.boolean(),
+    system: Joi.boolean(),
+  }),
+  quietHours: Joi.object({
+    enabled: Joi.boolean(),
+    startTime: Joi.string(),
+    endTime: Joi.string(),
+    timezone: Joi.string(),
+  }),
+});
+
+// Update digest preferences
+router.patch('/digest/preferences',
+  authMiddleware.authenticate,
+  asyncHandler(async (req: Request, res: Response) => {
+    const user = req.user as any;
+    const { error, value } = digestPreferencesSchema.validate(req.body);
+    if (error) {
+      return res.status(400).json({
+        success: false,
+        message: error.details[0].message,
+      });
+    }
+
+    const { notificationDigestService } = await import('../services/notifications/notificationDigest.service');
+
+    const updatedPreferences = await notificationDigestService.updatePreferences(user._id, value);
+
+    return res.json({
+      success: true,
+      message: 'Digest preferences updated successfully',
+      data: updatedPreferences,
+    });
+  })
+);
+
+// Get digest schedule
+router.get('/digest/schedule',
+  authMiddleware.authenticate,
+  asyncHandler(async (req: Request, res: Response) => {
+    const user = req.user as any;
+    const { notificationDigestService } = await import('../services/notifications/notificationDigest.service');
+
+    const schedule = await notificationDigestService.getDigestSchedule(user._id);
+
+    res.json({
+      success: true,
+      data: {
+        frequency: schedule?.frequency || 'daily',
+        nextRun: schedule?.nextRun?.toISOString(),
+        lastRun: schedule?.lastRun?.toISOString(),
+      },
+    });
+  })
+);
+
+// ============================================
+// WhatsApp Routes
+// ============================================
+
+// Get WhatsApp status
+router.get('/whatsapp/status',
+  authMiddleware.authenticate,
+  asyncHandler(async (req: Request, res: Response) => {
+    const user = req.user as any;
+    const { whatsAppService } = await import('../services/notifications/whatsapp.service');
+
+    if (!whatsAppService.isConfigured()) {
+      res.json({
+        success: true,
+        data: { enabled: false, configured: false },
+      });
+      return;
+    }
+
+    const status = await whatsAppService.getOptInStatus(user._id.toString());
+
+    res.json({
+      success: true,
+      data: {
+        enabled: status.enabled,
+        optedOutAt: status.optedOutAt?.toISOString(),
+        optedInAt: status.optedInAt?.toISOString(),
+      },
+    });
+  })
+);
+
+// Enable WhatsApp notifications
+router.post('/whatsapp/enable',
+  authMiddleware.authenticate,
+  asyncHandler(async (req: Request, res: Response) => {
+    const user = req.user as any;
+    const { whatsAppService } = await import('../services/notifications/whatsapp.service');
+
+    if (!whatsAppService.isConfigured()) {
+      res.status(503).json({
+        success: false,
+        message: 'WhatsApp integration is not configured',
+      });
+      return;
+    }
+
+    await whatsAppService.setOptInStatus(user._id.toString(), true);
+
+    res.json({
+      success: true,
+      message: 'WhatsApp notifications enabled successfully',
+    });
+  })
+);
+
+// Disable WhatsApp notifications
+router.post('/whatsapp/disable',
+  authMiddleware.authenticate,
+  asyncHandler(async (req: Request, res: Response) => {
+    const user = req.user as any;
+    const { whatsAppService } = await import('../services/notifications/whatsapp.service');
+
+    await whatsAppService.setOptInStatus(user._id.toString(), false);
+
+    res.json({
+      success: true,
+      message: 'WhatsApp notifications disabled successfully',
+    });
+  })
+);
+
+// ============================================
+// Telegram Routes
+// ============================================
+
+// Get Telegram status
+router.get('/telegram/status',
+  authMiddleware.authenticate,
+  asyncHandler(async (req: Request, res: Response) => {
+    const user = req.user as any;
+    const userDoc = await User.findById(user._id);
+
+    res.json({
+      success: true,
+      data: {
+        linked: !!userDoc?.telegramChatId,
+        enabled: !!userDoc?.telegramChatId,
+        username: userDoc?.telegramUsername,
+      },
+    });
+  })
+);
+
+// Get Telegram deep link
+router.get('/telegram/link',
+  authMiddleware.authenticate,
+  asyncHandler(async (req: Request, res: Response) => {
+    const user = req.user as any;
+    const { telegramService } = await import('../services/notifications/telegram.service');
+
+    if (!telegramService.isConfigured()) {
+      res.status(503).json({
+        success: false,
+        message: 'Telegram integration is not configured',
+      });
+      return;
+    }
+
+    const botUsername = process.env.TELEGRAM_BOT_USERNAME || '';
+    if (!botUsername) {
+      res.status(503).json({
+        success: false,
+        message: 'TELEGRAM_BOT_USERNAME is not configured',
+      });
+      return;
+    }
+    const link = `https://t.me/${botUsername.replace('@', '')}?start=${user._id.toString()}`;
+
+    res.json({
+      success: true,
+      data: { link },
+    });
+  })
+);
+
+// Unlink Telegram
+router.post('/telegram/unlink',
+  authMiddleware.authenticate,
+  asyncHandler(async (req: Request, res: Response) => {
+    const user = req.user as any;
+    const userDoc = await User.findById(user._id);
+
+    if (userDoc) {
+      userDoc.telegramChatId = undefined;
+      userDoc.telegramUsername = undefined;
+      await userDoc.save();
+    }
+
+    res.json({
+      success: true,
+      message: 'Telegram account unlinked successfully',
+    });
+  })
+);
+
+// ============================================
+// Web Push Routes
+// ============================================
+
+// Get Web Push public key
+router.get('/push/key',
+  authMiddleware.authenticate,
+  asyncHandler(async (req: Request, res: Response) => {
+    const { webPushService } = await import('../services/notifications/webpush.service');
+    const publicKey = webPushService.getPublicKey();
+
+    res.json({
+      success: true,
+      data: { publicKey },
+    });
+  })
+);
+
+// Subscribe to push notifications
+router.post('/push/subscribe',
+  authMiddleware.authenticate,
+  asyncHandler(async (req: Request, res: Response) => {
+    const user = req.user as any;
+    const { webPushService } = await import('../services/notifications/webpush.service');
+
+    const { subscription } = req.body;
+
+    if (!subscription || !subscription.endpoint) {
+      res.status(400).json({
+        success: false,
+        message: 'Invalid subscription data',
+      });
+      return;
+    }
+
+    const result = await webPushService.saveSubscription(user._id.toString(), subscription);
+
+    res.json({
+      success: result.success,
+      message: result.success ? 'Push subscription successful' : result.error,
+    });
+  })
+);
+
+// Unsubscribe from push notifications
+router.post('/push/unsubscribe',
+  authMiddleware.authenticate,
+  asyncHandler(async (req: Request, res: Response) => {
+    const user = req.user as any;
+    const { webPushService } = await import('../services/notifications/webpush.service');
+
+    const { endpoint } = req.body;
+
+    if (!endpoint) {
+      res.status(400).json({
+        success: false,
+        message: 'Endpoint is required',
+      });
+      return;
+    }
+
+    const result = await webPushService.removeSubscription(user._id.toString(), endpoint);
+
+    res.json({
+      success: result.success,
+      message: result.success ? 'Push unsubscription successful' : result.error,
+    });
+  })
+);
+
+// Get push subscription status
+router.get('/push/status',
+  authMiddleware.authenticate,
+  asyncHandler(async (req: Request, res: Response) => {
+    const user = req.user as any;
+    const { webPushService } = await import('../services/notifications/webpush.service');
+
+    const subscriptions = await webPushService.getUserSubscriptions(user._id.toString());
+
+    res.json({
+      success: true,
+      data: {
+        subscribed: subscriptions.length > 0,
+        subscriptions: subscriptions.map((sub: any) => ({
+          endpoint: sub.endpoint,
+          createdAt: sub.createdAt?.toISOString(),
+        })),
+      },
+    });
+  })
 );
 
 export default router;

@@ -381,6 +381,15 @@ export class BulkDiscountService {
         return { success: false, error: 'Booking not found' };
       }
 
+      // FIX: Double-Discount Prevention - Check for existing coupons
+      const pricing = booking.pricing as any;
+      if (pricing.couponDiscount && pricing.couponDiscount > 0) {
+        return {
+          success: false,
+          error: 'Cannot apply bulk discount. A coupon discount is already applied. Only one discount type can be used per booking.',
+        };
+      }
+
       const discountId = this.generateDiscountId();
       const customerObjectId = (booking.customerId as Types.ObjectId) || new Types.ObjectId();
 
@@ -409,9 +418,9 @@ export class BulkDiscountService {
 
       // Update booking pricing
       booking.pricing = booking.pricing || {};
-      const pricing = booking.pricing as any;
+      const updatedPricing = booking.pricing as any;
 
-      pricing.bulkDiscount = {
+      updatedPricing.bulkDiscount = {
         discountId,
         discountPercent: calculation.discountPercent,
         discountAmount: calculation.discountAmount,
@@ -422,7 +431,7 @@ export class BulkDiscountService {
       };
 
       // Add discount to pricing discounts array
-      pricing.discounts = pricing.discounts || [];
+      updatedPricing.discounts = updatedPricing.discounts || [];
       pricing.discounts.push({
         type: 'bulk',
         code: `BULK-${calculation.currentBookingCount}`,
@@ -431,11 +440,11 @@ export class BulkDiscountService {
       });
 
       // Recalculate total
-      const subtotal = pricing.subtotal || calculation.originalAmount;
-      const otherDiscounts = pricing.discounts
+      const subtotal = updatedPricing.subtotal || calculation.originalAmount;
+      const otherDiscounts = updatedPricing.discounts
         .filter((d: any) => d.type !== 'bulk')
         .reduce((sum: number, d: any) => sum + d.amount, 0);
-      pricing.totalAmount = Math.max(0, calculation.finalAmount);
+      updatedPricing.totalAmount = Math.max(0, calculation.finalAmount);
       pricing.discount = calculation.discountAmount + otherDiscounts;
 
       await booking.save();

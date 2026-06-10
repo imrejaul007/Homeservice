@@ -22,6 +22,7 @@ import { toast } from 'react-hot-toast';
 import type { Booking } from '../../types/booking.types';
 import { useBookingStore } from '../../stores/bookingStore';
 import { useAuthStore } from '../../stores/authStore';
+import { useSocketEvent } from '../../hooks/useSocket';
 
 // =============================================================================
 // Types
@@ -109,13 +110,14 @@ const OngoingBookings: React.FC<OngoingBookingsProps> = ({
   const {
     customerBookings,
     isLoading,
-    errors,
+    errors: storeErrors,
     getCustomerBookings,
   } = useBookingStore();
 
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [progressKey, setProgressKey] = useState(0); // Force re-render for progress updates
   const prevProgressRef = useRef<Map<string, number>>(new Map());
+  const isMounted = useRef(true);
 
   const fetchBookings = useCallback(async () => {
     try {
@@ -126,6 +128,7 @@ const OngoingBookings: React.FC<OngoingBookingsProps> = ({
       });
     } catch (err) {
       console.error('Failed to fetch bookings:', err);
+      toast.error('Failed to load bookings. Please try again.');
     }
   }, [getCustomerBookings]);
 
@@ -133,16 +136,33 @@ const OngoingBookings: React.FC<OngoingBookingsProps> = ({
     fetchBookings();
   }, [fetchBookings]);
 
-  // Auto-refresh for live updates every 30 seconds
+  // Socket listener for real-time booking status updates
+  const ongoingBookingIds = customerBookings
+    .filter((booking) => booking.status === 'in_progress')
+    .map((booking) => booking._id);
+
+  useSocketEvent('booking:status_changed', (data) => {
+    // Refresh if this event is for a booking in our list
+    if (data.bookingId && ongoingBookingIds.includes(data.bookingId)) {
+      fetchBookings();
+      setProgressKey(prev => prev + 1);
+    }
+  });
+
+  // Fallback polling every 60 seconds (socket handles most real-time updates)
   useEffect(() => {
     const interval = setInterval(() => {
-      // Refresh data from store (WebSocket would be better in production)
+      // Guard against unmount during async fetch
+      if (!isMounted.current) return;
       fetchBookings();
       // Force re-render to update progress bars
       setProgressKey(prev => prev + 1);
-    }, 30000);
+    }, 60000);
 
-    return () => clearInterval(interval);
+    return () => {
+      isMounted.current = false;
+      clearInterval(interval);
+    };
   }, [fetchBookings]);
 
   const handleRefresh = async () => {
@@ -205,7 +225,7 @@ const OngoingBookings: React.FC<OngoingBookingsProps> = ({
     );
   }
 
-  if (errors.length > 0 && customerBookings.length === 0) {
+  if (storeErrors.length > 0 && customerBookings.length === 0) {
     return (
       <section className="py-6">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">

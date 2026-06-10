@@ -2,6 +2,8 @@ import { Router, Request, Response } from 'express';
 import { authenticate } from '../middleware/auth.middleware';
 import { asyncHandler } from '../utils/asyncHandler';
 import { ApiError, ERROR_CODES } from '../utils/ApiError';
+import { offerValidateLimiter } from '../middleware/rateLimiter';
+import { TAX_CONFIG } from '../config/constants';
 import Coupon from '../models/coupon.model';
 import Booking from '../models/booking.model';
 import Joi from 'joi';
@@ -12,15 +14,26 @@ const router = Router();
 // ============================================
 // Validation Schemas
 // ============================================
+// FIX P0-5: Standardize coupon code validation across all endpoints
 
 const validateCouponSchema = Joi.object({
-  code: Joi.string().required().min(3).max(50).uppercase(),
+  // FIX P0-5: min 6, max 20, alphanumeric only
+  code: Joi.string().required().min(6).max(20).pattern(/^[A-Z0-9]+$/).uppercase().messages({
+    'string.pattern.base': 'Coupon code must be alphanumeric (A-Z, 0-9 only)',
+    'string.min': 'Coupon code must be at least 6 characters',
+    'string.max': 'Coupon code cannot exceed 20 characters',
+  }),
   orderValue: Joi.number().required().min(0),
   serviceId: Joi.string().optional(),
 });
 
 const applyCouponSchema = Joi.object({
-  code: Joi.string().required().min(3).max(50).uppercase(),
+  // FIX P0-5: min 6, max 20, alphanumeric only
+  code: Joi.string().required().min(6).max(20).pattern(/^[A-Z0-9]+$/).uppercase().messages({
+    'string.pattern.base': 'Coupon code must be alphanumeric (A-Z, 0-9 only)',
+    'string.min': 'Coupon code must be at least 6 characters',
+    'string.max': 'Coupon code cannot exceed 20 characters',
+  }),
   bookingId: Joi.string().required(),
 });
 
@@ -88,9 +101,10 @@ async function checkUserCouponEligibility(
 
 /**
  * Get coupon by code with soft-delete filter
+ * FIX: Explicitly filter out soft-deleted coupons
  */
 async function findCouponByCode(code: string): Promise<any | null> {
-  return Coupon.findOne({ code: code.toUpperCase(), isDeleted: false });
+  return Coupon.findOne({ code: code.toUpperCase(), isDeleted: { $ne: true } });
 }
 
 // ============================================
@@ -101,9 +115,11 @@ async function findCouponByCode(code: string): Promise<any | null> {
  * POST /api/coupons/validate
  * Validate a coupon code and calculate discount for given order value
  * Returns: { valid: boolean, discount: number, couponCode: string, message?: string }
+ * FIX: Added rate limiting to prevent coupon code brute-forcing
  */
 router.post(
   '/validate',
+  offerValidateLimiter,
   authenticate,
   asyncHandler(async (req: Request, res: Response): Promise<void> => {
     const { error, value } = validateCouponSchema.validate(req.body);
@@ -255,7 +271,7 @@ router.get(
     const afterCoupon = Math.max(0, subtotal - couponDiscount);
 
     // Calculate tax (typically 5% VAT)
-    const taxRate = 0.05; // 5% VAT
+    const taxRate = TAX_CONFIG.RATE; // FIX: Use centralized tax configuration
     const tax = Math.round(afterCoupon * taxRate * 100) / 100;
 
     // Calculate total
@@ -315,9 +331,11 @@ router.get(
 /**
  * POST /api/coupons/apply
  * Apply a coupon to a booking (validates and stores the discount)
+ * FIX: Added rate limiting to prevent abuse
  */
 router.post(
   '/apply',
+  offerValidateLimiter,
   authenticate,
   asyncHandler(async (req: Request, res: Response) => {
     const { error, value } = applyCouponSchema.validate(req.body);
@@ -361,6 +379,19 @@ router.post(
       throw ApiError.badRequest('A coupon has already been applied to this booking', [], ERROR_CODES.VALIDATION_ERROR);
     }
 
+    // FIX: Double-Discount Prevention - Check for conflicting discounts
+    const existingDiscounts = booking.pricing.discounts || [];
+    const conflictingDiscount = existingDiscounts.find((d: any) =>
+      d.type === 'membership' || d.type === 'bulk' || d.type === 'loyalty'
+    );
+    if (conflictingDiscount) {
+      throw ApiError.badRequest(
+        `Cannot apply coupon. A ${conflictingDiscount.type} discount is already applied. Only one discount type can be used per booking.`,
+        [],
+        ERROR_CODES.VALIDATION_ERROR
+      );
+    }
+
     // Find coupon
     const coupon = await findCouponByCode(code);
 
@@ -399,8 +430,7 @@ router.post(
 
     // Update booking with coupon discount
     const newSubtotal = orderValue - discountAmount;
-    const taxRate = 0.05;
-    const newTax = Math.round(newSubtotal * taxRate * 100) / 100;
+    const newTax = Math.round(newSubtotal * TAX_CONFIG.RATE * 100) / 100;
     const newTotal = Math.round((newSubtotal + newTax) * 100) / 100;
 
     // Add coupon to discounts array with type 'coupon'
@@ -481,7 +511,7 @@ router.delete(
     // Recalculate pricing without coupon
     const addOnsTotal = booking.pricing.addOns?.reduce((sum: number, addon: { price: number }) => sum + addon.price, 0) || 0;
     const baseTotal = booking.pricing.basePrice + addOnsTotal;
-    const taxRate = 0.05;
+    const taxRate = TAX_CONFIG.RATE; // FIX: Use centralized tax configuration
     const newTax = Math.round(baseTotal * taxRate * 100) / 100;
     const newTotal = Math.round((baseTotal + newTax) * 100) / 100;
 

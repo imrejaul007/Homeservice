@@ -23,6 +23,7 @@ import { useAuthStore } from '../../stores/authStore';
 import { api } from '../../services/api';
 
 interface LoginSession {
+  sessionId: string;
   device: string;
   browser?: string;
   os?: string;
@@ -195,6 +196,20 @@ const ProfileSecurity: React.FC = () => {
     }
   };
 
+  const handleLogoutSession = async (login: LoginSession) => {
+    if (!confirm(`Are you sure you want to logout from "${login.device || 'this device'}"?`)) {
+      return;
+    }
+
+    try {
+      await api.delete(`/sessions/${login.sessionId}`);
+      setMessage({ type: 'success', text: 'Session logged out successfully' });
+      fetchLoginHistory();
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err.response?.data?.message || 'Failed to logout from this device' });
+    }
+  };
+
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
     return date.toLocaleDateString('en-US', {
@@ -219,8 +234,8 @@ const ProfileSecurity: React.FC = () => {
       return;
     }
 
-    if (passwordData.newPassword.length < 8) {
-      setMessage({ type: 'error', text: 'Password must be at least 8 characters' });
+    if (passwordData.newPassword.length < 12) {
+      setMessage({ type: 'error', text: 'Password must be at least 12 characters' });
       return;
     }
 
@@ -602,7 +617,10 @@ const ProfileSecurity: React.FC = () => {
                   </div>
                 </div>
                 {!login.isCurrent && (
-                  <button className="text-sm text-red-500 hover:text-red-600 flex items-center gap-1">
+                  <button
+                    onClick={() => handleLogoutSession(login)}
+                    className="text-sm text-red-500 hover:text-red-600 flex items-center gap-1"
+                  >
                     <LogOut className="w-4 h-4" />
                     Logout
                   </button>

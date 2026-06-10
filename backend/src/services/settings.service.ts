@@ -185,6 +185,8 @@ export const updateSettings = async (
   await settings.save();
   invalidateTransportCaches(updates);
   await invalidateSettingsCache();
+  // Invalidate in-memory cache on the model (used by middleware)
+  PlatformSettings.invalidateCache();
   await refreshPlatformPolicy(settings);
 
   return settings;

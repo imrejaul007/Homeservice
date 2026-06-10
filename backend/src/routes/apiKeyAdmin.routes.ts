@@ -455,11 +455,9 @@ router.get('/', getAllApiKeys);
  */
 router.post('/', createApiKey);
 
-/**
- * GET /api/admin/api-keys/:id
- * Get a specific API key
- */
-router.get('/:id', getApiKeyById);
+// ============================================
+// ROUTES WITH :id - Specific routes BEFORE parameterized /:id
+// ============================================
 
 /**
  * PATCH /api/admin/api-keys/:id
@@ -484,5 +482,11 @@ router.post('/:id/regenerate', regenerateApiKey);
  * Toggle API key active status
  */
 router.post('/:id/toggle', toggleApiKey);
+
+/**
+ * GET /api/admin/api-keys/:id
+ * Get a specific API key (must be last for /:id routes)
+ */
+router.get('/:id', getApiKeyById);
 
 export default router;

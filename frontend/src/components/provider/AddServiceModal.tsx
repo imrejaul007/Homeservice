@@ -8,7 +8,12 @@ import {
   AlertCircle,
   Loader2,
   Tag as TagIcon,
-  MapPin
+  MapPin,
+  Layers,
+  ChevronDown,
+  ChevronUp,
+  Trash2,
+  Edit3
 } from 'lucide-react';
 import authService from '../../services/AuthService';
 import { useCategories } from '../../hooks/useCategories';
@@ -20,6 +25,18 @@ interface AddServiceModalProps {
   isOpen: boolean;
   onClose: () => void;
   onServiceAdded: () => void;
+}
+
+interface DurationVariant {
+  duration: number;
+  price: number;
+  label: string;
+}
+
+interface AddOn {
+  name: string;
+  price: number;
+  description?: string;
 }
 
 interface ServiceFormData {
@@ -35,6 +52,8 @@ interface ServiceFormData {
     type: 'fixed' | 'hourly' | 'custom';
   };
   tags: string[];
+  durationOptions: DurationVariant[];
+  addOns: AddOn[];
 }
 
 export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClose, onServiceAdded }) => {
@@ -56,8 +75,20 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
       currency: 'AED',
       type: 'fixed'
     },
-    tags: []
+    tags: [],
+    durationOptions: [],
+    addOns: []
   });
+
+  // UI state for collapsible sections
+  const [showDurationVariants, setShowDurationVariants] = useState(false);
+  const [showAddOns, setShowAddOns] = useState(false);
+
+  // State for adding new duration variant
+  const [newVariant, setNewVariant] = useState<DurationVariant>({ duration: 30, price: 0, label: '' });
+
+  // State for adding new add-on
+  const [newAddOn, setNewAddOn] = useState<AddOn>({ name: '', price: 0, description: '' });
 
   // Fetch categories from API (single source of truth)
   const { categories, isLoading: categoriesLoading, error: categoriesError, refetch: refetchCategories } = useCategories();
@@ -97,7 +128,7 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleInputChange = (field: string, value: string | number | boolean | string[]) => {
+  const handleInputChange = (field: string, value: any) => {
     setFormData(prev => {
       const keys = field.split('.');
       if (keys.length === 1) {
@@ -163,6 +194,53 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
     handleInputChange('tags', formData.tags.filter(tag => tag !== tagToRemove));
   };
 
+  // Duration Variants Management
+  const addDurationVariant = () => {
+    if (!newVariant.label.trim()) {
+      return;
+    }
+    if (newVariant.duration < 15 || newVariant.duration > 480) {
+      return;
+    }
+    if (newVariant.price < 0) {
+      return;
+    }
+    handleInputChange('durationOptions', [...formData.durationOptions, { ...newVariant }]);
+    setNewVariant({ duration: 30, price: 0, label: '' });
+  };
+
+  const removeDurationVariant = (index: number) => {
+    handleInputChange('durationOptions', formData.durationOptions.filter((_, i) => i !== index));
+  };
+
+  const updateDurationVariant = (index: number, field: keyof DurationVariant, value: string | number) => {
+    const updated = [...formData.durationOptions];
+    updated[index] = { ...updated[index], [field]: value };
+    handleInputChange('durationOptions', updated);
+  };
+
+  // Add-Ons Management
+  const addAddOn = () => {
+    if (!newAddOn.name.trim()) {
+      return;
+    }
+    if (newAddOn.price < 0) {
+      return;
+    }
+    handleInputChange('addOns', [...formData.addOns, { ...newAddOn }]);
+    setNewAddOn({ name: '', price: 0, description: '' });
+  };
+
+  const removeAddOn = (index: number) => {
+    handleInputChange('addOns', formData.addOns.filter((_, i) => i !== index));
+  };
+
+  const updateAddOn = (index: number, field: keyof AddOn, value: string | number) => {
+    const updated = [...formData.addOns];
+    updated[index] = { ...updated[index], [field]: value };
+    handleInputChange('addOns', updated);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!validateForm()) return;
@@ -170,11 +248,19 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
     setIsLoading(true);
     try {
       const serviceData = {
-        ...formData,
+        name: formData.name,
+        category: formData.category,
+        subcategory: formData.subcategory,
+        description: formData.description,
+        shortDescription: formData.shortDescription,
+        duration: formData.duration,
         price:
           formData.price.type === 'custom'
             ? { ...formData.price, amount: 0 }
             : formData.price,
+        tags: formData.tags,
+        durationOptions: formData.durationOptions.length > 0 ? formData.durationOptions : undefined,
+        addOns: formData.addOns.length > 0 ? formData.addOns : undefined,
       };
 
       const data = await authService.post<{success: boolean}>('/provider/services', serviceData);
@@ -195,7 +281,9 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
           shortDescription: '',
           duration: 60,
           price: { amount: 0, currency: 'AED', type: 'fixed' },
-          tags: []
+          tags: [],
+          durationOptions: [],
+          addOns: []
         });
         setErrors({});
       }
@@ -510,6 +598,249 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ isOpen, onClos
               </button>
             </div>
             {errors.tags && <p className="mt-1.5 text-sm text-red-500">{errors.tags}</p>}
+          </div>
+
+          {/* Duration Variants */}
+          <div className="border-t border-nilin-border pt-6">
+            <button
+              type="button"
+              onClick={() => setShowDurationVariants(!showDurationVariants)}
+              className="w-full flex items-center justify-between text-left"
+            >
+              <div className="flex items-center gap-2">
+                <Layers className="w-5 h-5 text-nilin-coral" />
+                <span className="text-sm font-medium text-nilin-charcoal">
+                  Duration Variants
+                </span>
+                {formData.durationOptions.length > 0 && (
+                  <span className="px-2 py-0.5 text-xs bg-nilin-coral/10 text-nilin-coral rounded-full">
+                    {formData.durationOptions.length}
+                  </span>
+                )}
+              </div>
+              {showDurationVariants ? (
+                <ChevronUp className="w-5 h-5 text-nilin-warmGray" />
+              ) : (
+                <ChevronDown className="w-5 h-5 text-nilin-warmGray" />
+              )}
+            </button>
+
+            {showDurationVariants && (
+              <div className="mt-4 space-y-4">
+                <p className="text-xs text-nilin-warmGray">
+                  Offer multiple service options with different durations and prices (e.g., Express, Standard, Premium).
+                </p>
+
+                {/* Existing Variants */}
+                {formData.durationOptions.length > 0 && (
+                  <div className="space-y-2">
+                    {formData.durationOptions.map((variant, index) => (
+                      <div key={index} className="flex items-center gap-3 p-3 bg-nilin-muted/30 rounded-xl">
+                        <div className="flex-1 grid grid-cols-3 gap-2">
+                          <input
+                            type="text"
+                            value={variant.label}
+                            onChange={(e) => updateDurationVariant(index, 'label', e.target.value)}
+                            placeholder="Label (e.g., Express)"
+                            className="px-3 py-2 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
+                          />
+                          <div className="relative">
+                            <Clock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-nilin-warmGray" />
+                            <input
+                              type="number"
+                              value={variant.duration}
+                              onChange={(e) => updateDurationVariant(index, 'duration', parseInt(e.target.value) || 0)}
+                              min="15"
+                              max="480"
+                              placeholder="Minutes"
+                              className="w-full pl-10 pr-3 py-2 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
+                            />
+                          </div>
+                          <div className="relative">
+                            <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-nilin-warmGray" />
+                            <input
+                              type="number"
+                              value={variant.price}
+                              onChange={(e) => updateDurationVariant(index, 'price', parseFloat(e.target.value) || 0)}
+                              min="0"
+                              step="0.01"
+                              placeholder="Price"
+                              className="w-full pl-10 pr-3 py-2 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
+                            />
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => removeDurationVariant(index)}
+                          className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Add New Variant */}
+                <div className="flex items-end gap-3">
+                  <div className="flex-1 grid grid-cols-3 gap-2">
+                    <input
+                      type="text"
+                      value={newVariant.label}
+                      onChange={(e) => setNewVariant({ ...newVariant, label: e.target.value })}
+                      placeholder="Label (e.g., Premium)"
+                      className="px-3 py-2 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
+                    />
+                    <div className="relative">
+                      <Clock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-nilin-warmGray" />
+                      <input
+                        type="number"
+                        value={newVariant.duration}
+                        onChange={(e) => setNewVariant({ ...newVariant, duration: parseInt(e.target.value) || 0 })}
+                        min="15"
+                        max="480"
+                        placeholder="Minutes"
+                        className="w-full pl-10 pr-3 py-2 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
+                      />
+                    </div>
+                    <div className="relative">
+                      <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-nilin-warmGray" />
+                      <input
+                        type="number"
+                        value={newVariant.price}
+                        onChange={(e) => setNewVariant({ ...newVariant, price: parseFloat(e.target.value) || 0 })}
+                        min="0"
+                        step="0.01"
+                        placeholder="Price"
+                        className="w-full pl-10 pr-3 py-2 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
+                      />
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={addDurationVariant}
+                    disabled={!newVariant.label.trim()}
+                    className="px-4 py-2 bg-nilin-coral/10 text-nilin-coral rounded-lg hover:bg-nilin-coral/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                  >
+                    <Plus className="w-4 h-4" />
+                    Add
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Add-Ons */}
+          <div className="border-t border-nilin-border pt-6">
+            <button
+              type="button"
+              onClick={() => setShowAddOns(!showAddOns)}
+              className="w-full flex items-center justify-between text-left"
+            >
+              <div className="flex items-center gap-2">
+                <Plus className="w-5 h-5 text-nilin-coral" />
+                <span className="text-sm font-medium text-nilin-charcoal">
+                  Add-Ons
+                </span>
+                {formData.addOns.length > 0 && (
+                  <span className="px-2 py-0.5 text-xs bg-nilin-coral/10 text-nilin-coral rounded-full">
+                    {formData.addOns.length}
+                  </span>
+                )}
+              </div>
+              {showAddOns ? (
+                <ChevronUp className="w-5 h-5 text-nilin-warmGray" />
+              ) : (
+                <ChevronDown className="w-5 h-5 text-nilin-warmGray" />
+              )}
+            </button>
+
+            {showAddOns && (
+              <div className="mt-4 space-y-4">
+                <p className="text-xs text-nilin-warmGray">
+                  Offer optional extras that customers can add to their booking (e.g., Extra cleaning supplies, Express delivery).
+                </p>
+
+                {/* Existing Add-Ons */}
+                {formData.addOns.length > 0 && (
+                  <div className="space-y-2">
+                    {formData.addOns.map((addon, index) => (
+                      <div key={index} className="flex items-start gap-3 p-3 bg-nilin-muted/30 rounded-xl">
+                        <div className="flex-1 grid grid-cols-2 gap-2">
+                          <input
+                            type="text"
+                            value={addon.name}
+                            onChange={(e) => updateAddOn(index, 'name', e.target.value)}
+                            placeholder="Add-on name"
+                            className="px-3 py-2 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
+                          />
+                          <div className="relative">
+                            <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-nilin-warmGray" />
+                            <input
+                              type="number"
+                              value={addon.price}
+                              onChange={(e) => updateAddOn(index, 'price', parseFloat(e.target.value) || 0)}
+                              min="0"
+                              step="0.01"
+                              placeholder="Price"
+                              className="w-full pl-10 pr-3 py-2 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
+                            />
+                          </div>
+                        </div>
+                        <input
+                          type="text"
+                          value={addon.description || ''}
+                          onChange={(e) => updateAddOn(index, 'description', e.target.value)}
+                          placeholder="Description (optional)"
+                          className="w-full px-3 py-2 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => removeAddOn(index)}
+                          className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Add New Add-On */}
+                <div className="flex items-start gap-3">
+                  <div className="flex-1 grid grid-cols-2 gap-2">
+                    <input
+                      type="text"
+                      value={newAddOn.name}
+                      onChange={(e) => setNewAddOn({ ...newAddOn, name: e.target.value })}
+                      placeholder="Add-on name"
+                      className="px-3 py-2 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
+                    />
+                    <div className="relative">
+                      <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-nilin-warmGray" />
+                      <input
+                        type="number"
+                        value={newAddOn.price}
+                        onChange={(e) => setNewAddOn({ ...newAddOn, price: parseFloat(e.target.value) || 0 })}
+                        min="0"
+                        step="0.01"
+                        placeholder="Price"
+                        className="w-full pl-10 pr-3 py-2 rounded-lg border border-nilin-border bg-white focus:border-nilin-coral focus:ring-1 focus:ring-nilin-coral/20 outline-none text-sm"
+                      />
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={addAddOn}
+                    disabled={!newAddOn.name.trim()}
+                    className="px-4 py-2 bg-nilin-coral/10 text-nilin-coral rounded-lg hover:bg-nilin-coral/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                  >
+                    <Plus className="w-4 h-4" />
+                    Add
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Error Messages */}

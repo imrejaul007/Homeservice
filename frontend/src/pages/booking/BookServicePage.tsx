@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { AlertCircle } from 'lucide-react';
 import NavigationHeader from '../../components/layout/NavigationHeader';
@@ -55,18 +55,9 @@ const BookServicePage: React.FC = () => {
     }
   }, [location.pathname]);
 
-  // FIX: Store idempotency key in sessionStorage to persist across component re-renders
-  // Generate once per session for the same service booking
-  const idempotencyKey = useMemo(() => {
-    const storageKey = `booking_idempotency_${serviceId}`;
-    const existing = sessionStorage.getItem(storageKey);
-    if (existing) {
-      return existing;
-    }
-    const newKey = crypto.randomUUID();
-    sessionStorage.setItem(storageKey, newKey);
-    return newKey;
-  }, [serviceId]);
+  // Idempotency keys are generated fresh on each submit inside BookingFormWizard.
+  // Do NOT persist them in sessionStorage — that caused stale bookings to be returned
+  // when the user changed date, time, or coupon and tried again.
 
   const fetchServiceDetails = async () => {
     if (!serviceId) {
@@ -187,20 +178,50 @@ const BookServicePage: React.FC = () => {
     );
   }
 
+  // Normalize providerId (search API may return a populated object)
+  const resolveProviderId = (svc: Service): string => {
+    const raw = svc.providerId ?? (svc.provider as { _id?: string })?._id;
+    if (typeof raw === 'string') return raw;
+    if (raw && typeof raw === 'object' && '_id' in raw) {
+      return String((raw as { _id: unknown })._id);
+    }
+    return '';
+  };
+
+  const resolvedProviderId = resolveProviderId(service);
+
+  // Extract offer/coupon data from navigation state
+  const offerData = location.state as {
+    couponCode?: string;
+    offerId?: string;
+    offerDetails?: {
+      code: string;
+      title: string;
+      type: 'percentage' | 'fixed' | 'free_service';
+      value: number;
+      maxDiscount?: number;
+    };
+    filterByOffer?: boolean;
+  } | undefined;
+
   // Ensure service has required fields for BookingForm
   const serviceWithDefaults = {
     ...service,
-    providerId: service.providerId || (service.provider as any)?._id || ''
+    providerId: resolvedProviderId,
   };
 
   return (
     <BookingFormWizard
       service={serviceWithDefaults}
-      providerId={serviceWithDefaults.providerId}
+      providerId={resolvedProviderId}
       onSuccess={handleBookingSuccess}
       onCancel={handleCancel}
       guestMode={isGuest}
-      idempotencyKey={idempotencyKey}
+      preloadedOffer={offerData?.couponCode ? {
+        code: offerData.couponCode,
+        offerId: offerData.offerId,
+        offerDetails: offerData.offerDetails,
+      } : undefined}
     />
   );
 };

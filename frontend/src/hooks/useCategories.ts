@@ -23,11 +23,27 @@ interface CacheEntry<T> {
 const CATEGORY_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 const categoryCache = new Map<string, CacheEntry<unknown>>();
 
-// Request deduplication map
+// Subcategory cache (separate from main category cache)
+const subcategoryCache = new Map<string, CacheEntry<unknown>>();
+
+// Stats cache
+const statsCache = new Map<string, CacheEntry<unknown>>();
+
+// Request deduplication maps
 const pendingRequests = new Map<string, Promise<unknown>>();
+const pendingSubcategoryRequests = new Map<string, Promise<unknown>>();
+const pendingStatsRequests = new Map<string, Promise<unknown>>();
 
 function getCacheKey(featured?: boolean, includeComingSoon?: boolean): string {
   return `categories:${featured}:${includeComingSoon}`;
+}
+
+function getSubcategoryCacheKey(categorySlug: string): string {
+  return `subcategories:${categorySlug}`;
+}
+
+function getStatsCacheKey(): string {
+  return 'category-stats';
 }
 
 function getCachedData<T>(key: string): T | null {
@@ -51,6 +67,52 @@ function setCachedData<T>(key: string, data: T): void {
     }
   }
   categoryCache.set(key, { data, timestamp: Date.now() });
+}
+
+function getSubcategoryCachedData<T>(key: string): T | null {
+  const entry = subcategoryCache.get(key) as CacheEntry<T> | undefined;
+  if (!entry) return null;
+  if (Date.now() - entry.timestamp > CATEGORY_CACHE_TTL) {
+    subcategoryCache.delete(key);
+    return null;
+  }
+  return entry.data;
+}
+
+function setSubcategoryCachedData<T>(key: string, data: T): void {
+  // Clean old entries if cache is too large
+  if (subcategoryCache.size > 50) {
+    const now = Date.now();
+    for (const [k, v] of subcategoryCache.entries()) {
+      if (now - v.timestamp > CATEGORY_CACHE_TTL) {
+        subcategoryCache.delete(k);
+      }
+    }
+  }
+  subcategoryCache.set(key, { data, timestamp: Date.now() });
+}
+
+function getStatsCachedData<T>(key: string): T | null {
+  const entry = statsCache.get(key) as CacheEntry<T> | undefined;
+  if (!entry) return null;
+  if (Date.now() - entry.timestamp > CATEGORY_CACHE_TTL) {
+    statsCache.delete(key);
+    return null;
+  }
+  return entry.data;
+}
+
+function setStatsCachedData<T>(key: string, data: T): void {
+  // Clean old entries if cache is too large
+  if (statsCache.size > 10) {
+    const now = Date.now();
+    for (const [k, v] of statsCache.entries()) {
+      if (now - v.timestamp > CATEGORY_CACHE_TTL) {
+        statsCache.delete(k);
+      }
+    }
+  }
+  statsCache.set(key, { data, timestamp: Date.now() });
 }
 
 // Hook to fetch all categories
@@ -198,28 +260,79 @@ export function useSubcategories(categorySlug: string | undefined): {
     error: null,
   });
 
+  const cacheKey = getSubcategoryCacheKey(categorySlug || '');
+  const fetchCountRef = useRef(0);
+
   const fetchSubcategories = useCallback(async () => {
     if (!categorySlug) {
       setState({ subcategories: [], categoryName: '', isLoading: false, error: null });
       return;
     }
 
-    setState(prev => ({ ...prev, isLoading: true, error: null }));
-    try {
-      const response = await categoryApi.getSubcategories(categorySlug);
+    const currentFetch = ++fetchCountRef.current;
+    const key = getSubcategoryCacheKey(categorySlug);
+
+    // Check cache first
+    const cached = getSubcategoryCachedData<{ subcategories: Subcategory[]; categoryName: string }>(key);
+    if (cached) {
       setState({
-        subcategories: response.data.subcategories,
-        categoryName: response.data.categoryName,
+        subcategories: cached.subcategories,
+        categoryName: cached.categoryName,
         isLoading: false,
         error: null,
       });
+      return;
+    }
+
+    // Request deduplication - wait for existing request if in progress
+    const existingRequest = pendingSubcategoryRequests.get(key) as Promise<{ data: { subcategories: Subcategory[]; categoryName: string } }> | undefined;
+    if (existingRequest) {
+      try {
+        const response = await existingRequest;
+        if (currentFetch === fetchCountRef.current) {
+          const data = { subcategories: response.data.subcategories, categoryName: response.data.categoryName };
+          setSubcategoryCachedData(key, data);
+          setState({
+            subcategories: response.data.subcategories,
+            categoryName: response.data.categoryName,
+            isLoading: false,
+            error: null,
+          });
+        }
+        return;
+      } catch {
+        // If existing request failed, continue to fetch
+      }
+    }
+
+    setState(prev => ({ ...prev, isLoading: true, error: null }));
+
+    const requestPromise = categoryApi.getSubcategories(categorySlug) as Promise<{ data: { subcategories: Subcategory[]; categoryName: string } }>;
+    pendingSubcategoryRequests.set(key, requestPromise);
+
+    try {
+      const response = await requestPromise;
+      if (currentFetch === fetchCountRef.current) {
+        const data = { subcategories: response.data.subcategories, categoryName: response.data.categoryName };
+        setSubcategoryCachedData(key, data);
+        setState({
+          subcategories: response.data.subcategories,
+          categoryName: response.data.categoryName,
+          isLoading: false,
+          error: null,
+        });
+      }
     } catch (err) {
-      setState({
-        subcategories: [],
-        categoryName: '',
-        isLoading: false,
-        error: err instanceof Error ? err.message : 'Failed to fetch subcategories',
-      });
+      if (currentFetch === fetchCountRef.current) {
+        setState({
+          subcategories: [],
+          categoryName: '',
+          isLoading: false,
+          error: err instanceof Error ? err.message : 'Failed to fetch subcategories',
+        });
+      }
+    } finally {
+      pendingSubcategoryRequests.delete(key);
     }
   }, [categorySlug]);
 
@@ -247,15 +360,17 @@ export function useCategoryStats(): {
   error: string | null;
   refetch: () => Promise<void>;
 } {
+  type StatsItem = {
+    _id: string;
+    name: string;
+    slug: string;
+    icon: string;
+    color: string;
+    serviceCount: number;
+  };
+
   const [state, setState] = useState<{
-    stats: Array<{
-      _id: string;
-      name: string;
-      slug: string;
-      icon: string;
-      color: string;
-      serviceCount: number;
-    }>;
+    stats: StatsItem[];
     isLoading: boolean;
     error: string | null;
   }>({
@@ -264,21 +379,69 @@ export function useCategoryStats(): {
     error: null,
   });
 
+  const cacheKey = getStatsCacheKey();
+  const fetchCountRef = useRef(0);
+
   const fetchStats = useCallback(async () => {
-    setState(prev => ({ ...prev, isLoading: true, error: null }));
-    try {
-      const response = await categoryApi.getCategoryStats();
+    const currentFetch = ++fetchCountRef.current;
+
+    // Check cache first
+    const cached = getStatsCachedData<StatsItem[]>(cacheKey);
+    if (cached) {
       setState({
-        stats: response.data.categories,
+        stats: cached,
         isLoading: false,
         error: null,
       });
+      return;
+    }
+
+    // Request deduplication - wait for existing request if in progress
+    const existingRequest = pendingStatsRequests.get(cacheKey) as Promise<{ data: { categories: StatsItem[] } }> | undefined;
+    if (existingRequest) {
+      try {
+        const response = await existingRequest;
+        if (currentFetch === fetchCountRef.current) {
+          const stats = response.data.categories;
+          setStatsCachedData(cacheKey, stats);
+          setState({
+            stats,
+            isLoading: false,
+            error: null,
+          });
+        }
+        return;
+      } catch {
+        // If existing request failed, continue to fetch
+      }
+    }
+
+    setState(prev => ({ ...prev, isLoading: true, error: null }));
+
+    const requestPromise = categoryApi.getCategoryStats() as Promise<{ data: { categories: StatsItem[] } }>;
+    pendingStatsRequests.set(cacheKey, requestPromise);
+
+    try {
+      const response = await requestPromise;
+      if (currentFetch === fetchCountRef.current) {
+        const stats = response.data.categories;
+        setStatsCachedData(cacheKey, stats);
+        setState({
+          stats,
+          isLoading: false,
+          error: null,
+        });
+      }
     } catch (err) {
-      setState({
-        stats: [],
-        isLoading: false,
-        error: err instanceof Error ? err.message : 'Failed to fetch category stats',
-      });
+      if (currentFetch === fetchCountRef.current) {
+        setState({
+          stats: [],
+          isLoading: false,
+          error: err instanceof Error ? err.message : 'Failed to fetch category stats',
+        });
+      }
+    } finally {
+      pendingStatsRequests.delete(cacheKey);
     }
   }, []);
 

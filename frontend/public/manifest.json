@@ -4,8 +4,8 @@
   "description": "Book trusted home service professionals instantly",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#ffffff",
-  "theme_color": "#667eea",
+  "background_color": "#F5E6E0",
+  "theme_color": "#E8B4A8",
   "orientation": "portrait-primary",
   "scope": "/",
   "icons": [
@@ -63,34 +63,17 @@
     {
       "name": "Search Services",
       "short_name": "Search",
-      "url": "/search",
-      "icons": [{ "src": "/icons/search-shortcut.png", "sizes": "96x96" }]
+      "url": "/search"
     },
     {
       "name": "My Bookings",
       "short_name": "Bookings",
-      "url": "/bookings",
-      "icons": [{ "src": "/icons/booking-shortcut.png", "sizes": "96x96" }]
+      "url": "/bookings"
     },
     {
       "name": "Become a Provider",
       "short_name": "Provider",
-      "url": "/provider/register",
-      "icons": [{ "src": "/icons/provider-shortcut.png", "sizes": "96x96" }]
-    }
-  ],
-  "screenshots": [
-    {
-      "src": "/screenshots/desktop.png",
-      "sizes": "1280x720",
-      "type": "image/png",
-      "form_factor": "wide"
-    },
-    {
-      "src": "/screenshots/mobile.png",
-      "sizes": "390x844",
-      "type": "image/png",
-      "form_factor": "narrow"
+      "url": "/provider/register"
     }
   ],
   "prefer_related_applications": false

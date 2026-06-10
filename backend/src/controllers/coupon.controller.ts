@@ -5,14 +5,24 @@ import { asyncHandler } from '../utils/asyncHandler';
 import Joi from 'joi';
 import mongoose from 'mongoose';
 import logger from '../utils/logger';
+import AuditLog from '../models/auditLog.model';
 
 /**
  * Validation Schemas
  */
 const createCouponSchema = Joi.object({
-  code: Joi.string().required().min(3).max(50).uppercase(),
+  // FIX: Align with offer.service.ts - min 6 chars, alphanumeric only
+  code: Joi.string().required().min(6).max(20).pattern(/^[A-Z0-9]+$/).uppercase().messages({
+    'string.pattern.base': 'Coupon code must be alphanumeric (A-Z, 0-9 only)',
+    'string.min': 'Coupon code must be at least 6 characters',
+  }),
   type: Joi.string().required().valid('percentage', 'fixed', 'free_service'),
-  value: Joi.number().required().min(0),
+  value: Joi.number().required().min(0).when('type', {
+    is: 'percentage',
+    then: Joi.number().max(100).messages({
+      'number.max': 'Percentage value cannot exceed 100'
+    })
+  }),
   maxDiscount: Joi.number().min(0).optional(),
   minOrderAmount: Joi.number().min(0).default(0),
   currency: Joi.string().default('AED'),
@@ -34,9 +44,18 @@ const createCouponSchema = Joi.object({
 });
 
 const updateCouponSchema = Joi.object({
-  code: Joi.string().min(3).max(50).uppercase(),
+  // FIX: Align with offer.service.ts - min 6 chars, alphanumeric only
+  code: Joi.string().min(6).max(20).pattern(/^[A-Z0-9]+$/).uppercase().messages({
+    'string.pattern.base': 'Coupon code must be alphanumeric (A-Z, 0-9 only)',
+    'string.min': 'Coupon code must be at least 6 characters',
+  }),
   type: Joi.string().valid('percentage', 'fixed', 'free_service'),
-  value: Joi.number().min(0),
+  value: Joi.number().min(0).when('type', {
+    is: 'percentage',
+    then: Joi.number().max(100).messages({
+      'number.max': 'Percentage value cannot exceed 100'
+    })
+  }),
   maxDiscount: Joi.number().min(0).allow(null),
   minOrderAmount: Joi.number().min(0),
   currency: Joi.string(),
@@ -74,6 +93,9 @@ export const getAllCoupons = asyncHandler(async (req: Request, res: Response) =>
 
   // Build filter
   const filter: Record<string, unknown> = {};
+
+  // FIX: Always filter out soft-deleted coupons
+  filter.isDeleted = { $ne: true };
 
   if (search) {
     filter.$or = [
@@ -192,6 +214,23 @@ export const createCoupon = asyncHandler(async (req: Request, res: Response) => 
     createdBy: (req as any).user._id,
   });
 
+  // FIX: Add audit logging for coupon creation
+  await AuditLog.create({
+    userId: (req as any).user._id,
+    action: 'COUPON_CREATED',
+    resource: 'coupon',
+    resourceId: coupon._id.toString(),
+    details: {
+      code: coupon.code,
+      type: coupon.type,
+      value: coupon.value,
+      maxUses: coupon.maxUses,
+      validFrom: coupon.validFrom,
+      validUntil: coupon.validUntil,
+    },
+    status: 'success',
+  });
+
   res.status(201).json({
     success: true,
     message: 'Coupon created successfully',
@@ -293,6 +332,19 @@ export const updateCoupon = asyncHandler(async (req: Request, res: Response) => 
     fields: Object.keys(value),
   });
 
+  // FIX: Add audit logging for coupon update
+  await AuditLog.create({
+    userId: (req as any).user._id,
+    action: 'COUPON_UPDATED',
+    resource: 'coupon',
+    resourceId: coupon._id.toString(),
+    details: {
+      code: coupon.code,
+      updatedFields: Object.keys(value),
+    },
+    status: 'success',
+  });
+
   res.json({
     success: true,
     message: 'Coupon updated successfully',
@@ -301,7 +353,8 @@ export const updateCoupon = asyncHandler(async (req: Request, res: Response) => 
 });
 
 /**
- * DELETE /api/admin/coupons/:id - Delete a coupon
+ * DELETE /api/admin/coupons/:id - Delete a coupon (soft delete)
+ * FIX: Now uses soft delete to preserve historical data
  */
 export const deleteCoupon = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
@@ -310,22 +363,45 @@ export const deleteCoupon = asyncHandler(async (req: Request, res: Response) => 
     throw ApiError.badRequest('Invalid coupon ID', [], ERROR_CODES.VALIDATION_ERROR);
   }
 
-  const coupon = await Coupon.findByIdAndDelete(id);
+  // FIX: Soft delete instead of hard delete
+  const coupon = await Coupon.findByIdAndUpdate(
+    id,
+    {
+      isDeleted: true,
+      deletedAt: new Date(),
+      isActive: false, // Also deactivate to prevent further use
+    },
+    { new: true }
+  );
 
   if (!coupon) {
     throw ApiError.notFound('Coupon not found', ERROR_CODES.NOT_FOUND);
   }
 
-  logger.info('Coupon deleted', {
-    action: 'COUPON_DELETED',
+  logger.info('Coupon soft deleted', {
+    action: 'COUPON_SOFT_DELETED',
     couponId: id,
     code: coupon.code,
     deletedBy: (req as any).user._id,
   });
 
+  // FIX: Add audit logging for coupon deletion
+  await AuditLog.create({
+    userId: (req as any).user._id,
+    action: 'COUPON_DELETED',
+    resource: 'coupon',
+    resourceId: id,
+    details: {
+      code: coupon.code,
+      wasActive: coupon.isActive,
+    },
+    status: 'success',
+  });
+
   res.json({
     success: true,
     message: 'Coupon deleted successfully',
+    data: { coupon },
   });
 });
 
@@ -356,9 +432,235 @@ export const deactivateCoupon = asyncHandler(async (req: Request, res: Response)
     deactivatedBy: (req as any).user._id,
   });
 
+  // FIX: Add audit logging for coupon deactivation
+  await AuditLog.create({
+    userId: (req as any).user._id,
+    action: 'COUPON_DEACTIVATED',
+    resource: 'coupon',
+    resourceId: coupon._id.toString(),
+    details: {
+      code: coupon.code,
+    },
+    status: 'success',
+  });
+
   res.json({
     success: true,
     message: 'Coupon deactivated successfully',
+    data: { coupon },
+  });
+});
+
+/**
+ * POST /api/admin/coupons/:id/archive - Archive a coupon
+ * FIX: Archives the coupon instead of deleting
+ */
+export const archiveCoupon = asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    throw ApiError.badRequest('Invalid coupon ID', [], ERROR_CODES.VALIDATION_ERROR);
+  }
+
+  const coupon = await Coupon.findByIdAndUpdate(
+    id,
+    {
+      $set: {
+        status: 'archived',
+        archivedAt: new Date(),
+        isActive: false, // Also deactivate to prevent use
+      },
+    },
+    { new: true }
+  ).populate('createdBy', 'firstName lastName email');
+
+  if (!coupon) {
+    throw ApiError.notFound('Coupon not found', ERROR_CODES.NOT_FOUND);
+  }
+
+  logger.info('Coupon archived', {
+    action: 'COUPON_ARCHIVED',
+    couponId: coupon._id,
+    code: coupon.code,
+    archivedBy: (req as any).user._id,
+  });
+
+  // FIX: Add audit logging for coupon archive
+  await AuditLog.create({
+    userId: (req as any).user._id,
+    action: 'COUPON_ARCHIVED',
+    resource: 'coupon',
+    resourceId: coupon._id.toString(),
+    details: {
+      code: coupon.code,
+    },
+    status: 'success',
+  });
+
+  res.json({
+    success: true,
+    message: 'Coupon archived successfully',
+    data: { coupon },
+  });
+});
+
+/**
+ * POST /api/admin/coupons/:id/clone - Clone a coupon
+ * FIX: Creates a copy of an existing coupon with a new code
+ */
+export const cloneCoupon = asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { newCode } = req.body;
+
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    throw ApiError.badRequest('Invalid coupon ID', [], ERROR_CODES.VALIDATION_ERROR);
+  }
+
+  // Find the original coupon
+  const originalCoupon = await Coupon.findById(id);
+  if (!originalCoupon) {
+    throw ApiError.notFound('Coupon not found', ERROR_CODES.NOT_FOUND);
+  }
+
+  // Check if new code is provided and not duplicate
+  if (!newCode) {
+    throw ApiError.badRequest('New coupon code is required', [], ERROR_CODES.VALIDATION_ERROR);
+  }
+
+  const normalizedCode = newCode.toUpperCase().trim();
+  const existingCoupon = await Coupon.findOne({ code: normalizedCode });
+  if (existingCoupon) {
+    throw ApiError.conflict('Coupon code already exists', ERROR_CODES.DUPLICATE_ENTRY);
+  }
+
+  // Create clone with reset usage and new status
+  const clonedCoupon = new Coupon({
+    ...originalCoupon.toObject(),
+    _id: undefined, // Let MongoDB generate new ID
+    code: normalizedCode,
+    currentUses: 0,
+    usedBy: [],
+    clonedFrom: originalCoupon._id,
+    status: 'draft', // Start as draft for review
+    isActive: false, // Start inactive
+    createdBy: (req as any).user._id,
+    createdAt: undefined,
+    updatedAt: undefined,
+  });
+
+  await clonedCoupon.save();
+
+  logger.info('Coupon cloned', {
+    action: 'COUPON_CLONED',
+    originalCouponId: originalCoupon._id,
+    clonedCouponId: clonedCoupon._id,
+    newCode: normalizedCode,
+    clonedBy: (req as any).user._id,
+  });
+
+  // FIX: Add audit logging for coupon clone
+  await AuditLog.create({
+    userId: (req as any).user._id,
+    action: 'COUPON_CLONED',
+    resource: 'coupon',
+    resourceId: clonedCoupon._id.toString(),
+    details: {
+      originalCouponId: originalCoupon._id.toString(),
+      originalCode: originalCoupon.code,
+      newCode: normalizedCode,
+    },
+    status: 'success',
+  });
+
+  res.status(201).json({
+    success: true,
+    message: 'Coupon cloned successfully',
+    data: { coupon: clonedCoupon },
+  });
+});
+
+/**
+ * PATCH /api/admin/coupons/:id/status - Update coupon approval status
+ * FIX: Supports draft -> pending_review -> approved -> published workflow
+ */
+export const updateCouponStatus = asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { status, isActive } = req.body;
+
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    throw ApiError.badRequest('Invalid coupon ID', [], ERROR_CODES.VALIDATION_ERROR);
+  }
+
+  // Validate status transitions
+  const validStatuses = ['draft', 'pending_review', 'approved', 'published', 'archived'];
+  if (status && !validStatuses.includes(status)) {
+    throw ApiError.badRequest(
+      `Invalid status. Must be one of: ${validStatuses.join(', ')}`,
+      [],
+      ERROR_CODES.VALIDATION_ERROR
+    );
+  }
+
+  // Build update object
+  const updateData: Record<string, unknown> = {};
+
+  if (status) {
+    updateData.status = status;
+
+    // If publishing, activate the coupon
+    if (status === 'published') {
+      updateData.isActive = true;
+    }
+    // If reverting to draft or archiving, deactivate
+    if (status === 'draft' || status === 'archived') {
+      updateData.isActive = false;
+    }
+    // Set archivedAt timestamp if archiving
+    if (status === 'archived') {
+      updateData.archivedAt = new Date();
+    }
+  }
+
+  if (isActive !== undefined) {
+    updateData.isActive = isActive;
+  }
+
+  const coupon = await Coupon.findByIdAndUpdate(
+    id,
+    { $set: updateData },
+    { new: true }
+  ).populate('createdBy', 'firstName lastName email');
+
+  if (!coupon) {
+    throw ApiError.notFound('Coupon not found', ERROR_CODES.NOT_FOUND);
+  }
+
+  logger.info('Coupon status updated', {
+    action: 'COUPON_STATUS_UPDATED',
+    couponId: coupon._id,
+    code: coupon.code,
+    newStatus: status,
+    isActive: coupon.isActive,
+    updatedBy: (req as any).user._id,
+  });
+
+  // FIX: Add audit logging for coupon status update
+  await AuditLog.create({
+    userId: (req as any).user._id,
+    action: 'COUPON_STATUS_UPDATED',
+    resource: 'coupon',
+    resourceId: coupon._id.toString(),
+    details: {
+      code: coupon.code,
+      newStatus: status,
+      isActive: coupon.isActive,
+    },
+    status: 'success',
+  });
+
+  res.json({
+    success: true,
+    message: `Coupon status updated to ${status || (isActive ? 'active' : 'inactive')}`,
     data: { coupon },
   });
 });

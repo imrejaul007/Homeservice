@@ -14,8 +14,7 @@ import {
   AlertCircle,
   Loader2,
 } from 'lucide-react';
-import { useBookingStore } from '../../stores/bookingStore';
-import { useAuthStore } from '../../stores/authStore';
+import { customerDashboardApi } from '../../services/customerDashboardApi';
 
 // =============================================================================
 // Types
@@ -186,13 +185,9 @@ const StatCard: React.FC<StatCardProps> = ({
 // Dashboard Stats Component
 // =============================================================================
 
-const PAGE_SIZE = 100;
-
 const DashboardStats: React.FC<DashboardStatsProps> = ({
   showRefresh = true,
 }) => {
-  const { user } = useAuthStore();
-  const { customerBookings, isLoading, getCustomerBookings } = useBookingStore();
   const [stats, setStats] = useState<DashboardStats>({
     activeBookings: 0,
     completedBookings: 0,
@@ -201,66 +196,36 @@ const DashboardStats: React.FC<DashboardStatsProps> = ({
   });
   const [error, setError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [hasMore, setHasMore] = useState(true);
-  const [currentPage, setCurrentPage] = useState(1);
-  const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const allBookingsRef = useRef<typeof customerBookings>([]);
-
-  const calculateStats = useCallback(() => {
-    const activeBookings = customerBookings.filter(
-      (b) => ['pending', 'confirmed', 'in_progress'].includes(b.status)
-    ).length;
-
-    const completedBookings = customerBookings.filter(
-      (b) => b.status === 'completed'
-    ).length;
-
-    const totalSpent = customerBookings
-      .filter((b) => b.pricing?.totalAmount)
-      .reduce((sum, b) => sum + (b.pricing?.totalAmount || 0), 0);
-
-    // Calculate average rating from completed bookings with ratings
-    const ratings = customerBookings
-      .filter((b) => b.customerRating?.rating)
-      .map((b) => b.customerRating!.rating);
-    const averageRating =
-      ratings.length > 0
-        ? ratings.reduce((sum, r) => sum + r, 0) / ratings.length
-        : 4.8; // Default rating for new users
-
-    setStats({
-      activeBookings,
-      completedBookings,
-      totalSpent,
-      averageRating,
-    });
-  }, [customerBookings]);
+  const [isLoading, setIsLoading] = useState(true);
 
   const fetchStats = useCallback(async () => {
     try {
       setError(null);
-      await getCustomerBookings({
-        limit: 100,
-        sortBy: 'createdAt',
-        sortOrder: 'desc',
+      const response = await customerDashboardApi.getStats();
+      setStats({
+        activeBookings: response.activeBookings ?? (
+          response.totalBookings != null && response.completedBookings != null
+            ? response.totalBookings - response.completedBookings
+            : 0
+        ),
+        completedBookings: response.completedBookings ?? 0,
+        totalSpent: response.totalSpent ?? 0,
+        averageRating: response.averageRating ?? 0,
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load stats');
+    } finally {
+      setIsLoading(false);
     }
-  }, [getCustomerBookings]);
+  }, []);
 
   useEffect(() => {
     fetchStats();
   }, [fetchStats]);
 
-  useEffect(() => {
-    if (customerBookings.length > 0) {
-      calculateStats();
-    }
-  }, [customerBookings, calculateStats]);
-
   const handleRefresh = async () => {
     setIsRefreshing(true);
+    setIsLoading(true);
     await fetchStats();
     setIsRefreshing(false);
   };
@@ -361,7 +326,7 @@ const DashboardStats: React.FC<DashboardStatsProps> = ({
               iconBg={stat.iconBg}
               iconColor={stat.iconColor}
               trend={stat.trend}
-              isLoading={isLoading && customerBookings.length === 0}
+              isLoading={isLoading}
               decimals={stat.decimals}
             />
           ))}

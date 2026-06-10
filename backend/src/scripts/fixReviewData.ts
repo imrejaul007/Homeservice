@@ -5,11 +5,21 @@ import mongoose from 'mongoose';
 
 /**
  * Fix: Update reviews to have correct customer (reviewer) IDs
+ *
+ * Usage:
+ *   MONGODB_URI="mongodb+srv://..." npx ts-node scripts/fixReviewData.ts
  */
 
+const MONGODB_URI = process.env.MONGODB_URI;
+
+if (!MONGODB_URI) {
+  console.error('❌ MONGODB_URI environment variable is required');
+  console.error('   Usage: MONGODB_URI="mongodb+srv://..." npx ts-node scripts/fixReviewData.ts');
+  process.exit(1);
+}
+
 async function fix() {
-  const uri = 'mongodb+srv://nilimraj_db_user:aXJBzxFtRJosdxEc@cluster0.wnjcyp1.mongodb.net/test?appName=Cluster0';
-  await mongoose.connect(uri, { maxPoolSize: 5 });
+  await mongoose.connect(MONGODB_URI, { maxPoolSize: 5 });
   const db = mongoose.connection.db!;
 
   console.log('='.repeat(60));

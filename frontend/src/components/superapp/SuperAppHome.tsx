@@ -122,7 +122,7 @@ export function SuperAppHome({ userId, services, onNavigate }: SuperAppHomeProps
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.3 }}
         >
-          <WalletBalance compact />
+          <WalletBalance compact walletContext="customer" />
         </motion.section>
 
         {/* Smart Discovery / Recommendations */}

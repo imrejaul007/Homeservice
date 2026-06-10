@@ -285,26 +285,39 @@ export async function bookBundle(
         serviceId: service._id,
         scheduledDate: serviceStartDate,
         scheduledTime: serviceStartTime,
-        estimatedDuration: service.duration || 60,
+        duration: service.duration || 60,
+        estimatedEndTime: new Date(`${serviceStartDate}T${serviceStartTime}:00.000Z`),
         status: 'confirmed',
         pricing: {
           basePrice: bundleService.originalPrice,
           addOns: [],
           subtotal: bundleService.originalPrice,
-          taxes: 0,
-          total: bundleService.originalPrice,
+          tax: 0,
           totalAmount: bundleService.originalPrice,
           currency: 'AED',
         },
-        location: addressId ? { type: 'customer_address' } : undefined,
+        location: addressId ? {
+          type: 'customer_address',
+          address: {
+            street: '',
+            city: '',
+            state: '',
+            zipCode: '',
+            country: 'AE',
+          }
+        } : undefined,
         customerInfo: {
           firstName: customer.firstName,
           lastName: customer.lastName,
           email: customer.email,
           phone: customer.phone,
         },
+        cancellationPolicy: {
+          allowedUntil: new Date(serviceStartDate),
+          refundPercentage: 100,
+          cancellationFee: 0,
+        },
         notes: `Bundle: ${bundle.name}${notes ? `. Note: ${notes}` : ''}`,
-        bundleBookingId: bundleBooking._id,
       });
 
       await booking.save({ session: mongoSession });
@@ -556,20 +569,34 @@ export async function redeemRemainingServices(
         serviceId: serviceDoc._id,
         scheduledDate: scheduleInfo?.date || new Date().toISOString().split('T')[0],
         scheduledTime: scheduleInfo?.time || '10:00',
-        estimatedDuration: serviceDoc.duration || 60,
+        duration: serviceDoc.duration || 60,
+        estimatedEndTime: new Date(`${scheduleInfo?.date || new Date().toISOString().split('T')[0]}T${scheduleInfo?.time || '10:00'}:00.000Z`),
         status: 'confirmed',
         pricing: {
           basePrice: service.originalPrice,
           addOns: [],
           subtotal: service.originalPrice,
-          taxes: 0,
-          total: service.originalPrice,
+          tax: 0,
           totalAmount: service.originalPrice,
           currency: 'AED',
         },
+        location: {
+          type: 'customer_address',
+          address: {
+            street: '',
+            city: '',
+            state: '',
+            zipCode: '',
+            country: 'AE',
+          }
+        },
         customerInfo: {},
+        cancellationPolicy: {
+          allowedUntil: new Date(scheduleInfo?.date || new Date()),
+          refundPercentage: 100,
+          cancellationFee: 0,
+        },
         notes: `Bundle Redemption: ${bundle.name}`,
-        bundleBookingId: bundleBooking!._id,
       });
 
       await booking.save({ session: mongoSession });
@@ -656,9 +683,12 @@ export async function cancelBundleBooking(
   mongoSession.startTransaction();
 
   try {
+    // Get booking IDs from bundle booking services
+    const bookingIds = bundleBooking.services.map((s) => s.bookingId);
+
     // Cancel all pending bookings in the bundle
     const pendingBookings = await Booking.find({
-      bundleBookingId: bundleBooking._id,
+      _id: { $in: bookingIds },
       status: 'pending',
     }).session(mongoSession);
 

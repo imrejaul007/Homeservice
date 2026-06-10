@@ -20,6 +20,8 @@
     "cap:sync": "cap sync",
     "cap:open": "cap open android",
     "cap:build": "npm run build && cap sync",
+    "cap:build:debug": "npm run build && cap sync android",
+    "cap:build:release": "npm run build && cap sync android --release",
     "cap:run": "cap run android"
   },
   "dependencies": {

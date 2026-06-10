@@ -1,11 +1,16 @@
 import { Request, Response } from 'express';
 import mongoose from 'mongoose';
+import { parseISO } from 'date-fns';
+import { toZonedTime } from 'date-fns-tz';
 import ProviderProfile from '../models/providerProfile.model';
 import User from '../models/user.model';
 import Booking from '../models/booking.model';
 import { asyncHandler } from '../utils/asyncHandler';
 import { REGIONS } from '../services/region.service';
+import { getPlatformPolicySync } from '../services/platformSettingsPolicy.service';
 import logger from '../utils/logger';
+import { getProviderBookableSlots } from '../utils/availabilityHelper';
+import { parseBookingTime } from '../utils/timezone.util';
 
 // MongoDB ObjectId validator
 const isValidObjectId = (id: string): boolean => {
@@ -35,7 +40,7 @@ async function getProviderTimezone(providerId: string): Promise<string> {
       const country = providerProfile.locationInfo.primaryAddress.country.toUpperCase();
       // Map country to region timezone
       const countryToRegion: Record<string, string> = {
-        'AE': 'UAE', 'UNITED ARAB EMIRATES': 'UAE',
+        'AE': 'UAE', 'UAE': 'UAE', 'UNITED ARAB EMIRATES': 'UAE',
         'SA': 'KSA', 'SAUDI ARABIA': 'KSA',
         'IN': 'INDIA', 'INDIA': 'INDIA',
         'GB': 'UK', 'UK': 'UK', 'UNITED KINGDOM': 'UK',
@@ -176,17 +181,38 @@ const transformToLegacyFormat = (newWeeklySchedule: any) => {
   return oldSchedule;
 };
 
-// Create default weekly schedule for new providers
-const createDefaultSchedule = () => {
-  const defaultWorkingDay = {
-    isAvailable: true,
-    timeSlots: [{
-      startTime: '09:00',
-      endTime: '17:00',
+// Helper function to generate 30-minute interval time slots
+const create30MinTimeSlots = (startHour: number, endHour: number) => {
+  const slots = [];
+  for (let hour = startHour; hour < endHour; hour++) {
+    // 30-minute slot starting at :00
+    slots.push({
+      startTime: `${hour.toString().padStart(2, '0')}:00`,
+      endTime: `${hour.toString().padStart(2, '0')}:30`,
       isBooked: false,
       maxBookings: 1,
       currentBookings: 0
-    }]
+    });
+    // 30-minute slot starting at :30
+    slots.push({
+      startTime: `${hour.toString().padStart(2, '0')}:30`,
+      endTime: `${(hour + 1).toString().padStart(2, '0')}:00`,
+      isBooked: false,
+      maxBookings: 1,
+      currentBookings: 0
+    });
+  }
+  return slots;
+};
+
+// Create default weekly schedule for new providers
+const createDefaultSchedule = () => {
+  // Generate 30-minute slots from 09:00 to 17:00 (8 hours = 16 slots)
+  const workingSlots = create30MinTimeSlots(9, 17);
+
+  const defaultWorkingDay = {
+    isAvailable: true,
+    timeSlots: workingSlots
   };
 
   const defaultOffDay = {
@@ -756,29 +782,31 @@ export const getProviderAvailableSlots = asyncHandler(async (req: Request, res: 
     });
   }
 
-  // FIX: Issue #3 - Get provider's timezone for consistent slot calculations
   const providerTimezone = await getProviderTimezone(providerId);
   const requestDateStr = date as string;
 
-  // Parse date - use provider's timezone for correct day of week
-  let requestDate: Date;
-  try {
-    requestDate = new Date(requestDateStr);
-    // Adjust for timezone offset to get correct day in provider's timezone
-    const tzOffset = getTimezoneOffset(providerTimezone);
-    requestDate = new Date(requestDate.getTime() + tzOffset);
-  } catch (e) {
-    requestDate = new Date(requestDateStr);
-  }
+  const zonedRequestDate = toZonedTime(parseISO(requestDateStr), providerTimezone);
+  const dayOfWeek = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'][zonedRequestDate.getDay()];
 
-  const dayOfWeek = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'][requestDate.getDay()];
+  const providerObjectId = mongoose.Types.ObjectId.isValid(providerId)
+    ? new mongoose.Types.ObjectId(providerId)
+    : providerId;
 
-  const providerProfile = await ProviderProfile.findOne({ userId: providerId });
+  const providerProfile = await ProviderProfile.findOne({ userId: providerObjectId });
 
-  if (!providerProfile || !providerProfile.availability?.schedule) {
+  if (!providerProfile) {
+    logger.warn('Provider profile not found for slot lookup', { providerId, date: requestDateStr, serviceId });
     return res.json({
       success: true,
-      data: { slots: [], timezone: providerTimezone }
+      data: { slots: [], timezone: providerTimezone, reason: 'provider_profile_not_found' }
+    });
+  }
+
+  if (!providerProfile.availability?.schedule) {
+    logger.warn('Provider has no availability schedule', { providerId, date: requestDateStr });
+    return res.json({
+      success: true,
+      data: { slots: [], timezone: providerTimezone, reason: 'no_availability_schedule' }
     });
   }
 
@@ -798,9 +826,8 @@ export const getProviderAvailableSlots = asyncHandler(async (req: Request, res: 
     });
   }
 
-  // FIX: Use timezone-aware date comparison
-  const dateString = requestDateStr.split('T')[0];
-  const dateException = providerProfile.availability.exceptions.find(
+  const dateString = requestDateStr;
+  const dateException = (providerProfile.availability.exceptions || []).find(
     exception => {
       const exceptionDateStr = exception.date instanceof Date
         ? exception.date.toISOString().split('T')[0]
@@ -816,38 +843,8 @@ export const getProviderAvailableSlots = asyncHandler(async (req: Request, res: 
     });
   }
 
-  // FIX: Calculate start/end of day in provider's timezone
-  const tzOffset = getTimezoneOffset(providerTimezone);
-  const startOfDay = new Date(requestDate);
-  startOfDay.setHours(0, 0, 0, 0);
-  const startOfDayUtc = new Date(startOfDay.getTime() - tzOffset);
-
-  const endOfDay = new Date(requestDate);
-  endOfDay.setHours(23, 59, 59, 999);
-  const endOfDayUtc = new Date(endOfDay.getTime() - tzOffset);
-
-  // FIX: Issue #4 - Real-Time Slot Blocking
-  // Query bookings, optionally filtered by serviceId
-  const bookingQuery: any = {
-    providerId,
-    scheduledDate: {
-      $gte: startOfDayUtc,
-      $lte: endOfDayUtc
-    },
-    status: { $in: ['pending', 'confirmed', 'in_progress'] }
-  };
-
-  // Add service filter if checking per-service availability
-  if (serviceId) {
-    bookingQuery.serviceId = serviceId;
-  }
-
-  const existingBookings = await Booking.find(bookingQuery);
-
-  const availableSlots: string[] = [];
   const slotDuration = parseInt(duration as string, 10);
 
-  // FIX: Validate slot duration
   if (isNaN(slotDuration) || slotDuration < 15 || slotDuration > 480) {
     return res.status(400).json({
       success: false,
@@ -855,81 +852,20 @@ export const getProviderAvailableSlots = asyncHandler(async (req: Request, res: 
     });
   }
 
-  // FIX: Use timezone-aware current time comparison
-  const now = new Date();
-  const nowInProviderTz = new Date(now.getTime() + tzOffset);
-  const isToday = dateString === nowInProviderTz.toISOString().split('T')[0];
-  const nowMsInTz = nowInProviderTz.getTime();
-
-  for (const timeSlot of daySchedule.timeSlots) {
-    if (!timeSlot.startTime || !timeSlot.endTime) {
-      continue;
-    }
-
-    if (timeSlot.isBooked || timeSlot.currentBookings >= (timeSlot.maxBookings || 1)) {
-      continue;
-    }
-
-    try {
-      const startHour = parseInt(timeSlot.startTime.split(':')[0], 10);
-      const startMinute = parseInt(timeSlot.startTime.split(':')[1], 10);
-      const endHour = parseInt(timeSlot.endTime.split(':')[0], 10);
-      const endMinute = parseInt(timeSlot.endTime.split(':')[1], 10);
-
-      // Create slot times in provider's timezone
-      const slotStartBase = new Date(requestDate);
-      slotStartBase.setHours(startHour, startMinute, 0, 0);
-
-      const slotEndTime = new Date(requestDate);
-      slotEndTime.setHours(endHour, endMinute, 0, 0);
-
-      // Iterate through time slots
-      let currentSlotTime = new Date(slotStartBase);
-      const slotDurationMs = slotDuration * 60 * 1000;
-
-      while (currentSlotTime.getTime() + slotDurationMs <= slotEndTime.getTime()) {
-        const slotStart = new Date(currentSlotTime);
-        const slotEnd = new Date(currentSlotTime.getTime() + slotDurationMs);
-
-        // Skip past slots for today
-        if (isToday && slotStart.getTime() <= nowMsInTz) {
-          currentSlotTime.setTime(currentSlotTime.getTime() + slotDurationMs);
-          continue;
-        }
-
-        // Check conflicts using timezone-aware comparison
-        const hasConflict = existingBookings.some(booking => {
-          const bookingStart = new Date(booking.scheduledDate);
-          const bookingEnd = new Date(booking.estimatedEndTime);
-          return (slotStart < bookingEnd && slotEnd > bookingStart);
-        });
-
-        if (!hasConflict) {
-          const hours = String(slotStart.getHours()).padStart(2, '0');
-          const minutes = String(slotStart.getMinutes()).padStart(2, '0');
-          const timeString = `${hours}:${minutes}`;
-
-          if (!availableSlots.includes(timeString)) {
-            availableSlots.push(timeString);
-          }
-        }
-
-        currentSlotTime.setTime(currentSlotTime.getTime() + slotDurationMs);
-      }
-    } catch (error) {
-      logger.error('Error processing time slot', {
-        context: 'AvailabilityController',
-        action: 'PROCESS_SLOT_ERROR',
-        timeSlot,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      continue;
-    }
-  }
+  const { slots: availableSlots, minBookingAdvanceHours } = await getProviderBookableSlots({
+    providerId,
+    scheduledDate: requestDateStr,
+    serviceDurationMinutes: slotDuration,
+    serviceId: serviceId as string | undefined,
+  });
 
   return res.json({
     success: true,
-    data: { slots: availableSlots, timezone: providerTimezone }
+    data: {
+      slots: availableSlots,
+      timezone: providerTimezone,
+      minBookingAdvanceHours,
+    }
   });
 });
 
@@ -1220,5 +1156,222 @@ export const getAvailabilityAnalytics = asyncHandler(async (req: Request, res: R
       },
       generatedAt: new Date().toISOString(),
     },
+  });
+});
+
+// ============================================================
+// PER-SERVICE / BUNDLE AVAILABILITY ENDPOINTS
+// ============================================================
+
+/**
+ * Get per-service/bundle availability schedule
+ * GET /api/availability/service/:serviceId/schedule
+ */
+export const getServiceSchedule = asyncHandler(async (req: Request, res: Response) => {
+  if (req.user?.role !== 'provider') {
+    return res.status(403).json({
+      success: false,
+      message: 'Only providers can access service schedules'
+    });
+  }
+
+  const { serviceId } = req.params;
+  const providerProfile = await ProviderProfile.findOne({ userId: req.user?._id });
+
+  if (!providerProfile) {
+    return res.status(404).json({
+      success: false,
+      message: 'Provider profile not found'
+    });
+  }
+
+  const serviceSchedule = providerProfile.availability?.serviceSchedules?.[serviceId] || null;
+
+  return res.json({
+    success: true,
+    data: {
+      serviceId,
+      hasSchedule: !!serviceSchedule,
+      schedule: serviceSchedule,
+      usesGlobal: !serviceSchedule,
+    }
+  });
+});
+
+/**
+ * Update per-service/bundle availability schedule
+ * PUT /api/availability/service/:serviceId/schedule
+ *
+ * Body: {
+ *   schedule: { [day: string]: { isAvailable: boolean, timeSlots: [...] } }
+ * }
+ */
+export const updateServiceSchedule = asyncHandler(async (req: Request, res: Response) => {
+  if (req.user?.role !== 'provider') {
+    return res.status(403).json({
+      success: false,
+      message: 'Only providers can update service schedules'
+    });
+  }
+
+  const { serviceId } = req.params;
+  const { schedule, useGlobal } = req.body;
+
+  const providerProfile = await ProviderProfile.findOne({ userId: req.user?._id });
+
+  if (!providerProfile) {
+    return res.status(404).json({
+      success: false,
+      message: 'Provider profile not found'
+    });
+  }
+
+  // Initialize serviceSchedules if it doesn't exist
+  if (!providerProfile.availability) {
+    providerProfile.availability = {
+      schedule: createDefaultSchedule(),
+      exceptions: [],
+      bufferTime: 15,
+      maxAdvanceBooking: 30,
+      minNoticeTime: 24,
+      autoAcceptBookings: false,
+    };
+  }
+
+  if (!providerProfile.availability.serviceSchedules) {
+    providerProfile.availability.serviceSchedules = {};
+  }
+
+  if (useGlobal === true) {
+    // Remove service-specific schedule - use global
+    delete providerProfile.availability.serviceSchedules[serviceId];
+  } else if (schedule) {
+    // Update or set service-specific schedule
+    providerProfile.availability.serviceSchedules[serviceId] = schedule;
+  }
+
+  await providerProfile.save();
+
+  logger.info('Service schedule updated', {
+    context: 'AvailabilityController',
+    action: 'SERVICE_SCHEDULE_UPDATED',
+    providerId: req.user?._id?.toString(),
+    serviceId,
+    usesGlobal: useGlobal === true,
+  });
+
+  return res.json({
+    success: true,
+    message: 'Service schedule updated successfully',
+    data: {
+      serviceId,
+      hasSchedule: !!providerProfile.availability.serviceSchedules?.[serviceId],
+      schedule: providerProfile.availability.serviceSchedules?.[serviceId] || null,
+    }
+  });
+});
+
+/**
+ * Get all service schedules for a provider
+ * GET /api/availability/service/schedules
+ */
+export const getAllServiceSchedules = asyncHandler(async (req: Request, res: Response) => {
+  if (req.user?.role !== 'provider') {
+    return res.status(403).json({
+      success: false,
+      message: 'Only providers can access service schedules'
+    });
+  }
+
+  const providerProfile = await ProviderProfile.findOne({ userId: req.user?._id });
+
+  if (!providerProfile) {
+    return res.status(404).json({
+      success: false,
+      message: 'Provider profile not found'
+    });
+  }
+
+  const serviceSchedules = providerProfile.availability?.serviceSchedules || {};
+  const serviceIds = Object.keys(serviceSchedules);
+
+  return res.json({
+    success: true,
+    data: {
+      serviceSchedules,
+      count: serviceIds.length,
+      servicesWithCustomSchedule: serviceIds,
+      globalSchedule: providerProfile.availability?.schedule || null,
+    }
+  });
+});
+
+/**
+ * Copy global schedule to a service
+ * POST /api/availability/service/:serviceId/copy-global
+ */
+export const copyGlobalToService = asyncHandler(async (req: Request, res: Response) => {
+  if (req.user?.role !== 'provider') {
+    return res.status(403).json({
+      success: false,
+      message: 'Only providers can update service schedules'
+    });
+  }
+
+  const { serviceId } = req.params;
+
+  const providerProfile = await ProviderProfile.findOne({ userId: req.user?._id });
+
+  if (!providerProfile) {
+    return res.status(404).json({
+      success: false,
+      message: 'Provider profile not found'
+    });
+  }
+
+  const globalSchedule = providerProfile.availability?.schedule;
+
+  if (!globalSchedule) {
+    return res.status(400).json({
+      success: false,
+      message: 'Global schedule not set. Please set your working hours first.'
+    });
+  }
+
+  // Initialize serviceSchedules if it doesn't exist
+  if (!providerProfile.availability) {
+    providerProfile.availability = {
+      schedule: createDefaultSchedule(),
+      exceptions: [],
+      bufferTime: 15,
+      maxAdvanceBooking: 30,
+      minNoticeTime: 24,
+      autoAcceptBookings: false,
+    };
+  }
+
+  if (!providerProfile.availability.serviceSchedules) {
+    providerProfile.availability.serviceSchedules = {};
+  }
+
+  // Copy global schedule to service
+  providerProfile.availability.serviceSchedules[serviceId] = { ...globalSchedule };
+
+  await providerProfile.save();
+
+  logger.info('Global schedule copied to service', {
+    context: 'AvailabilityController',
+    action: 'COPY_GLOBAL_TO_SERVICE',
+    providerId: req.user?._id?.toString(),
+    serviceId,
+  });
+
+  return res.json({
+    success: true,
+    message: 'Global schedule copied to service successfully',
+    data: {
+      serviceId,
+      schedule: providerProfile.availability.serviceSchedules[serviceId],
+    }
   });
 });

@@ -1,25 +1,15 @@
 import mongoose, { Schema, Document } from 'mongoose';
+import {
+  BEAUTY_PLANS,
+  BEAUTY_COMMISSION_RATES,
+  BEAUTY_PLAN_PRICES,
+  type BeautyPlanType,
+} from '../constants/subscriptionPlans';
 
-// Beauty/Salon subscription plans
-export const BEAUTY_PLANS = {
-  FREE: 'beauty_free',
-  PRO: 'beauty_pro',
-  PREMIUM: 'beauty_premium',
-} as const;
-
-// Commission rates by plan
-export const COMMISSION_RATES: Record<string, number> = {
-  beauty_free: 20,
-  beauty_pro: 15,
-  beauty_premium: 12,
-};
-
-// Plan pricing
-export const PLAN_PRICES: Record<string, { monthly: number; yearly: number }> = {
-  beauty_free: { monthly: 0, yearly: 0 },
-  beauty_pro: { monthly: 299, yearly: 2990 },
-  beauty_premium: { monthly: 799, yearly: 7990 },
-};
+// Re-export for backward compatibility
+export const COMMISSION_RATES = BEAUTY_COMMISSION_RATES;
+// Note: PLAN_PRICES is intentionally not exported here to avoid naming collision
+// Use BEAUTY_PLAN_PRICES from constants/subscriptionPlans instead
 
 export interface IBeautyPlan extends Document {
   providerId: mongoose.Types.ObjectId;
@@ -75,7 +65,7 @@ const beautyPlanSchema = new Schema({
 
 // Update commission based on plan
 beautyPlanSchema.pre('save', function(next) {
-  this.commissionRate = COMMISSION_RATES[this.plan] || 20;
+  this.commissionRate = BEAUTY_COMMISSION_RATES[this.plan as BeautyPlanType] || 20;
 
   // Set features based on plan
   this.features = {

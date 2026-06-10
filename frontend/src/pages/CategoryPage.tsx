@@ -7,6 +7,7 @@ import { useCategory } from '../hooks/useCategories';
 import SubcategoryCard from '../components/category/SubcategoryCard';
 import { CATEGORY_IMAGES } from '../constants/images';
 import { PageErrorBoundary } from '../components/common/PageErrorBoundary';
+import { resolveCategorySlug } from '../utils/categorySlugResolver';
 
 // Loading skeleton
 const CategoryPageSkeleton: React.FC = () => (
@@ -77,9 +78,17 @@ const Breadcrumb: React.FC<{ items: { label: string; href?: string }[] }> = ({ i
 };
 
 const CategoryPage: React.FC = () => {
-  const { slug } = useParams<{ slug: string }>();
+  const { slug: rawSlug } = useParams<{ slug: string }>();
   const navigate = useNavigate();
+  const slug = resolveCategorySlug(rawSlug) ?? rawSlug;
   const { category, isLoading, error } = useCategory(slug);
+
+  // Redirect legacy category URLs (e.g. /category/skincare → /category/skin-aesthetics)
+  React.useEffect(() => {
+    if (rawSlug && slug && rawSlug !== slug) {
+      navigate(`/category/${slug}`, { replace: true });
+    }
+  }, [rawSlug, slug, navigate]);
 
   if (isLoading) return <CategoryPageSkeleton />;
   if (error || !category) return <CategoryNotFound />;

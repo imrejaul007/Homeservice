@@ -30,15 +30,18 @@ const navItems: NavItem[] = [
     activeIcon: <Calendar className="h-6 w-6" strokeWidth={2.5} />,
   },
   {
+    label: 'Wallet',
+    href: '/customer/wallet',
+    icon: <Wallet className="h-6 w-6" strokeWidth={1.5} />,
+    activeIcon: <Wallet className="h-6 w-6" strokeWidth={2.5} />,
+  },
+  {
     label: 'Profile',
     href: '/customer/profile',
     icon: <User className="h-6 w-6" strokeWidth={1.5} />,
     activeIcon: <User className="h-6 w-6" strokeWidth={2.5} />,
   },
 ];
-
-// FIX: Removed broken links - /customer/wallet, /customer/ai, /customer/analytics
-// These routes don't exist (feature frozen) - removed to prevent 404 navigation
 
 const moreNavItems: NavItem[] = [
   {

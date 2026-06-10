@@ -20,6 +20,7 @@ import {
   isExpiringSoon,
 } from '../../services/managedContractApi';
 import { useToast } from '../../components/common/Toast/ToastContext';
+import { useAuthStore } from '../../stores/authStore';
 
 // ============================================
 // Icon Components
@@ -124,6 +125,14 @@ const ManagedServicesPage: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
+  const { user } = useAuthStore();
+
+  // Redirect if not a provider
+  useEffect(() => {
+    if (user?.role !== 'provider') {
+      navigate('/');
+    }
+  }, [user, navigate]);
 
   // URL param helpers
   const getInitialTab = (): TabType => {
@@ -195,7 +204,6 @@ const ManagedServicesPage: React.FC = () => {
         pages: response.meta.pages,
       });
     } catch (error) {
-      console.error('Failed to fetch contracts:', error);
       showToast('Failed to load contracts', 'error');
     } finally {
       setIsLoading(false);
@@ -217,7 +225,7 @@ const ManagedServicesPage: React.FC = () => {
         expiringContracts: expiringResponse.data.length,
       });
     } catch (error) {
-      console.error('Failed to fetch stats:', error);
+      showToast('Failed to load statistics', 'error');
     }
   }, []);
 
@@ -226,7 +234,6 @@ const ManagedServicesPage: React.FC = () => {
       const response = await managedContractApi.getContractById(contractId);
       setSelectedContract(response.data);
     } catch (error) {
-      console.error('Failed to fetch contract details:', error);
       showToast('Failed to load contract details', 'error');
     }
   }, [showToast]);
@@ -297,7 +304,6 @@ const ManagedServicesPage: React.FC = () => {
       fetchContracts();
       fetchStats();
     } catch (error) {
-      console.error('Failed to create contract:', error);
       showToast('Failed to create contract', 'error');
     } finally {
       setIsSubmitting(false);
@@ -313,7 +319,6 @@ const ManagedServicesPage: React.FC = () => {
       fetchContractDetail(selectedContractId);
       fetchStats();
     } catch (error) {
-      console.error('Failed to update contract:', error);
       showToast('Failed to update contract', 'error');
     } finally {
       setIsSubmitting(false);
@@ -344,7 +349,6 @@ const ManagedServicesPage: React.FC = () => {
       fetchContracts();
       fetchStats();
     } catch (error) {
-      console.error('Failed to change status:', error);
       showToast('Failed to change contract status', 'error');
     } finally {
       setIsSubmitting(false);
@@ -360,7 +364,6 @@ const ManagedServicesPage: React.FC = () => {
       setShowTeamModal(false);
       fetchContractDetail(selectedContractId);
     } catch (error) {
-      console.error('Failed to add team member:', error);
       showToast('Failed to add team member', 'error');
     } finally {
       setIsSubmitting(false);
@@ -374,7 +377,6 @@ const ManagedServicesPage: React.FC = () => {
       showToast('Team member removed', 'success');
       fetchContractDetail(selectedContractId);
     } catch (error) {
-      console.error('Failed to remove team member:', error);
       showToast('Failed to remove team member', 'error');
     }
   };
@@ -386,7 +388,6 @@ const ManagedServicesPage: React.FC = () => {
       showToast('Primary contact set', 'success');
       fetchContractDetail(selectedContractId);
     } catch (error) {
-      console.error('Failed to set primary contact:', error);
       showToast('Failed to set primary contact', 'error');
     }
   };
@@ -398,7 +399,6 @@ const ManagedServicesPage: React.FC = () => {
       showToast(`SLA Compliance: ${response.data.complianceRate}%`, 'success');
       fetchContractDetail(selectedContractId);
     } catch (error) {
-      console.error('Failed to calculate SLA:', error);
       showToast('Failed to calculate SLA compliance', 'error');
     }
   };
@@ -411,7 +411,6 @@ const ManagedServicesPage: React.FC = () => {
       showToast('Report generated', 'success');
       setShowReportModal(true);
     } catch (error) {
-      console.error('Failed to generate report:', error);
       showToast('Failed to generate report', 'error');
     }
   };

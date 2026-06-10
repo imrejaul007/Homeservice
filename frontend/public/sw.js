@@ -134,6 +134,135 @@ async function staleWhileRevalidate(request: Request): Promise<Response> {
 }
 
 // ============================================================
+// BOOKING NOTIFICATION TEMPLATES
+// ============================================================
+
+interface BookingTemplate {
+  id: string;
+  type: string;
+  title: string;
+  icon: string;
+  color: string;
+}
+
+// Booking notification type templates
+const BOOKING_TEMPLATES: Record<string, BookingTemplate> = {
+  booking_request: {
+    id: 'booking_request',
+    type: 'booking_request',
+    title: 'New Booking Request',
+    icon: 'calendar-plus',
+    color: 'bg-blue-100',
+  },
+  booking_confirmed: {
+    id: 'booking_confirmed',
+    type: 'booking_confirmed',
+    title: 'Booking Confirmed',
+    icon: 'check-circle',
+    color: 'bg-green-100',
+  },
+  booking_cancelled: {
+    id: 'booking_cancelled',
+    type: 'booking_cancelled',
+    title: 'Booking Cancelled',
+    icon: 'x-circle',
+    color: 'bg-red-100',
+  },
+  booking_rejected: {
+    id: 'booking_rejected',
+    type: 'booking_rejected',
+    title: 'Booking Rejected',
+    icon: 'x-circle',
+    color: 'bg-orange-100',
+  },
+  booking_started: {
+    id: 'booking_started',
+    type: 'booking_started',
+    title: 'Service Started',
+    icon: 'play-circle',
+    color: 'bg-cyan-100',
+  },
+  booking_completed: {
+    id: 'booking_completed',
+    type: 'booking_completed',
+    title: 'Service Completed',
+    icon: 'check-double',
+    color: 'bg-emerald-100',
+  },
+  booking_reminder: {
+    id: 'booking_reminder',
+    type: 'booking_reminder',
+    title: 'Booking Reminder',
+    icon: 'bell-ring',
+    color: 'bg-yellow-100',
+  },
+  provider_assigned: {
+    id: 'provider_assigned',
+    type: 'provider_assigned',
+    title: 'Provider Assigned',
+    icon: 'user-check',
+    color: 'bg-purple-100',
+  },
+  payment_received: {
+    id: 'payment_received',
+    type: 'payment_received',
+    title: 'Payment Received',
+    icon: 'credit-card',
+    color: 'bg-green-100',
+  },
+  payment_failed: {
+    id: 'payment_failed',
+    type: 'payment_failed',
+    title: 'Payment Failed',
+    icon: 'alert-triangle',
+    color: 'bg-red-100',
+  },
+  review_request: {
+    id: 'review_request',
+    type: 'review_request',
+    title: 'Rate Your Experience',
+    icon: 'star',
+    color: 'bg-yellow-100',
+  },
+};
+
+// Get template by type
+function getBookingTemplate(type: string): BookingTemplate | undefined {
+  return BOOKING_TEMPLATES[type];
+}
+
+// Format template message with data
+function formatTemplateMessage(template: BookingTemplate, data: Record<string, any>): string {
+  let message = data.message || '';
+
+  // Replace placeholders with actual data
+  const placeholders: Record<string, string> = {
+    '{{serviceName}}': data.serviceName || '',
+    '{{providerName}}': data.providerName || '',
+    '{{customerName}}': data.customerName || '',
+    '{{bookingNumber}}': data.bookingNumber || data.bookingId || '',
+    '{{scheduledDate}}': data.scheduledDate || '',
+    '{{scheduledTime}}': data.scheduledTime || '',
+    '{{totalAmount}}': data.totalAmount || '',
+    '{{currency}}': data.currency || 'AED',
+    '{{address}}': data.address || '',
+    '{{cancellationReason}}': data.cancellationReason || 'No reason provided',
+    '{{rejectionReason}}': data.rejectionReason || 'No reason provided',
+    '{{refundAmount}}': data.refundAmount || '',
+    '{{refundStatus}}': data.refundStatus || '',
+    '{{transactionId}}': data.transactionId || '',
+    '{{failureReason}}': data.failureReason || '',
+    '{{pointsReward}}': data.pointsReward || '',
+  };
+
+  for (const [placeholder, value] of Object.entries(placeholders)) {
+    message = message.replace(new RegExp(placeholder, 'g'), value);
+  }
+
+  return message;
+}
+
+// ============================================================
 // PUSH NOTIFICATION HANDLING
 // ============================================================
 
@@ -153,7 +282,16 @@ interface NotificationPayload {
   data?: {
     notificationId?: string;
     bookingId?: string;
+    bookingNumber?: string;
     type?: string;
+    serviceName?: string;
+    providerName?: string;
+    customerName?: string;
+    scheduledDate?: string;
+    scheduledTime?: string;
+    totalAmount?: string;
+    currency?: string;
+    address?: string;
     [key: string]: any;
   };
   vibrate?: number[];
@@ -202,18 +340,28 @@ self.addEventListener('push', (event: PushEvent) => {
     return;
   }
 
+  // Apply booking template if applicable
+  let notificationTitle = payload.title;
+  let notificationBody = payload.body;
+
+  if (payload.data?.type && getBookingTemplate(payload.data.type)) {
+    const template = getBookingTemplate(payload.data.type)!;
+    notificationTitle = payload.title || template.title;
+    notificationBody = formatTemplateMessage(template, payload.data);
+  }
+
   const options: NotificationOptions = {
-    body: payload.body || '',
+    body: notificationBody || '',
     icon: payload.icon || DEFAULT_OPTIONS.icon,
     badge: payload.badge || DEFAULT_OPTIONS.badge,
     tag: payload.tag || 'default',
     data: {
       ...payload.data,
-      url: payload.url || '/',
+      url: payload.url || getDefaultUrl(payload.data),
       dateOfArrival: Date.now(),
       notificationId: payload.data?.notificationId,
       bookingId: payload.data?.bookingId,
-      type: payload.type || 'notification',
+      type: payload.data?.type || 'notification',
     },
     actions: payload.actions || getDefaultActions(payload.data?.type),
     vibrate: payload.vibrate || DEFAULT_OPTIONS.vibrate,
@@ -229,10 +377,37 @@ self.addEventListener('push', (event: PushEvent) => {
   // Add badge count
   event.waitUntil(
     updateBadgeCount().then(() => {
-      return self.registration.showNotification(payload.title || 'NILIN', options);
+      return self.registration.showNotification(notificationTitle || 'NILIN', options);
     })
   );
 });
+
+// Get default URL based on notification data
+function getDefaultUrl(data?: Record<string, any>): string {
+  if (!data) return '/';
+
+  const { type, bookingId, bookingNumber } = data;
+
+  switch (type) {
+    case 'booking_request':
+    case 'booking_confirmed':
+    case 'booking_cancelled':
+    case 'booking_rejected':
+    case 'booking_started':
+    case 'booking_completed':
+    case 'booking_reminder':
+      return `/bookings/${bookingId || bookingNumber}`;
+    case 'payment_received':
+    case 'payment_failed':
+      return `/payments/${bookingId || bookingNumber}`;
+    case 'review_request':
+      return `/reviews/write/${bookingId || bookingNumber}`;
+    case 'provider_assigned':
+      return `/provider/${data.providerId}`;
+    default:
+      return '/notifications';
+  }
+}
 
 // Get default actions based on notification type
 function getDefaultActions(type?: string): Array<{ action: string; title: string; icon?: string }> {
@@ -242,11 +417,33 @@ function getDefaultActions(type?: string): Array<{ action: string; title: string
   ];
 
   switch (type) {
-    case 'booking':
+    case 'booking_request':
       return [
-        { action: 'view', title: 'View Booking', icon: '/icons/view.png' },
         { action: 'accept', title: 'Accept', icon: '/icons/check.png' },
         { action: 'decline', title: 'Decline', icon: '/icons/close.png' },
+        { action: 'view', title: 'View', icon: '/icons/view.png' },
+      ];
+    case 'booking_confirmed':
+    case 'booking_reminder':
+      return [
+        { action: 'view', title: 'View Booking', icon: '/icons/view.png' },
+        { action: 'reschedule', title: 'Reschedule', icon: '/icons/calendar.png' },
+      ];
+    case 'booking_cancelled':
+    case 'booking_rejected':
+      return [
+        { action: 'view', title: 'View Details', icon: '/icons/view.png' },
+        { action: 'rebook', title: 'Book Again', icon: '/icons/refresh.png' },
+      ];
+    case 'booking_started':
+      return [
+        { action: 'track', title: 'Track', icon: '/icons/location.png' },
+        { action: 'message', title: 'Message', icon: '/icons/message.png' },
+      ];
+    case 'booking_completed':
+      return [
+        { action: 'review', title: 'Review', icon: '/icons/star.png' },
+        { action: 'receipt', title: 'Receipt', icon: '/icons/document.png' },
       ];
     case 'payment':
       return [
@@ -262,6 +459,11 @@ function getDefaultActions(type?: string): Array<{ action: string; title: string
       return [
         { action: 'view', title: 'View Review', icon: '/icons/view.png' },
         { action: 'reply', title: 'Reply', icon: '/icons/reply.png' },
+      ];
+    case 'review_request':
+      return [
+        { action: 'review', title: 'Write Review', icon: '/icons/star.png' },
+        { action: 'skip', title: 'Skip', icon: '/icons/close.png' },
       ];
     default:
       return baseActions;
@@ -363,6 +565,10 @@ interface NotificationClickData {
   action?: string;
   notification?: Notification;
   url?: string;
+  bookingId?: string;
+  bookingNumber?: string;
+  type?: string;
+  providerId?: string;
 }
 
 // Handle notification click
@@ -381,26 +587,54 @@ self.addEventListener('notificationclick', (event: NotificationEvent) => {
       // Default view action
       break;
     case 'accept':
-      targetUrl = data?.url || `/bookings/${data?.bookingId || ''}/accept`;
+      targetUrl = `/bookings/${data?.bookingId || data?.bookingNumber || ''}/accept`;
       break;
     case 'decline':
-      targetUrl = `/bookings/${data?.bookingId || ''}`;
+      targetUrl = `/bookings/${data?.bookingId || data?.bookingNumber || ''}/decline`;
       break;
-    case 'reply':
-      targetUrl = `/messages/${data?.bookingId || ''}`;
+    case 'reschedule':
+      targetUrl = `/bookings/${data?.bookingId || data?.bookingNumber || ''}/reschedule`;
+      break;
+    case 'rebook':
+      targetUrl = `/services/${data?.bookingId || ''}`;
+      break;
+    case 'review':
+      targetUrl = `/reviews/write/${data?.bookingId || data?.bookingNumber || ''}`;
       break;
     case 'receipt':
-      targetUrl = `/payments/${data?.notificationId || ''}`;
+      targetUrl = `/payments/receipt/${data?.bookingId || data?.bookingNumber || ''}`;
       break;
+    case 'message':
+      targetUrl = `/messages/${data?.bookingId || data?.bookingNumber || ''}`;
+      break;
+    case 'reply':
+      targetUrl = `/messages/${data?.bookingId || data?.bookingNumber || ''}`;
+      break;
+    case 'track':
+      targetUrl = `/bookings/${data?.bookingId || data?.bookingNumber || ''}/track`;
+      break;
+    case 'skip':
+      // Just dismiss, don't navigate
+      return;
     case 'dismiss':
       // Just close, don't navigate
       return;
     default:
       // Check notification type for default action
-      if (data?.type === 'booking' && data?.bookingId) {
-        targetUrl = `/bookings/${data.bookingId}`;
-      } else if (data?.type === 'payment' && data?.notificationId) {
-        targetUrl = `/payments/${data.notificationId}`;
+      if (data?.type === 'booking_request' ||
+          data?.type === 'booking_confirmed' ||
+          data?.type === 'booking_cancelled' ||
+          data?.type === 'booking_rejected' ||
+          data?.type === 'booking_started' ||
+          data?.type === 'booking_completed' ||
+          data?.type === 'booking_reminder') {
+        targetUrl = `/bookings/${data.bookingId || data.bookingNumber}`;
+      } else if (data?.type === 'payment_received' || data?.type === 'payment_failed') {
+        targetUrl = `/payments/${data.bookingId || data.bookingNumber}`;
+      } else if (data?.type === 'review_request') {
+        targetUrl = `/reviews/write/${data.bookingId || data.bookingNumber}`;
+      } else if (data?.type === 'provider_assigned' && data?.providerId) {
+        targetUrl = `/provider/${data.providerId}`;
       }
   }
 
@@ -658,6 +892,13 @@ self.addEventListener('message', (event: MessageEvent) => {
       updateBadgeCount().then((count) => {
         event.ports[0]?.postMessage({ count });
       });
+      break;
+
+    case 'GET_BOOKING_TEMPLATE':
+      if (payload?.type) {
+        const template = getBookingTemplate(payload.type);
+        event.ports[0]?.postMessage({ template });
+      }
       break;
 
     default:

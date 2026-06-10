@@ -108,8 +108,6 @@ const RecommendedProCard: React.FC<RecommendedProCardProps> = ({
   onViewProfile,
   index
 }) => {
-  const [isHovered, setIsHovered] = useState(false);
-
   const tier = pro.tier || 'standard';
   const tierConfig = TIER_CONFIG[tier];
   const displayName = pro.businessName || `${pro.firstName} ${pro.lastName || ''}`.trim() || 'Professional';
@@ -117,8 +115,11 @@ const RecommendedProCard: React.FC<RecommendedProCardProps> = ({
   const avatarColor = getAvatarColor(displayName);
 
   // Get lowest price from services
+  const getNumericPrice = (price: number | { amount: number; currency?: string; type?: string; }): number => {
+    return typeof price === 'number' ? price : price.amount;
+  };
   const lowestPrice = pro.services && pro.services.length > 0
-    ? Math.min(...pro.services.map(s => s.price))
+    ? Math.min(...pro.services.map(s => getNumericPrice(s.price)))
     : null;
 
   // Get top 3 service names
@@ -127,9 +128,7 @@ const RecommendedProCard: React.FC<RecommendedProCardProps> = ({
   return (
     <FadeSection delay={index * 100}>
       <div
-        onMouseEnter={() => setIsHovered(true)}
-        onMouseLeave={() => setIsHovered(false)}
-        className={`relative overflow-hidden rounded-2xl border ${tierConfig.borderColor}
+        className={`relative overflow-hidden rounded-2xl border group ${tierConfig.borderColor}
                     bg-gradient-to-br ${tierConfig.bgGradient}
                     transition-all duration-300 hover:shadow-nilin-lg hover:-translate-y-1`}
       >
@@ -404,7 +403,7 @@ const RecommendedProsSection: React.FC<RecommendedProsSectionProps> = ({
 
   // Handle view profile action
   const handleViewProfile = (pro: RecommendedPro) => {
-    navigate(`/providers/${pro.userId}`);
+    navigate(`/provider/${pro.userId}`);
   };
 
   // Handle browse all

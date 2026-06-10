@@ -14,7 +14,7 @@ const SERVICES = [
     subtitle: 'Classic & Volume',
     image: 'https://images.unsplash.com/photo-1583001931096-959e9a1a6223?w=600&q=80',
     price: 'From AED 199',
-    link: '/category/beauty',
+    link: '/category/personal-care',
   },
   {
     id: '2',

@@ -254,7 +254,8 @@ const voucherUsageSchema = new Schema<IVoucherUsage>(
 );
 
 // Indexes for usage tracking
-voucherUsageSchema.index({ voucherId: 1, userId: 1 });
+// FIX: Add unique compound index to prevent duplicate voucher usage
+voucherUsageSchema.index({ voucherId: 1, userId: 1 }, { unique: true });
 voucherUsageSchema.index({ userId: 1, voucherCode: 1 });
 
 // Soft delete indexes

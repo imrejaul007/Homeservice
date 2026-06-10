@@ -6,10 +6,6 @@ import {
   type Membership,
   type SubscriptionPlan,
   type PlanType,
-  getSubscription,
-  subscribe,
-  cancelSubscriptionSimple,
-  upgradeSubscription,
 } from '../services/subscriptionApi';
 
 interface SubscriptionState {
@@ -47,8 +43,8 @@ export const useSubscriptionStore = create<SubscriptionState>()(
       fetchSubscription: async () => {
         set({ isLoading: true, error: null });
         try {
-          const sub = await getSubscription();
-          set({ subscription: sub, isLoading: false });
+          const response = await subscriptionApi.getSubscription();
+          set({ subscription: response.data, isLoading: false });
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : 'Failed to fetch subscription';
           set({ error: message, isLoading: false });
@@ -58,7 +54,7 @@ export const useSubscriptionStore = create<SubscriptionState>()(
       subscribe: async (tier: string) => {
         set({ isLoading: true, error: null });
         try {
-          await subscribe(tier);
+          await subscriptionApi.createSubscription({ plan: tier as PlanType, billingCycle: 'monthly' });
           await get().fetchSubscription();
           return true;
         } catch (err: unknown) {
@@ -71,7 +67,7 @@ export const useSubscriptionStore = create<SubscriptionState>()(
       cancelSubscription: async () => {
         set({ isLoading: true, error: null });
         try {
-          await cancelSubscriptionSimple();
+          await subscriptionApi.cancelSubscription();
           await get().fetchSubscription();
           return true;
         } catch (err: unknown) {
@@ -84,7 +80,7 @@ export const useSubscriptionStore = create<SubscriptionState>()(
       upgrade: async (tier: string) => {
         set({ isLoading: true, error: null });
         try {
-          await upgradeSubscription(tier);
+          await subscriptionApi.changePlan(tier as PlanType);
           await get().fetchSubscription();
           return true;
         } catch (err: unknown) {
@@ -116,7 +112,7 @@ export const useSubscriptionStore = create<SubscriptionState>()(
         }
       },
 
-      changePlan: async (plan: string, billingCycle = 'monthly') => {
+      changePlan: async (plan: PlanType, billingCycle: 'monthly' | 'yearly' = 'monthly') => {
         set({ isLoading: true, error: null });
         try {
           // Validate plan is one of the allowed PlanType values

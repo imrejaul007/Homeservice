@@ -4,7 +4,7 @@ import { useAuthStore } from '../../stores/authStore';
 import { bookingService } from '../../services/BookingService';
 import { providerAnalyticsApi, type ProviderAnalytics } from '../../services/providerApi';
 import { reviewsApi, type Review } from '../../services/reviewsApi';
-import { walletApi } from '../../services/walletApi';
+import { providerWalletApi } from '../../services/walletApi';
 import { socketService } from '../../services/socket';
 import NotificationBell from '../common/NotificationBell';
 import { PageErrorBoundary } from '../common/PageErrorBoundary';
@@ -295,7 +295,7 @@ const ProviderDashboard: React.FC = () => {
   const fetchWalletBalance = useCallback(async () => {
     try {
       setLoadingWallet(true);
-      const response = await walletApi.getWallet();
+      const response = await providerWalletApi.getWallet();
       if (response.success && response.data) {
         setWalletBalance(response.data.balance || 0);
       }
@@ -874,7 +874,14 @@ const ProviderDashboard: React.FC = () => {
 	              className="flex flex-col items-center justify-center p-3 bg-white/60 backdrop-blur rounded-xl border border-nilin-border/30 hover:border-nilin-coral/50 hover:shadow-md transition-all duration-300"
 	            >
 	              <Clock className="h-5 w-5 text-nilin-rose mb-1" />
-	              <span className="text-xs font-medium text-nilin-charcoal text-center">Availability</span>
+	              <span className="text-xs font-medium text-nilin-charcoal text-center">Hours</span>
+	            </Link>
+	            <Link
+	              to="/provider/service-availability"
+	              className="flex flex-col items-center justify-center p-3 bg-white/60 backdrop-blur rounded-xl border border-nilin-border/30 hover:border-nilin-coral/50 hover:shadow-md transition-all duration-300"
+	            >
+	              <Calendar className="h-5 w-5 text-purple-500 mb-1" />
+	              <span className="text-xs font-medium text-nilin-charcoal text-center">Services</span>
 	            </Link>
 	            <Link
 	              to="/provider/settings"

@@ -336,6 +336,79 @@ const socketValidationSchemas = {
     message: Joi.string().max(500).optional().messages({
       'string.max': 'Message must be at most 500 characters'
     })
+  }),
+
+  // Chat room management
+  'join:chat_room': Joi.object({
+    chatRoomId: Joi.string().required().hex().length(24).messages({
+      'string.hex': 'Chat room ID must be a valid hex string',
+      'string.length': 'Chat room ID must be 24 characters',
+      'any.required': 'Chat room ID is required'
+    })
+  }),
+
+  'leave:chat_room': Joi.object({
+    chatRoomId: Joi.string().required().hex().length(24).messages({
+      'string.hex': 'Chat room ID must be a valid hex string',
+      'string.length': 'Chat room ID must be 24 characters',
+      'any.required': 'Chat room ID is required'
+    })
+  }),
+
+  // Chat messaging - validates send:message event
+  'send:message': Joi.object({
+    chatRoomId: Joi.string().required().hex().length(24).messages({
+      'string.hex': 'Chat room ID must be a valid hex string',
+      'string.length': 'Chat room ID must be 24 characters',
+      'any.required': 'Chat room ID is required'
+    }),
+    receiverId: Joi.string().required().hex().length(24).messages({
+      'string.hex': 'Receiver ID must be a valid hex string',
+      'string.length': 'Receiver ID must be 24 characters',
+      'any.required': 'Receiver ID is required'
+    }),
+    content: Joi.string().max(5000).allow('').optional(),
+    type: Joi.string().valid('text', 'image', 'file').default('text'),
+    bookingId: Joi.string().hex().length(24).optional(),
+    replyTo: Joi.string().hex().length(24).optional(),
+    attachments: Joi.array().items(
+      Joi.object({
+        url: Joi.string().required(),
+        filename: Joi.string().required(),
+        mimeType: Joi.string().required(),
+        size: Joi.number().positive().required(),
+        thumbnailUrl: Joi.string().optional()
+      })
+    ).max(10).optional()
+  }),
+
+  // Mark read - validates mark:read event
+  'mark:read': Joi.object({
+    chatRoomId: Joi.string().required().hex().length(24).messages({
+      'string.hex': 'Chat room ID must be a valid hex string',
+      'string.length': 'Chat room ID must be 24 characters',
+      'any.required': 'Chat room ID is required'
+    }),
+    messageIds: Joi.array().items(
+      Joi.string().hex().length(24)
+    ).optional()
+  }),
+
+  // Chat typing indicators
+  'chat:typing:start': Joi.object({
+    chatRoomId: Joi.string().required().hex().length(24).messages({
+      'string.hex': 'Chat room ID must be a valid hex string',
+      'string.length': 'Chat room ID must be 24 characters',
+      'any.required': 'Chat room ID is required'
+    })
+  }),
+
+  'chat:typing:stop': Joi.object({
+    chatRoomId: Joi.string().required().hex().length(24).messages({
+      'string.hex': 'Chat room ID must be a valid hex string',
+      'string.length': 'Chat room ID must be 24 characters',
+      'any.required': 'Chat room ID is required'
+    })
   })
 };
 
@@ -1044,7 +1117,6 @@ class SocketServer {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   emitToUser<T extends keyof ServerToClientEvents>(userId: string, event: T, data: any): boolean {
     try {
-      const room = this.io.to(`user:${userId}`);
       const socketsCount = this.userSockets.get(userId)?.size || 0;
 
       if (socketsCount === 0) {
@@ -1056,7 +1128,8 @@ class SocketServer {
         return false;
       }
 
-      (room as any).emit(event, data);
+      // @ts-ignore - Socket.io emit requires string event name
+      this.io.to(`user:${userId}`).emit(event, data);
       logger.debug('Emitted event to user', {
         userId,
         event,
@@ -1081,7 +1154,6 @@ class SocketServer {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   emitToBooking<T extends keyof ServerToClientEvents>(bookingId: string, event: T, data: any): boolean {
     try {
-      const room = this.io.to(`booking:${bookingId}`);
       const socketsCount = this.bookingRooms.get(bookingId)?.size || 0;
 
       if (socketsCount === 0) {
@@ -1093,7 +1165,8 @@ class SocketServer {
         return false;
       }
 
-      (room as any).emit(event, data);
+      // @ts-ignore - Socket.io emit requires string event name
+      this.io.to(`booking:${bookingId}`).emit(event, data);
       logger.debug('Emitted event to booking room', {
         bookingId,
         event,
@@ -1699,10 +1772,10 @@ class SocketServer {
   // =============================================================================
 
   // Emit booking started event to provider
-  emitBookingStarted(bookingId: string, providerId: string): boolean {
+  emitBookingStarted(bookingId: string, bookingNumber: string, providerId: string): boolean {
     const eventData: BookingEvent = {
       bookingId,
-      bookingNumber: '',
+      bookingNumber,
       status: 'started',
       userId: providerId,
       timestamp: new Date(),
@@ -1712,6 +1785,7 @@ class SocketServer {
     if (emitted) {
       logger.info('Emitted booking:started event', {
         bookingId,
+        bookingNumber,
         providerId,
         action: 'EMIT_BOOKING_STARTED',
       });
@@ -1720,12 +1794,12 @@ class SocketServer {
   }
 
   // Emit booking no-show event to provider
-  emitBookingNoShow(bookingId: string, providerId: string, customerId: string): boolean {
+  emitBookingNoShow(bookingId: string, bookingNumber: string, providerId: string, customerId: string): boolean {
     const eventData: BookingEvent = {
       bookingId,
-      bookingNumber: '',
+      bookingNumber,
       status: 'no_show',
-      userId: customerId,
+      userId: providerId,
       timestamp: new Date(),
     };
 
@@ -1733,6 +1807,7 @@ class SocketServer {
     if (emitted) {
       logger.info('Emitted booking:no_show event to provider', {
         bookingId,
+        bookingNumber,
         providerId,
         customerId,
         action: 'EMIT_BOOKING_NO_SHOW_PROVIDER',
@@ -1742,10 +1817,10 @@ class SocketServer {
   }
 
   // Emit booking started event to customer
-  emitBookingStartedToCustomer(bookingId: string, customerId: string, providerId: string): boolean {
+  emitBookingStartedToCustomer(bookingId: string, bookingNumber: string, customerId: string, providerId: string): boolean {
     const eventData: BookingEvent = {
       bookingId,
-      bookingNumber: '',
+      bookingNumber,
       status: 'started',
       userId: providerId,
       timestamp: new Date(),
@@ -1755,6 +1830,7 @@ class SocketServer {
     if (emitted) {
       logger.info('Emitted booking:started event to customer', {
         bookingId,
+        bookingNumber,
         customerId,
         providerId,
         action: 'EMIT_BOOKING_STARTED_CUSTOMER',
@@ -1764,10 +1840,10 @@ class SocketServer {
   }
 
   // Emit booking no-show event to customer
-  emitBookingNoShowToCustomer(bookingId: string, customerId: string): boolean {
+  emitBookingNoShowToCustomer(bookingId: string, bookingNumber: string, customerId: string): boolean {
     const eventData: BookingEvent = {
       bookingId,
-      bookingNumber: '',
+      bookingNumber,
       status: 'no_show',
       userId: customerId,
       timestamp: new Date(),
@@ -1777,6 +1853,7 @@ class SocketServer {
     if (emitted) {
       logger.info('Emitted booking:no_show event to customer', {
         bookingId,
+        bookingNumber,
         customerId,
         action: 'EMIT_BOOKING_NO_SHOW_CUSTOMER',
       });
@@ -2350,14 +2427,14 @@ class SocketServer {
   // =============================================================================
 
   // Emit new review event to provider when a customer submits a review
-  // FIX: Added bookingNumber, providerId, serviceName fields to match frontend expectations
-  emitNewReview(providerId: string, reviewId: string, bookingId: string, bookingNumber: string, customerName: string, rating: number, comment?: string, serviceName?: string): boolean {
+  // FIX: Added bookingNumber, providerId, serviceName, customerId fields to match frontend expectations
+  emitNewReview(providerId: string, reviewId: string, bookingId: string, bookingNumber: string, customerId: string, customerName: string, rating: number, comment?: string, serviceName?: string): boolean {
     const emitted = this.emitToUser(providerId, 'review:new', {
       reviewId,
       bookingId,
       bookingNumber,
       providerId, // Include providerId for frontend to identify the provider
-      customerId: '', // Not needed for provider notification, but included for completeness
+      customerId, // Customer who submitted the review
       customerName,
       rating,
       comment,

@@ -19,7 +19,8 @@ import {
   Calendar,
   Flag,
   TrendingUp,
-  BarChart3
+  BarChart3,
+  AlertCircle
 } from 'lucide-react';
 import {
   BarChart,
@@ -38,34 +39,20 @@ import {
 import { cn } from '../../lib/utils';
 import { api } from '../../services/api';
 import { useToastActions } from '../common/Toast';
+import { AdminReview, AdminReviewStats, getReviewDisplayStatus } from '../../services/adminReviewApi';
 
-interface ReviewFlag {
-  id: string;
-  type: 'fake_positive' | 'fake_negative' | 'suspicious' | 'competitor';
+/**
+ * REWRITTEN: This component now uses the existing review moderation system
+ * with reportCount-based flagging instead of a non-existent ML infrastructure.
+ *
+ * Reviews with reportCount > 0 are flagged for review.
+ * This leverages the existing: /admin/reviews endpoint with status filtering
+ */
+
+// Flagged review extends AdminReview with computed flag info
+interface FlaggedReview extends AdminReview {
+  flagReasons: string[];
   confidence: number;
-  reasons: string[];
-  reviewId: string;
-  rating: number;
-  text: string;
-  authorName: string;
-  authorId: string;
-  providerId: string;
-  providerName: string;
-  serviceName: string;
-  timestamp: string;
-  status: 'pending' | 'approved' | 'rejected' | 'deleted';
-  detectionMethod: 'ml' | 'pattern' | 'manual';
-}
-
-interface ReviewStats {
-  totalFlagged: number;
-  pendingReview: number;
-  confirmedFake: number;
-  falsePositives: number;
-  accuracy: number;
-  byType: Array<{ type: string; count: number; color: string }>;
-  weeklyTrend: Array<{ week: string; flagged: number; confirmed: number }>;
-  topReasons: Array<{ reason: string; count: number }>;
 }
 
 interface FakeReviewDetectorProps {
@@ -73,175 +60,119 @@ interface FakeReviewDetectorProps {
   onClose?: () => void;
 }
 
-const FLAG_TYPE_CONFIG = {
-  fake_positive: { label: 'Fake Positive', color: '#EF4444', bgColor: 'bg-red-50 border-red-200' },
-  fake_negative: { label: 'Fake Negative', color: '#F59E0B', bgColor: 'bg-amber-50 border-amber-200' },
-  suspicious: { label: 'Suspicious', color: '#8B5CF6', bgColor: 'bg-purple-50 border-purple-200' },
-  competitor: { label: 'Competitor', color: '#EC4899', bgColor: 'bg-pink-50 border-pink-200' }
-};
-
-const STATUS_CONFIG = {
-  pending: { label: 'Pending', color: 'bg-amber-100 text-amber-700', icon: Clock },
-  approved: { label: 'Approved', color: 'bg-blue-100 text-blue-700', icon: CheckCircle },
-  rejected: { label: 'Rejected', color: 'bg-green-100 text-green-700', icon: XCircle },
-  deleted: { label: 'Deleted', color: 'bg-gray-100 text-gray-700', icon: Trash2 }
-};
-
-const DETECTION_METHOD_CONFIG = {
-  ml: { label: 'ML Model', color: 'bg-purple-100 text-purple-700' },
-  pattern: { label: 'Pattern Match', color: 'bg-blue-100 text-blue-700' },
-  manual: { label: 'Manual Flag', color: 'bg-gray-100 text-gray-700' }
-};
-
 export const FakeReviewDetector: React.FC<FakeReviewDetectorProps> = ({
   embedded = false,
   onClose
 }) => {
-  const [flags, setFlags] = useState<ReviewFlag[]>([]);
-  const [stats, setStats] = useState<ReviewStats | null>(null);
+  const [reviews, setReviews] = useState<FlaggedReview[]>([]);
+  const [stats, setStats] = useState<AdminReviewStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [usingMockData, setUsingMockData] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [typeFilter, setTypeFilter] = useState<string>('all');
-  const [statusFilter, setStatusFilter] = useState<string>('all');
-  const [selectedFlag, setSelectedFlag] = useState<ReviewFlag | null>(null);
+  const [ratingFilter, setRatingFilter] = useState<number | 'all'>('all');
+  const [reportFilter, setReportFilter] = useState<number | 'all'>('all');
+  const [selectedReview, setSelectedReview] = useState<FlaggedReview | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const toast = useToastActions();
   const isMountedRef = useRef(true);
 
+  const computeFlagReasons = (review: AdminReview): string[] => {
+    const reasons: string[] = [];
+
+    if (review.reportCount > 0) {
+      reasons.push(`${review.reportCount} user report(s)`);
+    }
+
+    // Add more flagging reasons based on patterns
+    if (review.comment.length < 10) {
+      reasons.push('Very short review text');
+    }
+
+    if (review.isVerified && review.reportCount > 0) {
+      reasons.push('Verified booking but flagged');
+    }
+
+    return reasons;
+  };
+
+  const computeConfidence = (review: AdminReview): number => {
+    let confidence = 50; // Base confidence
+
+    // More reports = higher confidence
+    confidence += Math.min(review.reportCount * 15, 40);
+
+    // Very short reviews are suspicious
+    if (review.comment.length < 20) {
+      confidence += 20;
+    }
+
+    // Generic positive/negative patterns
+    const lowerComment = review.comment.toLowerCase();
+    if (review.rating === 5 && (lowerComment.includes('!') || lowerComment.length < 30)) {
+      confidence += 15;
+    }
+    if (review.rating === 1 && review.comment.length < 50) {
+      confidence += 15;
+    }
+
+    return Math.min(confidence, 100);
+  };
+
   const fetchData = useCallback(async () => {
     try {
       setError(null);
-      const response = await api.get('/admin/reviews/flagged');
 
-      if (response.data?.success) {
-        setFlags(response.data.data.flags || []);
-        setStats(response.data.data.stats);
-        setUsingMockData(false);
-      } else {
-        // Mock data
-        setUsingMockData(true);
-        setFlags([
-          {
-            id: 'flag-001',
-            type: 'fake_positive',
-            confidence: 92,
-            reasons: ['Unusual review velocity', 'Same-day reviews from new accounts', 'IP cluster detected'],
-            reviewId: 'rev-12345',
-            rating: 5,
-            text: 'Absolutely amazing service! Best provider ever! Highly recommend to everyone!',
-            authorName: 'John Smith',
-            authorId: 'user-001',
-            providerId: 'prov-001',
-            providerName: 'Elite Cleaning Services',
-            serviceName: 'Deep Cleaning',
-            timestamp: new Date().toISOString(),
-            status: 'pending',
-            detectionMethod: 'ml'
-          },
-          {
-            id: 'flag-002',
-            type: 'fake_negative',
-            confidence: 78,
-            reasons: ['Competitor review pattern', 'Generic negative text', 'No specific complaints'],
-            reviewId: 'rev-12346',
-            rating: 1,
-            text: 'Bad service. Do not use.',
-            authorName: 'Mike Wilson',
-            authorId: 'user-002',
-            providerId: 'prov-002',
-            providerName: 'Professional Plumbers',
-            serviceName: 'Pipe Repair',
-            timestamp: new Date(Date.now() - 3600000).toISOString(),
-            status: 'pending',
-            detectionMethod: 'pattern'
-          },
-          {
-            id: 'flag-003',
-            type: 'suspicious',
-            confidence: 65,
-            reasons: ['First review from account', 'No booking history', 'Review text similarity'],
-            reviewId: 'rev-12347',
-            rating: 3,
-            text: 'It was okay. Nothing special.',
-            authorName: 'Sarah Jones',
-            authorId: 'user-003',
-            providerId: 'prov-003',
-            providerName: 'Home Electricians',
-            serviceName: 'Wiring Check',
-            timestamp: new Date(Date.now() - 7200000).toISOString(),
-            status: 'approved',
-            detectionMethod: 'ml'
-          },
-          {
-            id: 'flag-004',
-            type: 'competitor',
-            confidence: 85,
-            reasons: ['Review mentions competitor', 'Targeted negative review', 'Same IP as competitor reviews'],
-            reviewId: 'rev-12348',
-            rating: 2,
-            text: 'Better to use ABC Services instead, much cheaper and same quality.',
-            authorName: 'Tom Brown',
-            authorId: 'user-004',
-            providerId: 'prov-004',
-            providerName: 'Quality Painters',
-            serviceName: 'Interior Painting',
-            timestamp: new Date(Date.now() - 10800000).toISOString(),
-            status: 'deleted',
-            detectionMethod: 'pattern'
-          },
-          {
-            id: 'flag-005',
-            type: 'fake_positive',
-            confidence: 88,
-            reasons: ['Bulk review pattern', 'Account created same day', 'No previous activity'],
-            reviewId: 'rev-12349',
-            rating: 5,
-            text: 'Perfect! 5 stars! Best experience ever! Will book again!',
-            authorName: 'Lisa Green',
-            authorId: 'user-005',
-            providerId: 'prov-005',
-            providerName: 'Garden Experts',
-            serviceName: 'Lawn Maintenance',
-            timestamp: new Date(Date.now() - 14400000).toISOString(),
-            status: 'rejected',
-            detectionMethod: 'ml'
-          }
-        ]);
-        setStats({
-          totalFlagged: 156,
-          pendingReview: 34,
-          confirmedFake: 89,
-          falsePositives: 33,
-          accuracy: 87.5,
-          byType: [
-            { type: 'Fake Positive', count: 62, color: '#EF4444' },
-            { type: 'Fake Negative', count: 45, color: '#F59E0B' },
-            { type: 'Suspicious', count: 38, color: '#8B5CF6' },
-            { type: 'Competitor', count: 11, color: '#EC4899' }
-          ],
-          weeklyTrend: [
-            { week: 'Week 1', flagged: 18, confirmed: 12 },
-            { week: 'Week 2', flagged: 22, confirmed: 15 },
-            { week: 'Week 3', flagged: 25, confirmed: 18 },
-            { week: 'Week 4', flagged: 20, confirmed: 14 }
-          ],
-          topReasons: [
-            { reason: 'Unusual review velocity', count: 45 },
-            { reason: 'No booking history', count: 38 },
-            { reason: 'IP cluster detected', count: 32 },
-            { reason: 'Generic review text', count: 28 },
-            { reason: 'Same-day reviews', count: 24 }
-          ]
+      // Fetch flagged reviews (those with reportCount > 0)
+      // We'll fetch all reviews and filter client-side for now
+      // TODO: Add backend endpoint /admin/reviews/flagged that filters by reportCount
+      const [reviewsResponse, statsResponse] = await Promise.all([
+        api.get('/admin/reviews', {
+          params: { page: 1, limit: 100, status: 'all' }
+        }),
+        api.get('/admin/reviews/stats')
+      ]);
+
+      if (reviewsResponse.data?.success && statsResponse.data?.success) {
+        const allReviews: AdminReview[] = reviewsResponse.data.data.reviews || [];
+        const rawStats = statsResponse.data.data;
+
+        // Filter to only flagged reviews (reportCount > 0)
+        const flaggedReviews: FlaggedReview[] = allReviews
+          .filter(r => r.reportCount > 0)
+          .map(r => ({
+            ...r,
+            flagReasons: computeFlagReasons(r),
+            confidence: computeConfidence(r)
+          }))
+          .sort((a, b) => b.reportCount - a.reportCount); // Most reported first
+
+        setReviews(flaggedReviews);
+
+        // Compute stats for flagged reviews
+        const flaggedStats: AdminReviewStats = {
+          total: flaggedReviews.length,
+          pending: flaggedReviews.filter(r => getReviewDisplayStatus(r) === 'pending').length,
+          approved: flaggedReviews.filter(r => getReviewDisplayStatus(r) === 'approved').length,
+          rejected: flaggedReviews.filter(r => getReviewDisplayStatus(r) === 'rejected').length,
+          hidden: flaggedReviews.filter(r => r.isHidden).length,
+          flagged: flaggedReviews.length,
+          averageRating: flaggedReviews.length > 0
+            ? flaggedReviews.reduce((sum, r) => sum + r.rating, 0) / flaggedReviews.length
+            : 0,
+          ratingDistribution: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 }
+        };
+
+        flaggedReviews.forEach(r => {
+          flaggedStats.ratingDistribution[r.rating]++;
         });
+
+        setStats(flaggedStats);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error fetching review flags:', err);
       if (isMountedRef.current) {
-        setError('Failed to load review detection data');
-        setUsingMockData(false);
+        setError(err.response?.data?.message || 'Failed to load flagged reviews');
       }
     } finally {
       if (isMountedRef.current) {
@@ -264,32 +195,31 @@ export const FakeReviewDetector: React.FC<FakeReviewDetectorProps> = ({
     setIsRefreshing(false);
   };
 
-  const handleUpdateStatus = async (flagId: string, newStatus: ReviewFlag['status']) => {
-    setActionLoading(flagId);
+  const handleModerate = async (reviewId: string, action: 'approve' | 'reject' | 'hide' | 'delete') => {
+    setActionLoading(reviewId);
     try {
-      await api.patch(`/admin/reviews/flags/${flagId}`, { status: newStatus });
-      setFlags(prev => prev.map(flag =>
-        flag.id === flagId ? { ...flag, status: newStatus } : flag
-      ));
-      toast.success('Status updated', `Review flag status changed to ${newStatus}`);
-    } catch (err) {
-      console.error('Error updating flag:', err);
-      toast.error('Update failed', 'Could not update review flag status. Please try again.');
+      await api.patch(`/admin/reviews/${reviewId}/moderate`, { action });
+      toast.success('Review moderated', `Action '${action}' completed`);
+      await fetchData(); // Refresh data
+    } catch (err: any) {
+      console.error('Error moderating review:', err);
+      toast.error('Moderation failed', err.response?.data?.message || 'Please try again');
     } finally {
       setActionLoading(null);
     }
   };
 
-  const filteredFlags = useMemo(() => {
-    return flags.filter(flag => {
-      const matchesSearch = flag.authorName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                            flag.providerName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                            flag.text.toLowerCase().includes(searchQuery.toLowerCase());
-      const matchesType = typeFilter === 'all' || flag.type === typeFilter;
-      const matchesStatus = statusFilter === 'all' || flag.status === statusFilter;
-      return matchesSearch && matchesType && matchesStatus;
+  const filteredReviews = useMemo(() => {
+    return reviews.filter(review => {
+      const matchesSearch =
+        review.comment.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        review.reviewerId?.firstName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        review.revieweeId?.firstName?.toLowerCase().includes(searchQuery.toLowerCase());
+      const matchesRating = ratingFilter === 'all' || review.rating === ratingFilter;
+      const matchesReports = reportFilter === 'all' || review.reportCount >= reportFilter;
+      return matchesSearch && matchesRating && matchesReports;
     });
-  }, [flags, searchQuery, typeFilter, statusFilter]);
+  }, [reviews, searchQuery, ratingFilter, reportFilter]);
 
   if (loading) {
     return (
@@ -308,8 +238,8 @@ export const FakeReviewDetector: React.FC<FakeReviewDetectorProps> = ({
     return (
       <div className={cn('bg-white rounded-2xl shadow-sm p-8', embedded ? '' : 'max-w-7xl mx-auto')}>
         <div className="flex flex-col items-center justify-center py-12 text-center">
-          <Shield className="w-12 h-12 text-red-400 mb-4" />
-          <h3 className="text-lg font-serif text-nilin-charcoal mb-2">Unable to Load Detection Data</h3>
+          <AlertCircle className="w-12 h-12 text-red-400 mb-4" />
+          <h3 className="text-lg font-serif text-nilin-charcoal mb-2">Unable to Load Flagged Reviews</h3>
           <p className="text-sm text-nilin-warmGray mb-4">{error}</p>
           <button
             onClick={handleRefresh}
@@ -323,6 +253,12 @@ export const FakeReviewDetector: React.FC<FakeReviewDetectorProps> = ({
     );
   }
 
+  const formatUserName = (user?: { firstName?: string; lastName?: string; email?: string; businessInfo?: { businessName?: string } } | null) => {
+    if (!user) return 'Unknown';
+    if (user.businessInfo?.businessName) return user.businessInfo.businessName;
+    return `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.email || 'Unknown';
+  };
+
   return (
     <div className={cn('bg-white rounded-2xl shadow-sm', embedded ? '' : 'max-w-7xl mx-auto p-6')}>
       {/* Header */}
@@ -332,8 +268,8 @@ export const FakeReviewDetector: React.FC<FakeReviewDetectorProps> = ({
             <Shield className="w-6 h-6 text-amber-600" />
           </div>
           <div>
-            <h2 className="text-2xl font-serif text-nilin-charcoal">Fake Review Detection</h2>
-            <p className="text-sm text-nilin-warmGray mt-1">ML-powered review authenticity analysis{usingMockData && ' (Demo Data)'}</p>
+            <h2 className="text-2xl font-serif text-nilin-charcoal">Review Flagging</h2>
+            <p className="text-sm text-nilin-warmGray mt-1">Reviews with user reports - based on reportCount system</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -353,110 +289,26 @@ export const FakeReviewDetector: React.FC<FakeReviewDetectorProps> = ({
       </div>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <div className="glass rounded-xl border border-nilin-border/50 p-4">
           <Flag className="w-5 h-5 text-amber-500 mb-2" />
-          <p className="text-2xl font-serif text-nilin-charcoal">{stats?.totalFlagged || 0}</p>
+          <p className="text-2xl font-serif text-nilin-charcoal">{stats?.flagged || 0}</p>
           <p className="text-xs text-nilin-warmGray">Total Flagged</p>
         </div>
         <div className="glass rounded-xl border border-nilin-border/50 p-4">
           <Clock className="w-5 h-5 text-blue-500 mb-2" />
-          <p className="text-2xl font-serif text-nilin-charcoal">{stats?.pendingReview || 0}</p>
-          <p className="text-xs text-nilin-warmGray">Pending</p>
+          <p className="text-2xl font-serif text-nilin-charcoal">{stats?.pending || 0}</p>
+          <p className="text-xs text-nilin-warmGray">Pending Review</p>
         </div>
         <div className="glass rounded-xl border border-nilin-border/50 p-4">
           <AlertTriangle className="w-5 h-5 text-red-500 mb-2" />
-          <p className="text-2xl font-serif text-red-600">{stats?.confirmedFake || 0}</p>
-          <p className="text-xs text-nilin-warmGray">Confirmed Fake</p>
+          <p className="text-2xl font-serif text-red-600">{reviews.filter(r => r.reportCount >= 3).length}</p>
+          <p className="text-xs text-nilin-warmGray">High Risk (3+ reports)</p>
         </div>
         <div className="glass rounded-xl border border-nilin-border/50 p-4">
           <CheckCircle className="w-5 h-5 text-green-500 mb-2" />
-          <p className="text-2xl font-serif text-green-600">{stats?.falsePositives || 0}</p>
-          <p className="text-xs text-nilin-warmGray">False Positives</p>
-        </div>
-        <div className="glass rounded-xl border border-nilin-border/50 p-4">
-          <TrendingUp className="w-5 h-5 text-purple-500 mb-2" />
-          <p className="text-2xl font-serif text-purple-600">{stats?.accuracy || 0}%</p>
-          <p className="text-xs text-nilin-warmGray">Accuracy</p>
-        </div>
-      </div>
-
-      {/* Charts */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-        {/* Weekly Trend */}
-        <div className="glass rounded-2xl border border-nilin-border/50 p-6">
-          <h3 className="text-lg font-serif text-nilin-charcoal mb-4">Weekly Detection Trend</h3>
-          <div className="h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={stats?.weeklyTrend || []}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
-                <XAxis dataKey="week" stroke="#6B7280" fontSize={12} />
-                <YAxis stroke="#6B7280" fontSize={12} />
-                <Tooltip contentStyle={{ borderRadius: 12, border: '1px solid #E8E0D8', fontFamily: 'system-ui' }} />
-                <Bar dataKey="flagged" fill="#F59E0B" name="Flagged" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="confirmed" fill="#EF4444" name="Confirmed" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        {/* By Type */}
-        <div className="glass rounded-2xl border border-nilin-border/50 p-6">
-          <h3 className="text-lg font-serif text-nilin-charcoal mb-4">By Detection Type</h3>
-          <div className="h-40">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={stats?.byType || []}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={40}
-                  outerRadius={70}
-                  paddingAngle={5}
-                  dataKey="count"
-                  nameKey="type"
-                >
-                  {stats?.byType?.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.color} />
-                  ))}
-                </Pie>
-                <Tooltip />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-          <div className="grid grid-cols-2 gap-2 mt-4">
-            {stats?.byType?.map(item => (
-              <div key={item.type} className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full" style={{ backgroundColor: item.color }} />
-                <span className="text-xs text-nilin-warmGray">{item.type}</span>
-                <span className="text-xs font-medium text-nilin-charcoal ml-auto">{item.count}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* Top Reasons */}
-      <div className="glass rounded-2xl border border-nilin-border/50 p-6 mb-6">
-        <h3 className="text-lg font-serif text-nilin-charcoal mb-4">Top Detection Reasons</h3>
-        <div className="space-y-3">
-          {stats?.topReasons?.map((item, index) => (
-            <div key={item.reason} className="flex items-center gap-4">
-              <span className="text-xs text-nilin-warmGray w-6">{index + 1}.</span>
-              <div className="flex-1">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-sm text-nilin-charcoal">{item.reason}</span>
-                  <span className="text-sm font-medium text-nilin-coral">{item.count}</span>
-                </div>
-                <div className="h-2 bg-nilin-blush/30 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-gradient-to-r from-nilin-rose to-nilin-coral rounded-full"
-                    style={{ width: `${(item.count / (stats?.topReasons?.[0]?.count || 1)) * 100}%` }}
-                  />
-                </div>
-              </div>
-            </div>
-          ))}
+          <p className="text-2xl font-serif text-green-600">{stats?.approved || 0}</p>
+          <p className="text-xs text-nilin-warmGray">Cleared</p>
         </div>
       </div>
 
@@ -468,51 +320,57 @@ export const FakeReviewDetector: React.FC<FakeReviewDetectorProps> = ({
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search reviews..."
+            placeholder="Search flagged reviews..."
             className="w-full pl-10 pr-4 py-2 border border-nilin-border rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-coral/30 text-sm"
           />
         </div>
         <select
-          value={typeFilter}
-          onChange={(e) => setTypeFilter(e.target.value)}
+          value={ratingFilter}
+          onChange={(e) => setRatingFilter(e.target.value === 'all' ? 'all' : Number(e.target.value))}
           className="px-4 py-2 border border-nilin-border rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-coral/30 text-sm"
         >
-          <option value="all">All Types</option>
-          <option value="fake_positive">Fake Positive</option>
-          <option value="fake_negative">Fake Negative</option>
-          <option value="suspicious">Suspicious</option>
-          <option value="competitor">Competitor</option>
+          <option value="all">All Ratings</option>
+          <option value="5">5 Stars</option>
+          <option value="4">4 Stars</option>
+          <option value="3">3 Stars</option>
+          <option value="2">2 Stars</option>
+          <option value="1">1 Star</option>
         </select>
         <select
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
+          value={reportFilter}
+          onChange={(e) => setReportFilter(e.target.value === 'all' ? 'all' : Number(e.target.value))}
           className="px-4 py-2 border border-nilin-border rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-coral/30 text-sm"
         >
-          <option value="all">All Status</option>
-          <option value="pending">Pending</option>
-          <option value="approved">Approved</option>
-          <option value="rejected">Rejected</option>
-          <option value="deleted">Deleted</option>
+          <option value="all">All Reports</option>
+          <option value="1">1+ Reports</option>
+          <option value="2">2+ Reports</option>
+          <option value="3">3+ Reports</option>
+          <option value="5">5+ Reports</option>
         </select>
       </div>
 
       {/* Flagged Reviews List */}
       <div className="space-y-4">
-        {filteredFlags.length === 0 ? (
+        {filteredReviews.length === 0 ? (
           <div className="text-center py-12 text-nilin-warmGray">
             <CheckCircle className="w-12 h-12 mx-auto mb-4 text-green-400" />
             <p className="font-medium">No flagged reviews match your filters</p>
+            <p className="text-sm mt-1">
+              {reviews.length === 0 ? 'All reviews are clear of reports' : 'Try adjusting your filters'}
+            </p>
           </div>
         ) : (
-          filteredFlags.map(flag => {
-            const typeConfig = FLAG_TYPE_CONFIG[flag.type];
-            const statusConfig = STATUS_CONFIG[flag.status];
-            const methodConfig = DETECTION_METHOD_CONFIG[flag.detectionMethod];
+          filteredReviews.map(review => {
+            const displayStatus = getReviewDisplayStatus(review);
+            const isHighRisk = review.reportCount >= 3;
 
             return (
               <div
-                key={flag.id}
-                className={cn('glass rounded-xl border p-4 transition-all hover:shadow-md', typeConfig.bgColor)}
+                key={review._id}
+                className={cn(
+                  'glass rounded-xl border p-4 transition-all hover:shadow-md',
+                  isHighRisk ? 'border-red-200 bg-red-50/30' : 'border-amber-200 bg-amber-50/30'
+                )}
               >
                 <div className="flex items-start gap-4">
                   <div className="flex flex-col items-center gap-1">
@@ -521,87 +379,105 @@ export const FakeReviewDetector: React.FC<FakeReviewDetectorProps> = ({
                         key={star}
                         className={cn(
                           'w-3 h-3',
-                          star <= flag.rating ? 'text-amber-400 fill-amber-400' : 'text-gray-300'
+                          star <= review.rating ? 'text-amber-400 fill-amber-400' : 'text-gray-300'
                         )}
                       />
                     ))}
-                    <span className="text-xs font-medium text-nilin-charcoal mt-1">{flag.rating}/5</span>
+                    <span className="text-xs font-medium text-nilin-charcoal mt-1">{review.rating}/5</span>
                   </div>
+
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1 flex-wrap">
-                      <span className="px-2 py-0.5 rounded text-xs font-medium border" style={{ borderColor: typeConfig.color, color: typeConfig.color }}>
-                        {typeConfig.label}
+                      <span className={cn(
+                        'px-2 py-0.5 rounded text-xs font-medium',
+                        isHighRisk ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
+                      )}>
+                        {review.reportCount} Report{review.reportCount !== 1 ? 's' : ''}
                       </span>
-                      <span className={cn('px-2 py-0.5 rounded text-xs font-medium', statusConfig.color)}>
-                        {statusConfig.label}
-                      </span>
-                      <span className={cn('px-2 py-0.5 rounded text-xs font-medium', methodConfig.color)}>
-                        {methodConfig.label}
+                      <span className={cn(
+                        'px-2 py-0.5 rounded text-xs font-medium',
+                        displayStatus === 'pending' ? 'bg-blue-100 text-blue-700' :
+                        displayStatus === 'approved' ? 'bg-green-100 text-green-700' :
+                        displayStatus === 'rejected' ? 'bg-gray-100 text-gray-700' :
+                        'bg-gray-100 text-gray-700'
+                      )}>
+                        {displayStatus}
                       </span>
                       <span className="ml-auto text-xs text-nilin-warmGray">
-                        Confidence: <strong className="text-nilin-charcoal">{flag.confidence}%</strong>
+                        Flag Confidence: <strong className={cn(
+                          'text-nilin-charcoal',
+                          review.confidence >= 70 && 'text-red-600',
+                          review.confidence >= 50 && review.confidence < 70 && 'text-amber-600'
+                        )}>{review.confidence}%</strong>
                       </span>
                     </div>
-                    <p className="font-medium text-nilin-charcoal">{flag.authorName}</p>
-                    <p className="text-sm text-nilin-warmGray mt-1 italic">"{flag.text}"</p>
-                    <div className="flex items-center gap-4 mt-2 text-xs text-nilin-warmGray">
-                      <span>Provider: <strong className="text-nilin-charcoal">{flag.providerName}</strong></span>
-                      <span>Service: <strong className="text-nilin-charcoal">{flag.serviceName}</strong></span>
-                      <span className="ml-auto">{new Date(flag.timestamp).toLocaleString()}</span>
+
+                    <div className="flex items-center gap-2 text-sm text-nilin-warmGray mb-2">
+                      <span>By: <strong className="text-nilin-charcoal">{formatUserName(review.reviewerId)}</strong></span>
+                      <span>For: <strong className="text-nilin-charcoal">{formatUserName(review.revieweeId)}</strong></span>
+                      {review.bookingId?.serviceId && (
+                        <span>Service: <strong className="text-nilin-charcoal">{review.bookingId.serviceId.name}</strong></span>
+                      )}
                     </div>
+
+                    <p className="text-sm text-nilin-charcoal mt-1">"{review.comment}"</p>
+
+                    {/* Flag Reasons */}
+                    {review.flagReasons.length > 0 && (
+                      <div className="flex flex-wrap gap-2 mt-3">
+                        {review.flagReasons.map((reason, idx) => (
+                          <span
+                            key={idx}
+                            className="px-2 py-0.5 bg-red-100 text-red-700 rounded text-xs"
+                          >
+                            {reason}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
+
                   <div className="flex items-center gap-2">
-                    {flag.status === 'pending' && (
+                    {displayStatus === 'pending' && (
                       <>
                         <button
-                          onClick={() => handleUpdateStatus(flag.id, 'deleted')}
-                          disabled={actionLoading === flag.id}
-                          className="p-2 rounded-lg bg-red-100 text-red-600 hover:bg-red-200 transition-colors"
-                          title="Delete Review"
+                          onClick={() => handleModerate(review._id, 'hide')}
+                          disabled={actionLoading === review._id}
+                          className="p-2 rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors"
+                          title="Hide Review"
                         >
-                          <Trash2 className="w-4 h-4" />
+                          <Eye className="w-4 h-4" />
                         </button>
                         <button
-                          onClick={() => handleUpdateStatus(flag.id, 'rejected')}
-                          disabled={actionLoading === flag.id}
+                          onClick={() => handleModerate(review._id, 'reject')}
+                          disabled={actionLoading === review._id}
                           className="p-2 rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors"
                           title="False Positive"
                         >
                           <ThumbsDown className="w-4 h-4" />
                         </button>
                         <button
-                          onClick={() => handleUpdateStatus(flag.id, 'approved')}
-                          disabled={actionLoading === flag.id}
-                          className="p-2 rounded-lg bg-green-100 text-green-600 hover:bg-green-200 transition-colors"
-                          title="Keep Review"
+                          onClick={() => handleModerate(review._id, 'delete')}
+                          disabled={actionLoading === review._id}
+                          className="p-2 rounded-lg bg-red-100 text-red-600 hover:bg-red-200 transition-colors"
+                          title="Delete Review"
                         >
-                          <ThumbsUp className="w-4 h-4" />
+                          <Trash2 className="w-4 h-4" />
                         </button>
                       </>
                     )}
-                    <button
-                      onClick={() => setSelectedFlag(selectedFlag?.id === flag.id ? null : flag)}
-                      className="p-2 rounded-lg hover:bg-white/50 transition-colors"
-                    >
-                      <Eye className="w-4 h-4 text-nilin-warmGray" />
-                    </button>
+                    {displayStatus !== 'pending' && (
+                      <button
+                        onClick={() => handleModerate(review._id, 'approve')}
+                        disabled={actionLoading === review._id}
+                        className="p-2 rounded-lg bg-green-100 text-green-600 hover:bg-green-200 transition-colors"
+                        title="Restore Review"
+                      >
+                        <ThumbsUp className="w-4 h-4" />
+                      </button>
+                    )}
                   </div>
                 </div>
-                {selectedFlag?.id === flag.id && (
-                  <div className="mt-4 pt-4 border-t border-nilin-border/50">
-                    <p className="text-sm font-medium text-nilin-charcoal mb-2">Detection Reasons</p>
-                    <div className="flex flex-wrap gap-2">
-                      {flag.reasons.map((reason, index) => (
-                        <span
-                          key={index}
-                          className="px-3 py-1 bg-white/50 rounded-full text-xs text-nilin-charcoal border border-nilin-border/30"
-                        >
-                          {reason}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
               </div>
             );
           })

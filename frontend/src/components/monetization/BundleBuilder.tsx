@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Package,
   Plus,
@@ -9,9 +9,17 @@ import {
   Sparkles,
   Tag,
   Calendar,
-  DollarSign
+  DollarSign,
+  Loader2,
+  X
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { api } from '../../services/api';
+import { useToast } from '../common/Toast/ToastContext';
+
+// =============================================================================
+// Types
+// =============================================================================
 
 interface Service {
   _id: string;
@@ -20,6 +28,7 @@ interface Service {
   price: number;
   duration: number;
   images?: string[];
+  status?: string;
 }
 
 interface BundleService {
@@ -27,33 +36,136 @@ interface BundleService {
   quantity: number;
 }
 
+interface Bundle {
+  _id: string;
+  name: string;
+  description: string;
+  services: Array<{
+    serviceId: Service;
+    serviceName: string;
+    quantity: number;
+    originalPrice: number;
+  }>;
+  originalPrice: number;
+  bundlePrice: number;
+  savingsAmount: number;
+  savingsPercentage: number;
+  validFrom: string;
+  validUntil: string;
+  status: 'pending' | 'approved' | 'rejected';
+  isActive: boolean;
+}
+
 interface BundleBuilderProps {
-  services: Service[];
-  onBundleCreate: (bundle: {
-    name: string;
-    description: string;
-    serviceIds: string[];
-    discountPercentage: number;
-  }) => Promise<void>;
+  bundle?: Bundle;
+  onSuccess?: (bundle?: Bundle) => void;
+  onCancel?: () => void;
   maxServices?: number;
   minServices?: number;
   currency?: string;
 }
 
+interface ValidationError {
+  field: string;
+  message: string;
+}
+
+// =============================================================================
+// Component
+// =============================================================================
+
 const BundleBuilder: React.FC<BundleBuilderProps> = ({
-  services,
-  onBundleCreate,
+  bundle,
+  onSuccess,
+  onCancel,
   maxServices = 10,
-  minServices = 2,
+  minServices = 1,
   currency = 'AED',
 }) => {
+  // Toast notifications
+  const { addToast } = useToast();
+
+  // State
+  const [services, setServices] = useState<Service[]>([]);
   const [selectedServices, setSelectedServices] = useState<BundleService[]>([]);
   const [bundleName, setBundleName] = useState('');
   const [bundleDescription, setBundleDescription] = useState('');
   const [discountPercentage, setDiscountPercentage] = useState(10);
+  const [validFrom, setValidFrom] = useState('');
+  const [validUntil, setValidUntil] = useState('');
+  const [isLoading, setIsLoading] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [validationErrors, setValidationErrors] = useState<ValidationError[]>([]);
+
+  // Check if we're editing an existing bundle
+  const isEditMode = !!bundle?._id;
+
+  // Fetch provider's services
+  const fetchProviderServices = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      setError(null);
+
+      const response = await api.get('/provider/services');
+      const data = response.data?.data || response.data || [];
+
+      // Filter only active/approved services
+      const activeServices = Array.isArray(data)
+        ? data.filter((s: Service) => s.status === 'active' || !s.status)
+        : [];
+
+      setServices(activeServices);
+    } catch (err: unknown) {
+      const error = err as { response?: { data?: { message?: string } }; message?: string };
+      const errorMessage = error.response?.data?.message || error.message || 'Failed to load services';
+      setError(errorMessage);
+      console.error('Error fetching services:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  // Initialize from existing bundle or set defaults
+  useEffect(() => {
+    fetchProviderServices();
+
+    if (bundle?._id) {
+      // Edit mode - populate form with existing bundle data
+      setIsEditing(true);
+      setBundleName(bundle.name || '');
+      setBundleDescription(bundle.description || '');
+      setDiscountPercentage(bundle.savingsPercentage || 10);
+
+      if (bundle.validFrom) {
+        setValidFrom(new Date(bundle.validFrom).toISOString().split('T')[0]);
+      }
+      if (bundle.validUntil) {
+        setValidUntil(new Date(bundle.validUntil).toISOString().split('T')[0]);
+      }
+
+      // Map existing services
+      if (bundle.services && bundle.services.length > 0) {
+        const mappedServices: BundleService[] = bundle.services
+          .filter(s => s.serviceId)
+          .map(s => ({
+            service: s.serviceId as unknown as Service,
+            quantity: s.quantity || 1
+          }));
+        setSelectedServices(mappedServices);
+      }
+    } else {
+      // Set default validity dates
+      const today = new Date();
+      const threeMonthsLater = new Date(today);
+      threeMonthsLater.setMonth(threeMonthsLater.getMonth() + 3);
+
+      setValidFrom(today.toISOString().split('T')[0]);
+      setValidUntil(threeMonthsLater.toISOString().split('T')[0]);
+    }
+  }, [bundle, fetchProviderServices]);
 
   // Calculate totals
   const originalTotal = selectedServices.reduce(
@@ -66,6 +178,80 @@ const BundleBuilder: React.FC<BundleBuilderProps> = ({
     ? Math.round((discountAmount / originalTotal) * 100)
     : 0;
 
+  // Validation
+  const validateForm = (): ValidationError[] => {
+    const errors: ValidationError[] = [];
+
+    // Name validation
+    if (!bundleName.trim()) {
+      errors.push({ field: 'name', message: 'Bundle name is required' });
+    } else if (bundleName.length < 3) {
+      errors.push({ field: 'name', message: 'Bundle name must be at least 3 characters' });
+    } else if (bundleName.length > 200) {
+      errors.push({ field: 'name', message: 'Bundle name cannot exceed 200 characters' });
+    }
+
+    // Description validation
+    if (!bundleDescription.trim()) {
+      errors.push({ field: 'description', message: 'Description is required' });
+    } else if (bundleDescription.length < 10) {
+      errors.push({ field: 'description', message: 'Description must be at least 10 characters' });
+    } else if (bundleDescription.length > 2000) {
+      errors.push({ field: 'description', message: 'Description cannot exceed 2000 characters' });
+    }
+
+    // Services validation
+    if (selectedServices.length < minServices) {
+      errors.push({ field: 'services', message: `At least ${minServices} service(s) are required` });
+    }
+
+    // Date validations
+    if (!validFrom) {
+      errors.push({ field: 'validFrom', message: 'Valid from date is required' });
+    }
+
+    if (!validUntil) {
+      errors.push({ field: 'validUntil', message: 'Valid until date is required' });
+    }
+
+    if (validFrom && validUntil) {
+      const fromDate = new Date(validFrom);
+      const untilDate = new Date(validUntil);
+
+      if (untilDate <= fromDate) {
+        errors.push({ field: 'validUntil', message: 'Valid until date must be after valid from date' });
+      }
+
+      // Check if validFrom is not in the past (for new bundles)
+      if (!isEditMode) {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        if (fromDate < today) {
+          errors.push({ field: 'validFrom', message: 'Valid from date cannot be in the past' });
+        }
+      }
+    }
+
+    // Pricing validation
+    if (discountPercentage < 0) {
+      errors.push({ field: 'discount', message: 'Discount cannot be negative' });
+    } else if (discountPercentage > 90) {
+      errors.push({ field: 'discount', message: 'Discount cannot exceed 90%' });
+    }
+
+    // Bundle price must be less than original price
+    if (bundlePrice >= originalTotal && selectedServices.length > 0) {
+      errors.push({ field: 'discount', message: 'Bundle price must be less than original price' });
+    }
+
+    return errors;
+  };
+
+  const getFieldError = (field: string): string | undefined => {
+    return validationErrors.find(e => e.field === field)?.message;
+  };
+
+  // Service management
   const addService = (service: Service) => {
     if (selectedServices.length >= maxServices) {
       setError(`Maximum ${maxServices} services allowed in a bundle`);
@@ -117,53 +303,165 @@ const BundleBuilder: React.FC<BundleBuilderProps> = ({
     return selectedServices.some((item) => item.service._id === serviceId);
   };
 
-  const handleCreateBundle = async () => {
+  // API calls
+  const createBundle = async (): Promise<Bundle | null> => {
+    try {
+      const payload = {
+        name: bundleName.trim(),
+        description: bundleDescription.trim(),
+        services: selectedServices.map((item) => ({
+          serviceId: item.service._id,
+          quantity: item.quantity,
+          originalPrice: item.service.price,
+        })),
+        validFrom: new Date(validFrom).toISOString(),
+        validUntil: new Date(validUntil).toISOString(),
+        categoryId: undefined, // Optional, can be added later
+        tags: [],
+        terms: '',
+      };
+
+      const response = await api.post('/bundles', payload);
+
+      if (response.data?.success) {
+        return response.data.data;
+      }
+
+      throw new Error(response.data?.message || 'Failed to create bundle');
+    } catch (err: unknown) {
+      const error = err as { response?: { data?: { message?: string; errors?: unknown[] } }; message?: string };
+      const errorMessage = error.response?.data?.message || error.message || 'Failed to create bundle';
+
+      // Handle validation errors from backend
+      if (error.response?.data?.errors) {
+        const backendErrors = error.response.data.errors as Array<{ msg: string }>;
+        throw new Error(backendErrors.map(e => e.msg).join(', ') || errorMessage);
+      }
+
+      throw new Error(errorMessage);
+    }
+  };
+
+  const updateBundle = async (): Promise<Bundle | null> => {
+    if (!bundle?._id) return null;
+
+    try {
+      const payload = {
+        name: bundleName.trim(),
+        description: bundleDescription.trim(),
+        services: selectedServices.map((item) => ({
+          serviceId: item.service._id,
+          quantity: item.quantity,
+          originalPrice: item.service.price,
+        })),
+        validFrom: new Date(validFrom).toISOString(),
+        validUntil: new Date(validUntil).toISOString(),
+        tags: [],
+        terms: '',
+      };
+
+      const response = await api.put(`/bundles/${bundle._id}`, payload);
+
+      if (response.data?.success) {
+        return response.data.data;
+      }
+
+      throw new Error(response.data?.message || 'Failed to update bundle');
+    } catch (err: unknown) {
+      const error = err as { response?: { data?: { message?: string; errors?: unknown[] } }; message?: string };
+      const errorMessage = error.response?.data?.message || error.message || 'Failed to update bundle';
+
+      // Handle validation errors from backend
+      if (error.response?.data?.errors) {
+        const backendErrors = error.response.data.errors as Array<{ msg: string }>;
+        throw new Error(backendErrors.map(e => e.msg).join(', ') || errorMessage);
+      }
+
+      throw new Error(errorMessage);
+    }
+  };
+
+  // Form submission
+  const handleSubmit = async () => {
     setError(null);
     setSuccess(false);
+    setValidationErrors([]);
 
-    // Validation
-    if (selectedServices.length < minServices) {
-      setError(`At least ${minServices} services are required`);
-      return;
-    }
-
-    if (!bundleName.trim()) {
-      setError('Please enter a bundle name');
-      return;
-    }
-
-    if (!bundleDescription.trim()) {
-      setError('Please enter a bundle description');
-      return;
-    }
-
-    if (discountPercentage < 0 || discountPercentage > 90) {
-      setError('Discount must be between 0% and 90%');
+    // Run validation
+    const errors = validateForm();
+    if (errors.length > 0) {
+      setValidationErrors(errors);
+      setError('Please fix the errors below');
       return;
     }
 
     try {
       setIsCreating(true);
-      await onBundleCreate({
-        name: bundleName.trim(),
-        description: bundleDescription.trim(),
-        serviceIds: selectedServices.map((item) => item.service._id),
-        discountPercentage,
-      });
+
+      let savedBundle: Bundle | null = null;
+
+      if (isEditMode) {
+        savedBundle = await updateBundle();
+        addToast({
+          title: 'Bundle Updated',
+          description: 'Your bundle has been updated and resubmitted for approval.',
+          variant: 'success',
+          duration: 5000,
+        });
+      } else {
+        savedBundle = await createBundle();
+        addToast({
+          title: 'Bundle Created',
+          description: 'Your bundle has been created and is pending approval.',
+          variant: 'success',
+          duration: 5000,
+        });
+      }
+
       setSuccess(true);
 
-      // Reset form
-      setSelectedServices([]);
-      setBundleName('');
-      setBundleDescription('');
-      setDiscountPercentage(10);
+      // Reset form if creating new
+      if (!isEditMode) {
+        setSelectedServices([]);
+        setBundleName('');
+        setBundleDescription('');
+        setDiscountPercentage(10);
+
+        // Reset dates
+        const today = new Date();
+        const threeMonthsLater = new Date(today);
+        threeMonthsLater.setMonth(threeMonthsLater.getMonth() + 3);
+        setValidFrom(today.toISOString().split('T')[0]);
+        setValidUntil(threeMonthsLater.toISOString().split('T')[0]);
+      }
+
+      // Call success callback
+      if (onSuccess) {
+        onSuccess(savedBundle || undefined);
+      }
+
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create bundle');
+      const errorMessage = err instanceof Error ? err.message : 'An unexpected error occurred';
+      setError(errorMessage);
+      addToast({
+        title: isEditMode ? 'Update Failed' : 'Creation Failed',
+        description: errorMessage,
+        variant: 'error',
+        duration: 5000,
+      });
     } finally {
       setIsCreating(false);
     }
   };
 
+  // Handle cancel
+  const handleCancel = () => {
+    if (onCancel) {
+      onCancel();
+    }
+  };
+
+  // Format price
   const formatPrice = (price: number) => {
     return new Intl.NumberFormat('en-AE', {
       style: 'currency',
@@ -173,23 +471,54 @@ const BundleBuilder: React.FC<BundleBuilderProps> = ({
     }).format(price);
   };
 
+  // Format date for display
+  const formatDate = (dateStr: string) => {
+    if (!dateStr) return '';
+    return new Date(dateStr).toLocaleDateString('en-AE', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric'
+    });
+  };
+
   return (
     <div className="w-full max-w-6xl mx-auto p-4">
       {/* Header */}
       <div className="mb-6">
-        <div className="flex items-center gap-3 mb-2">
-          <div className="p-2 bg-gradient-to-br from-nilin-coral to-nilin-rose rounded-lg">
-            <Package className="h-6 w-6 text-white" />
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-gradient-to-br from-nilin-coral to-nilin-rose rounded-lg">
+              <Package className="h-6 w-6 text-white" />
+            </div>
+            <div>
+              <h2 className="text-2xl font-bold text-nilin-charcoal">
+                {isEditMode ? 'Edit Bundle' : 'Create Service Bundle'}
+              </h2>
+              <p className="text-sm text-nilin-gray">
+                {isEditMode
+                  ? 'Update your service bundle details'
+                  : 'Combine multiple services at a discounted price'}
+              </p>
+            </div>
           </div>
-          <div>
-            <h2 className="text-2xl font-bold text-nilin-charcoal">
-              Create Service Bundle
-            </h2>
-            <p className="text-sm text-nilin-gray">
-              Combine multiple services at a discounted price
-            </p>
-          </div>
+          {onCancel && (
+            <button
+              onClick={handleCancel}
+              className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+              aria-label="Close"
+            >
+              <X className="h-5 w-5 text-nilin-gray" />
+            </button>
+          )}
         </div>
+
+        {isEditMode && bundle?.status && (
+          <div className="mt-3 inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-100 text-amber-700 text-sm">
+            <AlertCircle className="h-4 w-4" />
+            Status: {bundle.status.charAt(0).toUpperCase() + bundle.status.slice(1)}
+            {bundle.status === 'pending' && ' (Updates will require re-approval)'}
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -205,55 +534,83 @@ const BundleBuilder: React.FC<BundleBuilderProps> = ({
               </span>
             </div>
 
-            {/* Service Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {services.map((service) => (
-                <div
-                  key={service._id}
-                  className={cn(
-                    'relative border rounded-lg p-4 transition-all cursor-pointer',
-                    isServiceSelected(service._id)
-                      ? 'border-nilin-coral bg-nilin-coral/5 ring-2 ring-nilin-coral/20'
-                      : 'border-gray-200 hover:border-gray-300 hover:shadow-sm'
-                  )}
-                  onClick={() => addService(service)}
+            {isLoading ? (
+              <div className="flex items-center justify-center py-12">
+                <Loader2 className="h-8 w-8 text-nilin-coral animate-spin" />
+                <span className="ml-3 text-nilin-gray">Loading services...</span>
+              </div>
+            ) : error && services.length === 0 ? (
+              <div className="text-center py-8">
+                <AlertCircle className="h-12 w-12 text-red-400 mx-auto mb-3" />
+                <p className="text-red-600 mb-3">{error}</p>
+                <button
+                  onClick={fetchProviderServices}
+                  className="px-4 py-2 bg-nilin-coral text-white rounded-lg hover:bg-nilin-rose transition-colors"
                 >
-                  {isServiceSelected(service._id) && (
-                    <div className="absolute -top-2 -right-2 w-6 h-6 bg-nilin-coral rounded-full flex items-center justify-center">
-                      <Check className="h-4 w-4 text-white" />
-                    </div>
-                  )}
-
-                  <div className="flex items-start gap-3">
-                    <div className="w-12 h-12 bg-gradient-to-br from-gray-100 to-gray-200 rounded-lg flex items-center justify-center flex-shrink-0">
-                      <Package className="h-6 w-6 text-gray-400" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <h4 className="font-medium text-nilin-charcoal truncate">
-                        {service.name}
-                      </h4>
-                      <p className="text-sm text-nilin-gray line-clamp-2">
-                        {service.description}
-                      </p>
-                      <div className="flex items-center gap-2 mt-1">
-                        <span className="font-semibold text-nilin-coral">
-                          {formatPrice(service.price)}
-                        </span>
-                        <span className="text-xs text-nilin-gray">
-                          {service.duration} min
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            {services.length === 0 && (
+                  Retry
+                </button>
+              </div>
+            ) : services.length === 0 ? (
               <div className="text-center py-8">
                 <AlertCircle className="h-12 w-12 text-gray-300 mx-auto mb-3" />
                 <p className="text-nilin-gray">No services available</p>
+                <p className="text-sm text-nilin-gray mt-1">
+                  Create services first to build bundles
+                </p>
               </div>
+            ) : (
+              <>
+                {/* Service Grid */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {services.map((service) => (
+                    <div
+                      key={service._id}
+                      className={cn(
+                        'relative border rounded-lg p-4 transition-all cursor-pointer',
+                        isServiceSelected(service._id)
+                          ? 'border-nilin-coral bg-nilin-coral/5 ring-2 ring-nilin-coral/20'
+                          : 'border-gray-200 hover:border-gray-300 hover:shadow-sm'
+                      )}
+                      onClick={() => addService(service)}
+                    >
+                      {isServiceSelected(service._id) && (
+                        <div className="absolute -top-2 -right-2 w-6 h-6 bg-nilin-coral rounded-full flex items-center justify-center">
+                          <Check className="h-4 w-4 text-white" />
+                        </div>
+                      )}
+
+                      <div className="flex items-start gap-3">
+                        <div className="w-12 h-12 bg-gradient-to-br from-gray-100 to-gray-200 rounded-lg flex items-center justify-center flex-shrink-0">
+                          <Package className="h-6 w-6 text-gray-400" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <h4 className="font-medium text-nilin-charcoal truncate">
+                            {service.name}
+                          </h4>
+                          <p className="text-sm text-nilin-gray line-clamp-2">
+                            {service.description}
+                          </p>
+                          <div className="flex items-center gap-2 mt-1">
+                            <span className="font-semibold text-nilin-coral">
+                              {formatPrice(service.price)}
+                            </span>
+                            <span className="text-xs text-nilin-gray">
+                              {service.duration} min
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {getFieldError('services') && (
+                  <p className="mt-3 text-sm text-red-600 flex items-center gap-1">
+                    <AlertCircle className="h-4 w-4" />
+                    {getFieldError('services')}
+                  </p>
+                )}
+              </>
             )}
           </div>
         </div>
@@ -349,10 +706,22 @@ const BundleBuilder: React.FC<BundleBuilderProps> = ({
                 <input
                   type="text"
                   value={bundleName}
-                  onChange={(e) => setBundleName(e.target.value)}
+                  onChange={(e) => {
+                    setBundleName(e.target.value);
+                    setValidationErrors(prev => prev.filter(v => v.field !== 'name'));
+                  }}
                   placeholder="e.g., Home Deep Clean Package"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-nilin-coral/20 focus:border-nilin-coral outline-none transition"
+                  className={cn(
+                    'w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-nilin-coral/20 focus:border-nilin-coral outline-none transition',
+                    getFieldError('name') ? 'border-red-500' : 'border-gray-300'
+                  )}
                 />
+                {getFieldError('name') && (
+                  <p className="mt-1 text-xs text-red-600 flex items-center gap-1">
+                    <AlertCircle className="h-3 w-3" />
+                    {getFieldError('name')}
+                  </p>
+                )}
               </div>
 
               {/* Description */}
@@ -362,16 +731,81 @@ const BundleBuilder: React.FC<BundleBuilderProps> = ({
                 </label>
                 <textarea
                   value={bundleDescription}
-                  onChange={(e) => setBundleDescription(e.target.value)}
+                  onChange={(e) => {
+                    setBundleDescription(e.target.value);
+                    setValidationErrors(prev => prev.filter(v => v.field !== 'description'));
+                  }}
                   placeholder="Describe what's included in this bundle..."
                   rows={3}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-nilin-coral/20 focus:border-nilin-coral outline-none transition resize-none"
+                  className={cn(
+                    'w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-nilin-coral/20 focus:border-nilin-coral outline-none transition resize-none',
+                    getFieldError('description') ? 'border-red-500' : 'border-gray-300'
+                  )}
                 />
+                {getFieldError('description') && (
+                  <p className="mt-1 text-xs text-red-600 flex items-center gap-1">
+                    <AlertCircle className="h-3 w-3" />
+                    {getFieldError('description')}
+                  </p>
+                )}
+              </div>
+
+              {/* Date Range */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-nilin-charcoal mb-1">
+                    <Calendar className="h-3 w-3 inline mr-1" />
+                    Valid From *
+                  </label>
+                  <input
+                    type="date"
+                    value={validFrom}
+                    onChange={(e) => {
+                      setValidFrom(e.target.value);
+                      setValidationErrors(prev => prev.filter(v => v.field !== 'validFrom'));
+                    }}
+                    className={cn(
+                      'w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-nilin-coral/20 focus:border-nilin-coral outline-none transition text-sm',
+                      getFieldError('validFrom') ? 'border-red-500' : 'border-gray-300'
+                    )}
+                  />
+                  {getFieldError('validFrom') && (
+                    <p className="mt-1 text-xs text-red-600 flex items-center gap-1">
+                      <AlertCircle className="h-3 w-3" />
+                      {getFieldError('validFrom')}
+                    </p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-nilin-charcoal mb-1">
+                    <Calendar className="h-3 w-3 inline mr-1" />
+                    Valid Until *
+                  </label>
+                  <input
+                    type="date"
+                    value={validUntil}
+                    onChange={(e) => {
+                      setValidUntil(e.target.value);
+                      setValidationErrors(prev => prev.filter(v => v.field !== 'validUntil'));
+                    }}
+                    className={cn(
+                      'w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-nilin-coral/20 focus:border-nilin-coral outline-none transition text-sm',
+                      getFieldError('validUntil') ? 'border-red-500' : 'border-gray-300'
+                    )}
+                  />
+                  {getFieldError('validUntil') && (
+                    <p className="mt-1 text-xs text-red-600 flex items-center gap-1">
+                      <AlertCircle className="h-3 w-3" />
+                      {getFieldError('validUntil')}
+                    </p>
+                  )}
+                </div>
               </div>
 
               {/* Discount Slider */}
               <div>
                 <label className="block text-sm font-medium text-nilin-charcoal mb-2">
+                  <DollarSign className="h-3 w-3 inline mr-1" />
                   Discount: {discountPercentage}%
                 </label>
                 <input
@@ -379,13 +813,22 @@ const BundleBuilder: React.FC<BundleBuilderProps> = ({
                   min="0"
                   max="50"
                   value={discountPercentage}
-                  onChange={(e) => setDiscountPercentage(Number(e.target.value))}
+                  onChange={(e) => {
+                    setDiscountPercentage(Number(e.target.value));
+                    setValidationErrors(prev => prev.filter(v => v.field !== 'discount'));
+                  }}
                   className="w-full accent-nilin-coral"
                 />
                 <div className="flex justify-between text-xs text-nilin-gray mt-1">
                   <span>0%</span>
                   <span>50%</span>
                 </div>
+                {getFieldError('discount') && (
+                  <p className="mt-1 text-xs text-red-600 flex items-center gap-1">
+                    <AlertCircle className="h-3 w-3" />
+                    {getFieldError('discount')}
+                  </p>
+                )}
               </div>
 
               {/* Quick Discount Buttons */}
@@ -393,7 +836,10 @@ const BundleBuilder: React.FC<BundleBuilderProps> = ({
                 {[5, 10, 15, 20].map((discount) => (
                   <button
                     key={discount}
-                    onClick={() => setDiscountPercentage(discount)}
+                    onClick={() => {
+                      setDiscountPercentage(discount);
+                      setValidationErrors(prev => prev.filter(v => v.field !== 'discount'));
+                    }}
                     className={cn(
                       'flex-1 py-1.5 text-sm font-medium rounded-lg transition',
                       discountPercentage === discount
@@ -409,7 +855,7 @@ const BundleBuilder: React.FC<BundleBuilderProps> = ({
           </div>
 
           {/* Error/Success Messages */}
-          {error && (
+          {error && !validationErrors.length && (
             <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
               <AlertCircle className="h-4 w-4 flex-shrink-0" />
               {error}
@@ -419,43 +865,65 @@ const BundleBuilder: React.FC<BundleBuilderProps> = ({
           {success && (
             <div className="flex items-center gap-2 p-3 bg-green-50 border border-green-200 rounded-lg text-green-700 text-sm">
               <Check className="h-4 w-4 flex-shrink-0" />
-              Bundle created successfully!
+              Bundle {isEditMode ? 'updated' : 'created'} successfully!
             </div>
           )}
 
-          {/* Create Button */}
-          <button
-            onClick={handleCreateBundle}
-            disabled={
-              isCreating ||
-              selectedServices.length < minServices ||
-              !bundleName.trim() ||
-              !bundleDescription.trim()
-            }
-            className={cn(
-              'w-full py-3 px-4 rounded-xl font-semibold text-white transition-all flex items-center justify-center gap-2',
-              isCreating || selectedServices.length < minServices
-                ? 'bg-gray-300 cursor-not-allowed'
-                : 'bg-gradient-to-r from-nilin-coral to-nilin-rose hover:shadow-lg hover:scale-[1.02] active:scale-[0.98]'
+          {/* Action Buttons */}
+          <div className="flex gap-3">
+            <button
+              onClick={handleSubmit}
+              disabled={
+                isCreating ||
+                isLoading ||
+                selectedServices.length < minServices ||
+                !bundleName.trim() ||
+                !bundleDescription.trim() ||
+                !validFrom ||
+                !validUntil
+              }
+              className={cn(
+                'flex-1 py-3 px-4 rounded-xl font-semibold text-white transition-all flex items-center justify-center gap-2',
+                isCreating || isLoading || selectedServices.length < minServices
+                  ? 'bg-gray-300 cursor-not-allowed'
+                  : 'bg-gradient-to-r from-nilin-coral to-nilin-rose hover:shadow-lg hover:scale-[1.02] active:scale-[0.98]'
+              )}
+            >
+              {isCreating ? (
+                <>
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                  {isEditMode ? 'Updating...' : 'Creating...'}
+                </>
+              ) : (
+                <>
+                  <Sparkles className="h-5 w-5" />
+                  {isEditMode ? 'Update Bundle' : 'Create Bundle'}
+                </>
+              )}
+            </button>
+
+            {onCancel && (
+              <button
+                onClick={handleCancel}
+                className="px-4 py-3 border border-gray-300 rounded-xl font-medium text-nilin-gray hover:bg-gray-50 transition-colors"
+              >
+                Cancel
+              </button>
             )}
-          >
-            {isCreating ? (
-              <>
-                <div className="h-5 w-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                Creating...
-              </>
-            ) : (
-              <>
-                <Sparkles className="h-5 w-5" />
-                Create Bundle
-              </>
-            )}
-          </button>
+          </div>
 
           {selectedServices.length < minServices && (
             <p className="text-xs text-center text-nilin-gray">
-              Select at least {minServices} services to create a bundle
+              Select at least {minServices} service{minServices > 1 ? 's' : ''} to create a bundle
             </p>
+          )}
+
+          {/* Validity Preview */}
+          {validFrom && validUntil && (
+            <div className="text-xs text-center text-nilin-gray">
+              <Calendar className="h-3 w-3 inline mr-1" />
+              Valid: {formatDate(validFrom)} - {formatDate(validUntil)}
+            </div>
           )}
         </div>
       </div>

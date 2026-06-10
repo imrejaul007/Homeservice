@@ -19,22 +19,41 @@ const submitReviewSchema = Joi.object({
   photos: Joi.array().items(Joi.string()),
 });
 
+const voteReviewSchema = Joi.object({
+  helpful: Joi.boolean().required(),
+});
+
 // ============================================
 // Public Routes
 // ============================================
 
-// Get provider reviews (public) - from review.controller
+// Get provider reviews (public)
+// NOTE: This route is also defined in review.routes.ts - consolidated to use review.controller
 router.get('/provider/:providerId', reviewController.getProviderReviews);
+
+// ============================================
+// ROUTES WITH :reviewId - Specific routes BEFORE parameterized /:reviewId
+// ============================================
+
+// Get review votes
+router.get('/:reviewId/votes', reviewsController.getReviewVotes);
+
+// Get provider review analytics
+router.get('/analytics/provider/:providerId', reviewsController.getProviderReviewAnalytics);
 
 // ============================================
 // Protected Routes
 // ============================================
 
-// Submit a review
-router.post('/booking/:bookingId',
+// NOTE: POST /reviews/booking/:bookingId is consolidated in review.routes.ts
+// to avoid duplicate route definitions. Both routes pointed to reviewsController.submitReview
+// which creates standalone Review documents.
+
+// Vote on a review
+router.post('/:reviewId/vote',
   authMiddleware.authenticate,
-  validate(submitReviewSchema),
-  reviewsController.submitReview
+  validate(voteReviewSchema),
+  reviewsController.voteReview
 );
 
 // ============================================

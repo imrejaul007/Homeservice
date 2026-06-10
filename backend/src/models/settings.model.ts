@@ -198,6 +198,7 @@ export interface IPlatformSettings extends Document {
 
 export interface IPlatformSettingsModel extends Model<IPlatformSettings> {
   getSettings(): Promise<IPlatformSettings>;
+  invalidateCache(): void;
 }
 
 const SettingsSchema = new Schema<IPlatformSettings>(
@@ -622,13 +623,50 @@ const SettingsSchema = new Schema<IPlatformSettings>(
   }
 );
 
-// Singleton pattern - ensure only one settings document exists
+// In-memory cache for settings to avoid DB query on every request
+interface CacheEntry {
+  settings: IPlatformSettings;
+  expiresAt: number;
+}
+
+let settingsCache: CacheEntry | null = null;
+
+/**
+ * Retrieves settings with in-memory caching.
+ * Cache TTL is controlled by the settings' own cacheTTLSeconds field (default: 300s).
+ */
 SettingsSchema.statics.getSettings = async function () {
+  const now = Date.now();
+
+  // Return cached settings if still valid
+  if (settingsCache && now < settingsCache.expiresAt) {
+    return settingsCache.settings;
+  }
+
+  // Fetch from DB
   let settings = await this.findOne();
   if (!settings) {
     settings = await this.create({});
   }
+
+  // Determine TTL - use a minimum of 60 seconds, default to 300
+  const ttlSeconds = Math.max(60, settings.cacheTTLSeconds || 300);
+  const ttlMs = ttlSeconds * 1000;
+
+  // Update cache
+  settingsCache = {
+    settings,
+    expiresAt: now + ttlMs,
+  };
+
   return settings;
+};
+
+/**
+ * Invalidates the settings cache. Call this after updating settings.
+ */
+SettingsSchema.statics.invalidateCache = function (): void {
+  settingsCache = null;
 };
 
 // Index for efficient queries

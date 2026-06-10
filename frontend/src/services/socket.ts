@@ -21,6 +21,7 @@
 
 import { io, Socket } from 'socket.io-client';
 import { secureStorage } from '@/lib/security';
+import { getSocketUrl } from '@/lib/getApiUrl';
 
 // =============================================================================
 // Type Definitions
@@ -38,12 +39,14 @@ export interface BookingEvent {
 }
 
 /**
- * Notification event types
+ * Notification event types - re-exported from notificationApi for consistency
+ * This ensures socket events use the same type definitions as the API layer
  */
-export type NotificationType = 'booking' | 'message' | 'system' | 'promotion';
+export type { NotificationType, Notification } from './notificationApi';
 
 /**
  * New notification event from server
+ * Uses unified Notification interface for consistency
  */
 export interface NotificationEvent {
   id: string;
@@ -53,7 +56,8 @@ export interface NotificationEvent {
   data?: Record<string, unknown>;
   userId: string;
   timestamp: Date;
-  read?: boolean;
+  isRead?: boolean;  // Alias for read for backward compatibility
+  read?: boolean;   // Kept for backward compatibility with existing socket events
 }
 
 /**
@@ -735,16 +739,14 @@ class SocketService {
 
   /**
    * Get the Socket.IO server URL
-   * FIX #12: Added SSR guard for import.meta.env access
+   * Uses helper function for proper mobile detection
    */
   private getSocketUrl(): string {
     // SSR guard: Only access environment variables in browser
     if (typeof import.meta === 'undefined') {
-      return 'http://localhost:5000';
+      return 'https://homeservice-1.onrender.com';
     }
-    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
-    // Remove /api suffix if present
-    return apiUrl.replace(/\/api$/, '');
+    return getSocketUrl();
   }
 
   /**

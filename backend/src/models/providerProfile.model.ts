@@ -1210,6 +1210,8 @@ providerProfileSchema.index({ lastActiveAt: -1 });
 // Tenant isolation indexes
 providerProfileSchema.index({ tenantId: 1, 'verificationStatus.overall': 1 });
 providerProfileSchema.index({ tenantId: 1, isActive: 1 });
+providerProfileSchema.index({ tenantId: 1, 'services.isActive': 1 });
+providerProfileSchema.index({ tenantId: 1, isActive: 1, 'verificationStatus.overall': 1 });
 
 // FIX: Add index for booking analytics queries (completed bookings by date)
 providerProfileSchema.index({ 'analytics.bookingStats.completedBookings': 1 });
@@ -1591,14 +1593,18 @@ ProviderProfile.recalculateRevenueStats = async function(userId: string | mongoo
 ProviderProfile.recalculateReviewsData = async function(userId: string | mongoose.Types.ObjectId, tenantId?: mongoose.Types.ObjectId): Promise<void> {
   const Review = mongoose.model('Review');
 
-  // Build match conditions with tenant isolation if tenantId is provided
+  // Match publicly visible reviews (same rules as storefront API)
   const matchConditions: Record<string, any> = {
     revieweeId: new mongoose.Types.ObjectId(userId.toString()),
     reviewerType: 'customer',
-    isHidden: false
+    isHidden: false,
+    $or: [
+      { moderationStatus: 'approved' },
+      { moderationStatus: { $exists: false } },
+    ],
+    $nor: [{ reportCount: { $gte: 3 } }],
   };
 
-  // FIX: Add tenant isolation to prevent cross-tenant data leakage in multi-tenant mode
   if (tenantId) {
     matchConditions.tenantId = tenantId;
   }
@@ -1636,10 +1642,14 @@ ProviderProfile.recalculateReviewsData = async function(userId: string | mongoos
   const recentReviewQuery: Record<string, any> = {
     revieweeId: userId,
     reviewerType: 'customer',
-    isHidden: false
+    isHidden: false,
+    $or: [
+      { moderationStatus: 'approved' },
+      { moderationStatus: { $exists: false } },
+    ],
+    $nor: [{ reportCount: { $gte: 3 } }],
   };
 
-  // FIX: Add tenant isolation to recent reviews query
   if (tenantId) {
     recentReviewQuery.tenantId = tenantId;
   }

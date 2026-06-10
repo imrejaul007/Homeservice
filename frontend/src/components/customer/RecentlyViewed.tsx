@@ -409,7 +409,7 @@ export const RecentlyViewed: React.FC<RecentlyViewedProps> = ({
     if (onItemClick) {
       onItemClick(service);
     } else {
-      navigate(`/service/${service._id}`);
+      navigate(`/services/${service._id}`);
     }
   }, [navigate, onItemClick, addViewedItem]);
 

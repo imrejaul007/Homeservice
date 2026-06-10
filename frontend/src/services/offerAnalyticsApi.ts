@@ -225,6 +225,60 @@ class OfferAnalyticsApiService {
     const response = await api.get('/offers-analytics/user/me');
     return response.data;
   }
+
+  // ========================================
+  // Export Endpoints (Admin)
+  // ========================================
+
+  /**
+   * Export offers as CSV or JSON
+   */
+  async exportOffers(options: {
+    format?: 'csv' | 'json';
+    isActive?: boolean;
+    type?: string;
+    startDate?: string;
+    endDate?: string;
+  } = {}): Promise<void> {
+    const params = new URLSearchParams();
+    if (options.format) params.append('format', options.format);
+    if (options.isActive !== undefined) params.append('isActive', String(options.isActive));
+    if (options.type) params.append('type', options.type);
+    if (options.startDate) params.append('startDate', options.startDate);
+    if (options.endDate) params.append('endDate', options.endDate);
+
+    const queryString = params.toString();
+    const url = `/offers-analytics/export${queryString ? `?${queryString}` : ''}`;
+
+    // Use fetch to download file
+    const token = localStorage.getItem('accessToken');
+    const apiUrl = import.meta.env.VITE_API_URL || '';
+    const response = await fetch(`${apiUrl}${url}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error('Export failed');
+    }
+
+    const blob = await response.blob();
+    const contentDisposition = response.headers.get('Content-Disposition');
+    const filename = contentDisposition
+      ? contentDisposition.split('filename=')[1]?.replace(/"/g, '')
+      : `offers-export.${options.format || 'csv'}`;
+
+    // Trigger download
+    const downloadUrl = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = downloadUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(downloadUrl);
+  }
 }
 
 // ============================================

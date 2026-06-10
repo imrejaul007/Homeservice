@@ -157,6 +157,20 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
             </div>
           )}
 
+          {/* Favorite Button */}
+          <button
+            onClick={handleToggleFavorite}
+            aria-label={isFavorited ? "Remove from favorites" : "Add to favorites"}
+            aria-pressed={isFavorited}
+            className={`absolute top-2 left-2 p-1.5 rounded-full shadow-sm transition-all ${
+              isFavorited
+                ? 'bg-red-500 text-white'
+                : 'bg-white/80 backdrop-blur-sm text-gray-600 hover:bg-white'
+            } ${isToggling ? 'opacity-50' : ''}`}
+          >
+            <Heart className={`h-3.5 w-3.5 ${isFavorited ? 'fill-current' : ''}`} />
+          </button>
+
           {/* Book Now Overlay - shows on hover */}
           {showBookNow && (
             <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex items-center justify-center">
@@ -331,7 +345,7 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
         )}
 
         {/* Badges */}
-        <div className="absolute top-3 left-3 flex gap-2">
+        <div className="absolute top-3 left-4 flex gap-2">
           {service.isNew && (
             <span className="bg-[#7BA889] text-white text-xs font-semibold px-2.5 py-1 rounded-full shadow-sm">
               NEW
@@ -359,6 +373,8 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
         {/* Favorite Button */}
         <button
           onClick={handleToggleFavorite}
+          aria-label={isFavorited ? "Remove from favorites" : "Add to favorites"}
+          aria-pressed={isFavorited}
           className={`absolute top-3 left-3 p-2 rounded-full shadow-sm transition-all ${
             isFavorited
               ? 'bg-red-500 text-white'
@@ -421,6 +437,7 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
               e.stopPropagation();
               handleBookNow(e);
             }}
+            aria-label={`Book ${displayTitle}`}
             className="px-4 py-2 bg-[#E8B4A8] text-white font-medium text-sm rounded-lg
               hover:bg-[#D4A89A] hover:shadow-[0_4px_20px_rgba(232,180,168,0.25)]
               active:scale-95

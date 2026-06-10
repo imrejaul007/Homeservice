@@ -34,8 +34,11 @@ import {
 import { checkRedisConnection } from './config/redis';
 import { featureFlagsMiddleware } from './services/featureFlags.service';
 import healthRoutes from './routes/health.routes';
+import aiMonitoringRoutes from './routes/aiMonitoring.routes';
+import errorTrackingRoutes from './routes/errorTracking.routes';
 import swaggerUi from 'swagger-ui-express';
 import { swaggerSpec } from './config/swagger';
+import { initializeMonitoring, shutdownMonitoring } from './monitoring';
 
 // FIX: Import and initialize workflows to connect them to the event bus
 // These modules self-register their event listeners when imported
@@ -48,6 +51,9 @@ dotenv.config({ path: path.join(__dirname, '../.env') });
 // Initialize Sentry first
 initializeSentry();
 
+// Initialize monitoring system
+initializeMonitoring();
+
 // Perform security audit on startup
 import securityValidator from './utils/securityValidator';
 securityValidator.performSecurityAudit();
@@ -57,6 +63,28 @@ const app: Application = express();
 
 // Trust proxy
 app.set('trust proxy', 1);
+
+// CORS preflight handler - MUST be before any other middleware
+app.use((req: any, res: any, next: any) => {
+  // Always set CORS headers for ALL requests
+  const origin = req.headers.origin;
+
+  // Set origin dynamically (required for credentials)
+  if (origin && (origin.includes('localhost') || process.env.NODE_ENV === 'development')) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+  }
+
+  // Handle preflight OPTIONS requests
+  if (req.method === 'OPTIONS') {
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, X-Correlation-ID, X-Tenant, X-Device-Fingerprint, X-Idempotency-Key, x-csrf-token, x-2fa-token, skipauth, cookies');
+    res.setHeader('Access-Control-Max-Age', '86400');
+    res.status(204).end();
+    return;
+  }
+  next();
+});
 
 // Sentry request handler (must be early)
 app.use(sentryRequestHandler);
@@ -74,55 +102,13 @@ app.use((req, res, next) => {
 app.use(securityMiddleware);
 
 // CORS configuration
-const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || [
-  'http://localhost:3000',
-  'http://localhost:5173',
-];
-
-const corsOptions = {
-  origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
-    // Allow requests with no origin (mobile apps, curl, etc.)
-    if (!origin) {
-      return callback(null, true);
-    }
-
-    // In development, allow all origins
-    if (process.env.NODE_ENV === 'development') {
-      return callback(null, true);
-    }
-
-    // Check if origin is allowed
-    if (allowedOrigins.includes(origin)) {
-      return callback(null, true);
-    }
-
-    callback(new Error('Not allowed by CORS'));
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: [
-    'Content-Type',
-    'Authorization',
-    'X-Requested-With',
-    'X-Correlation-ID',
-    'x-correlation-id',
-    'X-Tenant',
-    'x-tenant',
-    'x-csrf-token',
-    'x-2fa-token',
-    'skipauth',
-    'stripe-signature',
-  ],
-  exposedHeaders: [
-    'X-Total-Count',
-    'X-Page',
-    'X-Page-Size',
-    'X-Correlation-ID',
-  ],
-  maxAge: 86400,
-};
-
-app.use(cors(corsOptions));
+// NOTE: Custom CORS handler is implemented above using app.use() middleware
+// The cors() package is not used to avoid conflicts with custom implementation
+// const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || [
+//   'http://localhost:3000',
+//   'http://localhost:5173',
+// ];
+// app.use(cors(corsOptions));
 
 // Compression middleware with optimized settings for production
 app.use(compression({
@@ -188,11 +174,13 @@ if (process.env.NODE_ENV === 'development') {
   app.use(morgan('combined', { stream }));
 }
 
-// Global rate limiting for all API routes (disabled in development)
+// Global rate limiting for all API routes (relaxed in development)
 const isDev = process.env.NODE_ENV !== 'production';
+const isTest = process.env.NODE_ENV === 'test';
 const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: isDev ? 5000 : parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '500'),
+  max: isDev ? 10_000 : parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '500'),
+  skip: () => isDev && process.env.DISABLE_DEV_RATE_LIMIT === 'true',
   standardHeaders: true,
   legacyHeaders: false,
   message: {
@@ -201,13 +189,23 @@ const globalLimiter = rateLimit({
   },
 });
 
-app.use('/api', globalLimiter);
+if (!isTest) {
+  app.use('/api', globalLimiter);
+}
 
 // Per-user rate limiting (stricter for authenticated users)
-app.use('/api', perUserRateLimiter);
+if (!isTest) {
+  app.use('/api', perUserRateLimiter);
+}
 
 // Health routes (no rate limiting for basic checks)
 app.use('/', healthRoutes);
+
+// AI Monitoring routes
+app.use('/', aiMonitoringRoutes);
+
+// Frontend error tracking routes
+app.use('/', errorTrackingRoutes);
 
 // Health check endpoint (with strict rate limiting for detailed checks)
 app.get('/api/health', strictRateLimiter, (_req: Request, res: Response) => {
@@ -325,6 +323,7 @@ if (process.env.NODE_ENV === 'production' && process.env.CLUSTER_MODE === 'true'
 // Graceful shutdown handler
 process.on('SIGTERM', () => {
   logger.info('SIGTERM signal received. Closing HTTP server...');
+  shutdownMonitoring();
 
   // Stop accepting new connections
   // Existing connections will be handled until they complete
@@ -337,6 +336,7 @@ process.on('SIGTERM', () => {
 
 process.on('SIGINT', () => {
   logger.info('SIGINT signal received. Closing HTTP server...');
+  shutdownMonitoring();
 
   setTimeout(() => {
     logger.info('Shutdown complete');

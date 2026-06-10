@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { Filter, X, MapPin, DollarSign, Star, ChevronDown } from 'lucide-react';
 import { useSearchStore } from '@/stores/searchStore';
 import { useCategories } from '@/hooks/useCategories';
@@ -41,7 +41,7 @@ const SearchFilters: React.FC<SearchFiltersProps> = ({
     filters.state
   );
 
-  const handleFilterChange = (key: string, value: any) => {
+  const handleFilterChange = useCallback((key: string, value: any) => {
     const newFilters = {
       ...localFilters,
       [key]: value,
@@ -49,7 +49,7 @@ const SearchFilters: React.FC<SearchFiltersProps> = ({
     };
     setLocalFilters(newFilters);
     setFilters(newFilters);
-  };
+  }, [localFilters, setFilters, setLocalFilters]);
 
   const handleApplyFilters = () => {
     performSearch();

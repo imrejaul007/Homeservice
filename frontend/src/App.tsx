@@ -8,6 +8,7 @@ import { OfflineBanner } from './components/common/OfflineBanner';
 import { MaintenanceGuard } from './components/common/MaintenanceGuard';
 import { PlatformConfigProvider, usePlatformConfig } from './components/common/PlatformConfigProvider';
 import { AppShell } from './components/mobile/AppShell';
+import FloatingChatWidget from './components/chat/FloatingChatWidget';
 
 // =============================================================================
 // Error Boundary Component
@@ -121,7 +122,9 @@ const MaintenanceMode = lazy(() => import('./pages/admin/MaintenanceMode'));
 const PayoutManagement = lazy(() => import('./pages/admin/PayoutManagement'));
 const ChurnReport = lazy(() => import('./pages/admin/ChurnReport'));
 const ProviderManagement = lazy(() => import('./pages/admin/ProviderManagement'));
+const ProviderMetricsDashboard = lazy(() => import('./pages/admin/ProviderMetricsDashboard'));
 const ChatbotBuilderPage = lazy(() => import('./pages/admin/ChatbotBuilderPage'));
+const UnsubscribePage = lazy(() => import('./pages/UnsubscribePage'));
 const HomePage = lazy(() => import('./pages/HomePage'));
 const ExperiencesPage = lazy(() => import('./pages/ExperiencesPage'));
 const SearchPage = lazy(() => import('./pages/SearchPage'));
@@ -141,11 +144,18 @@ const TrackBookingPage = lazy(() => import('./pages/booking/TrackBookingPage'));
 const CustomerStatsPage = lazy(() => import('./pages/customer/CustomerStatsPage'));
 const ProfilePage = lazy(() => import('./pages/customer/ProfilePage'));
 const FavoritesPage = lazy(() => import('./pages/customer/FavoritesPage'));
+const WishlistPage = lazy(() => import('./pages/customer/WishlistPage'));
 const RewardsPage = lazy(() => import('./pages/customer/RewardsPage'));
 const AddressesPage = lazy(() => import('./pages/customer/AddressesPage'));
 const PaymentMethodsPage = lazy(() => import('./pages/customer/PaymentMethodsPage'));
 const NotificationsPage = lazy(() => import('./pages/customer/NotificationsPage'));
+const NotificationSettings = lazy(() => import('./pages/customer/NotificationSettings'));
+const WalletPage = lazy(() => import('./pages/customer/WalletPage'));
+const WalletTransactionsPage = lazy(() => import('./pages/customer/WalletTransactionsPage'));
+const BookServicesPage = lazy(() => import('./pages/customer/BookServicesPage'));
 const ReviewsPage = lazy(() => import('./pages/customer/ReviewsPage'));
+const MessagesPage = lazy(() => import('./pages/customer/MessagesPage'));
+const NewMessagePage = lazy(() => import('./pages/customer/NewMessagePage'));
 const MyClaimsPage = lazy(() => import('./pages/customer/MyClaimsPage'));
 const ProviderProfilePage = lazy(() => import('./pages/provider/ProviderProfilePage'));
 const ProviderPortfolioPage = lazy(() => import('./pages/provider/ProviderPortfolioPage'));
@@ -155,11 +165,16 @@ const ProviderVerificationPage = lazy(() => import('./pages/provider/ProviderVer
 const ProviderReviewsPage = lazy(() => import('./pages/provider/ProviderReviewsPage'));
 const AdsPage = lazy(() => import('./pages/provider/AdsPage'));
 const ProviderSettingsPage = lazy(() => import('./pages/provider/ProviderSettingsPage'));
+const SubscriptionPlansPage = lazy(() => import('./pages/SubscriptionPlans'));
+const SubscriptionManagementPage = lazy(() => import('./pages/customer/SubscriptionManagementPage'));
 
 const ManagedServicesPage = lazy(() => import('./pages/provider/ManagedServicesPage'));
+const MyBundlesPage = lazy(() => import('./pages/provider/MyBundlesPage'));
+const BundleAnalyticsPage = lazy(() => import('./pages/provider/BundleAnalyticsPage'));
 const EarningsReport = lazy(() => import('./pages/provider/EarningsReport'));
 const InsightsDashboard = lazy(() => import('./pages/provider/InsightsDashboard'));
 const AvailabilityPage = lazy(() => import('./pages/provider/AvailabilityPage'));
+const ServiceAvailabilityPage = lazy(() => import('./pages/provider/ServiceAvailabilityPage'));
 const OperationsDashboard = lazy(() => import('./pages/provider/OperationsDashboard'));
 const PayoutDashboard = lazy(() => import('./pages/provider/PayoutDashboard'));
 const SuperAppPage = lazy(() => import('./pages/customer/SuperAppPage'));
@@ -170,8 +185,12 @@ const TermsPage = lazy(() => import('./pages/TermsPage'));
 const FAQPage = lazy(() => import('./pages/FAQPage'));
 const ContactPage = lazy(() => import('./pages/ContactPage'));
 const HelpPage = lazy(() => import('./pages/HelpPage'));
+const SupportHubPage = lazy(() => import('./pages/customer/SupportHubPage'));
+const SupportTicketDetailPage = lazy(() => import('./pages/customer/SupportTicketDetailPage'));
+const AdminSupportPage = lazy(() => import('./pages/admin/AdminSupportPage'));
 const PackagesPage = lazy(() => import('./pages/PackagesPage'));
 const PackageDetailPage = lazy(() => import('./pages/PackageDetailPage'));
+const PackageComparisonPage = lazy(() => import('./pages/PackageComparisonPage'));
 
 import {
   ProtectedRoute,
@@ -302,8 +321,17 @@ function App() {
           <Suspense fallback={<LoadingSpinner />}>
           <Routes>
         {/* Public Routes */}
-        <Route 
-          path="/login" 
+        <Route
+          path="/unsubscribe"
+          element={
+            <Suspense fallback={<div className="min-h-screen flex items-center justify-center">Loading...</div>}>
+              <UnsubscribePage />
+            </Suspense>
+          }
+        />
+
+        <Route
+          path="/login"
           element={
             <PublicRoute>
               <LoginForm />
@@ -381,6 +409,10 @@ function App() {
         <Route
           path="/packages/:id"
           element={<PackageDetailPage />}
+        />
+        <Route
+          path="/packages/compare"
+          element={<PackageComparisonPage />}
         />
         <Route
           path="/book-package/:packageId"
@@ -500,6 +532,11 @@ function App() {
 
         {/* Protected Customer Routes */}
         <Route
+          path="/customer"
+          element={<Navigate to="/customer/dashboard" replace />}
+        />
+
+        <Route
           path="/customer/dashboard"
           element={
             <CustomerRoute>
@@ -540,6 +577,15 @@ function App() {
           element={
             <CustomerRoute>
               <FavoritesPage />
+            </CustomerRoute>
+          }
+        />
+
+        <Route
+          path="/customer/wishlist"
+          element={
+            <CustomerRoute>
+              <WishlistPage />
             </CustomerRoute>
           }
         />
@@ -599,10 +645,121 @@ function App() {
         />
 
         <Route
+          path="/notifications"
+          element={<Navigate to="/customer/notifications" replace />}
+        />
+
+        <Route
+          path="/customer/notification-settings"
+          element={
+            <CustomerRoute>
+              <NotificationSettings />
+            </CustomerRoute>
+          }
+        />
+
+        <Route
+          path="/customer/wallet"
+          element={
+            <CustomerRoute>
+              <WalletPage />
+            </CustomerRoute>
+          }
+        />
+
+        <Route
+          path="/customer/transactions"
+          element={
+            <CustomerRoute>
+              <WalletTransactionsPage />
+            </CustomerRoute>
+          }
+        />
+
+        <Route
+          path="/customer/referrals"
+          element={<Navigate to="/customer/profile?tab=referral" replace />}
+        />
+
+        <Route
+          path="/customer/book-services"
+          element={
+            <CustomerRoute>
+              <BookServicesPage />
+            </CustomerRoute>
+          }
+        />
+
+        <Route
           path="/customer/reviews"
           element={
             <CustomerRoute>
               <ReviewsPage />
+            </CustomerRoute>
+          }
+        />
+
+        {/* Customer Support Hub */}
+        <Route
+          path="/customer/support"
+          element={
+            <CustomerRoute>
+              <SupportHubPage />
+            </CustomerRoute>
+          }
+        />
+        <Route
+          path="/customer/support/tickets/:ticketId"
+          element={
+            <CustomerRoute>
+              <SupportTicketDetailPage />
+            </CustomerRoute>
+          }
+        />
+
+        {/* Customer Messages Routes */}
+        <Route
+          path="/customer/messages"
+          element={
+            <CustomerRoute>
+              <MessagesPage />
+            </CustomerRoute>
+          }
+        />
+        <Route
+          path="/customer/messages/new"
+          element={
+            <CustomerRoute>
+              <NewMessagePage />
+            </CustomerRoute>
+          }
+        />
+
+        {/* Provider Messages Route */}
+        <Route
+          path="/provider/messages"
+          element={
+            <ProviderRoute>
+              <MessagesPage />
+            </ProviderRoute>
+          }
+        />
+
+        {/* Subscription Management Routes */}
+        <Route
+          path="/subscriptions"
+          element={
+            <CustomerRoute>
+              <SubscriptionPlansPage />
+            </CustomerRoute>
+          }
+        />
+
+        <Route
+          path="/subscriptions/manage"
+          element={
+            <CustomerRoute>
+              <SubscriptionManagementPage />
             </CustomerRoute>
           }
         />
@@ -649,6 +806,15 @@ function App() {
           element={
             <ProviderRoute>
               <ProviderAvailabilityPage />
+            </ProviderRoute>
+          }
+        />
+
+        <Route
+          path="/provider/service-availability"
+          element={
+            <ProviderRoute>
+              <ServiceAvailabilityPage />
             </ProviderRoute>
           }
         />
@@ -739,6 +905,24 @@ function App() {
           element={
             <ProviderRoute>
               <ManagedServicesPage />
+            </ProviderRoute>
+          }
+        />
+
+        <Route
+          path="/provider/bundles"
+          element={
+            <ProviderRoute>
+              <MyBundlesPage />
+            </ProviderRoute>
+          }
+        />
+
+        <Route
+          path="/provider/bundles/:id/analytics"
+          element={
+            <ProviderRoute>
+              <BundleAnalyticsPage />
             </ProviderRoute>
           }
         />
@@ -907,11 +1091,29 @@ function App() {
             </AdminRoute>
           }
         />
+        <Route
+          path="/admin/providers/metrics"
+          element={
+            <AdminRoute>
+              <ProviderMetricsDashboard />
+            </AdminRoute>
+          }
+        />
 
         {/* Default Route - Homepage */}
         <Route
           path="/"
           element={<HomePage />}
+        />
+
+        {/* Admin Support Dashboard */}
+        <Route
+          path="/admin/support"
+          element={
+            <AdminRoute>
+              <AdminSupportPage />
+            </AdminRoute>
+          }
         />
 
         {/* Chatbot Builder */}
@@ -927,6 +1129,12 @@ function App() {
         {/* 404 Route */}
         <Route path="*" element={<NotFound />} />
         </Routes>
+
+        {/* Floating Chat Widget - shows when not on chat pages */}
+        <FloatingChatWidget
+          botName="NILIN Assistant"
+          welcomeMessage="Hi there! How can I help you today?"
+        />
         </Suspense>
         </div>
         </MaintenanceGuard>

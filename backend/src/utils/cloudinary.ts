@@ -118,6 +118,16 @@ export const deleteFromCloudinary = async (publicId: string): Promise<void> => {
   await cloudinary.uploader.destroy(publicId);
 };
 
+/** Extract Cloudinary public_id from a secure_url (e.g. after /upload/v123/) */
+export const extractPublicIdFromUrl = (url: string): string | null => {
+  const uploadMarker = '/upload/';
+  const idx = url.indexOf(uploadMarker);
+  if (idx === -1) return null;
+  const path = url.substring(idx + uploadMarker.length);
+  const withoutVersion = path.replace(/^v\d+\//, '');
+  return withoutVersion.replace(/\.[^.]+$/, '') || null;
+};
+
 // Multer storage for Cloudinary
 export const createCloudinaryStorage = (folder: string = 'general') => {
   return new CloudinaryStorage({

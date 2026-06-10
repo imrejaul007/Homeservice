@@ -19,6 +19,8 @@ export * from './provider-rejected';
 export * from './loyalty-tier-upgrade';
 export * from './welcome';
 export * from './birthday';
+export * from './offerExpiry';
+export * from './offerExpiryPush';
 
 import { NotificationTemplate, NotificationEventType, UserRole, NotificationChannel, RenderedNotification, TemplateVariables } from './types';
 
@@ -38,6 +40,17 @@ import { providerRejectedTemplate, renderProviderRejectedTemplate } from './prov
 import { loyaltyTierUpgradeTemplate, renderLoyaltyTierUpgradeTemplate } from './loyalty-tier-upgrade';
 import { welcomeTemplate, renderWelcomeTemplate } from './welcome';
 import { birthdayTemplate, renderBirthdayTemplate } from './birthday';
+import {
+  offerExpiryReminderTemplate,
+  offerExpiredTemplate,
+  offerReminderUnusedTemplate,
+  adminOfferExpiryAlertTemplate,
+  renderOfferExpiryReminderEmail,
+  renderOfferExpiredEmail,
+  renderOfferReminderUnusedEmail,
+  renderAdminOfferExpiryAlertEmail,
+  OfferExpiryTemplateData
+} from './offerExpiry';
 
 /**
  * Registry of all notification templates
@@ -58,6 +71,10 @@ export const notificationTemplates: Record<NotificationEventType, NotificationTe
   loyalty_tier_upgrade: loyaltyTierUpgradeTemplate,
   welcome: welcomeTemplate,
   birthday: birthdayTemplate,
+  offer_expiry_reminder: offerExpiryReminderTemplate,
+  offer_expired: offerExpiredTemplate,
+  offer_reminder_unused: offerReminderUnusedTemplate,
+  admin_offer_expiry_alert: adminOfferExpiryAlertTemplate,
 };
 
 /**
@@ -102,6 +119,63 @@ export function renderNotification(
       return renderWelcomeTemplate(eventType, templateRole, channel as any, variables);
     case 'birthday':
       return renderBirthdayTemplate(eventType, templateRole, channel as any, variables);
+    case 'offer_expiry_reminder':
+      // Custom HTML email - return rendered content
+      if (channel === 'email') {
+        const rendered = renderOfferExpiryReminderEmail(variables as unknown as OfferExpiryTemplateData);
+        return {
+          channel: 'email',
+          subject: rendered.subject,
+          title: 'Offer Expiring Soon',
+          body: rendered.html,
+          actionText: 'Book Now & Save',
+          actionUrl: '/book',
+          metadata: variables,
+        };
+      }
+      return null;
+    case 'offer_expired':
+      if (channel === 'email') {
+        const rendered = renderOfferExpiredEmail(variables as unknown as OfferExpiryTemplateData);
+        return {
+          channel: 'email',
+          subject: rendered.subject,
+          title: 'Offer Expired',
+          body: rendered.html,
+          actionText: 'Browse New Offers',
+          actionUrl: '/offers',
+          metadata: variables,
+        };
+      }
+      return null;
+    case 'offer_reminder_unused':
+      if (channel === 'email') {
+        const rendered = renderOfferReminderUnusedEmail(variables as unknown as OfferExpiryTemplateData);
+        return {
+          channel: 'email',
+          subject: rendered.subject,
+          title: 'Unused Offer Reminder',
+          body: rendered.html,
+          actionText: 'Use Your Offer Now',
+          actionUrl: '/book',
+          metadata: variables,
+        };
+      }
+      return null;
+    case 'admin_offer_expiry_alert':
+      if (channel === 'email') {
+        const rendered = renderAdminOfferExpiryAlertEmail(variables as unknown as OfferExpiryTemplateData);
+        return {
+          channel: 'email',
+          subject: rendered.subject,
+          title: 'Admin Offer Expiry Alert',
+          body: rendered.html,
+          actionText: 'View All Offers',
+          actionUrl: '/admin/offers',
+          metadata: variables,
+        };
+      }
+      return null;
     default:
       return null;
   }

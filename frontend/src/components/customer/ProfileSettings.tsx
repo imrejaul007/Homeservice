@@ -1,87 +1,190 @@
-import React, { useState } from 'react';
-import { Globe, Bell, Shield, Palette, Check, AlertCircle, Save } from 'lucide-react';
-import { useAuthStore } from '../../stores/authStore';
-import { api } from '../../services/api';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { Globe, Bell, Shield, Check, AlertCircle, Save } from 'lucide-react';
+import { useNotificationPreferences } from '../../hooks/useNotificationPreferences';
+import { useWebPushRegistration } from '../../hooks/useWebPushRegistration';
+import PreferenceToggle from '../common/PreferenceToggle';
+import PreferencesLoadError from '../common/PreferencesLoadError';
+import type { NotificationPreferencesData } from '../../stores/notificationPreferencesStore';
 
 const LANGUAGES = [
   { code: 'en', name: 'English' },
   { code: 'ar', name: 'العربية (Arabic)' },
   { code: 'fr', name: 'Français (French)' },
+  { code: 'es', name: 'Español (Spanish)' },
+  { code: 'de', name: 'Deutsch (German)' },
+  { code: 'zh', name: '中文 (Chinese)' },
 ];
 
 const TIMEZONES = [
   { value: 'Asia/Dubai', label: 'Dubai (GMT+4)' },
   { value: 'Asia/Riyadh', label: 'Riyadh (GMT+3)' },
+  { value: 'Asia/Kolkata', label: 'India (GMT+5:30)' },
   { value: 'Europe/London', label: 'London (GMT+0)' },
   { value: 'America/New_York', label: 'New York (GMT-5)' },
+  { value: 'America/Los_Angeles', label: 'Los Angeles (GMT-8)' },
+  { value: 'UTC', label: 'UTC' },
 ];
 
+interface SettingsForm {
+  language: string;
+  timezone: string;
+  currency: string;
+  marketingEmails: boolean;
+  bookingUpdates: boolean;
+  reminders: boolean;
+  smsUpdates: boolean;
+  pushNotifications: boolean;
+}
+
+function prefsToForm(prefs: NotificationPreferencesData): SettingsForm {
+  return {
+    language: prefs.language,
+    timezone: prefs.timezone,
+    currency: prefs.currency,
+    marketingEmails: prefs.email.marketing,
+    bookingUpdates: prefs.email.bookingUpdates,
+    reminders: prefs.email.reminders,
+    smsUpdates: prefs.sms.bookingUpdates && prefs.sms.reminders,
+    pushNotifications: prefs.push.bookingUpdates && prefs.push.reminders,
+  };
+}
+
+function buildMergedPatch(
+  current: NotificationPreferencesData,
+  settings: SettingsForm
+): Partial<NotificationPreferencesData> {
+  return {
+    email: {
+      ...current.email,
+      marketing: settings.marketingEmails,
+      bookingUpdates: settings.bookingUpdates,
+      reminders: settings.reminders,
+      promotions: settings.marketingEmails,
+    },
+    sms: {
+      ...current.sms,
+      bookingUpdates: settings.smsUpdates,
+      reminders: settings.smsUpdates,
+    },
+    push: {
+      ...current.push,
+      bookingUpdates: settings.pushNotifications,
+      reminders: settings.pushNotifications,
+    },
+    language: settings.language,
+    timezone: settings.timezone,
+    currency: settings.currency,
+  };
+}
+
 const ProfileSettings: React.FC = () => {
-  const { user, customerProfile } = useAuthStore();
-  const [isLoading, setIsLoading] = useState(false);
+  const { preferences, isLoading, isSaving, error, updatePreferences, refresh } = useNotificationPreferences();
+  const { registerWebPush, unregisterWebPush, isRegistering } = useWebPushRegistration();
+  const [settings, setSettings] = useState<SettingsForm | null>(null);
+  const [savedSnapshot, setSavedSnapshot] = useState<SettingsForm | null>(null);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  const [settings, setSettings] = useState({
-    language: user?.language || 'en',
-    timezone: 'Asia/Dubai',
-    currency: 'AED',
-    marketingEmails: (customerProfile as any)?.communicationPreferences?.email?.marketing || false,
-    bookingUpdates: (customerProfile as any)?.communicationPreferences?.email?.bookingUpdates ?? true,
-    reminders: (customerProfile as any)?.communicationPreferences?.email?.reminders ?? true,
-    smsUpdates: (customerProfile as any)?.communicationPreferences?.sms?.bookingUpdates ?? true,
-    pushNotifications: (customerProfile as any)?.communicationPreferences?.push?.bookingUpdates ?? true,
-  });
+  const lastSyncedPrefs = useRef('');
 
-  const handleToggle = (key: keyof typeof settings) => {
-    setSettings(prev => ({
-      ...prev,
-      [key]: !prev[key],
-    }));
+  const isDirty = useMemo(() => {
+    if (!settings || !savedSnapshot) return false;
+    return JSON.stringify(settings) !== JSON.stringify(savedSnapshot);
+  }, [settings, savedSnapshot]);
+
+  useEffect(() => {
+    if (!preferences) return;
+    const serialized = JSON.stringify(preferences);
+    if (serialized === lastSyncedPrefs.current) return;
+    lastSyncedPrefs.current = serialized;
+    const form = prefsToForm(preferences);
+    setSettings(form);
+    setSavedSnapshot(form);
+  }, [preferences]);
+
+  const handleToggle = async (key: keyof SettingsForm) => {
+    if (!settings) return;
+
+    if (key === 'pushNotifications' && !settings.pushNotifications) {
+      const registered = await registerWebPush();
+      if (!registered) {
+        setMessage({
+          type: 'error',
+          text: 'Browser push permission was denied or is unavailable. Enable notifications in your browser settings.',
+        });
+        return;
+      }
+    }
+
+    setSettings(prev => (prev ? { ...prev, [key]: !prev[key] } : prev));
   };
 
   const handleSave = async () => {
-    setIsLoading(true);
+    if (!settings || !preferences) return;
     setMessage(null);
 
     try {
-      await api.patch('/notifications/preferences', {
-        email: {
-          marketing: settings.marketingEmails,
-          bookingUpdates: settings.bookingUpdates,
-          reminders: settings.reminders,
-          newsletters: false,
-          promotions: settings.marketingEmails,
-        },
-        sms: {
-          bookingUpdates: settings.smsUpdates,
-          reminders: settings.smsUpdates,
-          promotions: false,
-        },
-        push: {
-          bookingUpdates: settings.pushNotifications,
-          reminders: settings.pushNotifications,
-          newMessages: settings.pushNotifications,
-          promotions: false,
-        },
-        language: settings.language,
-        timezone: settings.timezone,
-        currency: settings.currency,
-      });
+      if (settings.pushNotifications && !savedSnapshot?.pushNotifications) {
+        const registered = await registerWebPush();
+        if (!registered) {
+          setMessage({
+            type: 'error',
+            text: 'Could not enable push notifications. Check browser permissions and try again.',
+          });
+          return;
+        }
+      } else if (!settings.pushNotifications && savedSnapshot?.pushNotifications) {
+        await unregisterWebPush();
+      }
 
+      await updatePreferences(buildMergedPatch(preferences, settings));
+
+      setSavedSnapshot(settings);
+      lastSyncedPrefs.current = JSON.stringify(preferences);
       setMessage({ type: 'success', text: 'Settings saved successfully!' });
-    } catch (error: any) {
+    } catch (err: unknown) {
+      const apiError = err as { response?: { data?: { message?: string } } };
       setMessage({
         type: 'error',
-        text: error.response?.data?.message || 'Failed to save settings'
+        text: apiError.response?.data?.message || error || 'Failed to save settings',
       });
-    } finally {
-      setIsLoading(false);
     }
   };
 
+  const handleRetry = () => {
+    setMessage(null);
+    refresh().catch(() => {
+      // error stored in hook state
+    });
+  };
+
+  if (isLoading) {
+    return (
+      <div className="space-y-6" aria-busy="true" aria-label="Loading settings">
+        {[1, 2, 3].map(i => (
+          <div key={i} className="glass-nilin rounded-nilin p-6 animate-pulse">
+            <div className="h-6 bg-nilin-border rounded w-1/3 mb-4" />
+            <div className="space-y-3">
+              <div className="h-10 bg-nilin-border rounded" />
+              <div className="h-10 bg-nilin-border rounded" />
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (!settings) {
+    return (
+      <PreferencesLoadError
+        message={error || 'Unable to load your settings.'}
+        onRetry={handleRetry}
+        label="Failed to load settings"
+      />
+    );
+  }
+
   return (
     <div className="space-y-6">
-      {/* Language & Region */}
       <div className="glass-nilin rounded-nilin p-6 hover-lift">
         <div className="flex items-center gap-3 mb-6">
           <div className="w-10 h-10 rounded-full bg-nilin-coral/20 flex items-center justify-center">
@@ -95,10 +198,13 @@ const ProfileSettings: React.FC = () => {
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
-            <label className="block text-sm font-medium text-nilin-charcoal mb-2">Language</label>
+            <label htmlFor="settings-language" className="block text-sm font-medium text-nilin-charcoal mb-2">
+              Language
+            </label>
             <select
+              id="settings-language"
               value={settings.language}
-              onChange={(e) => setSettings(prev => ({ ...prev, language: e.target.value }))}
+              onChange={(e) => setSettings(prev => prev ? { ...prev, language: e.target.value } : prev)}
               className="w-full px-4 py-3 rounded-nilin bg-white border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none text-nilin-charcoal"
             >
               {LANGUAGES.map(lang => (
@@ -108,10 +214,13 @@ const ProfileSettings: React.FC = () => {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-nilin-charcoal mb-2">Timezone</label>
+            <label htmlFor="settings-timezone" className="block text-sm font-medium text-nilin-charcoal mb-2">
+              Timezone
+            </label>
             <select
+              id="settings-timezone"
               value={settings.timezone}
-              onChange={(e) => setSettings(prev => ({ ...prev, timezone: e.target.value }))}
+              onChange={(e) => setSettings(prev => prev ? { ...prev, timezone: e.target.value } : prev)}
               className="w-full px-4 py-3 rounded-nilin bg-white border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none text-nilin-charcoal"
             >
               {TIMEZONES.map(tz => (
@@ -121,10 +230,13 @@ const ProfileSettings: React.FC = () => {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-nilin-charcoal mb-2">Currency</label>
+            <label htmlFor="settings-currency" className="block text-sm font-medium text-nilin-charcoal mb-2">
+              Currency
+            </label>
             <select
+              id="settings-currency"
               value={settings.currency}
-              onChange={(e) => setSettings(prev => ({ ...prev, currency: e.target.value }))}
+              onChange={(e) => setSettings(prev => prev ? { ...prev, currency: e.target.value } : prev)}
               className="w-full px-4 py-3 rounded-nilin bg-white border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none text-nilin-charcoal"
             >
               <option value="AED">AED - UAE Dirham</option>
@@ -136,7 +248,6 @@ const ProfileSettings: React.FC = () => {
         </div>
       </div>
 
-      {/* Email Notifications */}
       <div className="glass-nilin rounded-nilin p-6 hover-lift">
         <div className="flex items-center gap-3 mb-6">
           <div className="w-10 h-10 rounded-full bg-nilin-coral/20 flex items-center justify-center">
@@ -149,19 +260,19 @@ const ProfileSettings: React.FC = () => {
         </div>
 
         <div className="space-y-4">
-          <ToggleRow
+          <PreferenceToggle
             label="Booking Updates"
             description="Receive updates about your bookings"
             checked={settings.bookingUpdates}
             onChange={() => handleToggle('bookingUpdates')}
           />
-          <ToggleRow
+          <PreferenceToggle
             label="Reminders"
             description="Get reminded about upcoming appointments"
             checked={settings.reminders}
             onChange={() => handleToggle('reminders')}
           />
-          <ToggleRow
+          <PreferenceToggle
             label="Marketing & Promotions"
             description="Receive special offers and promotions"
             checked={settings.marketingEmails}
@@ -170,7 +281,6 @@ const ProfileSettings: React.FC = () => {
         </div>
       </div>
 
-      {/* SMS & Push */}
       <div className="glass-nilin rounded-nilin p-6 hover-lift">
         <div className="flex items-center gap-3 mb-6">
           <div className="w-10 h-10 rounded-full bg-nilin-coral/20 flex items-center justify-center">
@@ -183,44 +293,45 @@ const ProfileSettings: React.FC = () => {
         </div>
 
         <div className="space-y-4">
-          <ToggleRow
+          <PreferenceToggle
             label="SMS Updates"
             description="Receive booking updates via text message"
             checked={settings.smsUpdates}
             onChange={() => handleToggle('smsUpdates')}
           />
-          <ToggleRow
+          <PreferenceToggle
             label="Push Notifications"
             description="Get instant alerts on your device"
             checked={settings.pushNotifications}
             onChange={() => handleToggle('pushNotifications')}
+            disabled={isRegistering}
           />
         </div>
       </div>
 
-      {/* Message */}
-      {message && (
-        <div className={`p-4 rounded-nilin flex items-center gap-3 ${
-          message.type === 'success' ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'
-        }`}>
-          {message.type === 'success' ? (
-            <Check className="w-5 h-5 text-green-600" />
-          ) : (
-            <AlertCircle className="w-5 h-5 text-red-600" />
-          )}
-          <span className={message.type === 'success' ? 'text-green-800' : 'text-red-800'}>
-            {message.text}
-          </span>
-        </div>
-      )}
+      <div aria-live="polite" aria-atomic="true">
+        {message && (
+          <div className={`p-4 rounded-nilin flex items-center gap-3 ${
+            message.type === 'success' ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'
+          }`}>
+            {message.type === 'success' ? (
+              <Check className="w-5 h-5 text-green-600" />
+            ) : (
+              <AlertCircle className="w-5 h-5 text-red-600" />
+            )}
+            <span className={message.type === 'success' ? 'text-green-800' : 'text-red-800'}>
+              {message.text}
+            </span>
+          </div>
+        )}
+      </div>
 
-      {/* Save Button */}
       <button
         onClick={handleSave}
-        disabled={isLoading}
+        disabled={isSaving || isRegistering || !isDirty}
         className="btn-nilin w-full py-3 flex items-center justify-center gap-2 disabled:opacity-50"
       >
-        {isLoading ? (
+        {isSaving || isRegistering ? (
           <>
             <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
             Saving...
@@ -228,40 +339,12 @@ const ProfileSettings: React.FC = () => {
         ) : (
           <>
             <Save className="w-5 h-5" />
-            Save Settings
+            {isDirty ? 'Save Settings' : 'No Changes'}
           </>
         )}
       </button>
     </div>
   );
 };
-
-interface ToggleRowProps {
-  label: string;
-  description: string;
-  checked: boolean;
-  onChange: () => void;
-}
-
-const ToggleRow: React.FC<ToggleRowProps> = ({ label, description, checked, onChange }) => (
-  <div className="flex items-center justify-between py-3 border-b border-nilin-border last:border-0">
-    <div>
-      <p className="font-medium text-nilin-charcoal">{label}</p>
-      <p className="text-sm text-nilin-warmGray">{description}</p>
-    </div>
-    <button
-      onClick={onChange}
-      className={`relative w-12 h-6 rounded-full transition-colors ${
-        checked ? 'bg-nilin-coral' : 'bg-gray-300'
-      }`}
-    >
-      <span
-        className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform ${
-          checked ? 'left-7' : 'left-1'
-        }`}
-      />
-    </button>
-  </div>
-);
 
 export default ProfileSettings;

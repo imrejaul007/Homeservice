@@ -4,6 +4,7 @@ import Message from '../models/message.model';
 import User from '../models/user.model';
 import { ApiError } from '../utils/ApiError';
 import logger from '../utils/logger';
+import { liveChatSessionStore } from './liveChatSessionStore';
 
 // ============================================
 // TYPES & INTERFACES
@@ -77,11 +78,21 @@ export interface QueueEntry {
   createdAt: Date;
 }
 
-// In-memory queue for demonstration (in production, use Redis)
+// In-memory queue — hydrated from Redis on startup
 const chatQueue: QueueEntry[] = [];
+let queueHydrated = false;
 
 // Agent session mapping
 const agentSessions: Map<string, string[]> = new Map(); // agentId -> sessionIds
+
+async function hydrateQueueFromRedis(): Promise<void> {
+  if (queueHydrated) return;
+  const stored = await liveChatSessionStore.getQueue();
+  if (stored.length > 0) {
+    chatQueue.splice(0, chatQueue.length, ...stored);
+  }
+  queueHydrated = true;
+}
 
 // ============================================
 // LIVE CHAT SERVICE CLASS
@@ -104,6 +115,8 @@ export class LiveChatService {
     priority: ChatPriority = 'normal',
     tags: string[] = []
   ): Promise<{ session: ChatSession; chatRoomId: string }> {
+    await hydrateQueueFromRedis();
+
     // Create a support chat room
     const chatRoom = new ChatRoom({
       type: 'support',
@@ -187,6 +200,8 @@ export class LiveChatService {
       );
     }
 
+    await liveChatSessionStore.saveSession(session);
+
     logger.info('Chat session started', {
       context: 'LiveChatService',
       action: 'SESSION_STARTED',
@@ -203,8 +218,9 @@ export class LiveChatService {
    * Get session by ID
    */
   async getSession(sessionId: string): Promise<ChatSession | null> {
-    // In production, fetch from database
-    // For now, return mock data structure
+    const persisted = await liveChatSessionStore.getSession(sessionId);
+    if (persisted) return persisted;
+
     const session = chatQueue.find(q => q.sessionId === sessionId);
     if (session) {
       return {
@@ -647,6 +663,7 @@ export class LiveChatService {
     });
 
     this.updateQueuePositions();
+    this.syncQueueToRedis().catch(() => {});
   }
 
   /**
@@ -657,6 +674,10 @@ export class LiveChatService {
       entry.position = index + 1;
       entry.estimatedWaitTime = this.calculateEstimatedWaitTime();
     });
+  }
+
+  private async syncQueueToRedis(): Promise<void> {
+    await liveChatSessionStore.setQueue([...chatQueue]);
   }
 
   /**

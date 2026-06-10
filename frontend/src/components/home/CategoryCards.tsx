@@ -76,7 +76,7 @@ const CategoryCards: React.FC = () => {
         {/* View All Link */}
         <div className="text-center mt-10">
           <button
-            onClick={() => navigate('/categories')}
+            onClick={() => navigate('/customer/book-services')}
             className="glass-btn inline-flex items-center gap-2 px-6 py-3 rounded-full text-nilin-charcoal"
           >
             View All Categories

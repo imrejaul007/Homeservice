@@ -53,12 +53,9 @@ router.get('/expiring', managedContractController.getExpiringContracts);
  */
 router.get('/number/:contractNumber', managedContractController.getContractByNumber);
 
-/**
- * @route   GET /api/provider/managed-contracts/:id
- * @desc    Get a single contract by ID
- * @access  Private (Provider)
- */
-router.get('/:id', managedContractController.getContractById);
+// ============================================
+// ROUTES WITH :id - Specific routes BEFORE parameterized /:id
+// ============================================
 
 /**
  * @route   PUT /api/provider/managed-contracts/:id
@@ -80,6 +77,13 @@ router.delete('/:id', managedContractController.deleteContract);
  * @access  Private (Provider)
  */
 router.get('/:id/summary', managedContractController.getSummary);
+
+/**
+ * @route   GET /api/provider/managed-contracts/:id
+ * @desc    Get a single contract by ID (must be last for /:id routes)
+ * @access  Private (Provider)
+ */
+router.get('/:id', managedContractController.getContractById);
 
 // ============================================
 // Status Management Routes

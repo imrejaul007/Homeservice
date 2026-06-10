@@ -6,6 +6,7 @@ import {
   MapPin,
   Phone,
   User,
+  Mail,
   CreditCard,
   Plus,
   Minus,
@@ -18,6 +19,9 @@ import { useAuthStore } from '../../stores/authStore';
 import type { Service } from '../../types/search';
 import type { CreateBookingData, BookingAddOn, AvailableSlot } from '../../services/BookingService';
 import { cn, formatPrice } from '../../lib/utils';
+import { BOOKING_CONFIG } from '../../config/booking';
+import { getApiUrl } from '../../lib/getApiUrl';
+import { api } from '../../services/api';
 
 interface BookingFormProps {
   service: Service;
@@ -39,6 +43,8 @@ interface FormData {
     country: string;
   };
   customerInfo: {
+    name: string;
+    email: string;
     phone: string;
     specialRequests: string;
     accessInstructions: string;
@@ -78,6 +84,8 @@ const BookingForm: React.FC<BookingFormProps> = ({
       country: 'AE'
     },
     customerInfo: {
+      name: '',
+      email: '',
       phone: '',
       specialRequests: '',
       accessInstructions: ''
@@ -183,6 +191,14 @@ const BookingForm: React.FC<BookingFormProps> = ({
         break;
 
       case 3:
+        if (!formData.customerInfo.name) {
+          errors['customerInfo.name'] = 'Name is required';
+        }
+        if (!formData.customerInfo.email) {
+          errors['customerInfo.email'] = 'Email is required';
+        } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.customerInfo.email)) {
+          errors['customerInfo.email'] = 'Please enter a valid email address';
+        }
         if (!formData.customerInfo.phone) {
           errors['customerInfo.phone'] = 'Phone number is required';
         }
@@ -207,7 +223,7 @@ const BookingForm: React.FC<BookingFormProps> = ({
     const basePrice = service.price.amount;
     const addOnTotal = formData.addOns.reduce((sum, addon) => sum + addon.price, 0);
     const subtotal = basePrice + addOnTotal;
-    const taxRate = 0.05; // FIX: 5% UAE VAT rate (was 0.08)
+    const taxRate = BOOKING_CONFIG.taxRate;
     const tax = subtotal * taxRate;
     const total = subtotal + tax;
 
@@ -222,6 +238,97 @@ const BookingForm: React.FC<BookingFormProps> = ({
     }
 
     try {
+      // Generate idempotency key for duplicate prevention (guaranteed >= 16 chars)
+      const generateIdempotencyKey = () => {
+        // Pad timestamp to ensure minimum length of 10 characters
+        const timestampBase = Date.now().toString(36).padStart(10, '0');
+        // Get additional 6 chars from random to ensure timestamp part is >= 16
+        const timestampExtra = Math.random().toString(36).substring(2, 8).padEnd(6, '0');
+        const timestamp = timestampBase + timestampExtra;
+        // UUID without dashes, padded to ensure >= 16 total (timestamp + dash + random)
+        const randomPart = crypto.randomUUID().replace(/-/g, '').substring(0, 16).padEnd(16, '0');
+        const key = `${timestamp}-${randomPart}`;
+        // Final validation: ensure key is always >= 16 chars
+        if (key.length < 16) {
+          console.warn('Idempotency key shorter than 16 chars, padding applied');
+          return key.padEnd(16, '0');
+        }
+        return key;
+      };
+
+      // Get or create session ID
+      const sessionId = sessionStorage.getItem('booking_session_id') || (() => {
+        const newSessionId = crypto.randomUUID();
+        sessionStorage.setItem('booking_session_id', newSessionId);
+        return newSessionId;
+      })();
+
+      const isPackage = service.isPackage === true || !!service.bundleId;
+      const packageId = service.bundleId || service._id;
+
+      // For package bookings, use the package-specific endpoint with correct payload structure
+      if (isPackage) {
+        const API_BASE_URL = getApiUrl().replace(/\/$/, '');
+
+        // Format time to HH:MM
+        const timeParts = formData.scheduledTime.split(':');
+        const formattedTime = `${timeParts[0].padStart(2, '0')}:${timeParts[1]?.padStart(2, '0') || '00'}`;
+
+        const packagePayload = {
+          bundleId: packageId,
+          providerId: providerId,
+          scheduledDate: formData.scheduledDate,
+          scheduledTime: formattedTime,
+          location: {
+            type: formData.locationType === 'customer_address' ? 'customer_address' : formData.locationType === 'provider_location' ? 'provider_location' : 'online',
+            address: formData.locationType === 'customer_address' ? {
+              street: formData.address.street,
+              city: formData.address.city,
+              state: formData.address.state,
+              zipCode: formData.address.zipCode,
+              country: formData.address.country || 'AE'
+            } : undefined,
+            notes: formData.locationNotes || undefined
+          },
+          customerInfo: {
+            firstName: formData.customerInfo.name.split(' ')[0] || formData.customerInfo.name,
+            lastName: formData.customerInfo.name.split(' ').slice(1).join(' ') || '',
+            email: formData.customerInfo.email,
+            phone: formData.customerInfo.phone,
+            specialRequests: formData.customerInfo.specialRequests || undefined,
+            accessInstructions: formData.customerInfo.accessInstructions || undefined
+          },
+          addOns: formData.addOns,
+          specialRequests: formData.customerInfo.specialRequests || undefined,
+          metadata: {
+            idempotencyKey: sessionStorage.getItem(`booking_idempotency_${packageId}`) || generateIdempotencyKey(),
+            sessionId: sessionId,
+            bookingSource: 'package_booking',
+            deviceType: 'desktop'
+          }
+        };
+
+        const response = await api.post(`/packages/${packageId}/book-package`, packagePayload, {
+          timeout: 30000,
+        });
+
+        const result = response.data;
+
+        if (!result.success) {
+          throw new Error(result.message || result.error || 'Failed to create package booking');
+        }
+
+        const bookingId = result.data?.booking?._id || result.data?.individualBookings?.[0]?.bookingId;
+
+        if (onSuccess) {
+          onSuccess(bookingId);
+        } else {
+          navigate(`/customer/bookings/${bookingId}`);
+        }
+        return;
+      }
+
+      // For regular service bookings, use the standard booking endpoint
       const bookingData: CreateBookingData = {
         serviceId: service._id,
         providerId,
@@ -233,12 +340,18 @@ const BookingForm: React.FC<BookingFormProps> = ({
           notes: formData.locationNotes || undefined
         },
         customerInfo: {
+          name: formData.customerInfo.name,
+          email: formData.customerInfo.email,
           phone: formData.customerInfo.phone,
           specialRequests: formData.customerInfo.specialRequests || undefined,
           accessInstructions: formData.customerInfo.accessInstructions || undefined
         },
         addOns: formData.addOns,
-        notes: formData.customerInfo.specialRequests || undefined
+        notes: formData.customerInfo.specialRequests || undefined,
+        metadata: {
+          idempotencyKey: sessionStorage.getItem(`booking_idempotency_${service._id}`) || generateIdempotencyKey(),
+          sessionId: sessionId
+        }
       };
 
       const booking = await createBooking(bookingData);
@@ -368,7 +481,7 @@ const BookingForm: React.FC<BookingFormProps> = ({
                   onChange={(e) => handleInputChange('locationType', e.target.value)}
                   className="h-4 w-4 text-nilin-coral border-nilin-border focus:ring-nilin-rose"
                 />
-                <span className="ml-3 text-sm text-nilin-charcoal">Online/Virtual service</span>
+                <span className="ml-3 text-sm text-nilin-charcoal">Online / Virtual</span>
               </label>
             </div>
           </div>
@@ -472,6 +585,48 @@ const BookingForm: React.FC<BookingFormProps> = ({
         <h3 className="text-lg font-medium text-nilin-charcoal mb-4 font-serif">Contact Information & Preferences</h3>
 
         <div className="space-y-4">
+          {/* Name */}
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-nilin-warmGray">Full Name</label>
+            <div className="relative card-nilin p-4 rounded-xl transition-all duration-300 hover:shadow-nilin-warm">
+              <User className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-nilin-rose" />
+              <input
+                type="text"
+                value={formData.customerInfo.name}
+                onChange={(e) => handleInputChange('customerInfo.name', e.target.value)}
+                placeholder="John Doe"
+                className={cn(
+                  "w-full pl-10 pr-3 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-coral/30 font-sans border-2 transition-all duration-300",
+                  validationErrors['customerInfo.name'] ? "border-red-400" : "border-nilin-border bg-white/80 focus:border-nilin-coral"
+                )}
+              />
+            </div>
+            {validationErrors['customerInfo.name'] && (
+              <p className="mt-1 text-sm text-nilin-error">{validationErrors['customerInfo.name']}</p>
+            )}
+          </div>
+
+          {/* Email */}
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-nilin-warmGray">Email Address</label>
+            <div className="relative card-nilin p-4 rounded-xl transition-all duration-300 hover:shadow-nilin-warm">
+              <Mail className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-nilin-rose" />
+              <input
+                type="email"
+                value={formData.customerInfo.email}
+                onChange={(e) => handleInputChange('customerInfo.email', e.target.value)}
+                placeholder="john.doe@example.com"
+                className={cn(
+                  "w-full pl-10 pr-3 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-nilin-coral/30 font-sans border-2 transition-all duration-300",
+                  validationErrors['customerInfo.email'] ? "border-red-400" : "border-nilin-border bg-white/80 focus:border-nilin-coral"
+                )}
+              />
+            </div>
+            {validationErrors['customerInfo.email'] && (
+              <p className="mt-1 text-sm text-nilin-error">{validationErrors['customerInfo.email']}</p>
+            )}
+          </div>
+
           {/* Phone Number */}
           <div className="space-y-2">
             <label className="block text-sm font-medium text-nilin-warmGray">Phone Number</label>
@@ -653,6 +808,14 @@ const BookingForm: React.FC<BookingFormProps> = ({
             <div className="card-nilin p-4 rounded-xl transition-all duration-300 hover:shadow-nilin-warm">
               <h4 className="font-medium text-nilin-charcoal mb-3">Contact Information</h4>
               <div className="space-y-2 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-nilin-warmGray">Name:</span>
+                  <span className="text-nilin-charcoal">{formData.customerInfo.name}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-nilin-warmGray">Email:</span>
+                  <span className="text-nilin-charcoal">{formData.customerInfo.email}</span>
+                </div>
                 <div className="flex justify-between">
                   <span className="text-nilin-warmGray">Phone:</span>
                   <span className="text-nilin-charcoal">{formData.customerInfo.phone}</span>

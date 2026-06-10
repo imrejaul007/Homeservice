@@ -1,5 +1,23 @@
 import { api } from './api';
 
+/**
+ * ============================================
+ * LOYALTY SYSTEM TERMINOLOGY
+ * ============================================
+ *
+ * This app uses "coins" terminology consistently:
+ * - Backend field: coins (see loyalty.controller.ts)
+ * - Frontend field: coins (see LoyaltyStatus interface)
+ * - API response: coins
+ *
+ * The term "points" is used only in:
+ * - User-facing display (converted to display value)
+ * - History entries (description text)
+ *
+ * Conversion: 100 coins = 1 AED
+ * ============================================
+ */
+
 export interface LoyaltyStatus {
   coins: number;
   totalEarned: number;
@@ -17,6 +35,21 @@ export interface LoyaltyStatus {
     nextTier: string | null;
     percentage: number;
   };
+}
+
+/**
+ * Convert coins to display value (for user-facing text)
+ * Note: coins are stored and used directly, this is for display purposes
+ */
+export function coinsToDisplayValue(coins: number): string {
+  return coins.toLocaleString();
+}
+
+/**
+ * Convert display value to coins (for user input)
+ */
+export function displayValueToCoins(value: number): number {
+  return Math.floor(value);
 }
 
 export interface PointsHistoryEntry {

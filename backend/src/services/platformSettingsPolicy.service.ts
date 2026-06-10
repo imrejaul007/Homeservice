@@ -245,10 +245,202 @@ export function isChannelEnabledByPlatform(
   }
 }
 
+/**
+ * Normalize any IPv6 representation of an IPv4 address to standard dotted-decimal format.
+ * Handles:
+ * - ::ffff:192.168.1.1 (IPv4-mapped IPv6 with decimal)
+ * - ::ffff:c0a8:0101 (IPv4-mapped IPv6 with hex - last 32 bits of address)
+ * - 2001:db8::192.168.1.1 (IPv4-compatible IPv6 with embedded IPv4)
+ * - 64:ff9b::192.168.1.1 (IPv4/IPv6 translation prefix)
+ * - ::192.168.1.1 (IPv4-compatible short form)
+ * - 0:0:0:0:0:ffff:192.168.1.1 (full form)
+ * Returns null for pure IPv6 addresses that are not IPv4 representations.
+ */
+function normalizeIPv6ToIPv4(ip: string): string | null {
+  const trimmed = ip.trim();
+
+  // Pattern 1: IPv6 with embedded IPv4 at the end (e.g., 2001:db8::192.168.1.1)
+  const embeddedIPv4Match = trimmed.match(/^([0-9a-fA-F:]+):(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+  if (embeddedIPv4Match) {
+    const ipv4Part = embeddedIPv4Match[2];
+    // Validate the IPv4 part
+    const octets = ipv4Part.split('.').map(Number);
+    if (octets.length === 4 && octets.every((o) => o >= 0 && o <= 255)) {
+      return ipv4Part;
+    }
+  }
+
+  // Pattern 2: IPv4-mapped IPv6 (e.g., ::ffff:192.168.1.1 or ::ffff:c0a8:0101)
+  const mappedV6Match = trimmed.match(/^([0-9a-fA-F:]+:)?(ffff:)?([0-9a-fA-F]{1,4}):([0-9a-fA-F]{1,4})$/i);
+  if (mappedV6Match) {
+    const hex1 = mappedV6Match[3];
+    const hex2 = mappedV6Match[4];
+    // Check if it's hex form (c0a8:0101) - needs conversion
+    if (hex1.match(/^[0-9a-fA-F]+$/i) && hex2.match(/^[0-9a-fA-F]+$/i)) {
+      const fullHex = hex1 + hex2;
+      if (fullHex.length === 8) {
+        // Convert 8 hex digits to 4 decimal octets
+        // c0a80101 -> c0 a8 01 01 -> 192.168.1.1
+        const oct1 = parseInt(fullHex.slice(0, 2), 16);
+        const oct2 = parseInt(fullHex.slice(2, 4), 16);
+        const oct3 = parseInt(fullHex.slice(4, 6), 16);
+        const oct4 = parseInt(fullHex.slice(6, 8), 16);
+        if (!isNaN(oct1) && !isNaN(oct2) && !isNaN(oct3) && !isNaN(oct4)) {
+          return `${oct1}.${oct2}.${oct3}.${oct4}`;
+        }
+      }
+    }
+  }
+
+  // Pattern 3: ::ffff: prefix with dotted-decimal (e.g., ::ffff:192.168.1.1)
+  if (trimmed.startsWith('::ffff:')) {
+    const inner = trimmed.substring(7);
+    const octets = inner.split('.').map(Number);
+    if (octets.length === 4 && octets.every((o) => o >= 0 && o <= 255)) {
+      return inner;
+    }
+  }
+
+  // Pattern 4: IPv4-compatible IPv6 without ffff (e.g., ::192.168.1.1)
+  // These start with :: followed by an IPv4
+  if (trimmed.startsWith('::') && !trimmed.startsWith('::ffff:')) {
+    const afterPrefix = trimmed.substring(2);
+    // Check if remaining part looks like an IPv4
+    if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(afterPrefix)) {
+      const octets = afterPrefix.split('.').map(Number);
+      if (octets.every((o) => o >= 0 && o <= 255)) {
+        return afterPrefix;
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Normalize an IP address for consistent comparison.
+ * Converts all IPv6 representations of IPv4 addresses to standard dotted-decimal format.
+ */
+function normalizeIpAddress(ip: string): string {
+  // First check if it's an IPv6 representation of IPv4
+  const ipv4FromV6 = normalizeIPv6ToIPv4(ip);
+  if (ipv4FromV6) {
+    return ipv4FromV6;
+  }
+  // For pure IPv4, validate and return trimmed
+  const octets = ip.trim().split('.').map(Number);
+  if (octets.length === 4 && octets.every((o) => o >= 0 && o <= 255)) {
+    return ip.trim();
+  }
+  // For pure IPv6 (not an IPv4 representation), return as-is
+  return ip.trim();
+}
+
+/**
+ * Parse a CIDR notation string and check if an IP address is within the range.
+ * Supports both IPv4 and IPv6 CIDR notation.
+ */
+function isIpInCidrRange(ip: string, cidr: string): boolean {
+  const [range, prefixLengthStr] = cidr.split('/');
+
+  // If no prefix length, treat as exact match
+  if (!prefixLengthStr) {
+    return ip === range;
+  }
+
+  const prefixLength = parseInt(prefixLengthStr, 10);
+  if (isNaN(prefixLength)) return false;
+
+  // IPv4 CIDR (e.g., 192.168.1.0/24)
+  if (ip.includes('.') && range.includes('.')) {
+    if (prefixLength < 0 || prefixLength > 32) return false;
+
+    const ipParts = ip.split('.').map(Number);
+    const rangeParts = range.split('.').map(Number);
+
+    if (ipParts.length !== 4 || rangeParts.length !== 4) return false;
+    if (ipParts.some((o) => o < 0 || o > 255) || rangeParts.some((o) => o < 0 || o > 255)) return false;
+
+    if (prefixLength === 32) {
+      return ip === range;
+    }
+
+    if (prefixLength === 0) {
+      return true;
+    }
+
+    // Create subnet mask and compare using unsigned 32-bit integers
+    const mask = prefixLength === 0 ? 0 : (~0 << (32 - prefixLength)) >>> 0;
+    const ipInt = (ipParts[0] << 24 | ipParts[1] << 16 | ipParts[2] << 8 | ipParts[3]) >>> 0;
+    const rangeInt = (rangeParts[0] << 24 | rangeParts[1] << 16 | rangeParts[2] << 8 | rangeParts[3]) >>> 0;
+
+    return (ipInt & mask) === (rangeInt & mask);
+  }
+
+  // IPv6 CIDR (e.g., 2001:db8::/32)
+  if (ip.includes(':') && range.includes(':')) {
+    if (prefixLength < 0 || prefixLength > 128) return false;
+
+    // Expand IPv6 addresses to 8 groups of 4 hex digits
+    const expandIPv6 = (addr: string): string => {
+      const parts = addr.toLowerCase().split(':');
+      const result: string[] = [];
+      let emptyIndex = -1;
+
+      for (let i = 0; i < 8; i++) {
+        if (parts[i] && parts[i].length > 0) {
+          result.push(parts[i].padStart(4, '0'));
+        } else {
+          if (emptyIndex === -1) {
+            emptyIndex = i;
+            const zerosNeeded = 8 - parts.filter((p, idx) => idx !== emptyIndex && p && p.length > 0).length;
+            for (let j = 0; j < zerosNeeded; j++) {
+              result.push('0000');
+            }
+          }
+        }
+      }
+      return result.join('');
+    };
+
+    try {
+      const ipExpanded = BigInt('0x' + expandIPv6(ip));
+      const rangeExpanded = BigInt('0x' + expandIPv6(range));
+
+      if (prefixLength === 128) {
+        return ipExpanded === rangeExpanded;
+      }
+
+      if (prefixLength === 0) {
+        return true;
+      }
+
+      // Create IPv6 mask: prefix ones followed by zeros
+      const shiftBits = 128n - BigInt(prefixLength);
+      const mask = shiftBits === 128n ? 0n : ((1n << 128n) - 1n) ^ ((1n << shiftBits) - 1n);
+
+      return (ipExpanded & mask) === (rangeExpanded & mask);
+    } catch {
+      return false;
+    }
+  }
+
+  return false;
+}
+
 export function isAdminIpAllowed(clientIp: string, policy = getPlatformPolicySync()): boolean {
   if (!policy.ipAllowlist.length) return true;
-  const normalized = clientIp.replace('::ffff:', '').trim();
-  return policy.ipAllowlist.some((ip) => ip === normalized || ip === clientIp);
+  const normalized = normalizeIpAddress(clientIp);
+  return policy.ipAllowlist.some((ip) => {
+    const normalizedAllowlistIp = normalizeIpAddress(ip);
+    // Check exact match first, then CIDR range match
+    if (normalizedAllowlistIp === normalized) return true;
+    // If CIDR notation, check if IP falls within range
+    if (normalizedAllowlistIp.includes('/')) {
+      return isIpInCidrRange(normalized, normalizedAllowlistIp);
+    }
+    return false;
+  });
 }
 
 export function getEffectiveBufferMinutes(

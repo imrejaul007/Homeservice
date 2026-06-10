@@ -4,6 +4,7 @@ import { motion } from 'framer-motion';
 import { Gift, Share2, Copy, Check, MessageCircle, Users, Clock, TrendingUp } from 'lucide-react';
 import { useReferralStore, shareToPlatform, calculateReferralReward, getDeepLink } from '../../services/marketplace/ReferralService';
 import { analytics } from '../../services/product/AnalyticsService';
+import { formatReferralReward } from '../../utils/currency';
 import toast from 'react-hot-toast';
 
 interface ReferralShareProps {
@@ -22,6 +23,7 @@ const FRIEND_AVATARS = [
 export function ReferralShare({ compact = false }: ReferralShareProps) {
   const { referralCode, referrals } = useReferralStore();
   const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState<string | null>(null);
   const [countdown, setCountdown] = useState<number>(24 * 60 * 60 * 1000); // 24h in ms
 
   const referralCount = referrals.filter((r: { status: string }) => r.status === 'completed').length;
@@ -59,13 +61,18 @@ export function ReferralShare({ compact = false }: ReferralShareProps) {
 
     try {
       const deepLink = getDeepLink(referralCode.code);
-      const message = `Hey! Get ₹100 off your first booking on NILIN! Use my code: ${referralCode.code} - You get ₹100, I get ₹100 too! Win-win! 🎉\n\n${deepLink}`;
+      const refereeReward = referralCode.rewards?.referee || 250;
+      const referrerReward = referralCode.rewards?.referrer || 500;
+      const formattedRefereeReward = formatReferralReward(refereeReward);
+      const formattedReferrerReward = formatReferralReward(referrerReward);
+      const message = `Hey! Get ${formattedRefereeReward} off your first booking on NILIN! Use my code: ${referralCode.code} - You get ${formattedRefereeReward}, I get ${formattedReferrerReward} too! Win-win! 🎉\n\n${deepLink}`;
       await navigator.clipboard.writeText(message);
       setCopied(true);
       toast.success('Copied to clipboard!');
       analytics.trackReferralEvent('copy', { code: referralCode.code });
       setTimeout(() => setCopied(false), 2000);
-    } catch {
+    } catch (error) {
+      setCopyError('Failed to copy to clipboard');
       toast.error('Failed to copy');
     }
   };
@@ -75,7 +82,9 @@ export function ReferralShare({ compact = false }: ReferralShareProps) {
     if (platform === 'copy') {
       handleCopy();
     } else {
-      shareToPlatform(platform, referralCode?.code || '');
+      const refereeReward = referralCode?.rewards?.referee || 250;
+      const referrerReward = referralCode?.rewards?.referrer || 500;
+      shareToPlatform(platform, referralCode?.code || '', refereeReward, referrerReward);
     }
   };
 

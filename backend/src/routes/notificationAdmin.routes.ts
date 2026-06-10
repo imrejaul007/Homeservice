@@ -1,6 +1,8 @@
 import { Router, Request, Response } from 'express';
+import mongoose from 'mongoose';
 import User from '../models/user.model';
 import BookingNotification from '../models/bookingNotification.model';
+import BroadcastLog from '../models/broadcastLog.model';
 import { authenticate, requireRole } from '../middleware/auth.middleware';
 import { adminLimiter } from '../middleware/rateLimiter';
 import { asyncHandler } from '../utils/asyncHandler';
@@ -49,7 +51,8 @@ interface BroadcastPayload {
   data?: Record<string, unknown>;
 }
 
-interface BroadcastRecord {
+// Interface for API response transformation
+interface BroadcastResponse {
   _id: string;
   type: string;
   channels: string[];
@@ -58,14 +61,12 @@ interface BroadcastRecord {
   data?: Record<string, unknown>;
   sentCount: number;
   failedCount: number;
+  totalUsers: number;
   createdBy: string;
   createdAt: Date;
   scheduledAt?: Date;
   sentAt?: Date;
 }
-
-// In-memory broadcast history (in production, this should be stored in a database)
-const broadcastHistory: BroadcastRecord[] = [];
 
 /**
  * POST /api/admin/notifications/broadcast
@@ -107,85 +108,128 @@ export const broadcastNotification = asyncHandler(async (req: Request, res: Resp
     throw ApiError.badRequest('No users found matching the criteria');
   }
 
-  // Process notifications
+  // Process notifications using batch operations for better performance
   let sentCount = 0;
   let failedCount = 0;
   const errors: string[] = [];
+  const timestamp = new Date();
 
-  for (const user of users) {
+  // Build bulk operations for in-app notifications
+  if (payload.channels.includes('in_app')) {
+    const bulkOps = users.map(user => ({
+      updateOne: {
+        filter: { _id: user._id },
+        update: {
+          $push: {
+            notifications: {
+              $each: [{
+                _id: new mongoose.Types.ObjectId(),
+                type: 'system' as const,
+                title: payload.title,
+                message: payload.message,
+                isRead: false,
+                data: payload.data,
+                createdAt: timestamp,
+              }],
+              $slice: -100, // Keep only last 100 notifications
+            },
+          },
+        },
+      },
+    }));
+
     try {
-      // In-app notification
-      if (payload.channels.includes('in_app')) {
-        user.notifications = user.notifications || [];
-        user.notifications.push({
-          _id: new (require('mongoose').Types.ObjectId)(),
-          type: 'system' as const,
-          title: payload.title,
-          message: payload.message,
-          isRead: false,
-          data: payload.data,
-          createdAt: new Date(),
+      const bulkResult = await User.bulkWrite(bulkOps, { ordered: false });
+      sentCount += bulkResult.modifiedCount;
+      failedCount += users.length - bulkResult.modifiedCount;
+    } catch (bulkErr) {
+      // bulkWrite with ordered:false continues on errors, collect partial results
+      const bulkError = bulkErr as any;
+      if (bulkError.result?.writeErrors) {
+        failedCount += bulkError.result.writeErrors.length;
+        bulkError.result.writeErrors.forEach((writeError: any) => {
+          errors.push(`User ${writeError.err.op.filter._id}: ${writeError.err.errmsg}`);
         });
-
-        // Keep only last 100 notifications per user
-        if (user.notifications.length > 100) {
-          user.notifications = user.notifications.slice(-100);
-        }
       }
-
-      // Email notification (would integrate with email service in production)
-      if (payload.channels.includes('email')) {
-        const emailPrefs = user.communicationPreferences?.email;
-        if (emailPrefs?.marketing || emailPrefs?.promotions) {
-          // In production: await sendEmail(user.email, payload.title, payload.message);
-          logger.debug('Email notification queued', {
-            userId: user._id,
-            email: user.email,
-            title: payload.title,
-          });
-        }
-      }
-
-      // Push notification (would integrate with FCM/APNS in production)
-      if (payload.channels.includes('push')) {
-        const pushPrefs = user.communicationPreferences?.push;
-        if (pushPrefs?.promotions || pushPrefs?.bookingUpdates) {
-          // In production: await sendPushNotification(user.deviceTokens, payload.title, payload.message);
-          logger.debug('Push notification queued', {
-            userId: user._id,
-            deviceTokens: user.deviceTokens?.length || 0,
-            title: payload.title,
-          });
-        }
-      }
-
-      // SMS notification (would integrate with Twilio in production)
-      if (payload.channels.includes('sms')) {
-        const smsPrefs = user.communicationPreferences?.sms;
-        if (smsPrefs?.promotions) {
-          // In production: await sendSMS(user.phone, payload.message);
-          logger.debug('SMS notification queued', {
-            userId: user._id,
-            hasPhone: !!user.phone,
-          });
-        }
-      }
-
-      await user.save({ validateBeforeSave: false });
-      sentCount++;
-    } catch (err) {
-      failedCount++;
-      errors.push(`User ${user._id}: ${(err as Error).message}`);
-      logger.error('Failed to send notification to user', {
-        userId: user._id,
-        error: (err as Error).message,
-      });
+      sentCount = users.length - failedCount;
     }
   }
 
-  // Create booking notification record for analytics
-  const broadcastRecord: BroadcastRecord = {
-    _id: new (require('mongoose').Types.ObjectId)().toString(),
+  // Process other notification channels in parallel batches
+  const otherChannels = payload.channels.filter(ch => ch !== 'in_app');
+  if (otherChannels.length > 0) {
+    const BATCH_SIZE = 50;
+    const userBatches: typeof users[] = [];
+
+    for (let i = 0; i < users.length; i += BATCH_SIZE) {
+      userBatches.push(users.slice(i, i + BATCH_SIZE));
+    }
+
+    await Promise.all(
+      userBatches.map(batch =>
+        processBatch(batch, otherChannels, errors)
+      )
+    );
+
+    // Count successful sends for other channels
+    sentCount += users.length;
+  }
+
+  async function processBatch(batch: typeof users, channels: string[], errorList: string[]) {
+    await Promise.all(
+      batch.map(async (user) => {
+        try {
+          // Email notification (would integrate with email service in production)
+          if (channels.includes('email')) {
+            const emailPrefs = user.communicationPreferences?.email;
+            if (emailPrefs?.marketing || emailPrefs?.promotions) {
+              // In production: await sendEmail(user.email, payload.title, payload.message);
+              logger.debug('Email notification queued', {
+                userId: user._id,
+                email: user.email,
+                title: payload.title,
+              });
+            }
+          }
+
+          // Push notification (would integrate with FCM/APNS in production)
+          if (channels.includes('push')) {
+            const pushPrefs = user.communicationPreferences?.push;
+            if (pushPrefs?.promotions || pushPrefs?.bookingUpdates) {
+              // In production: await sendPushNotification(user.deviceTokens, payload.title, payload.message);
+              logger.debug('Push notification queued', {
+                userId: user._id,
+                deviceTokens: user.deviceTokens?.length || 0,
+                title: payload.title,
+              });
+            }
+          }
+
+          // SMS notification (would integrate with Twilio in production)
+          if (channels.includes('sms')) {
+            const smsPrefs = user.communicationPreferences?.sms;
+            if (smsPrefs?.promotions) {
+              // In production: await sendSMS(user.phone, payload.message);
+              logger.debug('SMS notification queued', {
+                userId: user._id,
+                hasPhone: !!user.phone,
+              });
+            }
+          }
+        } catch (err) {
+          errorList.push(`User ${user._id}: ${(err as Error).message}`);
+          logger.error('Failed to process notification channel', {
+            userId: user._id,
+            error: (err as Error).message,
+          });
+        }
+      })
+    );
+  }
+
+  // Persist broadcast record to MongoDB
+  const broadcastLog = new BroadcastLog({
+    _id: new mongoose.Types.ObjectId(),
     type: payload.type,
     channels: payload.channels,
     title: payload.title,
@@ -193,18 +237,13 @@ export const broadcastNotification = asyncHandler(async (req: Request, res: Resp
     data: payload.data,
     sentCount,
     failedCount,
-    createdBy: adminUser._id.toString(),
-    createdAt: new Date(),
+    totalUsers: users.length,
+    createdBy: adminUser._id,
     scheduledAt: value.scheduledAt,
     sentAt: new Date(),
-  };
+  });
 
-  broadcastHistory.unshift(broadcastRecord);
-
-  // Keep only last 1000 broadcasts in memory
-  if (broadcastHistory.length > 1000) {
-    broadcastHistory.pop();
-  }
+  await broadcastLog.save();
 
   logger.info('Broadcast notification sent', {
     action: 'NOTIFICATION_BROADCAST',
@@ -220,7 +259,7 @@ export const broadcastNotification = asyncHandler(async (req: Request, res: Resp
     success: true,
     message: 'Broadcast notification sent successfully',
     data: {
-      broadcastId: broadcastRecord._id,
+      broadcastId: broadcastLog._id.toString(),
       totalUsers: users.length,
       sentCount,
       failedCount,
@@ -244,46 +283,66 @@ export const getBroadcastHistory = asyncHandler(async (req: Request, res: Respon
     );
   }
 
-  let filteredHistory = [...broadcastHistory];
+  const page = value.page || 1;
+  const limit = value.limit || 20;
+  const skip = (page - 1) * limit;
+
+  // Build MongoDB query
+  const query: Record<string, unknown> = {};
 
   // Filter by type
   if (value.type) {
-    filteredHistory = filteredHistory.filter(h => h.type === value.type);
+    query.type = value.type;
   }
 
   // Filter by date range
-  if (value.startDate) {
-    filteredHistory = filteredHistory.filter(
-      h => new Date(h.createdAt) >= new Date(value.startDate!)
-    );
-  }
-  if (value.endDate) {
-    filteredHistory = filteredHistory.filter(
-      h => new Date(h.createdAt) <= new Date(value.endDate!)
-    );
+  if (value.startDate || value.endDate) {
+    const dateFilter: Record<string, Date> = {};
+    if (value.startDate) {
+      dateFilter.$gte = new Date(value.startDate);
+    }
+    if (value.endDate) {
+      dateFilter.$lte = new Date(value.endDate);
+    }
+    query.createdAt = dateFilter;
   }
 
-  // Sort by createdAt descending
-  filteredHistory.sort((a, b) =>
-    new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-  );
+  // Execute query with pagination
+  const [broadcasts, totalCount] = await Promise.all([
+    BroadcastLog.find(query)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean(),
+    BroadcastLog.countDocuments(query)
+  ]);
 
-  // Pagination
-  const page = value.page || 1;
-  const limit = value.limit || 20;
-  const startIndex = (page - 1) * limit;
-  const endIndex = startIndex + limit;
-  const paginatedHistory = filteredHistory.slice(startIndex, endIndex);
+  // Transform to API response format
+  const transformedBroadcasts: BroadcastResponse[] = broadcasts.map(b => ({
+    _id: b._id.toString(),
+    type: b.type,
+    channels: b.channels,
+    title: b.title,
+    message: b.message,
+    data: b.data as Record<string, unknown> | undefined,
+    sentCount: b.sentCount,
+    failedCount: b.failedCount,
+    totalUsers: b.totalUsers,
+    createdBy: b.createdBy.toString(),
+    createdAt: b.createdAt,
+    scheduledAt: b.scheduledAt,
+    sentAt: b.sentAt,
+  }));
 
   res.json({
     success: true,
     data: {
-      broadcasts: paginatedHistory,
+      broadcasts: transformedBroadcasts,
       pagination: {
         page,
         limit,
-        total: filteredHistory.length,
-        pages: Math.ceil(filteredHistory.length / limit),
+        total: totalCount,
+        pages: Math.ceil(totalCount / limit),
       },
     },
   });
@@ -297,29 +356,23 @@ export const getBroadcastStats = asyncHandler(async (req: Request, res: Response
   const thirtyDaysAgo = new Date();
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-  const recentBroadcasts = broadcastHistory.filter(
-    h => new Date(h.createdAt) >= thirtyDaysAgo
-  );
-
-  const totalSent = recentBroadcasts.reduce((sum, b) => sum + b.sentCount, 0);
-  const totalFailed = recentBroadcasts.reduce((sum, b) => sum + b.failedCount, 0);
-  const byType = {
-    all: recentBroadcasts.filter(b => b.type === 'all').length,
-    providers: recentBroadcasts.filter(b => b.type === 'providers').length,
-    customers: recentBroadcasts.filter(b => b.type === 'customers').length,
-  };
+  // Get stats from MongoDB
+  const [last30DaysStats, totalCount] = await Promise.all([
+    BroadcastLog.getStats(thirtyDaysAgo, new Date()),
+    BroadcastLog.countDocuments()
+  ]);
 
   res.json({
     success: true,
     data: {
       last30Days: {
-        totalBroadcasts: recentBroadcasts.length,
-        totalSent,
-        totalFailed,
-        byType,
+        totalBroadcasts: last30DaysStats.totalBroadcasts,
+        totalSent: last30DaysStats.totalSent,
+        totalFailed: last30DaysStats.totalFailed,
+        byType: last30DaysStats.byType,
       },
       total: {
-        totalBroadcasts: broadcastHistory.length,
+        totalBroadcasts: totalCount,
       },
     },
   });

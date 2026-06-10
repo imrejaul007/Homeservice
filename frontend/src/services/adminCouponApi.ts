@@ -8,6 +8,7 @@ export interface AdminCoupon {
   maxDiscount?: number;
   minOrderValue: number;
   maxUses: number;
+  maxUsesPerUser?: number;
   currentUses: number;
   validFrom: string;
   validUntil: string;
@@ -25,6 +26,7 @@ export interface CouponFormPayload {
   maxDiscount: number;
   minOrderAmount: number;
   usageLimit: number;
+  maxUsesPerUser: number;
   validFrom: string;
   validUntil: string;
   title: string;
@@ -58,6 +60,8 @@ function toApiPayload(form: CouponFormPayload) {
     validFrom: new Date(`${form.validFrom}T00:00:00`).toISOString(),
     validUntil: new Date(`${form.validUntil}T23:59:59.999`).toISOString(),
     maxDiscount: form.maxDiscount || undefined,
+    // Transform frontend field name to match backend
+    minOrderValue: form.minOrderAmount,
   };
 }
 
@@ -98,6 +102,11 @@ export const adminCouponApi = {
       payload.validUntil = new Date(`${form.validUntil}T23:59:59.999`).toISOString() as unknown as string;
     }
     if (form.code) payload.code = form.code.trim().toUpperCase();
+    // Transform frontend field name to match backend
+    if (form.minOrderAmount !== undefined) {
+      payload.minOrderValue = form.minOrderAmount;
+      delete payload.minOrderAmount;
+    }
     const response = await api.put(`/admin/coupons/${id}`, payload);
     return response.data;
   },

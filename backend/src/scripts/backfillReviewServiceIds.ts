@@ -48,9 +48,9 @@ async function backfillServiceIds() {
   console.log('='.repeat(60));
   console.log();
 
-  // Build connection URI with specified database
-  const baseUri = 'mongodb+srv://nilimraj_db_user:aXJBzxFtRJosdxEc@cluster0.wnjcyp1.mongodb.net/';
-  const uri = `${baseUri}${dbName}?appName=Cluster0`;
+  // FIX: Use environment variable instead of hardcoded credentials
+  const baseUri = process.env.MONGODB_URI || 'mongodb://localhost:27017/';
+  const uri = baseUri.endsWith('/') ? `${baseUri}${dbName}` : `${baseUri}/${dbName}`;
 
   console.log(`📍 Target Database: ${dbName}`);
   console.log();

@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Search, MapPin, User, LogOut, BarChart3, X, Calendar, Heart, ChevronDown, Package, Gift } from 'lucide-react';
+import { Search, MapPin, User, LogOut, BarChart3, X, Calendar, Heart, ChevronDown, Package, Gift, MessageCircle, Bell } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
 import CategoryTabs from './CategoryTabs';
 import LocationDropdown from '../location/LocationDropdown';
+import NotificationBell from '../common/NotificationBell';
 
 interface NavigationHeaderProps {
   showSearch?: boolean;
@@ -154,6 +155,13 @@ const NavigationHeader: React.FC<NavigationHeaderProps> = ({
                   <span>Track Order</span>
                 </Link>
 
+                {user && (
+                  <NotificationBell
+                    userId={user.id || (user as { _id?: string })._id}
+                    userRole={user.role === 'provider' ? 'provider' : 'customer'}
+                  />
+                )}
+
                 {user ? (
                   <div className="relative">
                     <button
@@ -192,14 +200,26 @@ const NavigationHeader: React.FC<NavigationHeaderProps> = ({
                               <Link to="/customer/bookings" className="flex items-center gap-3 px-4 py-3 text-sm text-nilin-charcoal hover:bg-nilin-blush/70 rounded-nilin transition-all duration-200" onClick={() => setShowUserMenu(false)}>
                                 <Calendar className="h-4 w-4 text-nilin-warmGray" /> My Bookings
                               </Link>
+                              <Link to="/customer/messages" className="flex items-center gap-3 px-4 py-3 text-sm text-nilin-charcoal hover:bg-nilin-blush/70 rounded-nilin transition-all duration-200" onClick={() => setShowUserMenu(false)}>
+                                <MessageCircle className="h-4 w-4 text-nilin-warmGray" /> Messages
+                              </Link>
                               <Link to="/customer/favorites" className="flex items-center gap-3 px-4 py-3 text-sm text-nilin-charcoal hover:bg-nilin-blush/70 rounded-nilin transition-all duration-200" onClick={() => setShowUserMenu(false)}>
                                 <Heart className="h-4 w-4 text-nilin-warmGray" /> Favorites
+                              </Link>
+                              <Link to="/customer/wishlist" className="flex items-center gap-3 px-4 py-3 text-sm text-nilin-charcoal hover:bg-nilin-blush/70 rounded-nilin transition-all duration-200" onClick={() => setShowUserMenu(false)}>
+                                <Package className="h-4 w-4 text-nilin-warmGray" /> Package Wishlist
                               </Link>
                               <Link to="/customer/my-claims" className="flex items-center gap-3 px-4 py-3 text-sm text-nilin-charcoal hover:bg-nilin-blush/70 rounded-nilin transition-all duration-200" onClick={() => setShowUserMenu(false)}>
                                 <Gift className="h-4 w-4 text-nilin-warmGray" /> My Claims
                               </Link>
                               <Link to="/customer/profile" className="flex items-center gap-3 px-4 py-3 text-sm text-nilin-charcoal hover:bg-nilin-blush/70 rounded-nilin transition-all duration-200" onClick={() => setShowUserMenu(false)}>
                                 <User className="h-4 w-4 text-nilin-warmGray" /> Profile
+                              </Link>
+                              <Link to="/customer/notifications" className="flex items-center gap-3 px-4 py-3 text-sm text-nilin-charcoal hover:bg-nilin-blush/70 rounded-nilin transition-all duration-200" onClick={() => setShowUserMenu(false)}>
+                                <Bell className="h-4 w-4 text-nilin-warmGray" /> Notifications
+                              </Link>
+                              <Link to="/customer/notification-settings" className="flex items-center gap-3 px-4 py-3 text-sm text-nilin-charcoal hover:bg-nilin-blush/70 rounded-nilin transition-all duration-200" onClick={() => setShowUserMenu(false)}>
+                                <Gift className="h-4 w-4 text-nilin-warmGray" /> Notification Settings
                               </Link>
                             </>
                           )}
@@ -353,8 +373,14 @@ const NavigationHeader: React.FC<NavigationHeaderProps> = ({
                       <Link to="/customer/bookings" className="flex items-center gap-3 px-4 py-3 text-nilin-charcoal hover:bg-nilin-peach/30 rounded-nilin transition-all duration-200" onClick={closeMobileMenu}>
                         <Calendar className="h-5 w-5 text-nilin-warmGray" /> My Bookings
                       </Link>
+                      <Link to="/customer/messages" className="flex items-center gap-3 px-4 py-3 text-nilin-charcoal hover:bg-nilin-peach/30 rounded-nilin transition-all duration-200" onClick={closeMobileMenu}>
+                        <MessageCircle className="h-5 w-5 text-nilin-warmGray" /> Messages
+                      </Link>
                       <Link to="/customer/favorites" className="flex items-center gap-3 px-4 py-3 text-nilin-charcoal hover:bg-nilin-peach/30 rounded-nilin transition-all duration-200" onClick={closeMobileMenu}>
                         <Heart className="h-5 w-5 text-nilin-warmGray" /> Favorites
+                      </Link>
+                      <Link to="/customer/wishlist" className="flex items-center gap-3 px-4 py-3 text-nilin-charcoal hover:bg-nilin-peach/30 rounded-nilin transition-all duration-200" onClick={closeMobileMenu}>
+                        <Package className="h-5 w-5 text-nilin-warmGray" /> Package Wishlist
                       </Link>
                       <Link to="/customer/my-claims" className="flex items-center gap-3 px-4 py-3 text-nilin-charcoal hover:bg-nilin-peach/30 rounded-nilin transition-all duration-200" onClick={closeMobileMenu}>
                         <Gift className="h-5 w-5 text-nilin-warmGray" /> My Claims

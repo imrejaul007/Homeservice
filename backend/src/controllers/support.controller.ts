@@ -5,6 +5,8 @@ import User, { IUser } from '../models/user.model';
 import { asyncHandler } from '../utils/asyncHandler';
 import { ApiError } from '../utils/ApiError';
 import logger from '../utils/logger';
+import { eventBus, EVENT_TYPES } from '../event-bus';
+import { crmWebhookService } from '../services/crmWebhook.service';
 
 // Extend Express Request type to include user
 interface AuthenticatedRequest extends Request {
@@ -572,12 +574,13 @@ export const getUserTickets = asyncHandler(async (req: AuthenticatedRequest, res
 
   const [tickets, total] = await Promise.all([
     SupportTicket.find(query)
-      .select('-messages') // Exclude messages for list view
+      .select('ticketNumber category priority status subject userName userEmail assignedToName createdAt updatedAt')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
-      .lean(),
-    SupportTicket.countDocuments(query)
+      .lean()
+      .hint({ userId: 1, createdAt: -1 }),
+    SupportTicket.countDocuments(query).hint({ userId: 1, createdAt: -1 }),
   ]);
 
   res.json({
@@ -664,8 +667,27 @@ export const createTicket = asyncHandler(async (req: AuthenticatedRequest, res: 
     ticketNumber: ticket.ticketNumber,
     userId: req.user._id,
     category,
-    priority: priority || 'medium'
+    priority: priority || 'medium',
+    action: 'SUPPORT_TICKET_CREATED',
   });
+
+  eventBus.emit(EVENT_TYPES.TICKET_CREATED, {
+    ticketId: ticket._id,
+    ticketNumber: ticket.ticketNumber,
+    userId: req.user._id,
+    category,
+    priority: priority || 'medium',
+  });
+
+  crmWebhookService.ticketCreated({
+    ticketId: ticket._id.toString(),
+    ticketNumber: ticket.ticketNumber,
+    userId: req.user._id.toString(),
+    category,
+    priority: priority || 'medium',
+    subject,
+    source: 'support_portal',
+  }).catch(() => {});
 
   res.status(201).json({
     success: true,

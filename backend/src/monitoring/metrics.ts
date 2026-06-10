@@ -1,5 +1,4 @@
-// @ts-expect-error prom-client types will be installed
-import { Counter, Histogram, Gauge, Summary } from 'prom-client';
+import { Counter, Histogram, Gauge } from 'prom-client';
 
 // HTTP metrics
 export const httpRequestDuration = new Histogram({

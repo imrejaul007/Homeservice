@@ -128,4 +128,39 @@ export function convertCurrency(
   return amount;
 }
 
+/**
+ * Get currency configuration from environment variables
+ *
+ * @returns Currency configuration object
+ *
+ * @example
+ * const { code, symbol } = getCurrencyConfig();
+ * // code: 'AED', symbol: 'د.إ'
+ */
+export function getCurrencyConfig(): { code: string; symbol: string } {
+  return {
+    code: import.meta.env.VITE_CURRENCY_CODE || AED_CURRENCY_CODE,
+    symbol: import.meta.env.VITE_CURRENCY_SYMBOL || getCurrencySymbol(AED_CURRENCY_CODE),
+  };
+}
+
+/**
+ * Format a referral reward amount with proper currency
+ *
+ * @param amount - The numeric amount to format
+ * @returns Formatted currency string with symbol (e.g., "د.إ 100")
+ *
+ * @example
+ * formatReferralReward(100) // "د.إ 100"
+ */
+export function formatReferralReward(amount: number): string {
+  const { code, symbol } = getCurrencyConfig();
+  // Use Intl.NumberFormat for locale-aware number formatting
+  const formatter = new Intl.NumberFormat(AED_LOCALE, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  });
+  return `${symbol}${formatter.format(amount)}`;
+}
+
 export default formatPrice;

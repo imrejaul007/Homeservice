@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Gift,
   Plus,
@@ -19,6 +20,7 @@ import {
   Loader2,
   Info,
   Link2,
+  Copy,
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { AdminPageShell } from '../admin/AdminPageShell';
@@ -58,7 +60,15 @@ const emptyForm = (): OfferFormPayload => ({
   featured: false,
   applicableServices: [],
   applicableCategories: [],
+  claimExpiresInDays: 30,
+  targetType: 'all',
+  targetProviders: [],
+  validDays: [],
+  validTimeStart: '',
+  validTimeEnd: '',
 });
+
+const DAYS_OF_WEEK = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 
 function extractError(err: unknown): string | undefined {
   if (err && typeof err === 'object' && 'response' in err) {
@@ -68,14 +78,22 @@ function extractError(err: unknown): string | undefined {
 }
 
 const AdminOffersManagement: React.FC = () => {
+  // FIX: Use URL search params for filter state persistence
+  const [searchParams, setSearchParams] = useSearchParams();
+
   const [offers, setOffers] = useState<AdminOffer[]>([]);
   const [services, setServices] = useState<Array<{ _id: string; name: string; category?: { name: string } }>>([]);
   const [categories, setCategories] = useState<Array<{ _id: string; name: string }>>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [filterType, setFilterType] = useState<string>('all');
-  const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'inactive' | 'expired'>('all');
+
+  // FIX: Initialize from URL params for persistence
+  const [searchTerm, setSearchTerm] = useState(searchParams.get('search') || '');
+  const [filterType, setFilterType] = useState<string>(searchParams.get('type') || 'all');
+  // FIX: Added workflow status types
+  const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'inactive' | 'expired' | 'archived' | 'draft' | 'pending_review' | 'approved'>(
+    (searchParams.get('status') as any) || 'all'
+  );
   const [showModal, setShowModal] = useState(false);
   const [editingOffer, setEditingOffer] = useState<AdminOffer | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -83,6 +101,15 @@ const AdminOffersManagement: React.FC = () => {
   const [showServiceSelector, setShowServiceSelector] = useState(false);
   const [showCategorySelector, setShowCategorySelector] = useState(false);
   const [formData, setFormData] = useState<OfferFormPayload>(emptyForm());
+
+  // FIX: Sync filter changes to URL params
+  useEffect(() => {
+    const params = new URLSearchParams();
+    if (searchTerm) params.set('search', searchTerm);
+    if (filterType !== 'all') params.set('type', filterType);
+    if (filterStatus !== 'all') params.set('status', filterStatus);
+    setSearchParams(params, { replace: true });
+  }, [searchTerm, filterType, filterStatus, setSearchParams]);
 
   const loadData = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
@@ -117,19 +144,33 @@ const AdminOffersManagement: React.FC = () => {
       (offer.displayTitle || '').toLowerCase().includes(q);
     const matchesType = filterType === 'all' || offer.type === filterType;
     const validity = getOfferValidityLabel(offer.validFrom, offer.validUntil, offer.isActive);
-    const matchesStatus =
-      filterStatus === 'all' ||
-      (filterStatus === 'active' && offer.isActive && validity.tone !== 'danger') ||
-      (filterStatus === 'inactive' && !offer.isActive) ||
-      (filterStatus === 'expired' && validity.tone === 'danger');
+    // FIX: Enhanced status filter with workflow statuses
+    const matchesStatus = (() => {
+      if (filterStatus === 'all') return true;
+      if (filterStatus === 'active') return offer.isActive && validity.tone !== 'danger';
+      if (filterStatus === 'inactive') return !offer.isActive;
+      if (filterStatus === 'expired') return validity.tone === 'danger';
+      // FIX: Handle workflow statuses
+      if (filterStatus === 'archived') return offer.status === 'archived';
+      if (filterStatus === 'draft') return offer.status === 'draft';
+      if (filterStatus === 'pending_review') return offer.status === 'pending_review';
+      if (filterStatus === 'approved') return offer.status === 'approved';
+      return true;
+    })();
     return matchesSearch && matchesType && matchesStatus;
   });
 
+  // FIX: Enhanced stats with workflow status breakdown
   const stats = {
     total: offers.length,
     active: offers.filter((o) => o.isActive && getOfferValidityLabel(o.validFrom, o.validUntil, true).tone !== 'danger').length,
     featured: offers.filter((o) => o.featured).length,
     claims: offers.reduce((s, o) => s + (o.currentUses || 0), 0),
+    // FIX: Add workflow status counts
+    draft: offers.filter((o) => o.status === 'draft').length,
+    pendingReview: offers.filter((o) => o.status === 'pending_review').length,
+    published: offers.filter((o) => o.status === 'published').length,
+    archived: offers.filter((o) => o.status === 'archived').length,
   };
 
   const openCreate = () => {
@@ -159,6 +200,12 @@ const AdminOffersManagement: React.FC = () => {
       featured: offer.featured || false,
       applicableServices: offer.applicableServices || [],
       applicableCategories: offer.applicableCategories || [],
+      claimExpiresInDays: offer.claimExpiresInDays || 30,
+      targetType: offer.targetType || 'all',
+      targetProviders: offer.targetProviders || [],
+      validDays: offer.validDays || [],
+      validTimeStart: offer.validTimeStart || '',
+      validTimeEnd: offer.validTimeEnd || '',
     });
     setShowModal(true);
   };
@@ -206,6 +253,19 @@ const AdminOffersManagement: React.FC = () => {
       await loadData();
     } catch (err) {
       toast.error(extractError(err) || 'Failed to deactivate offer');
+    }
+  };
+
+  const handleClone = async (offer: AdminOffer) => {
+    const newCode = prompt('Enter new promo code (leave empty to auto-generate):');
+    if (newCode === null) return; // User cancelled
+
+    try {
+      await adminOfferApi.clone(offer._id, newCode.toUpperCase());
+      toast.success('Offer cloned successfully');
+      await loadData();
+    } catch (err) {
+      toast.error(extractError(err) || 'Failed to clone offer');
     }
   };
 
@@ -301,6 +361,9 @@ const AdminOffersManagement: React.FC = () => {
               { label: 'Live now', value: stats.active },
               { label: 'Featured', value: stats.featured },
               { label: 'Total redemptions', value: stats.claims },
+              // FIX: Add workflow status KPIs
+              { label: 'Pending Review', value: stats.pendingReview, accent: 'yellow' },
+              { label: 'Archived', value: stats.archived, accent: 'red' },
             ].map((kpi) => (
               <div key={kpi.label} className="glass glass-blur rounded-2xl border border-nilin-border/50 p-5">
                 <p className="text-xs uppercase tracking-wide text-nilin-warmGray font-sans">{kpi.label}</p>
@@ -340,6 +403,11 @@ const AdminOffersManagement: React.FC = () => {
                 <option value="active">Live</option>
                 <option value="inactive">Inactive</option>
                 <option value="expired">Expired</option>
+                {/* FIX: Add workflow status options */}
+                <option value="draft">Draft</option>
+                <option value="pending_review">Pending Review</option>
+                <option value="approved">Approved</option>
+                <option value="archived">Archived</option>
               </select>
             </div>
           </div>
@@ -425,8 +493,20 @@ const AdminOffersManagement: React.FC = () => {
                         <span>{formatOfferDateRange(offer.validFrom, offer.validUntil)}</span>
                       </div>
 
-                      {(serviceCount > 0 || categoryCount > 0) && (
+                      {(serviceCount > 0 || categoryCount > 0 || offer.status) && (
                         <div className="flex flex-wrap gap-1.5 mt-3">
+                          {/* FIX: Show workflow status badge */}
+                          {offer.status && offer.status !== 'published' && (
+                            <span className={cn(
+                              'text-xs px-2 py-0.5 rounded-full font-medium',
+                              offer.status === 'draft' && 'bg-gray-100 text-gray-600',
+                              offer.status === 'pending_review' && 'bg-yellow-100 text-yellow-700',
+                              offer.status === 'approved' && 'bg-blue-100 text-blue-700',
+                              offer.status === 'archived' && 'bg-red-100 text-red-700'
+                            )}>
+                              {offer.status.replace('_', ' ')}
+                            </span>
+                          )}
                           {serviceCount > 0 && (
                             <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
                               <Link2 className="w-3 h-3" />
@@ -460,6 +540,14 @@ const AdminOffersManagement: React.FC = () => {
                         >
                           <Edit3 className="w-4 h-4" />
                           Edit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleClone(offer)}
+                          className="px-3 py-2 rounded-xl border border-blue-200 text-blue-600 hover:bg-blue-50"
+                          title="Clone offer"
+                        >
+                          <Copy className="w-4 h-4" />
                         </button>
                         <button
                           type="button"
@@ -586,7 +674,7 @@ const AdminOffersManagement: React.FC = () => {
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <label className="block text-sm font-medium">
-                    Max uses
+                    Max uses (global)
                     <input
                       type="number"
                       min={1}
@@ -596,20 +684,43 @@ const AdminOffersManagement: React.FC = () => {
                     />
                   </label>
                   <label className="block text-sm font-medium">
-                    Badge
-                    <select
-                      value={formData.displayBadge}
-                      onChange={(e) => setFormData({ ...formData, displayBadge: e.target.value })}
+                    Max uses per customer
+                    <input
+                      type="number"
+                      min={1}
+                      value={formData.maxUsesPerUser}
+                      onChange={(e) => setFormData({ ...formData, maxUsesPerUser: Number(e.target.value) || 1 })}
                       className="mt-1 w-full px-4 py-2 rounded-xl border border-nilin-border/50"
-                    >
-                      <option value="">None</option>
-                      <option value="Limited Time">Limited Time</option>
-                      <option value="New">New</option>
-                      <option value="Popular">Popular</option>
-                      <option value="Hot">Hot</option>
-                    </select>
+                    />
                   </label>
                 </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <label className="block text-sm font-medium">
+                    Claim expires in (days)
+                    <input
+                      type="number"
+                      min={1}
+                      max={365}
+                      value={formData.claimExpiresInDays || 30}
+                      onChange={(e) => setFormData({ ...formData, claimExpiresInDays: Number(e.target.value) || 30 })}
+                      className="mt-1 w-full px-4 py-2 rounded-xl border border-nilin-border/50"
+                    />
+                  </label>
+                </div>
+                <label className="block text-sm font-medium">
+                  Badge
+                  <select
+                    value={formData.displayBadge}
+                    onChange={(e) => setFormData({ ...formData, displayBadge: e.target.value })}
+                    className="mt-1 w-full px-4 py-2 rounded-xl border border-nilin-border/50"
+                  >
+                    <option value="">None</option>
+                    <option value="Limited Time">Limited Time</option>
+                    <option value="New">New</option>
+                    <option value="Popular">Popular</option>
+                    <option value="Hot">Hot</option>
+                  </select>
+                </label>
                 <label className="block text-sm font-medium">
                   Card gradient
                   <select
@@ -703,6 +814,76 @@ const AdminOffersManagement: React.FC = () => {
                   />
                   <span className="text-sm">Feature on homepage carousel</span>
                 </label>
+
+                {/* NEW: Target audience dropdown */}
+                <div className="space-y-2">
+                  <label className="block text-sm font-medium">
+                    Target audience
+                    <select
+                      value={formData.targetType || 'all'}
+                      onChange={(e) => setFormData({ ...formData, targetType: e.target.value as OfferFormPayload['targetType'] })}
+                      className="mt-1 w-full px-4 py-2 rounded-xl border border-nilin-border/50"
+                    >
+                      <option value="all">All users</option>
+                      <option value="new_users">New users only</option>
+                      <option value="first_booking">First booking only</option>
+                      <option value="specific_users">Specific users</option>
+                      <option value="specific_services">Specific services</option>
+                      <option value="specific_providers">Specific providers</option>
+                    </select>
+                  </label>
+                </div>
+
+                {/* NEW: Valid days checkboxes */}
+                <div className="space-y-2">
+                  <label className="block text-sm font-medium">
+                    Valid days (leave empty for all days)
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    {DAYS_OF_WEEK.map((day) => (
+                      <label key={day} className="flex items-center gap-1 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={formData.validDays?.includes(day)}
+                          onChange={(e) => {
+                            const days = formData.validDays || [];
+                            if (e.target.checked) {
+                              setFormData({ ...formData, validDays: [...days, day] });
+                            } else {
+                              setFormData({ ...formData, validDays: days.filter((d) => d !== day) });
+                            }
+                          }}
+                          className="rounded border-nilin-border/50 text-nilin-coral focus:ring-nilin-coral/30"
+                        />
+                        <span className="text-sm capitalize">{day.slice(0, 3)}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                {/* NEW: Time restrictions */}
+                <div className="grid grid-cols-2 gap-4">
+                  <label className="block text-sm font-medium">
+                    Valid from time
+                    <input
+                      type="time"
+                      value={formData.validTimeStart || ''}
+                      onChange={(e) => setFormData({ ...formData, validTimeStart: e.target.value })}
+                      className="mt-1 w-full px-4 py-2 rounded-xl border border-nilin-border/50"
+                      placeholder="09:00"
+                    />
+                  </label>
+                  <label className="block text-sm font-medium">
+                    Valid until time
+                    <input
+                      type="time"
+                      value={formData.validTimeEnd || ''}
+                      onChange={(e) => setFormData({ ...formData, validTimeEnd: e.target.value })}
+                      className="mt-1 w-full px-4 py-2 rounded-xl border border-nilin-border/50"
+                      placeholder="18:00"
+                    />
+                  </label>
+                </div>
 
                 <div className="flex gap-3 pt-2">
                   <button

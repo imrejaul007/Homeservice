@@ -1,6 +1,14 @@
 import axios, { AxiosError } from 'axios';
 import { API_BASE_URL } from '@/config/api';
-import type { SearchFilters, Service, SearchResponse, Suggestion, SuggestionsResponse } from '@/types/search';
+import type {
+  SearchFilters,
+  Service,
+  SearchResponse,
+  Suggestion,
+  SuggestionsResponse,
+  ProviderSearchResponse,
+} from '@/types/search';
+import { api as centralizedApi } from './api';
 
 // Error class for search API errors
 export class SearchApiError extends Error {
@@ -14,10 +22,15 @@ export class SearchApiError extends Error {
   }
 }
 
+// Use centralized API instance for consistent configuration and interceptors
 const api = axios.create({
   baseURL: `${API_BASE_URL}/search`,
-  timeout: 10000,
+  timeout: 30000,
 });
+
+// Inherit interceptors from centralized API for consistent auth handling
+api.interceptors.response.use = centralizedApi.interceptors.response.use;
+api.interceptors.request.use = centralizedApi.interceptors.request.use;
 
 /**
  * Transform frontend coordinates {lat, lng} to backend GeoJSON [lng, lat] format
@@ -60,6 +73,34 @@ export const searchApi = {
       const message = (err.response?.data as { message?: string })?.message || err.message || 'Search failed';
       console.error('[searchApi] searchServices error:', message, err.response?.status);
       throw new SearchApiError(message, err.response?.status, 'SEARCH_FAILED');
+    }
+  },
+
+  // Search providers with filters
+  searchProviders: async (
+    filters: SearchFilters & {
+      tier?: 'elite' | 'premium' | 'standard';
+      verified?: boolean;
+    },
+    signal?: AbortSignal
+  ): Promise<ProviderSearchResponse> => {
+    try {
+      const transformedFilters: Record<string, unknown> = { ...filters };
+      if (filters.lat !== undefined && filters.lng !== undefined) {
+        transformedFilters.coordinates = [filters.lng, filters.lat];
+        delete transformedFilters.lat;
+        delete transformedFilters.lng;
+      }
+      const response = await api.get('/providers', { params: transformedFilters, signal });
+      return response.data;
+    } catch (error) {
+      const err = error as AxiosError;
+      if (axios.isCancel(err)) {
+        throw err;
+      }
+      const message = (err.response?.data as { message?: string })?.message || err.message || 'Provider search failed';
+      console.error('[searchApi] searchProviders error:', message, err.response?.status);
+      throw new SearchApiError(message, err.response?.status, 'PROVIDER_SEARCH_FAILED');
     }
   },
 

@@ -113,6 +113,10 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
   });
 }));
 
+// ============================================
+// ROUTES WITH :id - Specific routes BEFORE parameterized /:id
+// ============================================
+
 // PATCH /api-keys/:id - Update an API key
 router.patch('/:id', asyncHandler(async (req: Request, res: Response) => {
   const { error, value } = updateApiKeySchema.validate(req.body);

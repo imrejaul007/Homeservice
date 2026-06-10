@@ -256,12 +256,14 @@ async function processPendingWithdrawals(): Promise<void> {
 
 /**
  * Send booking reminders (24h and 2h before appointment)
+ * Enhanced with email notifications and tracking
  */
 async function sendBookingReminders(): Promise<void> {
   try {
     const now = new Date();
     const { getBookingReminderHoursBefore } = await import('../services/platformEmailTemplate.service');
     const { getSettings } = await import('../services/settings.service');
+    const { sendBookingReminder } = await import('../services/email.service');
     const settings = await getSettings();
     const primaryHours = getBookingReminderHoursBefore(settings);
 
@@ -284,32 +286,73 @@ async function sendBookingReminders(): Promise<void> {
 
         for (const booking of bookingsToRemind as any[]) {
           try {
+            // Get customer info (handle both guest and authenticated users)
+            const customerId = booking.customerId?._id?.toString() || booking.customerId?.toString();
+            const providerId = booking.providerId?._id?.toString() || booking.providerId?.toString();
+            const customerEmail = booking.isGuestBooking ? booking.guestInfo?.email : booking.customerId?.email;
+            const customerName = booking.isGuestBooking ? booking.guestInfo?.name : booking.customerId?.firstName;
+
+            // Format booking data for email
+            const bookingData = {
+              bookingNumber: booking.bookingNumber,
+              serviceName: booking.serviceId?.name || 'Service',
+              providerName: booking.providerId?.firstName || 'Provider',
+              providerEmail: booking.providerId?.email || '',
+              customerName: customerName || 'Customer',
+              customerEmail: customerEmail || '',
+              scheduledDate: new Date(booking.scheduledDate).toLocaleDateString('en-US', {
+                weekday: 'long',
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric',
+              }),
+              scheduledTime: booking.scheduledTime,
+              duration: booking.duration || 60,
+              location: booking.location?.address
+                ? `${booking.location.address.street || ''}, ${booking.location.address.city || ''}`
+                : 'Location not specified',
+              totalAmount: booking.pricing?.totalAmount || 0,
+              currency: booking.pricing?.currency || 'AED',
+              status: booking.status,
+            };
+
+            let deferReminder = false;
+            if (customerId) {
+              const { notificationDigestService } = await import('../services/notifications/notificationDigest.service');
+              deferReminder = await notificationDigestService.shouldDeferExternalDelivery(
+                customerId,
+                'booking_reminder'
+              );
+            }
+
+            if (!deferReminder && customerEmail) {
+              await sendBookingReminder(bookingData);
+            }
+
             // Publish booking reminder event
             await eventBus.publish(EVENT_TYPES.BOOKING_REMINDER, {
               bookingId: booking._id.toString(),
-              customerId: booking.customerId?._id?.toString() || booking.customerId?.toString(),
-              providerId: booking.providerId?._id?.toString() || booking.providerId?.toString(),
+              customerId,
+              providerId,
               reminderType: window.label,
               scheduledDate: booking.scheduledDate,
               bookingNumber: booking.bookingNumber,
-              customerEmail: booking.customerId?.email,
-              customerName: booking.customerId?.firstName,
+              customerEmail,
+              customerName,
               providerName: booking.providerId?.firstName,
               serviceName: booking.serviceId?.name,
             });
 
-            // Queue push notification for customer
-            const customerId = booking.customerId?._id?.toString() || booking.customerId?.toString();
             if (customerId) {
-              await addJob('notification-queue', 'send_notification', {
-                userId: customerId,
+              const { notificationService } = await import('../services/notification.service');
+              await notificationService.createNotification({
+                recipientId: customerId,
                 type: 'booking_reminder',
                 title: `${window.label} Booking Reminder`,
                 message: `Your booking #${booking.bookingNumber} is in ${window.hours} hour(s)`,
-                data: {
-                  bookingId: booking._id.toString(),
-                  reminderType: window.label,
-                },
+                bookingId: booking._id.toString(),
+                channels: deferReminder ? ['in_app'] : ['in_app', 'push'],
+                metadata: { reminderType: window.label },
               });
             }
 
@@ -438,6 +481,40 @@ export function initializeScheduledJobs(): void {
   );
   scheduledTasks.push(reminderTask);
   logger.info(`Booking reminders scheduled: every 30 minutes (cron: */30 * * * *, tz: ${CRON_TIMEZONE})`);
+
+  // Process notification retry queue - every 5 minutes
+  const notificationQueueTask = cron.schedule(
+    '*/5 * * * *',
+    async () => {
+      await withLock('lock:scheduler:notification_queue', 'NotificationQueueJob', async () => {
+        const { notificationService } = await import('../services/notification.service');
+        const result = await notificationService.processNotificationQueue(100);
+        if (result.processed > 0 || result.failed > 0) {
+          logger.info('Notification queue processed', result);
+        }
+      });
+    },
+    { timezone: CRON_TIMEZONE }
+  );
+  scheduledTasks.push(notificationQueueTask);
+  logger.info(`Notification queue processor scheduled: every 5 minutes (cron: */5 * * * *, tz: ${CRON_TIMEZONE})`);
+
+  // Process notification digests - every 15 minutes
+  const digestTask = cron.schedule(
+    '*/15 * * * *',
+    async () => {
+      await withLock('lock:scheduler:notification_digest', 'NotificationDigestJob', async () => {
+        const { notificationDigestService } = await import('../services/notifications/notificationDigest.service');
+        const result = await notificationDigestService.processDueDigests(100);
+        if (result.processed > 0 || result.sent > 0 || result.failed > 0) {
+          logger.info('Notification digests processed', result);
+        }
+      });
+    },
+    { timezone: CRON_TIMEZONE }
+  );
+  scheduledTasks.push(digestTask);
+  logger.info(`Notification digest processor scheduled: every 15 minutes (cron: */15 * * * *, tz: ${CRON_TIMEZONE})`);
 
   // Cleanup - every 6 hours (at 0, 6, 12, 18)
   const cleanupTask = cron.schedule(
@@ -1016,6 +1093,61 @@ const offPeakPromotionTask = cron.schedule(
 );
 scheduledTasks.push(offPeakPromotionTask);
 logger.info(`Off-peak promotion analysis scheduled: daily at 6 AM (cron: 0 6 * * *, tz: ${CRON_TIMEZONE})`);
+
+// ============================================
+// OFFER EXPIRY NOTIFICATION JOBS
+// ============================================
+
+/**
+ * Send notifications for offers expiring soon
+ * Runs daily at 9 AM
+ */
+const offerExpiryTask = cron.schedule(
+  '0 9 * * *',
+  async () => {
+    await withLock('lock:scheduler:offer_expiry', 'OfferExpiryNotificationJob', async () => {
+      const { offerExpiryNotificationService } = await import('../services/offerExpiryNotification.service');
+      await offerExpiryNotificationService.notifyExpiringOffers();
+    });
+  },
+  { timezone: CRON_TIMEZONE }
+);
+scheduledTasks.push(offerExpiryTask);
+logger.info(`Offer expiry notifications scheduled: daily at 9 AM (cron: 0 9 * * *, tz: ${CRON_TIMEZONE})`);
+
+/**
+ * Send reminders for unused claims
+ * Runs daily at 10 AM
+ */
+const unusedClaimsTask = cron.schedule(
+  '0 10 * * *',
+  async () => {
+    await withLock('lock:scheduler:unused_claims', 'UnusedClaimsNotificationJob', async () => {
+      const { offerExpiryNotificationService } = await import('../services/offerExpiryNotification.service');
+      await offerExpiryNotificationService.notifyUnusedClaims();
+    });
+  },
+  { timezone: CRON_TIMEZONE }
+);
+scheduledTasks.push(unusedClaimsTask);
+logger.info(`Unused claims reminders scheduled: daily at 10 AM (cron: 0 10 * * *, tz: ${CRON_TIMEZONE})`);
+
+/**
+ * Process expired claims and send notifications
+ * Runs daily at midnight
+ */
+const expiredClaimsTask = cron.schedule(
+  '0 0 * * *',
+  async () => {
+    await withLock('lock:scheduler:expired_claims', 'ExpiredClaimsJob', async () => {
+      const { offerExpiryNotificationService } = await import('../services/offerExpiryNotification.service');
+      await offerExpiryNotificationService.processExpiredClaims();
+    });
+  },
+  { timezone: CRON_TIMEZONE }
+);
+scheduledTasks.push(expiredClaimsTask);
+logger.info(`Expired claims processor scheduled: daily at midnight (cron: 0 0 * * *, tz: ${CRON_TIMEZONE})`);
 
 /**
  * Gracefully shutdown all scheduled jobs

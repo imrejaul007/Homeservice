@@ -20,6 +20,7 @@ import Footer from '../../components/layout/Footer';
 import Breadcrumb from '../../components/common/Breadcrumb';
 import { useAuthStore } from '../../stores/authStore';
 import { loyaltyApi, type LoyaltyStatus, type TierBenefits } from '../../services/loyaltyApi';
+import { api } from '../../services/api';
 
 const RewardsPage: React.FC = () => {
   const navigate = useNavigate();
@@ -28,6 +29,7 @@ const RewardsPage: React.FC = () => {
   const [tierBenefits, setTierBenefits] = useState<TierBenefits | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [referrerReward, setReferrerReward] = useState(500);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -41,11 +43,16 @@ const RewardsPage: React.FC = () => {
     setIsLoading(true);
     setError(null);
     try {
-      const [statusRes, benefitsRes] = await Promise.all([
+      const [statusRes, benefitsRes, referralRes] = await Promise.all([
         loyaltyApi.getStatus(),
-        loyaltyApi.getTierBenefits()
+        loyaltyApi.getTierBenefits(),
+        api.get('/referrals/my-code').catch(() => null),
       ]);
       setLoyaltyStatus(statusRes.data);
+
+      if (referralRes?.data?.data?.referrerReward) {
+        setReferrerReward(referralRes.data.data.referrerReward);
+      }
 
       // Get current tier benefits
       const currentTier = statusRes.data.tier;
@@ -305,7 +312,7 @@ const RewardsPage: React.FC = () => {
                   </div>
                   <div>
                     <p className="font-medium text-nilin-charcoal">Refer Friends</p>
-                    <p className="text-xs text-nilin-warmGray">Get 500 coins per referral</p>
+                    <p className="text-xs text-nilin-warmGray">Get {referrerReward.toLocaleString()} coins per referral</p>
                   </div>
                 </div>
                 <p className="text-sm text-nilin-warmGray">
@@ -333,7 +340,7 @@ const RewardsPage: React.FC = () => {
           {/* Actions */}
           <div className="flex gap-4 justify-center">
             <button
-              onClick={() => navigate('/customer/referrals')}
+              onClick={() => navigate('/customer/profile?tab=referral')}
               className="btn-nilin"
             >
               <Gift className="w-5 h-5 mr-2" />

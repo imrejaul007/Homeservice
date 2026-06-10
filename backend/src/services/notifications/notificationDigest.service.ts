@@ -8,8 +8,10 @@
  * - Preference-based grouping
  */
 
+import mongoose from 'mongoose';
 import BookingNotification from '../../models/bookingNotification.model';
 import User from '../../models/user.model';
+import DigestScheduleModel, { IDigestSchedule } from '../../models/digestSchedule.model';
 import { notificationService } from '../notification.service';
 import { whatsAppService } from './whatsapp.service';
 import { telegramService } from './telegram.service';
@@ -75,13 +77,26 @@ export interface DigestContent {
   newestNotification: Date;
 }
 
-export interface DigestSchedule {
-  userId: string;
-  frequency: DigestFrequency;
-  nextRun: Date;
-  lastRun?: Date;
-  enabled: boolean;
+export interface DigestContactInfo {
+  email?: string;
+  phone?: string;
+  whatsappOptedIn: boolean;
+  pushSubscribed: boolean;
 }
+
+export interface DigestScheduleInfo {
+  frequency: string;
+  nextRun?: string;
+  lastRun?: string;
+}
+
+export interface DigestPreferencesEnriched extends DigestPreferences {
+  contactInfo: DigestContactInfo;
+  schedule: DigestScheduleInfo;
+}
+
+// Re-export the type from the model for backward compatibility
+export type { IDigestSchedule as DigestSchedule } from '../../models/digestSchedule.model';
 
 // ============================================
 // Constants
@@ -112,9 +127,6 @@ const DEFAULT_DIGEST_PREFERENCES: DigestPreferences = {
   },
   scheduledTime: '09:00',
 };
-
-// In-memory schedule tracking
-const digestSchedules = new Map<string, DigestSchedule>();
 
 // ============================================
 // Helper Functions
@@ -202,6 +214,8 @@ function filterNotificationsByType(
       'booking_rejected',
       'booking_started',
       'booking_completed',
+      'booking_updated',
+      'schedule_changed',
     ].includes(type)) {
       return true;
     }
@@ -232,6 +246,15 @@ function filterNotificationsByType(
       'dispute_received',
       'dispute_created',
       'dispute_resolved',
+      'dispute_evidence_added',
+      'dispute_assigned',
+      'review_received',
+      'review_request',
+      'review_rejected',
+      'payment_received',
+      'withdrawal',
+      'withdrawal_approved',
+      'withdrawal_rejected',
     ].includes(type)) {
       return true;
     }
@@ -275,55 +298,151 @@ function groupNotifications(notifications: any[]): NotificationGroup[] {
 }
 
 /**
- * Calculate next digest run time based on frequency
+ * Get current date/time parts in a specific timezone
  */
-function calculateNextRun(frequency: DigestFrequency, preferences: DigestPreferences): Date {
+function getZonedParts(date: Date, timezone: string): { year: number; month: number; day: number; hour: number; minute: number; weekday: number } {
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    weekday: 'short',
+  });
+  const parts = formatter.formatToParts(date);
+  const get = (type: string) => parts.find(p => p.type === type)?.value || '0';
+  const weekdayMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  return {
+    year: Number(get('year')),
+    month: Number(get('month')),
+    day: Number(get('day')),
+    hour: Number(get('hour')) % 24,
+    minute: Number(get('minute')),
+    weekday: weekdayMap[get('weekday')] ?? 0,
+  };
+}
+
+/**
+ * Calculate next digest run time based on frequency (timezone-aware)
+ */
+function calculateNextRun(
+  frequency: DigestFrequency,
+  preferences: DigestPreferences,
+  timezone: string = preferences.quietHours?.timezone || 'Asia/Dubai'
+): Date {
   const now = new Date();
 
   switch (frequency) {
     case 'realtime':
-      // No scheduling needed for realtime
-      return now;
+      return new Date(now.getTime() + 24 * 60 * 60 * 1000);
 
-    case 'hourly':
-      // Next hour
-      const nextHour = new Date(now);
-      nextHour.setMinutes(0, 0, 0);
-      nextHour.setHours(nextHour.getHours() + 1);
-      return nextHour;
+    case 'hourly': {
+      const zoned = getZonedParts(now, timezone);
+      const next = new Date(now);
+      const msUntilNextHour = ((60 - zoned.minute) % 60 || 60) * 60 * 1000;
+      return new Date(next.getTime() + msUntilNextHour);
+    }
 
-    case 'daily':
-      // Next scheduled time
+    case 'daily': {
       const [scheduledHour, scheduledMinute] = (preferences.scheduledTime || '09:00').split(':').map(Number);
-      const nextDaily = new Date(now);
-      nextDaily.setHours(scheduledHour, scheduledMinute, 0, 0);
+      const zoned = getZonedParts(now, timezone);
+      const currentTotal = zoned.hour * 60 + zoned.minute;
+      const scheduledTotal = scheduledHour * 60 + scheduledMinute;
+      let daysToAdd = currentTotal >= scheduledTotal ? 1 : 0;
+      const target = new Date(now.getTime() + daysToAdd * 24 * 60 * 60 * 1000);
+      const targetZoned = getZonedParts(target, timezone);
+      const offsetMs = ((scheduledHour - targetZoned.hour) * 60 + (scheduledMinute - targetZoned.minute)) * 60 * 1000;
+      return new Date(target.getTime() + offsetMs);
+    }
 
-      if (nextDaily <= now) {
-        nextDaily.setDate(nextDaily.getDate() + 1);
-      }
-      return nextDaily;
-
-    case 'weekly':
+    case 'weekly': {
       const [wHour, wMinute] = (preferences.scheduledTime || '09:00').split(':').map(Number);
-      const nextWeekly = new Date(now);
-      nextWeekly.setHours(wHour, wMinute, 0, 0);
+      const scheduledDays = (preferences.scheduledDays?.length ? preferences.scheduledDays : [1]).sort((a, b) => a - b);
+      const zoned = getZonedParts(now, timezone);
+      const currentTotal = zoned.hour * 60 + zoned.minute;
+      const scheduledTotal = wHour * 60 + wMinute;
 
-      // Find next scheduled day
-      const scheduledDays = preferences.scheduledDays || [1]; // Default Monday
-      const currentDay = nextWeekly.getDay();
-
-      let nextDay = scheduledDays.find(d => d > currentDay);
-      if (nextDay === undefined) {
-        nextDay = scheduledDays[0];
-        nextWeekly.setDate(nextWeekly.getDate() + (7 - currentDay + nextDay));
-      } else {
-        nextWeekly.setDate(nextWeekly.getDate() + (nextDay - currentDay));
+      for (let offset = 0; offset < 8; offset++) {
+        const candidate = new Date(now.getTime() + offset * 24 * 60 * 60 * 1000);
+        const candidateZoned = getZonedParts(candidate, timezone);
+        if (!scheduledDays.includes(candidateZoned.weekday)) continue;
+        if (offset === 0 && currentTotal >= scheduledTotal) continue;
+        const offsetMs = ((wHour - candidateZoned.hour) * 60 + (wMinute - candidateZoned.minute)) * 60 * 1000;
+        return new Date(candidate.getTime() + offsetMs);
       }
 
-      return nextWeekly;
+      return new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+    }
 
     default:
       return now;
+  }
+}
+
+/**
+ * Sync digest type toggles into communicationPreferences for realtime alignment
+ */
+function syncCommunicationPreferences(
+  user: InstanceType<typeof User>,
+  types?: Partial<DigestPreferences['types']>
+): void {
+  if (!types) return;
+
+  user.communicationPreferences = user.communicationPreferences || {} as any;
+
+  if (types.bookingUpdates !== undefined) {
+    user.communicationPreferences.email = {
+      ...user.communicationPreferences.email,
+      bookingUpdates: types.bookingUpdates,
+    };
+    user.communicationPreferences.sms = {
+      ...user.communicationPreferences.sms,
+      bookingUpdates: types.bookingUpdates,
+    };
+    user.communicationPreferences.push = {
+      ...user.communicationPreferences.push,
+      bookingUpdates: types.bookingUpdates,
+    };
+  }
+
+  if (types.reminders !== undefined) {
+    user.communicationPreferences.email = {
+      ...user.communicationPreferences.email,
+      reminders: types.reminders,
+    };
+    user.communicationPreferences.sms = {
+      ...user.communicationPreferences.sms,
+      reminders: types.reminders,
+    };
+    user.communicationPreferences.push = {
+      ...user.communicationPreferences.push,
+      reminders: types.reminders,
+    };
+  }
+
+  if (types.messages !== undefined) {
+    user.communicationPreferences.push = {
+      ...user.communicationPreferences.push,
+      newMessages: types.messages,
+    };
+    (user.communicationPreferences.sms as { newMessages?: boolean }).newMessages = types.messages;
+  }
+
+  if (types.promotions !== undefined) {
+    user.communicationPreferences.email = {
+      ...user.communicationPreferences.email,
+      promotions: types.promotions,
+    };
+    user.communicationPreferences.sms = {
+      ...user.communicationPreferences.sms,
+      promotions: types.promotions,
+    };
+    user.communicationPreferences.push = {
+      ...user.communicationPreferences.push,
+      promotions: types.promotions,
+    };
   }
 }
 
@@ -365,10 +484,84 @@ function formatNotificationType(type: string): string {
 
 export class NotificationDigestService {
   /**
-   * Get user's digest preferences
+   * Build contact info for digest UI
    */
-  async getPreferences(userId: string): Promise<DigestPreferences> {
-    return getUserDigestPreferences(userId);
+  private async buildContactInfo(userId: string): Promise<DigestContactInfo> {
+    const user = await User.findById(userId).select('email phone communicationPreferences.whatsapp pushSubscriptions');
+    if (!user) {
+      return { whatsappOptedIn: false, pushSubscribed: false };
+    }
+
+    const subscriptions = await webPushService.getUserSubscriptions(userId);
+
+    return {
+      email: user.email,
+      phone: user.phone,
+      whatsappOptedIn: user.communicationPreferences?.whatsapp?.enabled ?? false,
+      pushSubscribed: subscriptions.length > 0,
+    };
+  }
+
+  /**
+   * Build schedule info for digest UI
+   */
+  private async buildScheduleInfo(userId: string): Promise<DigestScheduleInfo> {
+    const schedule = await DigestScheduleModel.findByUserId(userId);
+    return {
+      frequency: schedule?.frequency || 'daily',
+      nextRun: schedule?.nextRun?.toISOString(),
+      lastRun: schedule?.lastRun?.toISOString(),
+    };
+  }
+
+  /**
+   * Initialize digest preferences and schedule for a new user
+   */
+  async initializeForUser(userId: string, timezone: string = 'Asia/Dubai'): Promise<void> {
+    const user = await User.findById(userId);
+    if (!user) return;
+
+    if (!user.digestPreferences) {
+      user.digestPreferences = {
+        ...DEFAULT_DIGEST_PREFERENCES,
+        quietHours: {
+          ...DEFAULT_DIGEST_PREFERENCES.quietHours,
+          timezone,
+        },
+      };
+      await user.save();
+    }
+
+    const existing = await DigestScheduleModel.findByUserId(userId);
+    if (!existing) {
+      await this.updateDigestSchedule(userId);
+    }
+  }
+
+  /**
+   * Check if external delivery should be deferred to digest batch
+   */
+  async shouldDeferExternalDelivery(userId: string, notificationType: string): Promise<boolean> {
+    const preferences = await getUserDigestPreferences(userId);
+    if (!preferences.enabled || preferences.frequency === 'realtime') {
+      return false;
+    }
+
+    const matches = filterNotificationsByType([{ type: notificationType }], preferences.types);
+    return matches.length > 0;
+  }
+
+  /**
+   * Get user's digest preferences with contact and schedule info
+   */
+  async getPreferences(userId: string): Promise<DigestPreferencesEnriched> {
+    const [preferences, contactInfo, schedule] = await Promise.all([
+      getUserDigestPreferences(userId),
+      this.buildContactInfo(userId),
+      this.buildScheduleInfo(userId),
+    ]);
+
+    return { ...preferences, contactInfo, schedule };
   }
 
   /**
@@ -377,53 +570,90 @@ export class NotificationDigestService {
   async updatePreferences(
     userId: string,
     updates: Partial<DigestPreferences>
-  ): Promise<void> {
+  ): Promise<DigestPreferencesEnriched> {
     const user = await User.findById(userId);
 
     if (!user) {
       throw ApiError.notFound('User not found', ERROR_CODES.USER_NOT_FOUND);
     }
 
-    user.digestPreferences = {
-      ...(user.digestPreferences ?? {
-        enabled: true,
-        frequency: 'daily' as const,
-        channels: { email: true, push: true, sms: false, whatsapp: false, telegram: false },
-        quietHours: { enabled: false, startTime: '22:00', endTime: '08:00', timezone: 'UTC' },
-        types: {},
-      }),
-      ...updates,
+    const mergedChannels = {
+      ...(user.digestPreferences?.channels ?? DEFAULT_DIGEST_PREFERENCES.channels),
+      ...(updates.channels ?? {}),
     };
 
-    // Update channels
-    if (updates.channels) {
-      user.digestPreferences.channels = {
-        ...(user.digestPreferences.channels ?? {}),
-        ...updates.channels,
-      };
+    if (mergedChannels.sms && !user.phone) {
+      throw ApiError.badRequest(
+        'A phone number is required for SMS digest notifications. Add your phone in Profile settings.',
+        [],
+        ERROR_CODES.VALIDATION_ERROR
+      );
     }
 
-    // Update quiet hours
+    if (mergedChannels.whatsapp) {
+      if (!user.phone) {
+        throw ApiError.badRequest(
+          'A phone number is required for WhatsApp digest notifications. Add your phone in Profile settings.',
+          [],
+          ERROR_CODES.VALIDATION_ERROR
+        );
+      }
+      if (!user.communicationPreferences?.whatsapp?.enabled) {
+        throw ApiError.badRequest(
+          'WhatsApp notifications must be enabled before using the WhatsApp digest channel.',
+          [],
+          ERROR_CODES.VALIDATION_ERROR
+        );
+      }
+    }
+
+    if (mergedChannels.push) {
+      const subscriptions = await webPushService.getUserSubscriptions(userId);
+      if (subscriptions.length === 0) {
+        throw ApiError.badRequest(
+          'Push notifications require a browser subscription. Enable push notifications first.',
+          [],
+          ERROR_CODES.VALIDATION_ERROR
+        );
+      }
+    }
+
+    user.digestPreferences = {
+      ...(user.digestPreferences ?? DEFAULT_DIGEST_PREFERENCES),
+      ...updates,
+      channels: mergedChannels,
+    };
+
     if (updates.quietHours) {
       user.digestPreferences.quietHours = {
-        ...(user.digestPreferences.quietHours ?? { enabled: false, startTime: '22:00', endTime: '08:00', timezone: 'UTC' }),
+        ...(user.digestPreferences.quietHours ?? DEFAULT_DIGEST_PREFERENCES.quietHours),
         ...updates.quietHours,
       };
     }
 
-    // Update types
     if (updates.types) {
       user.digestPreferences.types = {
-        ...(user.digestPreferences.types ?? {}),
+        ...(user.digestPreferences.types ?? DEFAULT_DIGEST_PREFERENCES.types),
         ...updates.types,
       };
+      syncCommunicationPreferences(user, updates.types);
     }
 
     await user.save();
 
-    // Update digest schedule
-    if (updates.enabled !== undefined || updates.frequency !== undefined) {
-      await this.updateDigestSchedule(userId);
+    const scheduleFieldsChanged =
+      updates.enabled !== undefined ||
+      updates.frequency !== undefined ||
+      updates.scheduledTime !== undefined ||
+      updates.scheduledDays !== undefined ||
+      updates.quietHours?.timezone !== undefined;
+
+    if (scheduleFieldsChanged) {
+      if (updates.enabled === false) {
+        await this.cancelDigestSchedule(userId);
+      } else {
+        await this.updateDigestSchedule(userId);
+      }
     }
 
     logger.info('Digest preferences updated', {
@@ -432,6 +662,8 @@ export class NotificationDigestService {
       userId,
       updates: Object.keys(updates),
     });
+
+    return this.getPreferences(userId);
   }
 
   /**
@@ -573,14 +805,15 @@ export class NotificationDigestService {
       }
     }
 
-    // Mark notifications as included in digest
-    const notificationIds = digest.groups.flatMap(g =>
-      g.notifications.map(n => n.id)
-    );
-    await BookingNotification.updateMany(
-      { _id: { $in: notificationIds } },
-      { $set: { includedInDigest: true, digestSentAt: new Date() } }
-    );
+    if (sent > 0) {
+      const notificationIds = digest.groups.flatMap(g =>
+        g.notifications.map(n => n.id)
+      );
+      await BookingNotification.updateMany(
+        { _id: { $in: notificationIds } },
+        { $set: { includedInDigest: true, lastDigestAt: new Date() } }
+      );
+    }
 
     return { sent, failed, channels: results };
   }
@@ -593,17 +826,26 @@ export class NotificationDigestService {
     userId: string,
     digest: DigestContent
   ): Promise<boolean> {
+    const user = await User.findById(userId).select('email phone communicationPreferences.whatsapp pushSubscriptions');
+    if (!user) return false;
+
     switch (channel) {
       case 'email':
+        if (!user.email) return false;
         return this.sendDigestEmail(digest);
 
       case 'sms':
+        if (!user.phone) return false;
         return this.sendDigestSms(digest);
 
-      case 'push':
+      case 'push': {
+        const subscriptions = await webPushService.getUserSubscriptions(userId);
+        if (subscriptions.length === 0) return false;
         return this.sendDigestPush(userId, digest);
+      }
 
       case 'whatsapp':
+        if (!user.phone || !user.communicationPreferences?.whatsapp?.enabled) return false;
         return this.sendDigestWhatsApp(digest);
 
       case 'telegram':
@@ -841,20 +1083,21 @@ export class NotificationDigestService {
   // ========================================
 
   /**
-   * Update digest schedule for a user
+   * Update digest schedule for a user (persists to MongoDB)
    */
-  async updateDigestSchedule(userId: string): Promise<DigestSchedule> {
+  async updateDigestSchedule(userId: string): Promise<IDigestSchedule> {
+    const user = await User.findById(userId).select('communicationPreferences.timezone digestPreferences');
     const preferences = await getUserDigestPreferences(userId);
-    const nextRun = calculateNextRun(preferences.frequency, preferences);
+    const timezone = user?.communicationPreferences?.timezone
+      || preferences.quietHours?.timezone
+      || 'Asia/Dubai';
+    const nextRun = calculateNextRun(preferences.frequency, preferences, timezone);
 
-    const schedule: DigestSchedule = {
-      userId,
+    const schedule = await DigestScheduleModel.upsertSchedule(userId, {
       frequency: preferences.frequency,
       nextRun,
       enabled: preferences.enabled,
-    };
-
-    digestSchedules.set(userId, schedule);
+    });
 
     logger.debug('Digest schedule updated', {
       context: 'NotificationDigestService',
@@ -870,8 +1113,8 @@ export class NotificationDigestService {
   /**
    * Get digest schedule for a user
    */
-  async getDigestSchedule(userId: string): Promise<DigestSchedule | null> {
-    return digestSchedules.get(userId) || null;
+  async getDigestSchedule(userId: string): Promise<IDigestSchedule | null> {
+    return DigestScheduleModel.findByUserId(userId);
   }
 
   /**
@@ -880,43 +1123,54 @@ export class NotificationDigestService {
   async processDueDigests(batchSize: number = 100): Promise<{ processed: number; sent: number; failed: number }> {
     const now = new Date();
 
-    // Get users with due digests
-    const dueSchedules: DigestSchedule[] = [];
-    for (const schedule of digestSchedules.values()) {
-      if (schedule.enabled && schedule.nextRun <= now) {
-        dueSchedules.push(schedule);
-      }
-    }
+    // Get due schedules from MongoDB
+    const dueSchedules = await DigestScheduleModel.findDueSchedules(batchSize);
 
-    // Process in batches
-    const batch = dueSchedules.slice(0, batchSize);
     let processed = 0;
     let totalSent = 0;
     let totalFailed = 0;
 
-    for (const schedule of batch) {
+    for (const schedule of dueSchedules) {
       try {
-        const notifications = await this.getPendingDigestNotifications(schedule.userId);
+        const userId = schedule.userId.toString();
+        const user = await User.findById(userId).select('communicationPreferences.timezone');
+        const preferences = await getUserDigestPreferences(userId);
+        const timezone = user?.communicationPreferences?.timezone
+          || preferences.quietHours?.timezone
+          || 'Asia/Dubai';
 
-        if (notifications.length === 0) {
-          // No pending notifications, just update schedule
-          const preferences = await this.getPreferences(schedule.userId);
-          schedule.lastRun = now;
-          schedule.nextRun = calculateNextRun(preferences.frequency, preferences);
-          digestSchedules.set(schedule.userId, schedule);
+        if (!preferences.enabled || preferences.frequency === 'realtime') {
+          await DigestScheduleModel.upsertSchedule(userId, {
+            frequency: preferences.frequency,
+            nextRun: calculateNextRun(preferences.frequency, preferences, timezone),
+            lastRun: now,
+            enabled: preferences.enabled,
+          });
           processed++;
           continue;
         }
 
-        const digest = await this.createDigestContent(schedule.userId, notifications);
-        if (digest) {
-          const result = await this.sendDigest(schedule.userId, digest);
+        const notifications = await this.getPendingDigestNotifications(userId);
 
-          // Update schedule
-          const preferences = await this.getPreferences(schedule.userId);
-          schedule.lastRun = now;
-          schedule.nextRun = calculateNextRun(preferences.frequency, preferences);
-          digestSchedules.set(schedule.userId, schedule);
+        if (notifications.length === 0) {
+          await DigestScheduleModel.upsertSchedule(userId, {
+            frequency: preferences.frequency,
+            nextRun: calculateNextRun(preferences.frequency, preferences, timezone),
+            lastRun: now,
+          });
+          processed++;
+          continue;
+        }
+
+        const digest = await this.createDigestContent(userId, notifications);
+        if (digest) {
+          const result = await this.sendDigest(userId, digest);
+
+          await DigestScheduleModel.upsertSchedule(userId, {
+            frequency: preferences.frequency,
+            nextRun: calculateNextRun(preferences.frequency, preferences, timezone),
+            lastRun: now,
+          });
 
           totalSent += result.sent;
           totalFailed += result.failed;
@@ -927,7 +1181,7 @@ export class NotificationDigestService {
         logger.error('Failed to process digest for user', {
           context: 'NotificationDigestService',
           action: 'PROCESS_DIGEST_ERROR',
-          userId: schedule.userId,
+          userId: schedule.userId.toString(),
           error: (error as Error).message,
         });
         totalFailed++;
@@ -950,11 +1204,9 @@ export class NotificationDigestService {
    * Cancel digest schedule for a user
    */
   async cancelDigestSchedule(userId: string): Promise<void> {
-    const schedule = digestSchedules.get(userId);
-    if (schedule) {
-      schedule.enabled = false;
-      digestSchedules.set(userId, schedule);
-    }
+    await DigestScheduleModel.upsertSchedule(userId, {
+      enabled: false,
+    });
   }
 
   /**
@@ -969,42 +1221,7 @@ export class NotificationDigestService {
     weeklyCount: number;
     dueNow: number;
   }> {
-    let enabledCount = 0;
-    let realtimeCount = 0;
-    let hourlyCount = 0;
-    let dailyCount = 0;
-    let weeklyCount = 0;
-    const now = new Date();
-
-    for (const schedule of digestSchedules.values()) {
-      if (schedule.enabled) {
-        enabledCount++;
-
-        if (schedule.nextRun <= now) {
-          // Due now
-        }
-
-        switch (schedule.frequency) {
-          case 'realtime': realtimeCount++; break;
-          case 'hourly': hourlyCount++; break;
-          case 'daily': dailyCount++; break;
-          case 'weekly': weeklyCount++; break;
-        }
-      }
-    }
-
-    const dueNow = Array.from(digestSchedules.values())
-      .filter(s => s.enabled && s.nextRun <= now).length;
-
-    return {
-      totalScheduled: digestSchedules.size,
-      enabledCount,
-      realtimeCount,
-      hourlyCount,
-      dailyCount,
-      weeklyCount,
-      dueNow,
-    };
+    return DigestScheduleModel.getStats();
   }
 }
 

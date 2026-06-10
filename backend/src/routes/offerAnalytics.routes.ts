@@ -82,9 +82,18 @@ router.get('/trends', authenticate, requireRole('admin'), asyncHandler(async (re
  * @route   GET /api/offers-analytics/offer/:id
  * @desc    Get detailed analytics for a specific offer
  * @access  Admin or Offer Owner
+ * FIX: Added authorization check
  */
 router.get('/offer/:id', authenticate, asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
+  const user = req as any;
+
+  // FIX: Check if user is admin or owns the offer
+  if (user.role !== 'admin') {
+    // Non-admins can only view their own offers' analytics
+    // For now, restrict to admins only for security
+    throw new ApiError(403, 'Not authorized to view offer analytics');
+  }
 
   const analytics = await offerAnalyticsService.getOfferAnalytics(id);
 
@@ -158,6 +167,38 @@ router.get('/attention-required', authenticate, requireRole('admin'), asyncHandl
     success: true,
     data: attention,
   });
+}));
+
+/**
+ * @route   GET /api/offers-analytics/export
+ * @desc    Export coupons/analytics as CSV or JSON
+ * @access  Admin
+ */
+router.get('/export', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
+  const { format = 'csv', isActive, type, startDate, endDate } = req.query;
+
+  const filters: any = {};
+  if (isActive !== undefined) {
+    filters.isActive = isActive === 'true';
+  }
+  if (type) {
+    filters.type = type as string;
+  }
+  if (startDate) {
+    filters.startDate = new Date(startDate as string);
+  }
+  if (endDate) {
+    filters.endDate = new Date(endDate as string);
+  }
+
+  const result = await offerAnalyticsService.exportCoupons({
+    format: format as 'csv' | 'json',
+    filters,
+  });
+
+  res.setHeader('Content-Type', result.contentType);
+  res.setHeader('Content-Disposition', `attachment; filename="${result.filename}"`);
+  res.send(result.data);
 }));
 
 export default router;

@@ -3,6 +3,7 @@ import { Bell, BellOff, Check, Clock, AlertCircle, Calendar, MessageSquare, Star
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../services/api';
 import { socketService, type NotificationEvent } from '../../services/socket';
+import { useAuthStore } from '../../stores/authStore';
 
 interface Notification {
   _id: string;
@@ -19,8 +20,23 @@ interface NotificationBellProps {
   userRole?: 'customer' | 'provider' | 'admin';
 }
 
+function normalizeNotification(raw: Partial<Notification> & { id?: string }): Notification {
+  const id = raw._id || raw.id || '';
+  return {
+    _id: id,
+    type: (raw.type as Notification['type']) || 'system',
+    title: raw.title || '',
+    message: raw.message || '',
+    isRead: Boolean(raw.isRead),
+    createdAt: raw.createdAt || new Date().toISOString(),
+    data: raw.data,
+  };
+}
+
 const NotificationBell: React.FC<NotificationBellProps> = ({ userId, userRole = 'customer' }) => {
   const navigate = useNavigate();
+  const { isAuthenticated, tokens } = useAuthStore();
+  const hasAuthToken = isAuthenticated && Boolean(tokens?.accessToken);
   const [isOpen, setIsOpen] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -52,7 +68,7 @@ const NotificationBell: React.FC<NotificationBellProps> = ({ userId, userRole = 
 
   // Connect to socket and listen for notifications
   useEffect(() => {
-    if (!userId) return;
+    if (!userId || !hasAuthToken) return;
 
     let unsubscribe: (() => void) | undefined;
 
@@ -62,8 +78,7 @@ const NotificationBell: React.FC<NotificationBellProps> = ({ userId, userRole = 
 
       // Listen for new notifications
       unsubscribe = socketService.onNewNotification(handleNewNotification);
-    }).catch(err => {
-      console.error('Failed to connect to socket:', err);
+    }).catch(() => {
       setIsConnected(false);
     });
 
@@ -73,7 +88,7 @@ const NotificationBell: React.FC<NotificationBellProps> = ({ userId, userRole = 
       // CRITICAL FIX: Do NOT disconnect socket here - it's a singleton shared across all components
       // The socketService singleton manages its own lifecycle
     };
-  }, [userId, handleNewNotification]);
+  }, [userId, hasAuthToken, handleNewNotification]);
 
   // Fetch notifications
   const fetchNotifications = async () => {
@@ -88,7 +103,7 @@ const NotificationBell: React.FC<NotificationBellProps> = ({ userId, userRole = 
         const list = Array.isArray(payload)
           ? payload
           : payload?.notifications ?? [];
-        setNotifications(list);
+        setNotifications(list.map(normalizeNotification));
         setUnreadCount(payload?.unreadCount ?? response.data.unreadCount ?? 0);
       }
     } catch (error) {
@@ -104,7 +119,7 @@ const NotificationBell: React.FC<NotificationBellProps> = ({ userId, userRole = 
     try {
       const response = await api.get('/notifications/unread-count');
       if (response.data?.success) {
-        setUnreadCount(response.data.data?.count || 0);
+        setUnreadCount(response?.data?.data?.count ?? 0);
       }
     } catch (error) {
       console.error('Failed to fetch unread count:', error);
@@ -112,13 +127,13 @@ const NotificationBell: React.FC<NotificationBellProps> = ({ userId, userRole = 
   };
 
   useEffect(() => {
-    if (userId) {
+    if (userId && hasAuthToken) {
       fetchNotifications();
       // Poll for new notifications every 30 seconds
       const interval = setInterval(fetchUnreadCount, 30000);
       return () => clearInterval(interval);
     }
-  }, [userId]);
+  }, [userId, hasAuthToken]);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -197,15 +212,17 @@ const NotificationBell: React.FC<NotificationBellProps> = ({ userId, userRole = 
     }
     setIsOpen(false);
 
-    // Navigate based on notification type
-    if (notification.data?.bookingId) {
-      navigate(`/bookings/${notification.data.bookingId}`);
+    const bookingId = notification.data?.bookingId as string | undefined;
+    const isProvider = userRole === 'provider';
+
+    if (bookingId) {
+      navigate(isProvider ? `/provider/bookings/${bookingId}` : `/customer/bookings/${bookingId}`);
     } else if (notification.type === 'booking') {
-      navigate('/provider/bookings');
+      navigate(isProvider ? '/provider/bookings' : '/customer/bookings');
     } else if (notification.type === 'message') {
-      navigate('/messages');
+      navigate(isProvider ? '/provider/messages' : '/customer/messages');
     } else {
-      navigate('/notifications');
+      navigate(isProvider ? '/provider/dashboard' : '/customer/notifications');
     }
   };
 
@@ -268,7 +285,7 @@ const NotificationBell: React.FC<NotificationBellProps> = ({ userId, userRole = 
             ) : (
               notifications.map((notification) => (
                 <div
-                  key={notification._id}
+                  key={notification._id || `notification-${notification.createdAt}-${notification.title}`}
                   onClick={() => handleNotificationClick(notification)}
                   className={`px-4 py-3 hover:bg-gray-50 cursor-pointer border-b border-nilin-border/30 last:border-b-0 ${
                     !notification.isRead ? 'bg-nilin-blush/20' : ''
@@ -317,7 +334,7 @@ const NotificationBell: React.FC<NotificationBellProps> = ({ userId, userRole = 
             <button
               onClick={() => {
                 setIsOpen(false);
-                navigate('/notifications');
+                navigate('/customer/notifications');
               }}
               className="w-full text-center text-sm text-nilin-coral hover:text-nilin-coral/80 font-medium"
             >

@@ -164,6 +164,10 @@ const BookingCard: React.FC<BookingCardProps> = ({
   return (
     <div
       onClick={handleView}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleView(); } }}
+      role="button"
+      tabIndex={0}
+      aria-label={`View booking ${booking._id}`}
       className="bg-white rounded-xl border border-gray-200 hover:shadow-lg transition-all duration-300 overflow-hidden cursor-pointer group"
     >
       {/* Header with Status */}

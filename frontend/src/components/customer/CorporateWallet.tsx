@@ -17,11 +17,11 @@ import {
   FileText,
   Send,
   Lock,
-  Loader,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { formatCurrency } from '../../utils/formatting';
 import { corporateWalletApi, type CorporateWallet as CorporateWalletData, type CorporateTransaction, type EmployeeSpending, type SpendingBreakdown } from '../../services/corporateWalletApi';
+import { useToastActions } from '../common/Toast';
 
 interface CorporateWalletProps {
   compact?: boolean;
@@ -45,6 +45,7 @@ export const CorporateWallet: React.FC<CorporateWalletProps> = ({
   const [refreshing, setRefreshing] = useState(false);
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
+  const toast = useToastActions();
 
   // UI State
   const [activeTab, setActiveTab] = useState<Tab>('overview');
@@ -109,6 +110,9 @@ export const CorporateWallet: React.FC<CorporateWalletProps> = ({
       setHasMore(moreData.page < moreData.pages);
     } catch (err) {
       console.error('Failed to load more:', err);
+      const errorMessage = err instanceof Error ? err.message : 'Failed to load more transactions';
+      setError(errorMessage);
+      toast.error('Failed to load more transactions', errorMessage);
     }
   };
 
@@ -130,6 +134,9 @@ export const CorporateWallet: React.FC<CorporateWalletProps> = ({
       }
     } catch (err) {
       console.error('Failed to submit request:', err);
+      const errorMessage = err instanceof Error ? err.message : 'Failed to submit limit increase request';
+      setError(errorMessage);
+      toast.error('Failed to submit request', errorMessage);
     } finally {
       setSubmitting(false);
     }

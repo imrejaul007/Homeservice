@@ -1,6 +1,102 @@
 import { api } from './api';
 import { AxiosError } from 'axios';
 
+/**
+ * Retry configuration
+ */
+const RETRY_CONFIG = {
+  maxRetries: 3,
+  initialDelayMs: 1000,
+  maxDelayMs: 5000,
+};
+
+/**
+ * Calculate exponential backoff delay with jitter
+ */
+function getRetryDelay(attempt: number): number {
+  const delay = Math.min(
+    RETRY_CONFIG.initialDelayMs * Math.pow(2, attempt),
+    RETRY_CONFIG.maxDelayMs
+  );
+  // Add jitter (0-25% of delay)
+  const jitter = delay * 0.25 * Math.random();
+  return Math.floor(delay + jitter);
+}
+
+/**
+ * Check if error is retryable
+ */
+function isRetryableError(error: unknown): boolean {
+  if (error instanceof AxiosError) {
+    // Network errors, timeouts, and 5xx errors are retryable
+    if (!error.response) return true; // Network error
+    if (error.response.status >= 500) return true; // Server error
+    if (error.code === 'ECONNABORTED') return true; // Timeout
+  }
+  return false;
+}
+
+/**
+ * Execute a function with retry logic
+ */
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  options: { maxRetries?: number; context?: string } = {}
+): Promise<T> {
+  const maxRetries = options.maxRetries ?? RETRY_CONFIG.maxRetries;
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+
+      // Don't retry on last attempt or non-retryable errors
+      if (attempt >= maxRetries || !isRetryableError(error)) {
+        throw error;
+      }
+
+      // Wait before retrying
+      const delay = getRetryDelay(attempt);
+      console.warn(`[Retry] ${options.context || 'Operation'} failed (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${delay}ms...`);
+
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+
+  throw lastError;
+}
+
+/**
+ * ============================================
+ * API RESPONSE FORMAT DOCUMENTATION
+ * ============================================
+ *
+ * Backend Standard Response Format:
+ * {
+ *   success: boolean,
+ *   data: T,           // The actual data payload
+ *   message?: string,  // Optional message
+ *   errors?: []        // Optional validation errors
+ * }
+ *
+ * Example:
+ * GET /api/customer/dashboard returns:
+ * {
+ *   success: true,
+ *   data: {
+ *     recentBookings: [...],
+ *     upcomingBookings: [...],
+ *     stats: {...},
+ *     loyaltyPoints: {...},
+ *     currentStreak: {...}
+ *   }
+ * }
+ *
+ * ============================================
+ */
+
 // ============================================
 // DASHBOARD TYPES
 // ============================================
@@ -15,6 +111,10 @@ export interface DashboardStats {
   activeBookings?: number;
   inProgressBookings?: number;
   pendingBookings?: number;
+  todayBookings?: number;
+  totalProviders?: number;
+  reviewsWritten?: number;
+  pendingReviews?: number;
 }
 
 export interface BookingSummary {
@@ -32,6 +132,7 @@ export interface BookingSummary {
   providerId: string;
   providerAvatar?: string;
   createdAt: Date | string;
+  canReview?: boolean;
 }
 
 export interface LoyaltyData {
@@ -75,7 +176,7 @@ export interface RecommendedPro {
   completedJobs: number;
   services: Array<{
     name: string;
-    price: number;
+    price: number | { amount: number; currency?: string; type?: string };
     category: string;
   }>;
   isVerified: boolean;
@@ -198,15 +299,17 @@ class CustomerDashboardApiService {
    * Get unified dashboard data
    */
   async getDashboard(): Promise<DashboardResponse> {
-    try {
-      const response = await api.get('/customer/dashboard');
-      return response.data.data;
-    } catch (error) {
+    return withRetry(
+      async () => {
+        const response = await api.get('/customer/dashboard');
+        return response.data.data;
+      },
+      { context: 'getDashboard' }
+    ).catch((error) => {
       const err = error as AxiosError;
       const message = (err.response?.data as { message?: string })?.message || err.message || 'Failed to fetch dashboard data';
-      console.error('[customerDashboardApi] getDashboard error:', message, err.response?.status);
       throw new CustomerDashboardApiError(message, err.response?.status, 'GET_DASHBOARD_FAILED');
-    }
+    });
   }
 
   /**
@@ -256,12 +359,21 @@ class CustomerDashboardApiService {
 
   /**
    * Get activity feed
+   * @param limit - Number of activities to return
+   * @param signal - Optional AbortSignal for request cancellation
    */
-  async getActivityFeed(limit: number = 20): Promise<ActivityItem[]> {
+  async getActivityFeed(limit: number = 20, signal?: AbortSignal): Promise<ActivityItem[]> {
     try {
-      const response = await api.get('/dashboard/activity', { params: { limit } });
+      const response = await api.get('/dashboard/activity', {
+        params: { limit },
+        signal,
+      });
       return response.data.data;
     } catch (error) {
+      // Ignore abort errors - they are expected when request is cancelled
+      if (signal?.aborted) {
+        return [];
+      }
       const err = error as AxiosError;
       const message = (err.response?.data as { message?: string })?.message || err.message || 'Failed to fetch activity feed';
       console.error('[customerDashboardApi] getActivityFeed error:', message, err.response?.status);
@@ -274,7 +386,9 @@ class CustomerDashboardApiService {
    */
   async getRecommendedPros(limit: number = 10): Promise<RecommendedPro[]> {
     try {
-      const response = await api.get('/dashboard/recommended-pros', { params: { limit } });
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(), 10000);
+      const response = await api.get('/dashboard/recommended-pros', { params: { limit }, signal: controller.signal });
       return response.data.data;
     } catch (error) {
       const err = error as AxiosError;
@@ -330,7 +444,22 @@ class CustomerDashboardApiService {
   async getBookingStats(): Promise<BookingStats> {
     try {
       const response = await api.get('/bookings/count');
-      return response.data.data;
+      const data = response.data.data as {
+        count?: number;
+        statusBreakdown?: Record<string, number>;
+      };
+      const breakdown = data.statusBreakdown || {};
+      const empty: BookingStats = {
+        total: data.count ?? 0,
+        pending: breakdown.pending ?? 0,
+        confirmed: breakdown.confirmed ?? 0,
+        inProgress: breakdown.in_progress ?? 0,
+        completed: breakdown.completed ?? 0,
+        cancelled: breakdown.cancelled ?? 0,
+        noShow: breakdown.no_show ?? 0,
+        refunded: breakdown.refunded ?? 0,
+      };
+      return empty;
     } catch (error) {
       const err = error as AxiosError;
       const message = (err.response?.data as { message?: string })?.message || err.message || 'Failed to fetch booking stats';
@@ -343,6 +472,8 @@ class CustomerDashboardApiService {
    * Get recent bookings (latest)
    * @param limit - Number of bookings to return (default: 5)
    * @returns Array of recent booking summaries
+   *
+   * Backend returns: { success, data: { bookings: [...] } }
    */
   async getRecentBookings(limit: number = 5): Promise<BookingSummary[]> {
     try {
@@ -350,10 +481,19 @@ class CustomerDashboardApiService {
         params: {
           limit,
           sortBy: 'createdAt',
-          order: 'desc',
+          sortOrder: 'desc',
         },
       });
-      return response.data.data.bookings;
+      // Handle both nested (data.bookings) and flat (data) response formats
+      const data = response.data.data;
+      if (Array.isArray(data?.bookings)) {
+        return data.bookings;
+      }
+      if (Array.isArray(data)) {
+        return data;
+      }
+      console.warn('[customerDashboardApi] getRecentBookings: Unexpected response format', data);
+      return [];
     } catch (error) {
       const err = error as AxiosError;
       const message = (err.response?.data as { message?: string })?.message || err.message || 'Failed to fetch recent bookings';

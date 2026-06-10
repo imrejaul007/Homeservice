@@ -15,7 +15,18 @@ import { pdfService, InvoiceData } from '../services/pdf.service';
 
 const router = Router();
 
-// Helper to transform invoice data to match frontend expectations
+/**
+ * Helper to transform invoice data to match frontend expectations
+ *
+ * Field Mapping (Backend → Frontend):
+ * - lineItems[].total → items[].totalPrice
+ * - total → totalAmount
+ * - discount → discountAmount
+ * - _id → id
+ * - All dates converted to ISO strings
+ *
+ * Frontend expects these transformed field names for invoice display
+ */
 const transformInvoiceForFrontend = (inv: any) => {
   const customer = inv.customerId || {};
   const provider = inv.providerId || {};

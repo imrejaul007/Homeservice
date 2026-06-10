@@ -52,6 +52,8 @@ const customerRegistrationSchema = z.object({
   phone: z.string().min(10, 'Phone number must be at least 10 digits').regex(/^[\+]?[(]?[\d\s\-\(\)]{10,}$/, 'Please enter a valid phone number'),
   street: z.string().min(1, 'Street address is required').max(200),
   zipCode: z.string().min(1, 'ZIP code is required').max(20),
+  dateOfBirth: z.string().optional(),
+  gender: z.enum(['male', 'female', 'other', 'prefer_not_to_say']).optional(),
   agreeToTermsAndPrivacy: z.boolean().refine(v => v === true, 'You must agree to Terms of Service and Privacy Policy'),
 }).refine(d => d.password === d.confirmPassword, { message: "Passwords don't match", path: ['confirmPassword'] });
 
@@ -66,6 +68,11 @@ const CustomerRegistration: React.FC = () => {
   const [detectedCity, setDetectedCity] = useState<string | null>(null);
   const [autoStreet, setAutoStreet] = useState<string>('');
   const [autoZipCode, setAutoZipCode] = useState<string>('');
+
+  // Track if user has manually modified fields to prevent overwriting user input
+  const userModifiedStreet = React.useRef(false);
+  const userModifiedZipCode = React.useRef(false);
+  const userModifiedEmail = React.useRef(false);
 
   const { registerCustomer, isLoading, errors } = useAuthStore();
   const { currentLocation, selectedCity, requestLocationPermission, getCurrentLocation } = useLocationStore();
@@ -139,7 +146,7 @@ const CustomerRegistration: React.FC = () => {
     detectCountryCode();
   }, [selectedCity, currentLocation]);
 
-  const { register, handleSubmit, formState: { errors: formErrors, isSubmitting }, setError, clearErrors, watch, reset } = useForm<CustomerRegistrationForm>({
+  const { register, handleSubmit, formState: { errors: zodErrors, isSubmitting }, setError, clearErrors, watch, reset, setValue } = useForm<CustomerRegistrationForm>({
     resolver: zodResolver(customerRegistrationSchema),
     defaultValues: {
       agreeToTermsAndPrivacy: false,
@@ -149,15 +156,18 @@ const CustomerRegistration: React.FC = () => {
     },
   });
 
-  // Update form defaults when auto-filled values change
+  // Update form fields when auto-filled values change, but only for fields not modified by user
   useEffect(() => {
-    reset({
-      agreeToTermsAndPrivacy: false,
-      email: prefilledEmail,
-      street: autoStreet,
-      zipCode: autoZipCode,
-    });
-  }, [autoStreet, autoZipCode, prefilledEmail, reset]);
+    if (!userModifiedStreet.current && autoStreet) {
+      setValue('street', autoStreet);
+    }
+    if (!userModifiedZipCode.current && autoZipCode) {
+      setValue('zipCode', autoZipCode);
+    }
+    if (!userModifiedEmail.current && prefilledEmail) {
+      setValue('email', prefilledEmail);
+    }
+  }, [autoStreet, autoZipCode, prefilledEmail, setValue]);
 
   const watchedPassword = watch('password');
 
@@ -176,7 +186,7 @@ const CustomerRegistration: React.FC = () => {
         city: currentLocation?.address?.city || '',
         state: currentLocation?.address?.state || '',
         zipCode: data.zipCode,
-        country: currentLocation?.address?.country || 'AE',
+        country: currentLocation?.address?.country || 'US',
         ...(hasCoordinates ? {
           coordinates: {
             type: 'Point' as const,
@@ -191,10 +201,11 @@ const CustomerRegistration: React.FC = () => {
         lastName: data.lastName,
         email: data.email,
         password: data.password,
-        role: 'customer' as const,
-        phone: selectedCountryCode + ' ' + data.phone,
+        phone: selectedCountryCode + data.phone,
         agreeToTermsAndPrivacy: data.agreeToTermsAndPrivacy,
         address,
+        role: 'customer' as const,
+        ...(data.gender && { gender: data.gender }),
       };
 
       console.log('registrationData:', registrationData);
@@ -344,12 +355,12 @@ const CustomerRegistration: React.FC = () => {
                 <div>
                   <label className="block text-sm font-medium text-nilin-charcoal mb-1.5">First Name *</label>
                   <input {...register('firstName')} placeholder="John" className="w-full px-4 py-3 rounded-xl bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all" />
-                  {formErrors.firstName && <p className="mt-1 text-xs text-red-500">{formErrors.firstName.message}</p>}
+                  {zodErrors.firstName && <p className="mt-1 text-xs text-red-500">{zodErrors.firstName.message}</p>}
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-nilin-charcoal mb-1.5">Last Name *</label>
                   <input {...register('lastName')} placeholder="Doe" className="w-full px-4 py-3 rounded-xl bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all" />
-                  {formErrors.lastName && <p className="mt-1 text-xs text-red-500">{formErrors.lastName.message}</p>}
+                  {zodErrors.lastName && <p className="mt-1 text-xs text-red-500">{zodErrors.lastName.message}</p>}
                 </div>
               </div>
 
@@ -358,9 +369,9 @@ const CustomerRegistration: React.FC = () => {
                 <label className="block text-sm font-medium text-nilin-charcoal mb-1.5">Email Address *</label>
                 <div className="relative">
                   <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-nilin-warmGray" />
-                  <input {...register('email')} type="email" placeholder="you@example.com" className="w-full pl-12 pr-4 py-3 rounded-xl bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all" />
+                  <input {...register('email')} type="email" placeholder="you@example.com" className="w-full pl-12 pr-4 py-3 rounded-xl bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all" onChange={(e) => { register('email').onChange(e); if (e.target.value && e.target.value !== prefilledEmail) userModifiedEmail.current = true; }} />
                 </div>
-                {formErrors.email && <p className="mt-1 text-xs text-red-500">{formErrors.email.message}</p>}
+                {zodErrors.email && <p className="mt-1 text-xs text-red-500">{zodErrors.email.message}</p>}
               </div>
 
               {/* Phone */}
@@ -385,7 +396,7 @@ const CustomerRegistration: React.FC = () => {
                     />
                   </div>
                 </div>
-                {formErrors.phone && <p className="mt-1 text-xs text-red-500">{formErrors.phone.message}</p>}
+                {zodErrors.phone && <p className="mt-1 text-xs text-red-500">{zodErrors.phone.message}</p>}
               </div>
 
               {/* Street Address */}
@@ -400,9 +411,10 @@ const CustomerRegistration: React.FC = () => {
                     {...register('street')}
                     placeholder="123 Main Street"
                     className="w-full pl-12 pr-4 py-3 rounded-xl bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all"
+                    onChange={(e) => { register('street').onChange(e); if (e.target.value && e.target.value !== autoStreet) userModifiedStreet.current = true; }}
                   />
                 </div>
-                {formErrors.street && <p className="mt-1 text-xs text-red-500">{formErrors.street.message}</p>}
+                {zodErrors.street && <p className="mt-1 text-xs text-red-500">{zodErrors.street.message}</p>}
               </div>
 
               {/* ZIP Code */}
@@ -417,9 +429,10 @@ const CustomerRegistration: React.FC = () => {
                     {...register('zipCode')}
                     placeholder={detectedCity === 'Dubai' || detectedCity === 'Abu Dhabi' ? '12345' : '123456'}
                     className="w-full pl-12 pr-4 py-3 rounded-xl bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all"
+                    onChange={(e) => { register('zipCode').onChange(e); if (e.target.value && e.target.value !== autoZipCode) userModifiedZipCode.current = true; }}
                   />
                 </div>
-                {formErrors.zipCode && <p className="mt-1 text-xs text-red-500">{formErrors.zipCode.message}</p>}
+                {zodErrors.zipCode && <p className="mt-1 text-xs text-red-500">{zodErrors.zipCode.message}</p>}
               </div>
 
               {/* Password */}
@@ -431,7 +444,7 @@ const CustomerRegistration: React.FC = () => {
                     {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                   </button>
                 </div>
-                {formErrors.password && <p className="mt-1 text-xs text-red-500">{formErrors.password.message}</p>}
+                {zodErrors.password && <p className="mt-1 text-xs text-red-500">{zodErrors.password.message}</p>}
                 <PasswordStrengthIndicator password={watchedPassword || ''} />
               </div>
 
@@ -444,7 +457,7 @@ const CustomerRegistration: React.FC = () => {
                     {showConfirm ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                   </button>
                 </div>
-                {formErrors.confirmPassword && <p className="mt-1 text-xs text-red-500">{formErrors.confirmPassword.message}</p>}
+                {zodErrors.confirmPassword && <p className="mt-1 text-xs text-red-500">{zodErrors.confirmPassword.message}</p>}
               </div>
 
               {/* Terms */}
@@ -455,7 +468,7 @@ const CustomerRegistration: React.FC = () => {
                     I agree to the <Link to="/terms" className="text-nilin-coral hover:underline">Terms of Service</Link> and <Link to="/privacy" className="text-nilin-coral hover:underline">Privacy Policy</Link> *
                   </span>
                 </label>
-                {formErrors.agreeToTermsAndPrivacy && <p className="text-xs text-red-500">{formErrors.agreeToTermsAndPrivacy.message}</p>}
+                {zodErrors.agreeToTermsAndPrivacy && <p className="text-xs text-red-500">{zodErrors.agreeToTermsAndPrivacy.message}</p>}
               </div>
 
               {/* Submit */}
@@ -464,11 +477,11 @@ const CustomerRegistration: React.FC = () => {
               </button>
 
               {/* Server Errors */}
-              {(errors?.length > 0 || formErrors.root) && (
+              {(errors?.length > 0 || zodErrors.root) && (
                 <div className="p-4 rounded-xl bg-red-50 border border-red-200 flex items-start gap-3">
                   <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
                   <ul className="text-sm text-red-600 list-disc list-inside">
-                    {formErrors.root && <li>{formErrors.root.message}</li>}
+                    {zodErrors.root && <li>{zodErrors.root.message}</li>}
                     {errors?.map((e, i) => <li key={i}>{e.message}</li>)}
                   </ul>
                 </div>

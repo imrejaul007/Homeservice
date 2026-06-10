@@ -2,6 +2,7 @@ import database from '../config/database';
 import { seedCategories } from './categories.seeder';
 import { createAdminUser } from './admin.seeder';
 import seedServices from './services.seeder';
+import seedBundles from './bundles.seeder';
 
 export const runAllSeeders = async (): Promise<void> => {
   try {
@@ -19,6 +20,9 @@ export const runAllSeeders = async (): Promise<void> => {
 
     console.log('\n3️⃣  Seeding sample services...');
     await seedServices();
+
+    console.log('\n4️⃣  Seeding sample bundles...');
+    await seedBundles();
 
     console.log('\n✅ All seeders completed successfully!');
 

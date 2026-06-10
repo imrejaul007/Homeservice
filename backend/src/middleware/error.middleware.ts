@@ -23,6 +23,7 @@ export interface StandardErrorResponse {
   details?: Record<string, unknown>;
   timestamp: string;
   retryAfter?: number;
+  stack?: string;
 }
 
 export interface ErrorDetail {
@@ -31,6 +32,57 @@ export interface ErrorDetail {
   type?: string;
   value?: unknown;
 }
+
+/**
+ * Extended Error interface that includes common custom error properties
+ * Used to safely access error properties without type casting
+ */
+interface ExtendedError extends Error {
+  code?: string | number;
+  errors?: Record<string, { path?: string; message?: string; kind?: string; value?: unknown }>;
+  keyValue?: Record<string, unknown>;
+  statusCode?: number;
+  field?: string;
+  path?: string;
+  kind?: string;
+}
+
+/**
+ * Extended Request type with custom properties
+ */
+type AuthenticatedRequest = Request & {
+  user?: { id?: string | number };
+  correlationId?: string;
+};
+
+/**
+ * Type guard to check if an error has a specific code
+ */
+const hasErrorCode = (err: Error, code: string | number): boolean => {
+  return (err as ExtendedError).code === code;
+};
+
+/**
+ * Type guard to check if error has keyValue property (MongoDB duplicate key)
+ */
+const hasKeyValue = (err: Error): err is Error & { keyValue: Record<string, unknown> } => {
+  return 'keyValue' in err && typeof (err as ExtendedError).keyValue === 'object';
+};
+
+/**
+ * Type guard to check if error has validation errors (Mongoose ValidationError)
+ */
+const hasValidationErrors = (err: Error): err is Error & { errors: Record<string, { path?: string; message?: string; kind?: string; value?: unknown }> } => {
+  return 'errors' in err && typeof (err as ExtendedError).errors === 'object';
+};
+
+/**
+ * Safely get error code as string
+ */
+const getErrorCode = (err: Error): string | undefined => {
+  const code = (err as ExtendedError).code;
+  return typeof code === 'string' ? code : undefined;
+};
 
 // ============================================
 // ERROR CLASSIFICATION
@@ -51,6 +103,8 @@ type ErrorCategory =
  * Classify error into a category for proper handling
  */
 const classifyError = (err: Error, statusCode: number): ErrorCategory => {
+  const errorCode = getErrorCode(err);
+
   // Validation errors (400)
   if (err.name === 'ValidationError' || statusCode === 400) {
     return 'validation';
@@ -60,37 +114,37 @@ const classifyError = (err: Error, statusCode: number): ErrorCategory => {
   if (err.name === 'JsonWebTokenError' ||
       err.name === 'TokenExpiredError' ||
       statusCode === 401 ||
-      (err as any).code === ERROR_CODES.TOKEN_INVALID ||
-      (err as any).code === ERROR_CODES.TOKEN_EXPIRED) {
+      errorCode === ERROR_CODES.TOKEN_INVALID ||
+      errorCode === ERROR_CODES.TOKEN_EXPIRED) {
     return 'authentication';
   }
 
   // Authorization errors (403)
   if (statusCode === 403 ||
-      (err as any).code === ERROR_CODES.FORBIDDEN ||
-      (err as any).code === ERROR_CODES.ACCESS_DENIED) {
+      errorCode === ERROR_CODES.FORBIDDEN ||
+      errorCode === ERROR_CODES.ACCESS_DENIED) {
     return 'authorization';
   }
 
   // Not found errors (404)
   if (statusCode === 404 ||
-      (err as any).code === ERROR_CODES.NOT_FOUND ||
-      (err as any).code === ERROR_CODES.USER_NOT_FOUND ||
-      (err as any).code === ERROR_CODES.RESOURCE_NOT_FOUND) {
+      errorCode === ERROR_CODES.NOT_FOUND ||
+      errorCode === ERROR_CODES.USER_NOT_FOUND ||
+      errorCode === ERROR_CODES.RESOURCE_NOT_FOUND) {
     return 'not_found';
   }
 
   // Conflict errors (409)
   if (statusCode === 409 ||
-      (err as any).code === ERROR_CODES.DUPLICATE_ENTRY ||
-      (err as any).code === ERROR_CODES.CONFLICT) {
+      errorCode === ERROR_CODES.DUPLICATE_ENTRY ||
+      errorCode === ERROR_CODES.CONFLICT) {
     return 'conflict';
   }
 
   // Rate limit errors (429)
   if (statusCode === 429 ||
-      (err as any).code === ERROR_CODES.RATE_LIMIT_EXCEEDED ||
-      (err as any).code === ERROR_CODES.TOO_MANY_REQUESTS) {
+      errorCode === ERROR_CODES.RATE_LIMIT_EXCEEDED ||
+      errorCode === ERROR_CODES.TOO_MANY_REQUESTS) {
     return 'rate_limit';
   }
 
@@ -98,7 +152,7 @@ const classifyError = (err: Error, statusCode: number): ErrorCategory => {
   if (err.message?.includes('ECONNREFUSED') ||
       err.message?.includes('ETIMEDOUT') ||
       err.message?.includes('ENOTFOUND') ||
-      (err as any).code === ERROR_CODES.EXTERNAL_SERVICE_ERROR) {
+      errorCode === ERROR_CODES.EXTERNAL_SERVICE_ERROR) {
     return 'external_service';
   }
 
@@ -126,34 +180,37 @@ interface MongooseErrorInfo {
  * Extract detailed information from Mongoose errors
  */
 const getMongooseErrorInfo = (err: Error): MongooseErrorInfo => {
+  const extendedErr = err as ExtendedError;
+  const errorCode = getErrorCode(err);
+
   // CastError - invalid ObjectId format
   if (err.name === 'CastError') {
-    const castError = err as any;
     return {
       code: ERROR_CODES.INVALID_INPUT,
       statusCode: 400,
-      message: `Invalid ${castError.path}: value format is incorrect`,
-      errors: [{ field: castError.path, message: 'Invalid format', type: 'cast_error' }],
-      details: { path: castError.path, valueType: castError.kind }
+      message: `Invalid ${extendedErr.path}: value format is incorrect`,
+      errors: [{ field: extendedErr.path, message: 'Invalid format', type: 'cast_error' }],
+      details: { path: extendedErr.path, valueType: extendedErr.kind }
     };
   }
 
   // Duplicate key error (11000)
-  if ((err as any).code === 11000) {
-    const keyValue = (err as any).keyValue || {};
+  if (hasErrorCode(err, 11000)) {
+    const keyValue = hasKeyValue(err) ? err.keyValue : {};
     const field = Object.keys(keyValue)[0] || 'field';
     return {
       code: ERROR_CODES.DUPLICATE_ENTRY,
       statusCode: 409,
       message: `A record with this ${field} already exists`,
       errors: [{ field, message: 'Value already exists', type: 'duplicate' }],
-      details: { field, duplicateValue: keyValue[field] }
+      details: { field, isDuplicate: true }
     };
   }
 
   // ValidationError - schema validation failed
   if (err.name === 'ValidationError') {
-    const errors = Object.values((err as any).errors || {}).map((e: any) => ({
+    const validationErrors = hasValidationErrors(err) ? err.errors : {};
+    const errors = Object.values(validationErrors).map((e) => ({
       field: e?.path || 'unknown',
       message: e?.message || 'Validation failed',
       type: e?.kind || 'unknown',
@@ -191,13 +248,12 @@ const getMongooseErrorInfo = (err: Error): MongooseErrorInfo => {
 
   // Multer file upload errors
   if (err.name === 'MulterError') {
-    const multerError = err as any;
     return {
       code: ERROR_CODES.FILE_UPLOAD_ERROR,
       statusCode: 400,
-      message: getMulterErrorMessage(multerError.code),
+      message: getMulterErrorMessage(extendedErr.code as string || ''),
       errors: [],
-      details: { code: multerError.code, field: multerError.field }
+      details: { code: extendedErr.code, field: extendedErr.field }
     };
   }
 
@@ -226,6 +282,50 @@ const getMulterErrorMessage = (code: string): string => {
     'LIMIT_BODY': 'Request body too large'
   };
   return messages[code] || 'File upload failed';
+};
+
+// ============================================
+// HEADER SANITIZATION FOR SENTRY
+// ============================================
+
+/**
+ * Headers that are safe to include in Sentry events
+ * Excludes: authorization tokens, cookies, API keys, and other credentials
+ */
+const SAFE_HEADERS = new Set([
+  'user-agent',
+  'content-type',
+  'content-length',
+  'accept',
+  'accept-encoding',
+  'accept-language',
+  'cache-control',
+  'x-correlation-id',
+  'x-request-id',
+  'x-forwarded-for',
+  'x-real-ip',
+  'x-forwarded-proto',
+  'x-b3-traceid',
+  'x-b3-spanid',
+  'x-b3-parentspanid',
+  'b3',
+  'x-trace-token',
+]);
+
+/**
+ * Filter request headers to only include safe, non-sensitive headers
+ * Prevents credentials, tokens, and cookies from being sent to Sentry
+ */
+const filterSafeHeaders = (req: Request): Record<string, string> => {
+  const filtered: Record<string, string> = {};
+
+  for (const [key, value] of Object.entries(req.headers)) {
+    if (SAFE_HEADERS.has(key.toLowerCase()) && typeof value === 'string') {
+      filtered[key] = value;
+    }
+  }
+
+  return filtered;
 };
 
 // ============================================
@@ -265,7 +365,8 @@ const sanitizeErrorMessage = (message: string, statusCode: number, category: Err
  * Get correlation ID from request headers
  */
 const getCorrelationId = (req: Request): string | undefined => {
-  return (req as any).correlationId ||
+  const authReq = req as AuthenticatedRequest;
+  return authReq.correlationId ||
          req.headers['x-correlation-id'] as string ||
          req.headers['x-request-id'] as string;
 };
@@ -288,6 +389,7 @@ export const errorHandler = (
   let details: Record<string, unknown> = {};
   let retryAfter: number | undefined;
 
+  const authReq = req as AuthenticatedRequest;
   const correlationId = getCorrelationId(req);
   const timestamp = new Date().toISOString();
   const requestPath = req.originalUrl;
@@ -332,9 +434,9 @@ export const errorHandler = (
     method: requestMethod,
     ip: req.ip,
     userAgent: req.get('user-agent'),
-    userId: (req as any).user?.id,
+    userId: authReq.user?.id,
     stack: process.env.NODE_ENV === 'development' ? err.stack : undefined,
-    originalMessage: err.message,
+    originalMessage: sanitizedMessage,
   };
 
   // Log based on severity
@@ -354,10 +456,7 @@ export const errorHandler = (
       request: {
         url: requestPath,
         method: requestMethod,
-        headers: {
-          'user-agent': req.get('user-agent'),
-          'content-type': req.get('content-type'),
-        },
+        headers: filterSafeHeaders(req),
         ip: req.ip,
         correlationId,
       },
@@ -365,7 +464,7 @@ export const errorHandler = (
         code: errorCode,
         statusCode,
         category,
-        userId: (req as any).user?.id,
+        userId: authReq.user?.id,
       },
     });
   }
@@ -399,7 +498,7 @@ export const errorHandler = (
 
   // Add stack trace in development only
   if (process.env.NODE_ENV === 'development') {
-    (response as any).stack = err.stack;
+    response.stack = err.stack;
   }
 
   // Add retry-after for rate limit errors
@@ -407,8 +506,10 @@ export const errorHandler = (
     response.retryAfter = retryAfter;
   }
 
-  // Send response
-  res.status(statusCode).json(response);
+  // Send response (only if headers not already sent)
+  if (!res.headersSent) {
+    res.status(statusCode).json(response);
+  }
 };
 
 /**

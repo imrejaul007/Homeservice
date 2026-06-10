@@ -13,6 +13,29 @@ import User from '../models/user.model';
 import ProviderProfile from '../models/providerProfile.model';
 import Availability from '../models/availability.model';
 
+/**
+ * Creates individual 30-minute time slots for a given hour range
+ */
+function create30MinSlots(startHour: number, endHour: number) {
+  const slots = [];
+  for (let hour = startHour; hour < endHour; hour++) {
+    for (let min = 0; min < 60; min += 30) {
+      const startTime = `${hour.toString().padStart(2, '0')}:${min.toString().padStart(2, '0')}`;
+      const endHourAdjusted = min + 30 === 60 ? hour + 1 : hour;
+      const endMin = min + 30 === 60 ? 0 : min + 30;
+      const endTime = `${endHourAdjusted.toString().padStart(2, '0')}:${endMin.toString().padStart(2, '0')}`;
+      slots.push({
+        startTime,
+        endTime,
+        isBooked: false,
+        maxBookings: 2,
+        currentBookings: 0,
+      });
+    }
+  }
+  return slots;
+}
+
 async function main() {
   const mongoUri = process.env.MONGODB_URI || 'mongodb://localhost:27017/home-service-platform';
   console.log('⏰ Setting up Provider Availability...\n');
@@ -23,17 +46,11 @@ async function main() {
   // Get all providers
   const providers = await User.find({ role: 'provider' }).lean();
 
-  // Time slots for weekdays (9 AM - 6 PM with breaks)
-  const weekdaySlots = [
-    { start: '09:00', end: '12:00', isActive: true },
-    { start: '13:00', end: '18:00', isActive: true },
-  ];
+  // Generate30-minute slots for weekdays (9 AM - 6 PM)
+  const weekdaySlots = create30MinSlots(9, 18);
 
-  // Time slots for weekends (10 AM - 4 PM)
-  const weekendSlots = [
-    { start: '10:00', end: '13:00', isActive: true },
-    { start: '14:00', end: '16:00', isActive: true },
-  ];
+  // Generate 30-minute slots for weekends (10 AM - 4 PM)
+  const weekendSlots = create30MinSlots(10, 16);
 
   for (const provider of providers) {
     const providerId = provider._id;
@@ -74,13 +91,13 @@ async function main() {
     if (profile && !profile.availability?.schedule) {
       profile.availability = {
         schedule: {
-          monday: { isAvailable: true, timeSlots: [{ startTime: '09:00', endTime: '12:00', isBooked: false, maxBookings: 2, currentBookings: 0 }, { startTime: '13:00', endTime: '18:00', isBooked: false, maxBookings: 2, currentBookings: 0 }] },
-          tuesday: { isAvailable: true, timeSlots: [{ startTime: '09:00', endTime: '12:00', isBooked: false, maxBookings: 2, currentBookings: 0 }, { startTime: '13:00', endTime: '18:00', isBooked: false, maxBookings: 2, currentBookings: 0 }] },
-          wednesday: { isAvailable: true, timeSlots: [{ startTime: '09:00', endTime: '12:00', isBooked: false, maxBookings: 2, currentBookings: 0 }, { startTime: '13:00', endTime: '18:00', isBooked: false, maxBookings: 2, currentBookings: 0 }] },
-          thursday: { isAvailable: true, timeSlots: [{ startTime: '09:00', endTime: '12:00', isBooked: false, maxBookings: 2, currentBookings: 0 }, { startTime: '13:00', endTime: '18:00', isBooked: false, maxBookings: 2, currentBookings: 0 }] },
-          friday: { isAvailable: true, timeSlots: [{ startTime: '09:00', endTime: '12:00', isBooked: false, maxBookings: 2, currentBookings: 0 }, { startTime: '13:00', endTime: '18:00', isBooked: false, maxBookings: 2, currentBookings: 0 }] },
-          saturday: { isAvailable: true, timeSlots: [{ startTime: '10:00', endTime: '13:00', isBooked: false, maxBookings: 2, currentBookings: 0 }, { startTime: '14:00', endTime: '16:00', isBooked: false, maxBookings: 2, currentBookings: 0 }] },
-          sunday: { isAvailable: true, timeSlots: [{ startTime: '10:00', endTime: '13:00', isBooked: false, maxBookings: 2, currentBookings: 0 }, { startTime: '14:00', endTime: '16:00', isBooked: false, maxBookings: 2, currentBookings: 0 }] },
+          monday: { isAvailable: true, timeSlots: create30MinSlots(9, 18) },
+          tuesday: { isAvailable: true, timeSlots: create30MinSlots(9, 18) },
+          wednesday: { isAvailable: true, timeSlots: create30MinSlots(9, 18) },
+          thursday: { isAvailable: true, timeSlots: create30MinSlots(9, 18) },
+          friday: { isAvailable: true, timeSlots: create30MinSlots(9, 18) },
+          saturday: { isAvailable: true, timeSlots: create30MinSlots(10, 16) },
+          sunday: { isAvailable: true, timeSlots: create30MinSlots(10, 16) },
         },
         exceptions: [],
         bufferTime: 15,

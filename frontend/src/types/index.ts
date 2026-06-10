@@ -24,3 +24,6 @@ export type { SearchFilters, SearchResponse };
 
 // Booking types (unified from BookingService.ts and bookingApi.ts)
 export * from './booking.types';
+
+// Subscription types (unified tier types across codebase)
+export * from './subscription.types';

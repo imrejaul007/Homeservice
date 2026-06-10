@@ -4,6 +4,8 @@ import { Capacitor } from '@capacitor/core';
 import { Preferences } from '@capacitor/preferences';
 import toast from 'react-hot-toast';
 import { offlineSync, type ActionType } from './OfflineSync';
+import type { NotificationType } from './notificationApi';
+import { api } from './api';
 
 const MAX_QUEUE_SIZE = 500;
 const MAX_QUEUE_AGE_DAYS = 7;
@@ -48,7 +50,7 @@ export interface NotificationPayload {
   title: string;
   body: string;
   data?: {
-    type?: 'booking' | 'message' | 'promotion' | 'system';
+    type?: NotificationType;
     bookingId?: string;
     providerId?: string;
     url?: string;
@@ -211,37 +213,11 @@ class NotificationService {
       throw new Error('Cannot dismiss notification while offline');
     }
 
-    // Get auth tokens
-    const getTokens = () => {
-      try {
-        const stored = sessionStorage.getItem('auth-storage');
-        if (!stored) return null;
-        const parsed = JSON.parse(stored);
-        return parsed?.state?.tokens || null;
-      } catch {
-        return null;
-      }
-    };
-
-    const tokens = getTokens();
-    if (!tokens?.accessToken) {
-      console.log('[Notifications] Not authenticated, skipping dismiss');
-      return;
-    }
-
-    const response = await fetch(
-      `${import.meta.env.VITE_API_URL}/notifications/${notificationId}/dismiss`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${tokens.accessToken}`,
-        },
-      }
-    );
-
-    if (!response.ok) {
-      throw new Error(`Failed to dismiss notification: ${response.status}`);
+    try {
+      await api.post(`/notifications/${notificationId}/dismiss`);
+    } catch (error) {
+      console.error('[Notifications] Failed to dismiss notification:', error);
+      throw error;
     }
   }
 
@@ -354,42 +330,12 @@ class NotificationService {
 
   private async registerTokenWithBackend(token: string): Promise<void> {
     try {
-      // Get tokens from sessionStorage (same pattern as api.ts)
-      const getTokens = () => {
-        try {
-          const stored = sessionStorage.getItem('auth-storage');
-          if (!stored) return null;
-          const parsed = JSON.parse(stored);
-          return parsed?.state?.tokens || null;
-        } catch {
-          return null;
-        }
-      };
-
-      const tokens = getTokens();
-      if (!tokens?.accessToken) {
-        console.log('[Notifications] Not authenticated, skipping token registration');
-        return;
-      }
-
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/notifications/register-device`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${tokens.accessToken}`,
-        },
-        body: JSON.stringify({
-          token,
-          platform: Capacitor.getPlatform(),
-          appVersion: import.meta.env.VITE_APP_VERSION || '1.0.0',
-        }),
+      await api.post('/notifications/register-device', {
+        token,
+        platform: Capacitor.getPlatform(),
+        appVersion: import.meta.env.VITE_APP_VERSION || '1.0.0',
       });
-
-      if (response.ok) {
-        console.log('[Notifications] Device token registered with backend');
-      } else {
-        console.error('[Notifications] Failed to register token with backend:', response.status);
-      }
+      console.log('[Notifications] Device token registered with backend');
     } catch (error) {
       console.error('[Notifications] Error registering token:', error);
     }

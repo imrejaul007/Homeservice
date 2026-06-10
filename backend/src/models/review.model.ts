@@ -10,6 +10,10 @@ export interface IReview extends Document {
   // Booking reference
   bookingId: mongoose.Types.ObjectId;
 
+  // Service reference (denormalized for efficient queries)
+  // FIX: Added serviceId for filtering reviews by service
+  serviceId?: mongoose.Types.ObjectId;
+
   // Who is reviewing
   reviewerId: mongoose.Types.ObjectId;  // Customer who wrote the review
   reviewerType: 'customer' | 'provider';
@@ -61,6 +65,13 @@ const reviewSchema = new Schema<IReview>(
       type: Schema.Types.ObjectId,
       ref: 'Booking',
       required: [true, 'Booking ID is required'],
+      index: true,
+    },
+
+    // FIX: Added serviceId for efficient service-level review queries
+    serviceId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Service',
       index: true,
     },
 
@@ -200,6 +211,10 @@ reviewSchema.index({ isHidden: 1, createdAt: -1 });
 reviewSchema.index({ isHidden: 1 }); // For findByProvider queries filtering hidden reviews
 // PERFORMANCE FIX: Compound index for service analytics queries
 reviewSchema.index({ bookingId: 1, revieweeId: 1 }); // For service-level rating queries
+
+// HIGH PRIORITY: Compound indexes for serviceId queries (filtering reviews by service and time/rating)
+reviewSchema.index({ serviceId: 1, createdAt: -1 }); // For fetching reviews by service, newest first
+reviewSchema.index({ serviceId: 1, rating: -1 }); // For fetching reviews by service, highest rated first
 
 // Tenant isolation indexes
 reviewSchema.index({ tenantId: 1, revieweeId: 1 });
@@ -365,7 +380,21 @@ reviewSchema.statics.existsForBooking = async function(
   return count > 0;
 };
 
-const Review: Model<IReview> = mongoose.model<IReview>('Review', reviewSchema);
+// Interface for ReviewModel with static methods
+interface ReviewModel extends Model<IReview> {
+  findByProvider(
+    providerId: string,
+    options?: { page?: number; limit?: number; minRating?: number }
+  ): Promise<IReview[]>;
+  getProviderStats(providerId: string): Promise<{
+    totalReviews: number;
+    averageRating: number;
+    ratingDistribution: Record<number, number>;
+  }>;
+  existsForBooking(bookingId: string, reviewerId: string): Promise<boolean>;
+}
+
+const Review = mongoose.model<IReview, ReviewModel>('Review', reviewSchema);
 
 // ===================================
 // POST-SAVE HOOKS FOR DENORMALIZED ANALYTICS

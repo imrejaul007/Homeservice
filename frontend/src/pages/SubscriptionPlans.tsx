@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import toast from 'react-hot-toast';
 import {
   Crown,
   Check,
@@ -36,13 +37,14 @@ import {
   type PlanType,
   type BillingCycle,
   type BillingHistoryItem,
+  type PaymentMethod,
 } from '../services/subscriptionApi';
 
 // ============================================
 // Plan Configuration
 // ============================================
 
-const PLANS: Record<PlanType, SubscriptionPlan> = {
+const PLANS: Record<string, SubscriptionPlan> = {
   free: {
     id: 'free',
     name: 'Free',
@@ -185,6 +187,8 @@ const SubscriptionPlansPage: React.FC = () => {
   const [cancelReason, setCancelReason] = useState('');
   const [activeTab, setActiveTab] = useState<'plans' | 'membership' | 'billing'>('plans');
   const [billingHistory, setBillingHistory] = useState<BillingHistoryItem[]>([]);
+  const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
+  const [defaultPaymentMethod, setDefaultPaymentMethod] = useState<PaymentMethod | null>(null);
 
   // Fetch data on mount
   useEffect(() => {
@@ -200,10 +204,12 @@ const SubscriptionPlansPage: React.FC = () => {
     setError(null);
 
     try {
-      const [subRes, usageRes, membershipRes] = await Promise.allSettled([
+      const [subRes, usageRes, membershipRes, historyRes, paymentMethodsRes] = await Promise.allSettled([
         subscriptionApi.getSubscription(),
         subscriptionApi.getUsageStats(),
         subscriptionApi.getMembership(),
+        subscriptionApi.getBillingHistory(),
+        subscriptionApi.getPaymentMethods(),
       ]);
 
       if (subRes.status === 'fulfilled') {
@@ -216,6 +222,15 @@ const SubscriptionPlansPage: React.FC = () => {
 
       if (membershipRes.status === 'fulfilled') {
         setMembershipTier(membershipRes.value.data);
+      }
+
+      if (historyRes.status === 'fulfilled') {
+        setBillingHistory(historyRes.value.data.subscriptions || []);
+      }
+
+      if (paymentMethodsRes.status === 'fulfilled') {
+        setPaymentMethods(paymentMethodsRes.value.data.paymentMethods);
+        setDefaultPaymentMethod(paymentMethodsRes.value.data.defaultMethod);
       }
     } catch (err) {
       // Don't show error for missing subscription (user might not have one)
@@ -249,6 +264,7 @@ const SubscriptionPlansPage: React.FC = () => {
 
       setCurrentSubscription(response.data);
       setSuccessMessage(`Successfully subscribed to ${PLANS[plan].name} plan!`);
+      toast.success(response.data.message || `Successfully subscribed to ${PLANS[plan].name} plan!`);
 
       // Refresh usage stats
       const usageRes = await subscriptionApi.getUsageStats();
@@ -258,7 +274,9 @@ const SubscriptionPlansPage: React.FC = () => {
       setTimeout(() => setSuccessMessage(null), 3000);
     } catch (err) {
       const error = err as { response?: { data?: { message?: string } } };
-      setError(error.response?.data?.message || 'Failed to create subscription');
+      const errorMessage = error.response?.data?.message || 'Failed to create subscription';
+      setError(errorMessage);
+      toast.error(errorMessage);
     } finally {
       setIsProcessing(false);
     }
@@ -276,6 +294,7 @@ const SubscriptionPlansPage: React.FC = () => {
 
       setCurrentSubscription(response.data);
       setSuccessMessage(`Successfully changed to ${PLANS[newPlan].name} plan!`);
+      toast.success(response.data.message || `Successfully changed to ${PLANS[newPlan].name} plan!`);
 
       // Refresh usage stats
       const usageRes = await subscriptionApi.getUsageStats();
@@ -284,7 +303,9 @@ const SubscriptionPlansPage: React.FC = () => {
       setTimeout(() => setSuccessMessage(null), 3000);
     } catch (err) {
       const error = err as { response?: { data?: { message?: string } } };
-      setError(error.response?.data?.message || 'Failed to change plan');
+      const errorMessage = error.response?.data?.message || 'Failed to change plan';
+      setError(errorMessage);
+      toast.error(errorMessage);
     } finally {
       setIsProcessing(false);
     }
@@ -304,11 +325,14 @@ const SubscriptionPlansPage: React.FC = () => {
       setShowCancelModal(false);
       setCancelReason('');
       setSuccessMessage('Your subscription will be cancelled at the end of the billing period.');
+      toast.success(response.data.message || 'Your subscription will be cancelled at the end of the billing period.');
 
       setTimeout(() => setSuccessMessage(null), 5000);
     } catch (err) {
       const error = err as { response?: { data?: { message?: string } } };
-      setError(error.response?.data?.message || 'Failed to cancel subscription');
+      const errorMessage = error.response?.data?.message || 'Failed to cancel subscription';
+      setError(errorMessage);
+      toast.error(errorMessage);
     } finally {
       setIsProcessing(false);
     }
@@ -322,10 +346,13 @@ const SubscriptionPlansPage: React.FC = () => {
       const response = await subscriptionApi.reactivateSubscription();
       setCurrentSubscription(response.data);
       setSuccessMessage('Your subscription has been reactivated!');
+      toast.success(response.data.message || 'Your subscription has been reactivated!');
       setTimeout(() => setSuccessMessage(null), 3000);
     } catch (err) {
       const error = err as { response?: { data?: { message?: string } } };
-      setError(error.response?.data?.message || 'Failed to reactivate subscription');
+      const errorMessage = error.response?.data?.message || 'Failed to reactivate subscription';
+      setError(errorMessage);
+      toast.error(errorMessage);
     } finally {
       setIsProcessing(false);
     }
@@ -861,20 +888,51 @@ const SubscriptionPlansPage: React.FC = () => {
               {/* Payment Method */}
               <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
                 <h3 className="text-lg font-bold text-gray-900 mb-4">Payment Method</h3>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="w-12 h-8 bg-gray-100 rounded flex items-center justify-center">
-                      <CreditCard className="w-6 h-6 text-gray-600" />
-                    </div>
-                    <div>
-                      <p className="font-medium text-gray-900">Credit Card ending in ****4242</p>
-                      <p className="text-sm text-gray-500">Expires 12/2025</p>
-                    </div>
+                {paymentMethods.length === 0 ? (
+                  <div className="text-center py-4">
+                    <CreditCard className="w-10 h-10 text-gray-300 mx-auto mb-2" />
+                    <p className="text-gray-500 mb-3">No payment method saved</p>
+                    <button
+                      onClick={() => navigate('/customer/payment-methods')}
+                      className="text-nilin-coral hover:text-nilin-coral/80 text-sm font-medium"
+                    >
+                      Add Payment Method
+                    </button>
                   </div>
-                  <button className="text-nilin-coral hover:text-nilin-coral/80 text-sm font-medium">
-                    Update
-                  </button>
-                </div>
+                ) : (
+                  <div className="space-y-3">
+                    {paymentMethods.map((method) => (
+                      <div key={method.id} className="flex items-center justify-between py-2">
+                        <div className="flex items-center gap-3">
+                          <div className="w-12 h-8 bg-gray-100 rounded flex items-center justify-center">
+                            <CreditCard className="w-6 h-6 text-gray-600" />
+                          </div>
+                          <div>
+                            <p className="font-medium text-gray-900">
+                              {method.brand
+                                ? `${method.brand.charAt(0).toUpperCase() + method.brand.slice(1)} ending in ****${method.last4}`
+                                : `Card ending in ****${method.last4}`}
+                            </p>
+                            {method.expMonth && method.expYear && (
+                              <p className="text-sm text-gray-500">
+                                Expires {String(method.expMonth).padStart(2, '0')}/{method.expYear}
+                              </p>
+                            )}
+                            {method.isDefault && (
+                              <span className="text-xs text-nilin-coral font-medium">Default</span>
+                            )}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => navigate('/customer/payment-methods')}
+                          className="text-nilin-coral hover:text-nilin-coral/80 text-sm font-medium"
+                        >
+                          Update
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* Billing History */}

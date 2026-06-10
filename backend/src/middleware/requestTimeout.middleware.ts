@@ -8,6 +8,13 @@ import { Request, Response, NextFunction, RequestHandler } from 'express';
 import logger from '../utils/logger';
 import { ApiError, ERROR_CODES } from '../utils/ApiError';
 
+/**
+ * Extended Request interface with correlationId for request tracing
+ */
+interface RequestWithCorrelation extends Request {
+  correlationId?: string;
+}
+
 // Timeout configuration
 interface TimeoutConfig {
   /** Default timeout in milliseconds */
@@ -87,9 +94,10 @@ export const createRequestTimeout = (config: Partial<TimeoutConfig> = {}): Reque
     ...config,
   };
 
-  return (req: Request, res: Response, next: NextFunction): void => {
+  return (req: RequestWithCorrelation, res: Response, next: NextFunction): void => {
     const path = req.path || req.url;
     const timeoutMs = getTimeoutValue(req, finalConfig);
+    const correlationId = req.correlationId;
 
     // Skip timeout for disabled paths
     if (timeoutMs === 0) {
@@ -106,7 +114,7 @@ export const createRequestTimeout = (config: Partial<TimeoutConfig> = {}): Reque
           path,
           method: req.method,
           timeout: timeoutMs,
-          correlationId: (req as any).correlationId,
+          correlationId,
           ip: req.ip,
           action: 'REQUEST_TIMEOUT',
         });
@@ -131,9 +139,21 @@ export const createRequestTimeout = (config: Partial<TimeoutConfig> = {}): Reque
         path,
         method: req.method,
         timeout: timeoutMs,
-        correlationId: (req as any).correlationId,
+        correlationId,
         action: 'RESPONSE_TIMEOUT',
       });
+
+      if (!res.headersSent) {
+        res.status(504).json({
+          success: false,
+          message: 'The request took too long to process. Please try again.',
+          code: ERROR_CODES.INTERNAL_ERROR,
+          error: {
+            type: TIMEOUT_ERROR_CODES.REQUEST_TIMEOUT,
+            timeout: timeoutMs,
+          },
+        });
+      }
     });
 
     // Track request start time
@@ -151,7 +171,7 @@ export const createRequestTimeout = (config: Partial<TimeoutConfig> = {}): Reque
           method: req.method,
           responseTime,
           expectedTimeout: timeoutMs,
-          correlationId: (req as any).correlationId,
+          correlationId,
           action: 'SLOW_REQUEST',
         });
       }
@@ -163,7 +183,7 @@ export const createRequestTimeout = (config: Partial<TimeoutConfig> = {}): Reque
           method: req.method,
           responseTime,
           statusCode: res.statusCode,
-          correlationId: (req as any).correlationId,
+          correlationId,
         });
       }
 
@@ -179,12 +199,19 @@ export const createRequestTimeout = (config: Partial<TimeoutConfig> = {}): Reque
  * Shorter timeout, faster failure response
  */
 export const criticalRequestTimeout: RequestHandler = (req: Request, res: Response, next: NextFunction): void => {
+  const path = req.path || req.url;
+
+  // Skip timeout for disabled paths (health checks, metrics, etc.)
+  if (shouldDisableTimeout(path, DEFAULT_TIMEOUT_CONFIG)) {
+    return next();
+  }
+
   const timeoutMs = DEFAULT_TIMEOUT_CONFIG.critical;
 
   if (typeof req.setTimeout === 'function') {
     req.setTimeout(timeoutMs, () => {
       logger.warn('Critical request timeout triggered', {
-        path: req.path,
+        path,
         method: req.method,
         timeout: timeoutMs,
         action: 'CRITICAL_REQUEST_TIMEOUT',
@@ -218,7 +245,7 @@ export const createTimeoutError = (
   return new ApiError(
     504,
     message,
-    [],
+    [{ type: TIMEOUT_ERROR_CODES.REQUEST_TIMEOUT, timeout }],
     ERROR_CODES.INTERNAL_ERROR
   );
 };
@@ -261,6 +288,10 @@ export const withTimeout = <T>(
               timeout: timeoutMs,
             },
           });
+          next(); // Signal to Express that response is complete
+        } else {
+          // Headers already sent - propagate error to trigger error handlers
+          next(error);
         }
       } else {
         next(error);

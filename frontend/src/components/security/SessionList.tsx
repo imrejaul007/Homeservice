@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { api } from '../../services/api';
 
 // Types
 interface Session {
@@ -50,17 +51,8 @@ export const SessionList: React.FC<SessionListProps> = ({
       setLoading(true);
       setError(null);
 
-      const response = await fetch(`/api/sessions?userId=${userId}`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('accessToken')}`,
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to fetch sessions');
-      }
-
-      const result: ApiResponse<{ sessions: any[] }> = await response.json();
+      const response = await api.get(`/sessions?userId=${userId}`);
+      const result: ApiResponse<{ sessions: any[] }> = response.data;
 
       if (result.success && result.data) {
         setSessions(result.data.sessions.map(s => ({
@@ -86,18 +78,7 @@ export const SessionList: React.FC<SessionListProps> = ({
     try {
       setActionLoading(sessionId);
 
-      const response = await fetch(`/api/sessions/${sessionId}/revoke`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('accessToken')}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ userId }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to revoke session');
-      }
+      await api.post(`/sessions/${sessionId}/revoke`, { userId });
 
       setSessions(prev => prev.filter(s => s.id !== sessionId));
       onSessionRevoked?.(sessionId);
@@ -113,18 +94,7 @@ export const SessionList: React.FC<SessionListProps> = ({
     try {
       setActionLoading('revoke-all');
 
-      const response = await fetch(`/api/sessions/revoke-others`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('accessToken')}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ userId }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to revoke sessions');
-      }
+      await api.post('/sessions/revoke-others', { userId });
 
       setSessions(prev => prev.filter(s => s.isCurrent));
       onAllRevoked?.();
@@ -140,18 +110,7 @@ export const SessionList: React.FC<SessionListProps> = ({
     try {
       setActionLoading('revoke-all');
 
-      const response = await fetch(`/api/sessions/revoke-all`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('accessToken')}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ userId }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to revoke sessions');
-      }
+      await api.post('/sessions/revoke-all', { userId });
 
       setSessions(prev => prev.filter(s => s.isCurrent));
       onAllRevoked?.();

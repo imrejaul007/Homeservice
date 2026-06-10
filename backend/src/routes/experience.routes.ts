@@ -47,6 +47,17 @@ router.get(
 );
 
 /**
+ * GET /api/experiences/my
+ * Get experiences submitted by current user
+ * Query params: page, limit
+ */
+router.get(
+  '/my',
+  authenticate,
+  experienceController.getMyExperiences
+);
+
+/**
  * GET /api/experiences/:id
  * Get single experience by ID (public)
  */
@@ -57,17 +68,6 @@ router.get('/:id', experienceController.getExperienceById);
  * PROTECTED ROUTES (Customer Authentication Required)
  * ============================================
  */
-
-/**
- * GET /api/experiences/my
- * Get experiences submitted by current user
- * Query params: page, limit
- */
-router.get(
-  '/my',
-  authenticate,
-  experienceController.getMyExperiences
-);
 
 /**
  * POST /api/experiences

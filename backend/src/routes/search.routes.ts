@@ -1,10 +1,12 @@
 import express from 'express';
 import {
   searchServices,
+  searchProviders,
   getSearchSuggestions,
   getTrendingServices,
   getSearchFilters,
   getServiceById,
+  getServicesByIds,
   trackServiceClick,
   getPopularServices,
   getServicesByCategory,
@@ -37,6 +39,8 @@ const router = express.Router();
 
 router.get('/services', searchLimiter, validateSearchQuery, searchServices);
 
+router.get('/providers', searchLimiter, validateSearchQuery, searchProviders);
+
 router.get('/suggestions', suggestionLimiter, validateSuggestionQuery, getSearchSuggestions);
 
 router.get('/trending', getTrendingServices);
@@ -48,6 +52,9 @@ router.get('/popular', getPopularServices);
 router.get('/category/:category', validateCategoryParam, validateSearchQuery, getServicesByCategory);
 
 router.get('/service/:id', validateServiceId, getServiceById);
+
+// FIX: Batch services lookup - replaces admin endpoint in customer-facing code
+router.get('/services/batch', getServicesByIds);
 
 router.post('/service/:id/click', validateServiceId, trackServiceClick);
 

@@ -10,7 +10,7 @@
  */
 
 import { Request, Response, NextFunction, RequestHandler } from 'express';
-import { circuitBreaker, CircuitBreakerMetrics, CircuitState } from '../services/circuitBreaker.service';
+import { circuitBreaker, CircuitBreakerMetrics, CircuitState, CIRCUIT_NAMES } from '../services/circuitBreaker.service';
 import { getFallbackHealthStatus, cleanupFallbackData } from '../services/fallback.service';
 import { getDeadLetterStats } from '../utils/retry.util';
 import { flushAnalyticsQueue } from '../services/fallback.service';
@@ -121,8 +121,12 @@ export function isDegradedMode(): boolean {
     return true;
   }
 
-  // Or if specific critical circuits are down
-  const criticalCircuits = ['stripe', 'database'];
+  // Or if specific critical circuits are down (use actual circuit names from CIRCUIT_NAMES)
+  const criticalCircuits = [
+    CIRCUIT_NAMES.PAYMENT,
+    CIRCUIT_NAMES.NOTIFICATION,
+    CIRCUIT_NAMES.SMS,
+  ];
   const criticalDown = criticalCircuits.filter(c => healthStatus.down.includes(c));
 
   return criticalDown.length > 0;
@@ -330,22 +334,29 @@ export const readinessProbe = async (req: Request, res: Response) => {
     // Check if database is ready
     const isDbReady = mongoose.connection.readyState === 1;
 
-    // Check if critical services are available
+    // Check if critical services are available (use actual circuit names from CIRCUIT_NAMES)
     const criticalHealthy = health.circuitBreakers
-      .filter(cb => ['stripe'].includes(cb.name))
+      .filter(cb => [CIRCUIT_NAMES.PAYMENT, CIRCUIT_NAMES.NOTIFICATION, CIRCUIT_NAMES.SMS].includes(cb.name as any))
       .every(cb => cb.state !== CircuitState.CLOSED || cb.totalRequests > 0);
 
-    if (isDbReady) {
+    // Check if system is ready: both DB and critical circuits must be healthy
+    const isReady = isDbReady && criticalHealthy;
+
+    if (isReady) {
       res.status(200).json({
         success: true,
         status: 'ready',
         timestamp: new Date().toISOString(),
       });
     } else {
+      const reasons: string[] = [];
+      if (!isDbReady) reasons.push('Database not connected');
+      if (!criticalHealthy) reasons.push('Critical circuits unhealthy');
+
       res.status(503).json({
         success: false,
         status: 'not_ready',
-        reason: 'Database not connected',
+        reasons,
         timestamp: new Date().toISOString(),
       });
     }
@@ -370,11 +381,12 @@ export const getDLQStatus = () => {
   const stats = getDeadLetterStats();
 
   return {
-    totalQueues: Array.isArray(stats) ? stats.length : 1,
-    queues: Array.isArray(stats) ? stats : [stats],
-    totalEntries: Array.isArray(stats)
-      ? stats.reduce((sum, q) => sum + q.queueSize, 0)
-      : (stats as any).queueSize || 0,
+    totalQueues: 1,
+    queues: [stats],
+    totalEntries: stats.totalEntries,
+    recentEntries: stats.recentEntries,
+    oldestEntry: stats.oldestEntry,
+    newestEntry: stats.newestEntry,
   };
 };
 
@@ -447,8 +459,8 @@ export const flushAnalyticsHandler: RequestHandler = async (req: Request, res: R
 /**
  * Cleanup expired fallback data
  */
-export const cleanupHandler: RequestHandler = (req: Request, res: Response) => {
-  const result = cleanupFallbackData();
+export const cleanupHandler: RequestHandler = async (req: Request, res: Response) => {
+  const result = await cleanupFallbackData();
 
   res.status(200).json({
     success: true,

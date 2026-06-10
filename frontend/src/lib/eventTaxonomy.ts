@@ -20,6 +20,7 @@ export enum EventCategory {
   SEARCH = 'search',
   USER = 'user',
   ERROR = 'error',
+  CONTACT = 'contact',
 }
 
 // =============================================================================
@@ -169,6 +170,23 @@ export enum SearchEvent {
   SORT_CHANGED = 'sort_changed',
   RESULT_CLICKED = 'result_clicked',
   NO_RESULTS = 'no_results',
+}
+
+// =============================================================================
+// Contact / Support Events
+// =============================================================================
+
+export enum ContactEvent {
+  PAGE_VIEWED = 'page_viewed',
+  FORM_STARTED = 'form_started',
+  FORM_SUBMITTED = 'form_submitted',
+  FORM_ERROR = 'form_error',
+  EMAIL_CLICKED = 'email_clicked',
+  PHONE_CLICKED = 'phone_clicked',
+  CHAT_OPENED = 'chat_opened',
+  SOCIAL_CLICKED = 'social_clicked',
+  MAPS_CLICKED = 'maps_clicked',
+  SUPPORT_TAB_CHANGED = 'support_tab_changed',
 }
 
 // =============================================================================

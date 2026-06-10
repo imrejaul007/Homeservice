@@ -75,12 +75,9 @@ const ProviderRegistration: React.FC = () => {
         agreeToTermsAndPrivacy: data.agreeToTerms && data.agreeToPrivacy,
       });
       setIsSuccess(true);
-    } catch {
-      if (errors?.length) {
-        errors.forEach(err => {
-          if (err.field) setError(err.field as keyof ProviderRegistrationForm, { type: 'server', message: err.message });
-        });
-      }
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error('Registration failed');
+      setError('root', { type: 'server', message: error.message });
     }
   };
 

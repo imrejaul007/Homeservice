@@ -9,6 +9,7 @@ const config: CapacitorConfig = {
     url: 'https://homeservice-1.onrender.com',
   },
   android: {
+    // NILIN brand color - matches app theme
     backgroundColor: '#F5E6E0',
     allowMixedContent: true,
     webContentsDebuggingEnabled: false,
@@ -17,14 +18,16 @@ const config: CapacitorConfig = {
     SplashScreen: {
       launchAutoHide: true,
       launchShowDuration: 2000,
-      backgroundColor: '#6366F1',
+      // Splash screen background - uses NILIN brand cream color for consistency
+      backgroundColor: '#F5E6E0',
       showSpinner: false,
       spinnerColor: '#E8B4A8',
       androidScaleType: 'CENTER_CROP',
     },
     StatusBar: {
       style: 'LIGHT',
-      backgroundColor: '#6366F1',
+      // Status bar color matches splash screen background
+      backgroundColor: '#F5E6E0',
       overlaysWebView: false,
     },
     Keyboard: {

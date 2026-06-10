@@ -1,6 +1,7 @@
 import mongoose, { Types } from 'mongoose';
 import Service from '../models/service.model';
 import Booking from '../models/booking.model';
+import Bundle from '../models/bundle.model';
 import { ApiError } from '../utils/ApiError';
 import logger from '../utils/logger';
 import { eventBus, EVENT_TYPES } from '../event-bus';
@@ -13,8 +14,8 @@ export interface BundleService {
   serviceId: Types.ObjectId;
   serviceName: string;
   originalPrice: number;
-  discountedPrice: number;
   quantity: number;
+  description?: string;
 }
 
 export interface Bundle {
@@ -22,24 +23,24 @@ export interface Bundle {
   name: string;
   description: string;
   services: BundleService[];
-  originalTotal: number;
+  originalPrice: number;
   bundlePrice: number;
-  discountAmount: number;
-  discountPercentage: number;
-  currency: string;
-  category?: Types.ObjectId;
-  providerId?: Types.ObjectId;
+  savingsAmount: number;
+  savingsPercentage: number;
+  validFrom: Date;
+  validUntil: Date;
+  maxRedemptions?: number;
+  redemptionsUsed: number;
+  categoryId?: Types.ObjectId;
+  createdBy: Types.ObjectId;
   isActive: boolean;
-  validityPeriod: {
-    startDate: Date;
-    endDate: Date;
-  };
-  usageLimit?: number;
-  usageCount: number;
-  metadata?: {
-    tags?: string[];
-    imageUrl?: string;
-    highlightServices?: string[];
+  isFeatured: boolean;
+  image?: string;
+  tags?: string[];
+  terms?: string;
+  rating?: {
+    average: number;
+    count: number;
   };
   createdAt: Date;
   updatedAt: Date;
@@ -95,58 +96,10 @@ export interface BundleAnalytics {
 // ============================================
 
 export class BundleSalesService {
-  private bundleModel: any;
+  private bundleModel: typeof Bundle;
 
   constructor() {
-    // Initialize bundle schema dynamically if model doesn't exist
-    this.initializeBundleModel();
-  }
-
-  private initializeBundleModel(): void {
-    try {
-      this.bundleModel = mongoose.models.Bundle || this.createBundleSchema();
-    } catch {
-      this.bundleModel = this.createBundleSchema();
-    }
-  }
-
-  private createBundleSchema(): any {
-    const BundleSchema = new mongoose.Schema({
-      name: { type: String, required: true, trim: true },
-      description: { type: String, required: true },
-      services: [{
-        serviceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Service', required: true },
-        serviceName: { type: String, required: true },
-        originalPrice: { type: Number, required: true },
-        discountedPrice: { type: Number, required: true },
-        quantity: { type: Number, default: 1, min: 1 },
-      }],
-      originalTotal: { type: Number, required: true },
-      bundlePrice: { type: Number, required: true },
-      discountAmount: { type: Number, required: true },
-      discountPercentage: { type: Number, required: true },
-      currency: { type: String, default: 'AED' },
-      category: { type: mongoose.Schema.Types.ObjectId, ref: 'ServiceCategory' },
-      providerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-      isActive: { type: Boolean, default: true },
-      validityPeriod: {
-        startDate: { type: Date, required: true },
-        endDate: { type: Date, required: true },
-      },
-      usageLimit: { type: Number },
-      usageCount: { type: Number, default: 0 },
-      metadata: {
-        tags: [String],
-        imageUrl: String,
-        highlightServices: [String],
-      },
-    }, { timestamps: true });
-
-    BundleSchema.index({ isActive: 1, 'validityPeriod.endDate': 1 });
-    BundleSchema.index({ category: 1 });
-    BundleSchema.index({ providerId: 1 });
-
-    return mongoose.model('Bundle', BundleSchema);
+    this.bundleModel = Bundle;
   }
 
   /**
@@ -159,14 +112,13 @@ export class BundleSalesService {
     discountPercentage: number;
     providerId?: string;
     categoryId?: string;
-    validityPeriod: { startDate: Date; endDate: Date };
-    usageLimit?: number;
-    metadata?: {
-      tags?: string[];
-      imageUrl?: string;
-      highlightServices?: string[];
-    };
-  }): Promise<{ success: boolean; bundle?: Bundle; error?: string }> {
+    validFrom: Date;
+    validUntil: Date;
+    maxRedemptions?: number;
+    tags?: string[];
+    terms?: string;
+    image?: string;
+  }): Promise<{ success: boolean; bundle?: any; error?: string }> {
     try {
       // Validate service IDs
       if (!data.serviceIds || data.serviceIds.length < 2) {
@@ -182,44 +134,41 @@ export class BundleSalesService {
       }
 
       // Calculate bundle pricing
-      let originalTotal = 0;
+      let originalPrice = 0;
       const bundleServices: BundleService[] = services.map(service => {
         const price = (service as any).price?.amount || (service as any).basePrice || 0;
-        originalTotal += price;
+        originalPrice += price;
         return {
           serviceId: service._id as Types.ObjectId,
           serviceName: service.name,
           originalPrice: price,
-          discountedPrice: price, // Will be calculated below
           quantity: 1,
         };
       });
 
       // Apply discount
-      const discountAmount = Math.round(originalTotal * (data.discountPercentage / 100) * 100) / 100;
-      const bundlePrice = Math.round((originalTotal - discountAmount) * 100) / 100;
-
-      // Update discounted prices proportionally
-      for (const service of bundleServices) {
-        service.discountedPrice = Math.round(
-          service.originalPrice * (1 - data.discountPercentage / 100) * 100
-        ) / 100;
-      }
+      const savingsAmount = Math.round(originalPrice * (data.discountPercentage / 100) * 100) / 100;
+      const bundlePrice = Math.round((originalPrice - savingsAmount) * 100) / 100;
 
       const bundle = new this.bundleModel({
         name: data.name,
         description: data.description,
         services: bundleServices,
-        originalTotal,
+        originalPrice,
         bundlePrice,
-        discountAmount,
-        discountPercentage: data.discountPercentage,
-        currency: 'AED',
-        category: data.categoryId ? new mongoose.Types.ObjectId(data.categoryId) : undefined,
-        providerId: data.providerId ? new mongoose.Types.ObjectId(data.providerId) : undefined,
-        validityPeriod: data.validityPeriod,
-        usageLimit: data.usageLimit,
-        metadata: data.metadata,
+        savingsAmount,
+        savingsPercentage: data.discountPercentage,
+        validFrom: data.validFrom,
+        validUntil: data.validUntil,
+        maxRedemptions: data.maxRedemptions,
+        redemptionsUsed: 0,
+        categoryId: data.categoryId ? new mongoose.Types.ObjectId(data.categoryId) : undefined,
+        createdBy: data.providerId ? new mongoose.Types.ObjectId(data.providerId) : new mongoose.Types.ObjectId(),
+        isActive: true,
+        isFeatured: false,
+        tags: data.tags || [],
+        terms: data.terms,
+        image: data.image,
       });
 
       await bundle.save();
@@ -227,9 +176,9 @@ export class BundleSalesService {
       logger.info('Bundle created', {
         bundleId: bundle._id.toString(),
         name: data.name,
-        originalTotal,
+        originalPrice,
         bundlePrice,
-        discountPercentage: data.discountPercentage,
+        savingsPercentage: data.discountPercentage,
       });
 
       // Emit event
@@ -258,7 +207,7 @@ export class BundleSalesService {
   async getBundleById(bundleId: string): Promise<Bundle | null> {
     return this.bundleModel.findById(bundleId)
       .populate('services.serviceId')
-      .populate('category');
+      .populate('categoryId');
   }
 
   /**
@@ -273,16 +222,12 @@ export class BundleSalesService {
     const now = new Date();
     const query: any = {
       isActive: true,
-      'validityPeriod.startDate': { $lte: now },
-      'validityPeriod.endDate': { $gte: now },
+      validFrom: { $lte: now },
+      validUntil: { $gte: now },
     };
 
     if (options.categoryId) {
-      query.category = new mongoose.Types.ObjectId(options.categoryId);
-    }
-
-    if (options.providerId) {
-      query.providerId = new mongoose.Types.ObjectId(options.providerId);
+      query.categoryId = new mongoose.Types.ObjectId(options.categoryId);
     }
 
     const page = options.page || 1;
@@ -292,7 +237,7 @@ export class BundleSalesService {
     const [bundles, total] = await Promise.all([
       this.bundleModel.find(query)
         .populate('services.serviceId', 'name images')
-        .populate('category', 'name')
+        .populate('categoryId', 'name')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit),
@@ -311,6 +256,7 @@ export class BundleSalesService {
     bookingData: {
       providerId?: string;
       scheduledDate?: Date;
+      scheduledTime?: string;
       location?: any;
     }
   ): Promise<{ success: boolean; bookingNumber?: string; savings?: number; error?: string }> {
@@ -328,20 +274,20 @@ export class BundleSalesService {
       // Check validity
       const now = new Date();
       if (!bundle.isActive ||
-          now < bundle.validityPeriod.startDate ||
-          now > bundle.validityPeriod.endDate) {
+          now < bundle.validFrom ||
+          now > bundle.validUntil) {
         await session.abortTransaction();
         return { success: false, error: 'Bundle is not available' };
       }
 
-      // Check usage limit
-      if (bundle.usageLimit && bundle.usageCount >= bundle.usageLimit) {
+      // Check redemption limit
+      if (bundle.maxRedemptions && bundle.redemptionsUsed >= bundle.maxRedemptions) {
         await session.abortTransaction();
-        return { success: false, error: 'Bundle usage limit reached' };
+        return { success: false, error: 'Bundle redemption limit reached' };
       }
 
-      // Increment usage count
-      bundle.usageCount += 1;
+      // Increment redemption count
+      bundle.redemptionsUsed += 1;
       await bundle.save({ session });
 
       // Create individual bookings for each service
@@ -350,11 +296,15 @@ export class BundleSalesService {
         const service = await Service.findById(bundleService.serviceId).session(session);
         if (!service) continue;
 
-        const providerId = bookingData.providerId ||
-          ((service as any).providerId?.toString()) ||
-          (bundle.providerId?.toString());
+        const providerId = bookingData.providerId || (bundle.createdBy?.toString());
 
         if (!providerId) continue;
+
+        // Calculate the discounted price for this service
+        const originalPrice = bundleService.originalPrice;
+        const discountedPrice = Math.round(
+          originalPrice * (1 - bundle.savingsPercentage / 100) * 100
+        ) / 100;
 
         const booking = new Booking({
           bookingNumber: this.generateBookingNumber(),
@@ -362,21 +312,21 @@ export class BundleSalesService {
           providerId: new mongoose.Types.ObjectId(providerId),
           serviceId: service._id,
           scheduledDate: bookingData.scheduledDate || new Date(),
-          scheduledTime: '10:00',
+          scheduledTime: bookingData.scheduledTime || '10:00',
           duration: service.duration || 60,
           location: bookingData.location,
           pricing: {
-            basePrice: bundleService.discountedPrice,
+            basePrice: discountedPrice,
             addOns: [],
             discounts: [{
               type: 'bundle',
               code: bundle._id.toString(),
-              amount: bundleService.originalPrice - bundleService.discountedPrice,
+              amount: originalPrice - discountedPrice,
             }],
-            subtotal: bundleService.discountedPrice,
+            subtotal: discountedPrice,
             tax: 0,
-            totalAmount: bundleService.discountedPrice,
-            currency: bundle.currency,
+            totalAmount: discountedPrice,
+            currency: 'AED',
           },
           status: 'confirmed',
           metadata: {
@@ -392,7 +342,7 @@ export class BundleSalesService {
 
       await session.commitTransaction();
 
-      const savings = bundle.discountAmount;
+      const savings = bundle.savingsAmount;
 
       logger.info('Bundle booked', {
         bundleId: bundle._id.toString(),
@@ -577,17 +527,17 @@ export class BundleSalesService {
     const now = new Date();
     const query: any = {
       isActive: true,
-      'validityPeriod.startDate': { $lte: now },
-      'validityPeriod.endDate': { $gte: now },
+      validFrom: { $lte: now },
+      validUntil: { $gte: now },
     };
 
     if (categoryIds.size > 0) {
-      query.category = { $in: Array.from(categoryIds).map(id => new mongoose.Types.ObjectId(id)) };
+      query.categoryId = { $in: Array.from(categoryIds).map(id => new mongoose.Types.ObjectId(id)) };
     }
 
     return this.bundleModel.find(query)
       .populate('services.serviceId', 'name images')
-      .sort({ discountPercentage: -1, usageCount: -1 })
+      .sort({ savingsPercentage: -1, redemptionsUsed: -1 })
       .limit(limit);
   }
 

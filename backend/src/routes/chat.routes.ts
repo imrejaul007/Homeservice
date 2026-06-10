@@ -5,6 +5,8 @@ import { asyncHandler } from '../utils/asyncHandler';
 import { ApiError } from '../utils/ApiError';
 import Joi from 'joi';
 import mongoose from 'mongoose';
+import Booking from '../models/booking.model';
+import { escapeRegex } from '../utils/formatBookingListItem';
 
 const router = Router();
 
@@ -276,11 +278,14 @@ router.post(
 /**
  * POST /api/chat/rooms/booking
  * Get or create a booking-related chat room
+ * CRITICAL: Verifies user is the customer, provider, or admin before creating room
  */
 router.post(
   '/rooms/booking',
   authenticate,
   asyncHandler(async (req: Request, res: Response) => {
+    const userId = req.user!._id.toString();
+    const userRole = req.user!.role;
     const { bookingId, customerId, providerId } = req.body;
 
     if (!bookingId || !mongoose.Types.ObjectId.isValid(bookingId)) {
@@ -293,6 +298,31 @@ router.post(
 
     if (!providerId || !mongoose.Types.ObjectId.isValid(providerId)) {
       throw new ApiError(400, 'Valid provider ID is required');
+    }
+
+    // IDOR Protection: Fetch booking and verify user relationship
+    const booking = await Booking.findById(bookingId).lean();
+
+    if (!booking) {
+      throw new ApiError(404, 'Booking not found');
+    }
+
+    // Verify user is the customer OR provider OR admin
+    const isCustomer = booking.customerId?.toString() === userId;
+    const isProvider = booking.providerId?.toString() === userId;
+    const isAdmin = userRole === 'admin';
+
+    if (!isCustomer && !isProvider && !isAdmin) {
+      throw new ApiError(403, 'You do not have permission to access this booking');
+    }
+
+    // Verify the provided customerId/providerId match the booking's actual IDs
+    if (booking.customerId?.toString() !== customerId) {
+      throw new ApiError(400, 'Customer ID does not match booking');
+    }
+
+    if (booking.providerId?.toString() !== providerId) {
+      throw new ApiError(400, 'Provider ID does not match booking');
     }
 
     const chatRoom = await chatService.getOrCreateBookingChat(
@@ -597,7 +627,7 @@ router.get(
       chatRoomId: new mongoose.Types.ObjectId(id),
       isDeleted: false,
       type: 'text',
-      content: { $regex: query, $options: 'i' }
+      content: { $regex: escapeRegex(query), $options: 'i' }
     })
       .sort({ createdAt: -1 })
       .skip(skip)
@@ -609,7 +639,7 @@ router.get(
       chatRoomId: new mongoose.Types.ObjectId(id),
       isDeleted: false,
       type: 'text',
-      content: { $regex: query, $options: 'i' }
+      content: { $regex: escapeRegex(query), $options: 'i' }
     });
 
     res.json({

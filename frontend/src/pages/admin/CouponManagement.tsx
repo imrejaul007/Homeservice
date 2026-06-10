@@ -35,6 +35,7 @@ interface ValidationErrors {
   value?: string;
   minOrderAmount?: string;
   usageLimit?: string;
+  maxUsesPerUser?: string;
   validFrom?: string;
   validUntil?: string;
 }
@@ -46,6 +47,7 @@ const emptyForm = (): CouponFormPayload => ({
   maxDiscount: 0,
   minOrderAmount: 0,
   usageLimit: 1000,
+  maxUsesPerUser: 1,
   validFrom: new Date().toISOString().split('T')[0],
   validUntil: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
   title: '',
@@ -59,8 +61,9 @@ const validateCoupon = (data: CouponFormPayload, isEditing: boolean): Validation
   if (!isEditing) {
     if (!data.code?.trim()) {
       errors.code = 'Coupon code is required';
-    } else if (data.code.trim().length < 3) {
-      errors.code = 'Code must be at least 3 characters';
+    } else if (data.code.trim().length < 6) {
+      // FIX: Increase minimum from 3 to 6 characters for security
+      errors.code = 'Code must be at least 6 characters';
     } else if (!/^[A-Za-z0-9]+$/.test(data.code)) {
       errors.code = 'Code must be alphanumeric';
     }
@@ -78,6 +81,7 @@ const validateCoupon = (data: CouponFormPayload, isEditing: boolean): Validation
 
   if (data.minOrderAmount < 0) errors.minOrderAmount = 'Cannot be negative';
   if (data.usageLimit < 1) errors.usageLimit = 'Usage limit must be at least 1';
+  if (data.maxUsesPerUser < 1) errors.maxUsesPerUser = 'Per-customer limit must be at least 1';
 
   if (!data.validFrom) errors.validFrom = 'Start date is required';
   if (!data.validUntil) {
@@ -214,6 +218,7 @@ const CouponManagement: React.FC = () => {
       maxDiscount: coupon.maxDiscount || 0,
       minOrderAmount: coupon.minOrderValue,
       usageLimit: coupon.maxUses,
+      maxUsesPerUser: coupon.maxUsesPerUser ?? 1,
       validFrom: coupon.validFrom?.split('T')[0] || '',
       validUntil: coupon.validUntil?.split('T')[0] || '',
       title: coupon.title,
@@ -699,7 +704,7 @@ const CouponManagement: React.FC = () => {
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium mb-1">Usage limit</label>
+                    <label className="block text-sm font-medium mb-1">Usage limit (global)</label>
                     <input
                       type="number"
                       min={1}
@@ -709,6 +714,24 @@ const CouponManagement: React.FC = () => {
                       }
                       className="w-full px-3 py-2 rounded-xl border border-nilin-border/60"
                     />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Max uses per customer</label>
+                    <input
+                      type="number"
+                      min={1}
+                      value={formData.maxUsesPerUser}
+                      onChange={(e) =>
+                        setFormData({ ...formData, maxUsesPerUser: Number(e.target.value) || 1 })
+                      }
+                      className={cn(
+                        'w-full px-3 py-2 rounded-xl border',
+                        validationErrors.maxUsesPerUser ? 'border-red-400' : 'border-nilin-border/60'
+                      )}
+                    />
+                    {validationErrors.maxUsesPerUser && (
+                      <p className="text-xs text-red-600 mt-1">{validationErrors.maxUsesPerUser}</p>
+                    )}
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-4">

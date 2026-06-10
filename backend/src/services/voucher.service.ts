@@ -1,6 +1,7 @@
 import Voucher, { IVoucher, VoucherUsage } from '../models/voucher.model';
 import User from '../models/user.model';
 import Booking from '../models/booking.model';
+import mongoose from 'mongoose';
 import logger from '../utils/logger';
 import { randomUUID } from 'crypto';
 import { Request } from 'express';
@@ -139,6 +140,7 @@ export const validateVoucher = async (
 
 /**
  * Apply discount to booking
+ * FIX: Use MongoDB transaction to prevent race conditions
  */
 export const applyVoucherToBooking = async (
   code: string,
@@ -146,7 +148,11 @@ export const applyVoucherToBooking = async (
   bookingId: string,
   req?: Request
 ): Promise<{ success: boolean; discount?: number; usageId?: string; error?: string }> => {
+  const session = await mongoose.startSession();
+
   try {
+    session.startTransaction();
+
     const tenantId = req ? getTenantIdOptional(req) : undefined;
 
     // Get booking to determine order amount
@@ -155,8 +161,9 @@ export const applyVoucherToBooking = async (
       bookingQuery.tenantId = tenantId;
     }
 
-    const booking = await Booking.findOne(bookingQuery);
+    const booking = await Booking.findOne(bookingQuery).session(session);
     if (!booking) {
+      await session.abortTransaction();
       return { success: false, error: 'Booking not found' };
     }
 
@@ -165,7 +172,34 @@ export const applyVoucherToBooking = async (
     // Validate voucher
     const validation = await validateVoucher(code, userId, orderAmount, req);
     if (!validation.valid || !validation.voucher) {
+      await session.abortTransaction();
       return { success: false, error: validation.error };
+    }
+
+    // FIX: Check user usage within transaction to prevent race condition
+    const userUsageCount = await VoucherUsage.countDocuments({
+      voucherId: validation.voucher._id,
+      userId,
+    }).session(session);
+
+    if (userUsageCount >= validation.voucher.perUserLimit) {
+      await session.abortTransaction();
+      return { success: false, error: 'You have already used this voucher the maximum number of times' };
+    }
+
+    // FIX: Atomically check and increment voucher usage
+    const result = await Voucher.findOneAndUpdate(
+      {
+        _id: validation.voucher._id,
+        totalUses: { $lt: validation.voucher.maxUses },
+      },
+      { $inc: { totalUses: 1 } },
+      { new: true, session }
+    );
+
+    if (!result) {
+      await session.abortTransaction();
+      return { success: false, error: 'Voucher has reached maximum uses' };
     }
 
     // Calculate discount
@@ -181,7 +215,7 @@ export const applyVoucherToBooking = async (
 
     discount = Math.round(discount * 100) / 100;
 
-    // Create usage record
+    // Create usage record within transaction
     const usageData: Record<string, unknown> = {
       voucherId: validation.voucher._id,
       voucherCode: validation.voucher.code,
@@ -195,13 +229,9 @@ export const applyVoucherToBooking = async (
       usageData.tenantId = tenantId;
     }
 
-    const usage = await VoucherUsage.create(usageData);
+    const usage = await VoucherUsage.create([usageData], { session });
 
-    // Update voucher usage count
-    await Voucher.updateOne(
-      { _id: validation.voucher._id },
-      { $inc: { totalUses: 1 } }
-    );
+    await session.commitTransaction();
 
     logger.info('Voucher applied to booking', {
       voucherId: validation.voucher._id.toString(),
@@ -214,9 +244,10 @@ export const applyVoucherToBooking = async (
     return {
       success: true,
       discount,
-      usageId: usage._id.toString(),
+      usageId: usage[0]._id.toString(),
     };
   } catch (error: any) {
+    await session.abortTransaction();
     logger.error('Failed to apply voucher', {
       code,
       bookingId,
@@ -225,6 +256,8 @@ export const applyVoucherToBooking = async (
       action: 'VOUCHER_APPLY_ERROR',
     });
     return { success: false, error: error.message };
+  } finally {
+    session.endSession();
   }
 };
 
@@ -251,7 +284,7 @@ export const getAvailableVouchers = async (
       status: 'active',
       validFrom: { $lte: now },
       validUntil: { $gte: now },
-      totalUses: { $lt: '$maxUses' }, // This won't work directly, need to filter
+      // Note: totalUses filtering is done after fetch due to MongoDB limitations
       $or: [
         { recipientType: 'all' },
         { recipientUsers: userId },
@@ -268,15 +301,26 @@ export const getAvailableVouchers = async (
       .skip(options?.offset || 0)
       .limit(options?.limit || 20);
 
-    // Filter by usage limits
+    // FIX: Batch query all voucher IDs and user usage counts in one go (N+1 fix)
+    const voucherIds = vouchers.map(v => v._id);
+
+    // Get all usage counts for these vouchers by this user in a single query
+    const usageAggregates = await VoucherUsage.aggregate([
+      { $match: { voucherId: { $in: voucherIds }, userId: new mongoose.Types.ObjectId(userId) } },
+      { $group: { _id: '$voucherId', count: { $sum: 1 } } }
+    ]);
+
+    // Convert to lookup map for O(1) access
+    const usageMap = new Map(
+      usageAggregates.map(u => [u._id.toString(), u.count])
+    );
+
+    // Filter by usage limits using the pre-computed map
     const availableVouchers = [];
     for (const voucher of vouchers) {
       if (voucher.totalUses >= voucher.maxUses) continue;
 
-      const userUsageCount = await VoucherUsage.countDocuments({
-        voucherId: voucher._id,
-        userId,
-      });
+      const userUsageCount = usageMap.get(voucher._id.toString()) || 0;
 
       if (userUsageCount >= voucher.perUserLimit) continue;
 
@@ -296,10 +340,16 @@ export const getAvailableVouchers = async (
       });
     }
 
+    // Note: total count is approximate since we filter by usage limits post-fetch
     const total = await Voucher.countDocuments({
       status: 'active',
       validFrom: { $lte: now },
       validUntil: { $gte: now },
+      $or: [
+        { recipientType: 'all' },
+        { recipientUsers: userId },
+        { recipientTiers: user?.loyaltySystem?.tier || 'bronze' },
+      ],
     });
 
     return {

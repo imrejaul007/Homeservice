@@ -4,16 +4,43 @@ import { AlertCircle, Package, Check, Loader2, ArrowLeft, ArrowRight } from 'luc
 import NavigationHeader from '../../components/layout/NavigationHeader';
 import Footer from '../../components/layout/Footer';
 import Button from '../../components/common/Button';
-import { packageApi, type ServicePackage } from '../../services/packageApi';
+import { packageApi, type ServicePackage, normalizeFeatures, isFeatureIncluded, getFeatureText } from '../../services/packageApi';
 import { useAuthStore } from '../../stores/authStore';
 import toast from 'react-hot-toast';
+import PackageBookingWizard from '../../components/booking/PackageBookingWizard';
 
 interface ServiceItem {
   _id: string;
   name: string;
   duration: number;
   price: number;
+  originalPrice?: number;
+  serviceId?: string;
+  serviceName?: string;
 }
+
+// Map backend service format to frontend format
+interface BackendService {
+  serviceId?: string;
+  _id?: string;
+  serviceName?: string;
+  name?: string;
+  duration?: number;
+  originalPrice?: number;
+  price?: number;
+}
+
+const mapService = (service: BackendService): ServiceItem => {
+  return {
+    _id: service.serviceId || service._id || '',
+    name: service.serviceName || service.name || 'Service',
+    duration: service.duration || 60,
+    price: service.originalPrice || service.price || 0,
+    originalPrice: service.originalPrice,
+    serviceId: service.serviceId,
+    serviceName: service.serviceName,
+  };
+};
 
 const BookPackagePage: React.FC = () => {
   const { packageId } = useParams<{ packageId: string }>();
@@ -27,6 +54,7 @@ const BookPackagePage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [selectedServiceId, setSelectedServiceId] = useState<string | null>(null);
   const [proceeding, setProceeding] = useState(false);
+  const [showWizard, setShowWizard] = useState(false);
 
   // Get packageId from route params or location state
   const resolvedPackageId = packageId || (location.state as { packageId?: string })?.packageId;
@@ -47,11 +75,18 @@ const BookPackagePage: React.FC = () => {
       setLoading(true);
       setError(null);
       const response = await packageApi.getPackage(resolvedPackageId);
-      setPkg(response.package);
+
+      // Map the package and services from backend format to frontend format
+      const mappedPackage = {
+        ...response.package,
+        services: (response.package.services || []).map(mapService),
+      };
+      setPkg(mappedPackage as ServicePackage);
 
       // Auto-select first service if available
-      if (response.package.services?.length > 0) {
-        setSelectedServiceId(response.package.services[0]._id);
+      const services = mappedPackage.services as ServiceItem[];
+      if (services.length > 0) {
+        setSelectedServiceId(services[0]._id);
       }
     } catch (err: unknown) {
       const error = err as { response?: { data?: { message?: string } }; message?: string };
@@ -61,13 +96,13 @@ const BookPackagePage: React.FC = () => {
     }
   };
 
-  const handleProceedToBooking = async () => {
+  const handleProceedToBooking = () => {
     if (!selectedServiceId || !pkg) {
       toast.error('Please select a service to book');
       return;
     }
 
-    const selectedService = pkg.services.find(s => s._id === selectedServiceId);
+    const selectedService = pkg.services.find((s: any) => s._id === selectedServiceId);
     if (!selectedService) {
       toast.error('Selected service not found');
       return;
@@ -82,6 +117,29 @@ const BookPackagePage: React.FC = () => {
         isFromPackage: true
       }
     });
+  };
+
+  const handleBookEntirePackage = () => {
+    if (!isAuthenticated) {
+      navigate('/login', { state: { returnTo: `/book-package/${resolvedPackageId}` } });
+      return;
+    }
+    setShowWizard(true);
+  };
+
+  const handleWizardComplete = (bookingId: string, bookingNumber?: string) => {
+    toast.success('Package booked successfully!');
+    if (bookingNumber) {
+      navigate(`/track/${bookingNumber}`);
+    } else if (bookingId) {
+      navigate(`/customer/bookings/${bookingId}`);
+    } else {
+      navigate('/customer/bookings');
+    }
+  };
+
+  const handleWizardCancel = () => {
+    setShowWizard(false);
   };
 
   const formatPrice = (price: number, currency: string = 'AED') => {
@@ -210,7 +268,7 @@ const BookPackagePage: React.FC = () => {
               <div className="mb-6">
                 <h3 className="font-semibold text-nilin-charcoal mb-3">What's Included</h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                  {pkg.features.map((feature, idx) => (
+                  {normalizeFeatures(pkg.features).map((feature, idx) => (
                     <div key={idx} className="flex items-center gap-2">
                       {feature.included ? (
                         <Check className="w-4 h-4 text-green-500 flex-shrink-0" />
@@ -290,7 +348,7 @@ const BookPackagePage: React.FC = () => {
         )}
 
         {/* Action Buttons */}
-        <div className="flex items-center justify-between gap-4">
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
           <Button
             variant="secondary"
             onClick={() => navigate(`/packages/${pkg._id}`)}
@@ -298,18 +356,90 @@ const BookPackagePage: React.FC = () => {
           >
             View Package Details
           </Button>
-          <Button
-            onClick={handleProceedToBooking}
-            disabled={!selectedServiceId || proceeding}
-            loading={proceeding}
-            rightIcon={<ArrowRight className="w-4 h-4" />}
-          >
-            Proceed to Booking
-          </Button>
+          <div className="flex items-center gap-3">
+            {pkg.services && pkg.services.length > 1 && (
+              <Button
+                variant="secondary"
+                onClick={handleBookEntirePackage}
+                className="bg-gradient-to-r from-nilin-coral/10 to-nilin-blush/10 border-nilin-coral/30 hover:from-nilin-coral/20 hover:to-nilin-blush/20"
+                leftIcon={<Package className="w-4 h-4" />}
+              >
+                Book Entire Package
+              </Button>
+            )}
+            <Button
+              onClick={handleProceedToBooking}
+              disabled={!selectedServiceId || proceeding}
+              loading={proceeding}
+              rightIcon={<ArrowRight className="w-4 h-4" />}
+            >
+              Book Selected Service
+            </Button>
+          </div>
         </div>
       </div>
 
       <Footer />
+
+      {/* Package Booking Wizard Modal */}
+      {showWizard && pkg && (
+        <div className="fixed inset-0 z-50 overflow-auto">
+          <div className="min-h-screen">
+            <PackageBookingWizard
+              packageData={{
+                id: pkg._id,
+                name: pkg.name,
+                services: pkg.services.map(s => ({
+                  _id: s._id,
+                  name: s.name,
+                  duration: s.duration,
+                  price: s.price,
+                  category: pkg.category,
+                  description: pkg.description,
+                  providerId: (pkg as any).providerId || '',
+                  provider: {
+                    _id: (pkg as any).providerId || '',
+                    firstName: (pkg as any).providerName || 'Provider',
+                    lastName: '',
+                    isVerified: true,
+                  },
+                  rating: pkg.averageRating,
+                  reviewCount: pkg.totalReviews,
+                  images: pkg.images,
+                  isActive: pkg.isActive,
+                  variants: [],
+                  variantDetails: null,
+                  selectedVariant: 0,
+                  location: { type: 'provider', coordinates: [0, 0] },
+                  tags: [],
+                  createdAt: '',
+                  updatedAt: '',
+                })),
+                basePrice: pkg.pricing.currentPrice,
+                provider: {
+                  _id: (pkg as any).providerId || '',
+                  firstName: (pkg as any).providerName || 'Provider',
+                  lastName: '',
+                  isVerified: true,
+                  rating: pkg.averageRating,
+                },
+              }}
+              selectedAddOns={[]}
+              calculatedPrice={{
+                subtotal: pkg.pricing.currentPrice,
+                addOnsTotal: 0,
+                discount: pkg.pricing.originalPrice > pkg.pricing.currentPrice
+                  ? pkg.pricing.originalPrice - pkg.pricing.currentPrice
+                  : 0,
+                tax: 0,
+                total: pkg.pricing.currentPrice,
+              }}
+              onComplete={handleWizardComplete}
+              onCancel={handleWizardCancel}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 };
