@@ -1,9 +1,9 @@
 export interface Experience {
   _id: string;
   userId: { _id: string; firstName: string; lastName: string; avatar?: string };
-  bookingId: string;
-  serviceId: { _id: string; name: string };
-  providerId: { _id: string; firstName: string; lastName: string };
+  bookingId?: string;
+  serviceId?: { _id: string; name: string };
+  providerId?: { _id: string; firstName: string; lastName: string };
   images: string[];
   videoUrl?: string;
   title: string;
@@ -20,7 +20,7 @@ export interface Experience {
 }
 
 export interface ExperienceSubmission {
-  bookingId: string;
+  bookingId?: string;
   title: string;
   description: string;
   rating: number;

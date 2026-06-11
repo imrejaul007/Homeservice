@@ -8,16 +8,17 @@ import Coupon from '../models/coupon.model';
 import Booking from '../models/booking.model';
 import Joi from 'joi';
 import mongoose from 'mongoose';
+// FIX: Use centralized discount stacking utility for consistent enforcement
+import { checkDiscountStacking, applyDiscountWithStackingPrevention } from '../utils/discountStacking';
 
 const router = Router();
 
 // ============================================
 // Validation Schemas
 // ============================================
-// FIX P0-5: Standardize coupon code validation across all endpoints
 
 const validateCouponSchema = Joi.object({
-  // FIX P0-5: min 6, max 20, alphanumeric only
+  // Standardized: min 6, max 20, alphanumeric only
   code: Joi.string().required().min(6).max(20).pattern(/^[A-Z0-9]+$/).uppercase().messages({
     'string.pattern.base': 'Coupon code must be alphanumeric (A-Z, 0-9 only)',
     'string.min': 'Coupon code must be at least 6 characters',
@@ -28,7 +29,7 @@ const validateCouponSchema = Joi.object({
 });
 
 const applyCouponSchema = Joi.object({
-  // FIX P0-5: min 6, max 20, alphanumeric only
+  // Standardized: min 6, max 20, alphanumeric only
   code: Joi.string().required().min(6).max(20).pattern(/^[A-Z0-9]+$/).uppercase().messages({
     'string.pattern.base': 'Coupon code must be alphanumeric (A-Z, 0-9 only)',
     'string.min': 'Coupon code must be at least 6 characters',
@@ -379,14 +380,12 @@ router.post(
       throw ApiError.badRequest('A coupon has already been applied to this booking', [], ERROR_CODES.VALIDATION_ERROR);
     }
 
-    // FIX: Double-Discount Prevention - Check for conflicting discounts
-    const existingDiscounts = booking.pricing.discounts || [];
-    const conflictingDiscount = existingDiscounts.find((d: any) =>
-      d.type === 'membership' || d.type === 'bulk' || d.type === 'loyalty'
-    );
-    if (conflictingDiscount) {
+    // FIX: Use centralized discount stacking utility instead of inline check
+    // This ensures consistent priority enforcement across all discount types
+    const stackingCheck = await checkDiscountStacking(bookingId, 'coupon');
+    if (!stackingCheck.canApply) {
       throw ApiError.badRequest(
-        `Cannot apply coupon. A ${conflictingDiscount.type} discount is already applied. Only one discount type can be used per booking.`,
+        stackingCheck.reason || 'Cannot apply coupon due to conflicting discount.',
         [],
         ERROR_CODES.VALIDATION_ERROR
       );

@@ -19,7 +19,7 @@ if (!MONGODB_URI) {
 }
 
 async function test() {
-  await mongoose.connect(MONGODB_URI, { maxPoolSize: 5 });
+  await mongoose.connect(MONGODB_URI!, { maxPoolSize: 5 });
   const db = mongoose.connection.db!;
 
   console.log('='.repeat(60));

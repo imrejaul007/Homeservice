@@ -38,6 +38,7 @@ const NAV_ITEMS: AdminNavItem[] = [
   { to: '/admin/churn', label: 'Churn & Retention', description: 'At-risk users', icon: TrendingDown },
   { to: '/admin/categories', label: 'Categories', description: 'Service taxonomy', icon: Layers },
   { to: '/admin/offers', label: 'Offers', description: 'Promotions', icon: Gift },
+  { to: '/admin/curated-trending', label: 'Homepage Trending', description: 'Trending Now carousel', icon: TrendingUp },
   { to: '/admin/coupons', label: 'Coupons', description: 'Discount codes', icon: Ticket },
   { to: '/admin/reviews', label: 'Reviews', description: 'Moderation', icon: Star },
   { to: '/admin/chatbot-builder', label: 'Chatbot Builder', description: 'IA Agents', icon: Bot },

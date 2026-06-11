@@ -5,6 +5,7 @@ import type { Service } from '../../types/service';
 import { useAuthStore } from '../../stores/authStore';
 import { favoritesApi } from '../../services/favoritesApi';
 import { toast } from 'react-hot-toast';
+import { usePriceConversion, formatPrice } from '../../utils/priceConverter';
 
 export type { Service };
 
@@ -45,6 +46,7 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
 }) => {
   const navigate = useNavigate();
   const { isAuthenticated } = useAuthStore();
+  const { convert, format, currency } = usePriceConversion();
   const [isFavorited, setIsFavorited] = useState(initialFavorited);
   const [isToggling, setIsToggling] = useState(false);
 
@@ -77,7 +79,7 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
     setIsToggling(true);
 
     try {
-      const currentProviderId = service.provider?._id || service.providerId;
+      const currentProviderId = service.provider?._id || (service as any).providerId;
       if (isFavorited) {
         await favoritesApi.removeFavorite(currentProviderId);
         setIsFavorited(false);
@@ -99,9 +101,12 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
 
   // Extract display values from potentially nested objects
   const displayTitle = service.title || service.name;
-  const displayPrice = typeof service.price === 'number'
-    ? service.price
-    : (service.price?.amount || 0);
+  // Handle multiple price formats: pricing.currentPrice, price.amount, or direct price
+  // Convert to user's local currency based on location
+  const rawPrice = (service as any).pricing?.currentPrice
+    ?? (typeof service.price === 'number' ? service.price : service.price?.amount || 0);
+  const sourceCurrency = typeof service.price === 'object' ? service.price?.currency || 'AED' : 'AED';
+  const displayPrice = convert(rawPrice, sourceCurrency);
 
   const displayRating = typeof service.rating === 'number'
     ? service.rating
@@ -192,7 +197,7 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
           </h3>
           <div className="flex items-center justify-between">
             <span className="text-lg font-bold text-[#2D2D2D]">
-              AED {displayPrice}
+              {format(displayPrice, currency)}
             </span>
             <ChevronRight className="h-4 w-4 text-[#9B9B9B] group-hover:translate-x-1 transition-transform duration-200" />
           </div>
@@ -295,11 +300,11 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
           {/* Price and CTA */}
           <div className="flex items-center justify-between pt-4 border-t border-[#E8E4E0]">
             <div>
-              {service.provider && (
-                <p className="text-xs text-[#9B9B9B] mb-0.5">by {service.provider.name}</p>
+              {(service.provider || (service as any).providerName) && (
+                <p className="text-xs text-[#9B9B9B] mb-0.5">by {service.provider?.businessName || (service as any).providerName || 'Service Provider'}</p>
               )}
               <div className="flex items-baseline gap-1">
-                <span className="text-2xl font-bold text-[#2D2D2D]">AED {displayPrice}</span>
+                <span className="text-2xl font-bold text-[#2D2D2D]">{format(displayPrice, currency)}</span>
               </div>
             </div>
             <button
@@ -424,11 +429,11 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
         {/* Price and Provider */}
         <div className="flex items-center justify-between pt-3 border-t border-[#E8E4E0]">
           <div>
-            {service.provider && (
-              <p className="text-xs text-[#9B9B9B] mb-0.5">by {service.provider.name}</p>
+            {(service.provider || (service as any).providerName) && (
+              <p className="text-xs text-[#9B9B9B] mb-0.5">by {service.provider?.businessName || (service as any).providerName || 'Service Provider'}</p>
             )}
             <div className="flex items-baseline gap-1">
-              <span className="text-xl font-bold text-[#2D2D2D]">AED {displayPrice}</span>
+              <span className="text-xl font-bold text-[#2D2D2D]">{format(displayPrice, currency)}</span>
               <span className="text-xs text-[#9B9B9B]">/ service</span>
             </div>
           </div>

@@ -23,7 +23,7 @@ async function listDatabases() {
 
   try {
     // Extract base URI from the full connection string (remove database name)
-    const baseUri = MONGODB_URI.replace(/\/[^/]+\?/, '/');
+    const baseUri = MONGODB_URI!.replace(/\/[^/]+\?/, '/');
 
     // Connect without specifying a database
     await mongoose.connect(baseUri, {

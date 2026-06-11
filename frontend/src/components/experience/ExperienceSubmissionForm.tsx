@@ -21,6 +21,10 @@ interface ExperienceSubmissionFormProps {
   onClose: () => void;
   onSuccess?: () => void;
   bookingId?: string;
+  experienceId?: string;
+  initialData?: Partial<FormData>;
+  requireBooking?: boolean;
+  lockBooking?: boolean;
 }
 
 interface FormData {
@@ -46,7 +50,11 @@ const ExperienceSubmissionForm: React.FC<ExperienceSubmissionFormProps> = ({
   isOpen,
   onClose,
   onSuccess,
-  bookingId
+  bookingId,
+  experienceId,
+  initialData,
+  requireBooking = false,
+  lockBooking = false,
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -74,10 +82,12 @@ const ExperienceSubmissionForm: React.FC<ExperienceSubmissionFormProps> = ({
     if (isOpen) {
       fetchAvailableBookings();
       if (bookingId) {
-        setFormData(prev => ({ ...prev, bookingId }));
+        setFormData((prev) => ({ ...prev, bookingId }));
+      } else if (initialData) {
+        setFormData((prev) => ({ ...prev, ...initialData }));
       }
     }
-  }, [isOpen, bookingId]);
+  }, [isOpen, bookingId, initialData]);
 
   // Reset form when modal closes
   useEffect(() => {
@@ -187,7 +197,7 @@ const ExperienceSubmissionForm: React.FC<ExperienceSubmissionFormProps> = ({
   const validateForm = (): boolean => {
     const newErrors: FormErrors = {};
 
-    if (!formData.bookingId) {
+    if (requireBooking && !formData.bookingId) {
       newErrors.bookingId = 'Please select a booking';
     }
 
@@ -228,14 +238,18 @@ const ExperienceSubmissionForm: React.FC<ExperienceSubmissionFormProps> = ({
     setErrors({});
 
     try {
-      const response = await experienceApi.submitExperience({
-        bookingId: formData.bookingId,
+      const payload = {
+        ...(formData.bookingId && { bookingId: formData.bookingId }),
         title: formData.title.trim(),
         description: formData.description.trim(),
         rating: formData.rating,
-        images: formData.images as string[],
-        videoUrl: formData.videoUrl.trim() || undefined
-      });
+        images: formData.images,
+        videoUrl: formData.videoUrl.trim() || undefined,
+      };
+
+      const response = experienceId
+        ? await experienceApi.updateExperience(experienceId, payload)
+        : await experienceApi.submitExperience(payload);
 
       if (response.success) {
         setShowSuccess(true);
@@ -257,8 +271,9 @@ const ExperienceSubmissionForm: React.FC<ExperienceSubmissionFormProps> = ({
   };
 
   const isFormValid = () => {
+    const bookingOk = requireBooking ? !!formData.bookingId : true;
     return (
-      formData.bookingId &&
+      bookingOk &&
       formData.rating >= 1 &&
       formData.title.trim().length >= 5 &&
       formData.title.trim().length <= 100 &&
@@ -302,9 +317,11 @@ const ExperienceSubmissionForm: React.FC<ExperienceSubmissionFormProps> = ({
             <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-nilin-success/20 flex items-center justify-center">
               <CheckCircle className="h-8 w-8 text-nilin-success" />
             </div>
-            <h3 className="text-xl font-medium text-nilin-charcoal mb-2">Experience Submitted!</h3>
+            <h3 className="text-xl font-medium text-nilin-charcoal mb-2">
+              {experienceId ? 'Experience Updated!' : 'Experience Submitted!'}
+            </h3>
             <p className="text-nilin-warmGray">
-              Thank you for sharing your experience. It will be reviewed shortly.
+              Submitted for review — we&apos;ll notify you when it&apos;s published.
             </p>
           </div>
         ) : (
@@ -317,16 +334,16 @@ const ExperienceSubmissionForm: React.FC<ExperienceSubmissionFormProps> = ({
               </div>
             )}
 
-            {/* Booking Selection */}
+            {/* Booking Selection (optional) */}
             <div>
               <label className="block text-sm font-medium text-nilin-charcoal mb-2">
-                Select Completed Booking <span className="text-nilin-error">*</span>
+                Link to a Booking {requireBooking ? <span className="text-nilin-error">*</span> : <span className="text-nilin-warmGray font-normal">(optional)</span>}
               </label>
               <div className="relative">
                 <button
                   type="button"
-                  onClick={() => !isLoading && setShowDropdown(!showDropdown)}
-                  disabled={isLoading}
+                  onClick={() => !isLoading && !lockBooking && setShowDropdown(!showDropdown)}
+                  disabled={isLoading || lockBooking}
                   className={cn(
                     'w-full flex items-center justify-between px-4 py-3 border rounded-xl transition-all',
                     errors.bookingId
@@ -345,7 +362,9 @@ const ExperienceSubmissionForm: React.FC<ExperienceSubmissionFormProps> = ({
                       {selectedBooking.service.name} - {selectedBooking.provider.firstName} {selectedBooking.provider.lastName}
                     </span>
                   ) : (
-                    <span className="text-nilin-warmGray">Select a completed booking</span>
+                    <span className="text-nilin-warmGray">
+                      {requireBooking ? 'Select a completed booking' : 'No booking linked (optional)'}
+                    </span>
                   )}
                   <ChevronDown className={cn(
                     'h-5 w-5 text-nilin-warmGray transition-transform',
@@ -353,8 +372,24 @@ const ExperienceSubmissionForm: React.FC<ExperienceSubmissionFormProps> = ({
                   )} />
                 </button>
 
-                {showDropdown && (
+                {showDropdown && !lockBooking && (
                   <div className="absolute z-20 w-full mt-2 bg-white border border-nilin-border rounded-xl shadow-lg overflow-hidden">
+                    {!requireBooking && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handleInputChange('bookingId', '');
+                          setShowDropdown(false);
+                        }}
+                        className={cn(
+                          'w-full px-4 py-3 text-left hover:bg-nilin-blush/30 transition-colors border-b border-nilin-border/50',
+                          !formData.bookingId && 'bg-nilin-blush/50'
+                        )}
+                      >
+                        <p className="font-medium text-nilin-charcoal text-sm">No booking link</p>
+                        <p className="text-xs text-nilin-warmGray">Share a general NILIN experience</p>
+                      </button>
+                    )}
                     {availableBookings.length === 0 ? (
                       <div className="p-4 text-center text-nilin-warmGray text-sm">
                         No completed bookings available

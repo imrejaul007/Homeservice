@@ -271,7 +271,11 @@ class BookingService {
 
       // Status timestamps - Issue #2: Handle Date conversion
       confirmedAt: toIsoString(booking.confirmedAt),
-      startedAt: toIsoString(booking.startedAt),
+      startedAt: toIsoString(
+        booking.startedAt
+          || booking.providerResponse?.arrivalTime
+          || booking.statusHistory?.find((h: { status?: string }) => h.status === 'in_progress')?.timestamp
+      ),
       completedAt: toIsoString(booking.completedAt),
       cancelledAt: toIsoString(booking.cancelledAt),
       cancellationReason: booking.cancellationReason,
@@ -310,27 +314,39 @@ class BookingService {
         couponDiscount: booking.pricing?.couponDiscount ?? 0,
       },
 
-      // Service Info (populated)
-      service: booking.service ? {
-        _id: toStringId(booking.service._id),
-        name: booking.service.name,
-        description: booking.service.description,
-        category: booking.service.category,
-        subcategory: booking.service.subcategory,
-        duration: booking.service.duration,
-        price: booking.service.price,
-      } : undefined,
+      // Service Info (populated via virtual or serviceId populate)
+      service: (() => {
+        const raw = booking.service
+          || (typeof booking.serviceId === 'object' && booking.serviceId?.name ? booking.serviceId : null);
+        if (!raw) return undefined;
+        return {
+          _id: toStringId(raw._id),
+          name: raw.name,
+          description: raw.description,
+          category: raw.category,
+          subcategory: raw.subcategory,
+          duration: raw.duration,
+          images: raw.images,
+          price: raw.price,
+        };
+      })(),
 
       // Provider Info (populated)
-      provider: booking.provider ? {
-        _id: toStringId(booking.provider._id),
-        firstName: booking.provider.firstName,
-        lastName: booking.provider.lastName,
-        email: booking.provider.email,
-        phone: booking.provider.phone,
-        avatar: booking.provider.avatar,
-        businessInfo: booking.provider.businessInfo,
-      } : undefined,
+      provider: (() => {
+        const raw = booking.provider
+          || (typeof booking.providerId === 'object' && booking.providerId?.firstName ? booking.providerId : null);
+        if (!raw) return undefined;
+        return {
+          _id: toStringId(raw._id),
+          firstName: raw.firstName,
+          lastName: raw.lastName,
+          email: raw.email,
+          phone: raw.phone,
+          avatar: raw.avatar,
+          rating: raw.rating ?? raw.reviewsData?.averageRating,
+          businessInfo: raw.businessInfo,
+        };
+      })(),
 
       // Customer Info (populated)
       customer: booking.customer ? {
@@ -385,14 +401,24 @@ class BookingService {
       providerResponse: booking.providerResponse ? {
         status: booking.providerResponse.status,
         message: booking.providerResponse.message,
-        estimatedArrival: booking.providerResponse.estimatedArrival,
+        estimatedArrival: toIsoString(booking.providerResponse.estimatedArrival),
         notes: booking.providerResponse.notes,
         respondedAt: toIsoString(booking.providerResponse.respondedAt),
         acceptedAt: toIsoString(booking.providerResponse.acceptedAt),
         rejectedAt: toIsoString(booking.providerResponse.rejectedAt),
         completedAt: toIsoString(booking.providerResponse.completedAt),
-        arrivalTime: booking.providerResponse.arrivalTime,
+        arrivalTime: toIsoString(booking.providerResponse.arrivalTime),
       } : undefined,
+
+      // ETA in minutes from provider estimated arrival when available
+      etaMinutes: (() => {
+        if (typeof booking.etaMinutes === 'number') return booking.etaMinutes;
+        const etaSource = booking.providerResponse?.estimatedArrival;
+        if (!etaSource) return undefined;
+        const etaDate = new Date(etaSource);
+        if (Number.isNaN(etaDate.getTime())) return undefined;
+        return Math.max(0, Math.round((etaDate.getTime() - Date.now()) / (1000 * 60)));
+      })(),
 
       // Issue #3: Convert createdAt/updatedAt from Date to string (ISO)
       createdAt: toIsoString(booking.createdAt) || booking.createdAt,

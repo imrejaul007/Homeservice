@@ -70,7 +70,16 @@ export const packageApi = {
   /**
    * Get a single package by ID
    */
-  getPackage: async (packageId: string): Promise<{ package: ServicePackage }> => {
+  getPackage: async (packageId: string): Promise<{
+    package: ServicePackage;
+    reviews?: Array<{
+      _id: string;
+      user: { name: string; avatar?: string };
+      rating: number;
+      comment: string;
+      createdAt: string;
+    }>;
+  }> => {
     try {
       const response = await api.get(`/packages/${packageId}`);
       return response.data.data;

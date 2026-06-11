@@ -1152,6 +1152,31 @@ class SocketServer {
 
   // Emit to booking room with error handling
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  emitToChatRoom<T extends keyof ServerToClientEvents>(chatRoomId: string, event: T, data: any): boolean {
+    try {
+      // @ts-ignore - Socket.io emit requires string event name
+      this.io.to(`chat:${chatRoomId}`).emit(event, data);
+      if (event === 'message:new') {
+        this.io.to(`chat:${chatRoomId}`).emit('chat:new_message', data);
+      }
+      logger.debug('Emitted event to chat room', {
+        chatRoomId,
+        event,
+        action: 'EMIT_TO_CHAT_ROOM',
+      });
+      return true;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.error('Failed to emit to chat room', {
+        chatRoomId,
+        event,
+        error: errorMessage,
+        action: 'EMIT_TO_CHAT_ROOM_FAILED',
+      });
+      return false;
+    }
+  }
+
   emitToBooking<T extends keyof ServerToClientEvents>(bookingId: string, event: T, data: any): boolean {
     try {
       const socketsCount = this.bookingRooms.get(bookingId)?.size || 0;

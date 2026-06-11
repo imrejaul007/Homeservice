@@ -2253,10 +2253,17 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
     filters?: BookingFiltersDTO,
     options?: { tenantContext?: { tenantId?: string; isAdmin?: boolean }; page?: number; limit?: number }
   ): Promise<{ bookings: any[]; pagination: any }> {
-    const page = options?.page || 1;
+    const page = filters?.page || options?.page || 1;
     // FIX: Enforce maximum pagination limit to prevent excessive queries
-    const limit = Math.min(options?.limit || 20, 100);
+    const limit = Math.min(filters?.limit || options?.limit || 20, 100);
     const skip = (page - 1) * limit;
+
+    const allowedSortFields = ['createdAt', 'scheduledDate', 'status', 'updatedAt'] as const;
+    const sortField = allowedSortFields.includes(filters?.sortBy as typeof allowedSortFields[number])
+      ? filters!.sortBy!
+      : 'scheduledDate';
+    const sortDirection = filters?.sortOrder === 'asc' ? 1 : -1;
+    const sortSpec: Record<string, 1 | -1> = { [sortField]: sortDirection };
 
     const query: any = { customerId: new mongoose.Types.ObjectId(customerId), deletedAt: { $exists: false } }; // FIX: Exclude deleted bookings
 
@@ -2276,7 +2283,11 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
         },
       ];
     } else if (filters?.status) {
-      query.status = filters.status;
+      if (filters.status === 'active') {
+        query.status = { $in: ['pending', 'confirmed', 'in_progress'] };
+      } else {
+        query.status = filters.status;
+      }
     }
     if (filters?.startDate || filters?.endDate) {
       query.scheduledDate = {};
@@ -2303,6 +2314,14 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
       pricing: 1,
       customerInfo: 1,
       locationType: 1,
+      location: 1,
+      address: 1,
+      providerResponse: 1,
+      statusHistory: 1,
+      payment: 1,
+      paymentStatus: 1,
+      serviceId: 1,
+      providerId: 1,
       createdAt: 1,
       updatedAt: 1,
     };
@@ -2376,7 +2395,7 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
             }
           }
         },
-        { $sort: { createdAt: -1 } },
+        { $sort: sortSpec },
         { $skip: skip },
         { $limit: limit }
       ]);
@@ -2384,9 +2403,9 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
       // Standard query without category filter
       const [bookingsResult, countResult] = await Promise.all([
         Booking.find(baseQuery, projection)
-          .populate('service', 'name category images')
-          .populate('provider', 'firstName lastName avatar')
-          .sort({ createdAt: -1 })
+          .populate('service', 'name category images duration price')
+          .populate('provider', 'firstName lastName avatar phone businessInfo rating')
+          .sort(sortSpec)
           .skip(skip)
           .limit(limit)
           .lean(),
@@ -3224,9 +3243,18 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
       | { firstName?: string; lastName?: string; email?: string; phone?: string }
       | undefined;
 
+    const providerDoc = booking.providerId as
+      | { _id?: mongoose.Types.ObjectId; firstName?: string; lastName?: string; businessInfo?: { businessName?: string }; phone?: string }
+      | mongoose.Types.ObjectId
+      | undefined;
+
     return {
       _id: booking._id,
       bookingNumber: booking.bookingNumber,
+      customerId: booking.customerId?.toString(),
+      providerId: providerDoc && typeof providerDoc === 'object' && '_id' in providerDoc
+        ? providerDoc._id?.toString()
+        : booking.providerId?.toString(),
       status: booking.status,
       statusHistory: booking.statusHistory || [],
       service: booking.serviceId
@@ -3244,11 +3272,12 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
       pricing: booking.pricing,
       isGuestBooking: Boolean(booking.isGuestBooking),
       createdAt: booking.createdAt,
-      provider: booking.providerId
+      provider: providerDoc && typeof providerDoc === 'object' && 'firstName' in providerDoc
         ? {
-            name: `${(booking.providerId as any).firstName} ${(booking.providerId as any).lastName}`,
-            businessName: (booking.providerId as any).businessInfo?.businessName,
-            phone: (booking.providerId as any).phone,
+            _id: providerDoc._id?.toString(),
+            name: `${providerDoc.firstName || ''} ${providerDoc.lastName || ''}`.trim(),
+            businessName: providerDoc.businessInfo?.businessName,
+            phone: providerDoc.phone,
           }
         : undefined,
       customerInfo: booking.isGuestBooking && guest

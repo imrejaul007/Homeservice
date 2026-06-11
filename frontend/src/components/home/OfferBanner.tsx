@@ -7,6 +7,7 @@ import { getOfferUsageLabel } from '../../utils/offerDisplay';
 import { useAuthStore } from '../../stores/authStore';
 import { toast } from 'react-hot-toast';
 import { OFFER_GRADIENT_MAP } from '../../utils/offerDisplay';
+import { usePriceConversion, localizeAedAmountsInText } from '../../utils/priceConverter';
 
 const GRADIENT_MAP = OFFER_GRADIENT_MAP;
 
@@ -37,6 +38,7 @@ const OfferBanner: React.FC = () => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const carouselRef = useRef<HTMLDivElement>(null);
   const { isAuthenticated } = useAuthStore();
+  const { convert, format, currency } = usePriceConversion();
   const [offers, setOffers] = useState<Offer[]>([]);
   const [claimedOfferIds, setClaimedOfferIds] = useState<Set<string>>(new Set());
   const [isLoading, setIsLoading] = useState(true);
@@ -232,9 +234,14 @@ const OfferBanner: React.FC = () => {
 
   const getDiscountText = (offer: Offer): string => {
     if (offer.type === 'percentage') return `${offer.value}% OFF`;
-    if (offer.type === 'fixed') return `AED ${offer.value} OFF`;
+    if (offer.type === 'fixed') return `${format(convert(offer.value, 'AED'), currency)} OFF`;
     if (offer.type === 'free_service') return 'FREE SERVICE';
     return 'SPECIAL OFFER';
+  };
+
+  const getOfferSubtitle = (offer: Offer): string => {
+    const raw = offer.displaySubtitle || offer.description || '';
+    return localizeAedAmountsInText(raw, convert, format, currency);
   };
 
   const hasServiceLinking = (offer: Offer): boolean => {
@@ -295,7 +302,7 @@ const OfferBanner: React.FC = () => {
               {offer.displayTitle || offer.title}
             </h3>
             <p className="text-sm text-white/80">
-              {offer.displaySubtitle || offer.description}
+              {getOfferSubtitle(offer)}
             </p>
             {hasServiceLinking(offer) && (
               <div className="flex items-center gap-1 mt-2">

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Tag, CheckCircle, XCircle, Loader2 } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { usePriceConversion } from '../../utils/priceConverter';
 
 export interface CouponValidationResult {
   valid: boolean;
@@ -19,6 +20,7 @@ interface CouponCodeInputProps {
     discountAmount: number;
   } | null;
   disabled?: boolean;
+  /** Currency discount amounts are stored in (default AED) */
   currency?: string;
 }
 
@@ -27,8 +29,9 @@ const CouponCodeInput: React.FC<CouponCodeInputProps> = ({
   onRemove,
   appliedCoupon,
   disabled = false,
-  currency = 'AED',
+  currency: sourceCurrency = 'AED',
 }) => {
+  const { convert, format, currency: displayCurrency } = usePriceConversion();
   const [code, setCode] = useState('');
   const [isValidating, setIsValidating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -47,10 +50,7 @@ const CouponCodeInput: React.FC<CouponCodeInputProps> = ({
   }, [code]);
 
   const formatAmount = (amount: number) => {
-    return new Intl.NumberFormat('en-AE', {
-      style: 'currency',
-      currency: currency.toUpperCase(),
-    }).format(amount);
+    return format(convert(amount, sourceCurrency), displayCurrency);
   };
 
   const handleApply = async () => {

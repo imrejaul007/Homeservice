@@ -7,7 +7,7 @@ import Joi from 'joi';
 import logger from '../utils/logger';
 import AuditLog from '../models/auditLog.model';
 
-// FIX P0-5: Standardize voucher code validation (can be shorter for physical distribution)
+// Voucher code validation (shorter codes allowed for physical distribution use cases)
 const createVoucherSchema = Joi.object({
   // Vouchers can be shorter (4-20) for physical distribution use cases
   code: Joi.string().required().min(4).max(20).pattern(/^[A-Z0-9]+$/).uppercase().messages({

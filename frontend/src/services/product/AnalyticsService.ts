@@ -69,6 +69,31 @@ class AnalyticsService {
     });
   }
 
+  // Trending Now homepage feed
+  trackTrendingFeedLoaded(details: Record<string, string | number | boolean>) {
+    this.track('trending_feed_loaded', details);
+  }
+
+  trackTrendingFeedError(message: string) {
+    this.track('trending_feed_error', { message });
+  }
+
+  trackTrendingFeedEmpty(city?: string) {
+    this.track('trending_feed_empty', { city: city || 'all' });
+  }
+
+  trackTrendingCardImpression(cardType: string, sourceId: string) {
+    this.track('trending_card_impression', { card_type: cardType, source_id: sourceId });
+  }
+
+  trackTrendingCardClick(cardType: string, sourceId: string, link: string) {
+    this.track('trending_card_click', { card_type: cardType, source_id: sourceId, link });
+  }
+
+  trackTrendingCarouselNav(direction: 'left' | 'right' | 'auto') {
+    this.track('trending_carousel_nav', { direction });
+  }
+
   // Track retention
   trackRetention(day: number) {
     this.track('retention', {

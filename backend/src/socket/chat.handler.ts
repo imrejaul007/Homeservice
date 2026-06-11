@@ -307,8 +307,9 @@ export class ChatSocketHandler {
   // Room Management Handlers
   // =============================================================================
 
-  private async handleJoinRoom(socket: AuthenticatedSocket, rawData: { chatRoomId: string }): Promise<void> {
-    const validation = this.validate<{ chatRoomId: string }>(joinRoomSchema, rawData);
+  private async handleJoinRoom(socket: AuthenticatedSocket, rawData: { chatRoomId: string } | string): Promise<void> {
+    const normalizedData = typeof rawData === 'string' ? { chatRoomId: rawData } : rawData;
+    const validation = this.validate<{ chatRoomId: string }>(joinRoomSchema, normalizedData);
     if (!validation.valid) {
       socket.emit('error', { message: validation.error || 'Invalid data' });
       return;

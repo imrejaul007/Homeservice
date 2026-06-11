@@ -10,6 +10,17 @@ import NavigationHeader from '../layout/NavigationHeader';
 import Footer from '../layout/Footer';
 import PasswordStrengthIndicator from './PasswordStrengthIndicator';
 
+// Supported cities with their coordinates
+const SUPPORTED_CITIES = [
+  { value: 'dubai', label: 'Dubai', coords: [55.2708, 25.2048] },
+  { value: 'abu-dhabi', label: 'Abu Dhabi', coords: [54.3773, 24.4539] },
+  { value: 'sharjah', label: 'Sharjah', coords: [55.4209, 25.3463] },
+  { value: 'ajman', label: 'Ajman', coords: [55.4209, 25.3488] },
+  { value: 'riyadh', label: 'Riyadh', coords: [46.6753, 24.7136] },
+  { value: 'jeddah', label: 'Jeddah', coords: [46.6753, 24.7136] },
+  { value: 'mumbai', label: 'Mumbai', coords: [72.8777, 19.0760] },
+];
+
 const providerRegistrationSchema = z.object({
   firstName: z.string().min(2, 'First name must be at least 2 characters').max(50).regex(/^[a-zA-Z\s-']+$/, 'Name can only contain letters'),
   lastName: z.string().min(2, 'Last name must be at least 2 characters').max(50).regex(/^[a-zA-Z\s-']+$/, 'Name can only contain letters'),
@@ -19,6 +30,10 @@ const providerRegistrationSchema = z.object({
   phone: z.string().optional().or(z.literal('')),
   businessName: z.string().min(2, 'Business name required'),
   serviceCategories: z.array(z.string()).min(1, 'Select at least one category'),
+  city: z.string().min(2, 'City is required'),
+  state: z.string().optional(),
+  country: z.string().default('AE'),
+  address: z.string().optional(),
   agreeToTerms: z.boolean().refine(v => v === true, 'You must agree to terms'),
   agreeToPrivacy: z.boolean().refine(v => v === true, 'You must agree to privacy policy'),
 }).refine(d => d.password === d.confirmPassword, { message: "Passwords don't match", path: ['confirmPassword'] });
@@ -36,7 +51,7 @@ const ProviderRegistration: React.FC = () => {
 
   const { register, handleSubmit, formState: { errors: formErrors, isSubmitting }, setError, clearErrors, watch, setValue, trigger } = useForm<ProviderRegistrationForm>({
     resolver: zodResolver(providerRegistrationSchema),
-    defaultValues: { serviceCategories: [], agreeToTerms: false, agreeToPrivacy: false },
+    defaultValues: { serviceCategories: [], agreeToTerms: false, agreeToPrivacy: false, country: 'AE' },
   });
 
   const watchedPassword = watch('password');
@@ -49,7 +64,8 @@ const ProviderRegistration: React.FC = () => {
       'email',
       'phone',
       'password',
-      'confirmPassword'
+      'confirmPassword',
+      'city' // Add city validation
     ];
 
     const result = await trigger(fieldsToValidate);
@@ -68,11 +84,29 @@ const ProviderRegistration: React.FC = () => {
   const onSubmit = async (data: ProviderRegistrationForm) => {
     try {
       clearErrors();
+
+      // Get coordinates from selected city
+      const selectedCity = SUPPORTED_CITIES.find(c => c.value === data.city);
+      const coordinates = selectedCity?.coords || [55.2708, 25.2048]; // Default to Dubai
+
       await registerProvider({
         firstName: data.firstName, lastName: data.lastName, email: data.email,
         password: data.password, confirmPassword: data.confirmPassword, role: 'provider' as const,
         phone: data.phone, businessName: data.businessName, serviceCategories: data.serviceCategories,
         agreeToTermsAndPrivacy: data.agreeToTerms && data.agreeToPrivacy,
+        locationInfo: {
+          primaryAddress: {
+            street: data.address || data.businessName,
+            city: selectedCity?.label || data.city,
+            state: data.state || data.city,
+            zipCode: '',
+            country: data.country || 'AE',
+            coordinates: {
+              type: 'Point',
+              coordinates: coordinates as [number, number] // [longitude, latitude]
+            }
+          }
+        }
       });
       setIsSuccess(true);
     } catch (err) {
@@ -220,6 +254,25 @@ const ProviderRegistration: React.FC = () => {
                     ))}
                   </div>
                   {formErrors.serviceCategories && <p className="mt-1 text-xs text-red-500">{formErrors.serviceCategories.message}</p>}
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-nilin-charcoal mb-1.5">City / Location *</label>
+                  <div className="relative">
+                    <MapPin className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-nilin-warmGray" />
+                    <select {...register('city')} className="w-full pl-12 pr-4 py-3 rounded-xl bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all appearance-none">
+                      <option value="">Select your city</option>
+                      {SUPPORTED_CITIES.map(city => (
+                        <option key={city.value} value={city.value}>{city.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  {formErrors.city && <p className="mt-1 text-xs text-red-500">{formErrors.city.message}</p>}
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-nilin-charcoal mb-1.5">Street Address (Optional)</label>
+                  <input {...register('address')} placeholder="Al Barsha, Dubai" className="w-full px-4 py-3 rounded-xl bg-white/60 border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-all" />
                 </div>
 
                 <div className="pt-2 space-y-2">

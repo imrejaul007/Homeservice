@@ -3,9 +3,9 @@ import mongoose, { Document, Schema, Model } from 'mongoose';
 export interface IExperience extends Document {
   // References
   userId: mongoose.Types.ObjectId;        // Customer who submitted
-  bookingId: mongoose.Types.ObjectId;     // Must be completed booking
-  serviceId: mongoose.Types.ObjectId;     // Service experienced
-  providerId: mongoose.Types.ObjectId;    // Provider who delivered
+  bookingId?: mongoose.Types.ObjectId;    // Optional linked completed booking
+  serviceId?: mongoose.Types.ObjectId;    // Service experienced (derived from booking or optional)
+  providerId?: mongoose.Types.ObjectId;   // Provider who delivered (derived from booking or optional)
 
   // Media (Cloudinary URLs)
   images: string[];                       // Max 10 images
@@ -67,20 +67,20 @@ const experienceSchema = new Schema<IExperience>(
     bookingId: {
       type: Schema.Types.ObjectId,
       ref: 'Booking',
-      required: [true, 'Booking ID is required'],
+      default: undefined,
     },
 
     serviceId: {
       type: Schema.Types.ObjectId,
       ref: 'Service',
-      required: [true, 'Service ID is required'],
+      default: undefined,
       index: true,
     },
 
     providerId: {
       type: Schema.Types.ObjectId,
       ref: 'User',
-      required: [true, 'Provider ID is required'],
+      default: undefined,
       index: true,
     },
 
@@ -184,8 +184,8 @@ const experienceSchema = new Schema<IExperience>(
 // INDEXES FOR PERFORMANCE
 // ===================================
 
-// Unique index on bookingId prevents duplicate experiences per booking
-experienceSchema.index({ bookingId: 1 }, { unique: true });
+// Sparse unique: one experience per booking when bookingId is set
+experienceSchema.index({ bookingId: 1 }, { unique: true, sparse: true });
 
 // Compound index for efficient queries
 experienceSchema.index({ status: 1, isFeatured: 1 });

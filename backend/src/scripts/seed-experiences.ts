@@ -3,6 +3,7 @@ import dotenv from 'dotenv';
 import Experience from '../models/experience.model';
 import Booking from '../models/booking.model';
 import User from '../models/user.model';
+import '../models/service.model';
 
 dotenv.config();
 

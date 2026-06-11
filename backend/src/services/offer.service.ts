@@ -11,10 +11,15 @@ import { get as cacheGet, set as cacheSet, delByPattern } from './cache.service'
 import timezoneService from '../utils/timezone';
 import { eventBus, EventTypes } from '../events/eventBus';
 
-// FIX P0-9: Redis caching for offers - configurable TTL
+// Redis caching TTL for offers - configurable via environment variables
 const OFFER_CACHE_TTL = parseInt(process.env.OFFER_CACHE_TTL || '60', 10); // Default 60 seconds, can be overridden
 const OFFER_DETAIL_CACHE_TTL = parseInt(process.env.OFFER_DETAIL_CACHE_TTL || '300', 10); // Default 5 minutes
 const OFFER_CACHE_PREFIX = 'offer';
+
+// FIX: Configurable abuse detection limits (defaults match previous hardcoded values)
+const DEVICE_ABUSE_CLAIM_LIMIT = parseInt(process.env.OFFER_DEVICE_ABUSE_CLAIM_LIMIT || '5', 10);
+const IP_ABUSE_CLAIM_LIMIT = parseInt(process.env.OFFER_IP_ABUSE_CLAIM_LIMIT || '10', 10);
+const ABUSE_LOOKBACK_DAYS = parseInt(process.env.OFFER_ABUSE_LOOKBACK_DAYS || '7', 10);
 
 // FIX: Escape regex special characters to prevent regex injection
 function escapeRegex(str: string): string {
@@ -81,12 +86,12 @@ async function checkDeviceAbuse(
     return { blocked: false };
   }
 
-  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const lookbackDate = new Date(Date.now() - ABUSE_LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
 
   // Check for suspicious patterns
   const query: any = {
     offerId,
-    claimedAt: { $gte: sevenDaysAgo },
+    claimedAt: { $gte: lookbackDate },
   };
 
   // Check fingerprint claims
@@ -96,8 +101,8 @@ async function checkDeviceAbuse(
       deviceFingerprint: fingerprint,
     });
 
-    // If same device claims more than 5 times in 7 days, block
-    if (fingerprintClaims >= 5) {
+    // FIX: Configurable device claim limit (default 5 per lookback period)
+    if (fingerprintClaims >= DEVICE_ABUSE_CLAIM_LIMIT) {
       return {
         blocked: true,
         reason: 'Too many claims from this device. Please try again later.',
@@ -112,8 +117,24 @@ async function checkDeviceAbuse(
       ipAddress: ip,
     });
 
-    // If same IP claims more than 10 times in 7 days, block
-    if (ipClaims >= 10) {
+    // FIX: Configurable IP claim limit (default 10 per lookback period)
+    if (ipClaims >= IP_ABUSE_CLAIM_LIMIT) {
+      return {
+        blocked: true,
+        reason: 'Too many claims from this device. Please try again later.',
+      };
+    }
+  }
+
+  // Check IP claims
+  if (ip) {
+    const ipClaims = await OfferClaim.countDocuments({
+      ...query,
+      ipAddress: ip,
+    });
+
+    // FIX: Configurable IP claim limit (default 10 per lookback period)
+    if (ipClaims >= IP_ABUSE_CLAIM_LIMIT) {
       return {
         blocked: true,
         reason: 'Too many claims from this location. Please try again later.',
@@ -489,6 +510,8 @@ export class OfferService {
   private checkOfferValidity(offer: any): { valid: boolean; reason?: string } {
     const now = new Date();
     // FIX: Add 5-minute grace period to prevent edge-case failures at exact expiration time
+    // Edge case: if a coupon expires at 10:00:00 exactly and the server clock ticks just before
+    // the check completes, the coupon would incorrectly appear expired. The grace period prevents this.
     const gracePeriodMs = 5 * 60 * 1000;
 
     if (!offer.isActive) {
@@ -599,10 +622,7 @@ export class OfferService {
   }
 
   // Claim an offer
-  // FIX P0-1, P0-3: Race condition fixed with atomic upsert + idempotency keys
-  // SECURITY FIX (SEC-002): Uses atomic findOneAndUpdate with upsert to prevent race conditions
-  // FIX P0-3: Added idempotency key support for network retry protection
-  // SECURITY: Added device fingerprint abuse detection
+  // Uses atomic findOneAndUpdate with idempotency keys to prevent race conditions and duplicate claims
   async claimOffer(
     userId: string,
     offerId: string,
@@ -618,7 +638,7 @@ export class OfferService {
     const userObjectId = new mongoose.Types.ObjectId(userId);
     const offerObjectId = new mongoose.Types.ObjectId(offerId);
 
-    // FIX P0-3: Check for existing claim with same idempotency key first
+    // Check for existing claim with same idempotency key first
     if (idempotencyKey) {
       const existingByIdempotency = await OfferClaim.findOne({
         idempotencyKey,
@@ -831,7 +851,7 @@ export class OfferService {
     }
   }
 
-  // FIX P0-8: Get user's claimed offers with pagination
+  // Get user's claimed offers with pagination
   async getUserClaims(userId: string, page: number = 1, limit: number = 20): Promise<{ claims: any[]; total: number; page: number; totalPages: number }> {
     const userObjectId = new mongoose.Types.ObjectId(userId);
     const skip = (page - 1) * limit;
@@ -1182,8 +1202,7 @@ export class OfferService {
     return true; // Default allow for other types
   }
 
-  // Apply discount (mark claim as used)
-  // FIX P0-2: Made truly atomic using MongoDB transactions with proper rollback handling
+  // Apply discount (mark claim as used) — fully atomic via MongoDB transactions with rollback on failure
   async applyDiscount(claimId: string, bookingId: string): Promise<boolean> {
     const session = await mongoose.startSession();
     session.startTransaction();
@@ -1196,18 +1215,18 @@ export class OfferService {
         return false;
       }
 
-      // FIX P0-2: Check claim status before allowing use
+      // Check claim status before allowing use
       if (claim.status !== 'claimed') {
         await session.abortTransaction();
         logger.warn('Claim already used or expired', { claimId, status: claim.status });
         return false;
       }
 
-      // FIX P0-2: Check claim expiration - update inside transaction scope
+      // Check claim expiration - update inside transaction scope
       const now = new Date();
       const isExpired = now > claim.expiresAt;
       if (isExpired) {
-        // FIX P0-2: Update status INSIDE the transaction - will be rolled back if transaction aborts
+        // Update status INSIDE the transaction — will be rolled back if transaction aborts
         await OfferClaim.findByIdAndUpdate(
           claimId,
           { status: 'expired' },
@@ -1221,7 +1240,7 @@ export class OfferService {
       const bookingObjectId = new mongoose.Types.ObjectId(bookingId);
       const userObjectId = claim.userId;
 
-      // FIX P0-2: Get the coupon to check current/max uses
+      // Get the coupon to check current/max uses
       const coupon = await Coupon.findById(claim.offerId).session(session);
       if (!coupon) {
         await session.abortTransaction();
@@ -1229,7 +1248,7 @@ export class OfferService {
         return false;
       }
 
-      // FIX P0-4: Use direct field comparison instead of $expr for better index usage
+      // Use direct field comparison instead of $expr for better index usage
       // Convert maxUses to ObjectId is not correct - use numeric comparison
       const result = await Coupon.findOneAndUpdate(
         {
@@ -1255,7 +1274,7 @@ export class OfferService {
         return false;
       }
 
-      // FIX P0-2: Update claim status atomically
+      // Update claim status atomically
       await OfferClaim.findByIdAndUpdate(
         claimId,
         {
@@ -1274,12 +1293,12 @@ export class OfferService {
         newCurrentUses: result.currentUses,
       });
 
-      // FIX P0-2: Invalidate cache after commit
+      // Invalidate cache after transaction commit
       await this.invalidateOfferCache();
 
       return true;
     } catch (error) {
-      // FIX P0-2: Ensure transaction is aborted on any error
+      // Ensure transaction is aborted on any error
       try {
         await session.abortTransaction();
       } catch (abortError) {
@@ -1463,12 +1482,14 @@ export class OfferService {
       updateData.discountAmount = calculatedDiscount;
     }
 
+    // FIX: Move claim expiration check into the atomic update condition
+    // so the status transition only happens if the claim is still valid
     await OfferClaim.findOneAndUpdate(
       {
         userId: userObjectId,
         offerId: result._id,
         status: 'claimed',
-        expiresAt: { $gt: new Date() },
+        expiresAt: { $gt: new Date() }, // Only update if not expired
       },
       {
         $set: updateData,

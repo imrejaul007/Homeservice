@@ -1,56 +1,75 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowRight, Sparkles } from 'lucide-react';
+import { customerDashboardApi } from '../../services/customerDashboardApi';
+import type { ServicePackage } from '../../services/customerDashboardApi';
+import { usePriceConversion } from '../../utils/priceConverter';
 
 interface CategorySpotlightProps {
   categorySlug?: string;
   title?: string;
+  limit?: number;
 }
 
-const SERVICES = [
-  {
-    id: '1',
-    title: 'Eyelash Extension',
-    subtitle: 'Classic & Volume',
-    image: 'https://images.unsplash.com/photo-1583001931096-959e9a1a6223?w=600&q=80',
-    price: 'From AED 199',
-    link: '/category/personal-care',
-  },
-  {
-    id: '2',
-    title: 'Gel Nails',
-    subtitle: 'Long-lasting shine',
-    image: 'https://images.unsplash.com/photo-1604654894610-df63bc536371?w=600&q=80',
-    price: 'From AED 129',
-    link: '/category/nails',
-  },
-  {
-    id: '3',
-    title: 'Hair Color',
-    subtitle: 'Balayage & Highlights',
-    image: 'https://images.unsplash.com/photo-1522337360788-8b13dee7a37e?w=600&q=80',
-    price: 'From AED 299',
-    link: '/category/hair',
-  },
-  {
-    id: '4',
-    title: 'Bridal Makeup',
-    subtitle: 'Your perfect day',
-    image: 'https://images.unsplash.com/photo-1487412720507-e7ab37603c6f?w=600&q=80',
-    price: 'From AED 599',
-    link: '/category/makeup',
-  },
-];
-
-const CategorySpotlight: React.FC<CategorySpotlightProps> = ({ categorySlug, title }) => {
+const CategorySpotlight: React.FC<CategorySpotlightProps> = ({
+  categorySlug,
+  title = 'Beauty Studio',
+  limit = 6
+}) => {
   const navigate = useNavigate();
   const scrollRef = useRef<HTMLDivElement>(null);
+  const { convert, format, currency } = usePriceConversion();
+  const [packages, setPackages] = useState<ServicePackage[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchFeaturedPackages = async () => {
+      try {
+        setIsLoading(true);
+        setError(null);
+        console.log('[CategorySpotlight] Fetching featured packages...');
+        const response = await customerDashboardApi.getFeaturedPackages({
+          limit,
+          category: categorySlug
+        });
+        console.log('[CategorySpotlight] API response:', response);
+        console.log('[CategorySpotlight] Packages:', response?.packages?.length);
+
+        if (response.packages && response.packages.length > 0) {
+          setPackages(response.packages);
+        } else {
+          // Fallback to regular packages if no featured
+          console.log('[CategorySpotlight] No featured, trying regular packages...');
+          const packagesResponse = await customerDashboardApi.getPackages({
+            limit,
+            category: categorySlug,
+            sortBy: 'popularity',
+            page: 1,
+          });
+          console.log('[CategorySpotlight] Regular packages:', packagesResponse?.packages?.length);
+          setPackages(packagesResponse.packages || []);
+        }
+      } catch (err) {
+        console.error('Error fetching featured packages:', err);
+        setError('Failed to load services');
+        // Don't show error to user, just hide the section gracefully
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchFeaturedPackages();
+  }, [categorySlug, limit]);
 
   const scroll = (dir: 'left' | 'right') => {
     if (scrollRef.current) {
       scrollRef.current.scrollBy({ left: dir === 'left' ? -280 : 280, behavior: 'smooth' });
     }
   };
+
+  // Always show section (don't hide if no packages yet)
+  // Empty state will be shown instead
 
   return (
     <section className="py-16 px-4 bg-white relative overflow-hidden">
@@ -67,7 +86,7 @@ const CategorySpotlight: React.FC<CategorySpotlightProps> = ({ categorySlug, tit
               <span className="text-sm text-nilin-charcoal">NILIN Certified</span>
             </div>
             <h2 className="text-3xl md:text-4xl font-serif text-nilin-charcoal mb-2">
-              {title || 'Beauty Studio'}
+              {title}
             </h2>
             <p className="text-nilin-warmGray">By NILIN Certified Artists</p>
           </div>
@@ -92,71 +111,124 @@ const CategorySpotlight: React.FC<CategorySpotlightProps> = ({ categorySlug, tit
           </div>
         </div>
 
-        {/* Cards Carousel */}
-        <div
-          ref={scrollRef}
-          className="flex gap-5 overflow-x-auto pb-4 scrollbar-hide"
-          style={{ scrollbarWidth: 'none' }}
-        >
-          {SERVICES.map((service) => (
-            <button
-              key={service.id}
-              onClick={() => navigate(service.link)}
-              className="flex-shrink-0 group"
-            >
-              <div className="relative w-[260px] md:w-[300px] rounded-3xl overflow-hidden shadow-lg card-3d">
-                {/* Image */}
-                <div className="aspect-[3/4] relative">
-                  <img
-                    src={service.image}
-                    alt={service.title}
-                    className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
-                  />
-
-                  {/* Gradient Overlay */}
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
-
-                  {/* Verified Badge */}
-                  <div className="absolute top-4 left-4">
-                    <span className="glass rounded-full px-3 py-1.5 text-xs font-medium text-nilin-charcoal flex items-center gap-1 backdrop-blur-md">
-                      <Sparkles className="w-3 h-3 text-nilin-coral" />
-                      Verified
-                    </span>
-                  </div>
-
-                  {/* Price */}
-                  <div className="absolute top-4 right-4">
-                    <span className="glass rounded-full px-3 py-1.5 text-xs font-semibold text-nilin-charcoal backdrop-blur-md">
-                      {service.price}
-                    </span>
-                  </div>
-
-                  {/* Content */}
-                  <div className="absolute bottom-0 left-0 right-0 p-6 text-left">
-                    <h3 className="text-xl font-medium text-white mb-1">{service.title}</h3>
-                    <p className="text-sm text-white/80 mb-4">{service.subtitle}</p>
-
-                    <div className="flex items-center gap-2 text-white/0 group-hover:text-white transition-all duration-300">
-                      <span className="text-sm font-medium">Book Now</span>
-                      <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-2" />
-                    </div>
-                  </div>
+        {/* Loading State */}
+        {isLoading && (
+          <div className="flex gap-5 overflow-x-auto pb-4 scrollbar-hide">
+            {[1, 2, 3, 4].map((i) => (
+              <div key={i} className="flex-shrink-0 w-[300px] rounded-3xl overflow-hidden">
+                <div className="aspect-[3/4] bg-gray-200 animate-pulse" />
+                <div className="p-4 space-y-2">
+                  <div className="h-6 bg-gray-200 rounded animate-pulse w-3/4" />
+                  <div className="h-4 bg-gray-200 rounded animate-pulse w-1/2" />
                 </div>
               </div>
-            </button>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
+
+        {/* Cards Carousel */}
+        {!isLoading && packages.length > 0 && (
+          <div
+            ref={scrollRef}
+            className="flex gap-5 overflow-x-auto pb-4 scrollbar-hide"
+            style={{ scrollbarWidth: 'none' }}
+          >
+            {packages.map((pkg) => {
+              // Extract price - handle both number and object format
+              const getPrice = (p: any): number => {
+                if (typeof p === 'number') return p;
+                if (typeof p === 'object' && p !== null) return p.amount || p.currentPrice || 0;
+                return 0;
+              };
+
+              const originalPrice = getPrice(pkg.pricing?.originalPrice || pkg.basePrice);
+              const currentPrice = getPrice(pkg.pricing?.currentPrice || pkg.discountedPrice || originalPrice);
+              const displayPrice = currentPrice > 0 ? currentPrice : originalPrice;
+              const sourceCurrency = pkg.pricing?.currency || 'AED';
+              const localizedPrice = format(convert(displayPrice, sourceCurrency), currency);
+
+              // Get image
+              const imageUrl = pkg.images?.[0] || pkg.image ||
+                'https://images.unsplash.com/photo-1560066984-138dadb4c035?w=600&q=80';
+
+              // Get first service name for subtitle (handle both serviceName and name)
+              const firstService = pkg.services?.[0];
+              const subtitle = firstService?.serviceName || firstService?.name || pkg.category || 'Professional Service';
+
+              return (
+                <button
+                  key={pkg._id}
+                  onClick={() => navigate(`/packages/${pkg._id}`)}
+                  className="flex-shrink-0 group"
+                >
+                  <div className="relative w-[260px] md:w-[300px] rounded-3xl overflow-hidden shadow-lg card-3d">
+                    {/* Image */}
+                    <div className="aspect-[3/4] relative">
+                      <img
+                        src={imageUrl}
+                        alt={pkg.name}
+                        className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).src =
+                            'https://images.unsplash.com/photo-1560066984-138dadb4c035?w=600&q=80';
+                        }}
+                      />
+
+                      {/* Gradient Overlay */}
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
+
+                      {/* Verified Badge */}
+                      <div className="absolute top-4 left-4">
+                        <span className="glass rounded-full px-3 py-1.5 text-xs font-medium text-nilin-charcoal flex items-center gap-1 backdrop-blur-md">
+                          <Sparkles className="w-3 h-3 text-nilin-coral" />
+                          {pkg.provider?.isVerified ? 'Verified' : 'NILIN Certified'}
+                        </span>
+                      </div>
+
+                      {/* Price */}
+                      <div className="absolute top-4 right-4">
+                        <span className="glass rounded-full px-3 py-1.5 text-xs font-semibold text-nilin-charcoal backdrop-blur-md">
+                          From {localizedPrice}
+                        </span>
+                      </div>
+
+                      {/* Content */}
+                      <div className="absolute bottom-0 left-0 right-0 p-6 text-left">
+                        <h3 className="text-xl font-medium text-white mb-1">{pkg.name}</h3>
+                        <p className="text-sm text-white/80 mb-4">{subtitle}</p>
+
+                        <div className="flex items-center gap-2 text-white/0 group-hover:text-white transition-all duration-300">
+                          <span className="text-sm font-medium">Book Now</span>
+                          <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-2" />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Empty State */}
+        {!isLoading && packages.length === 0 && (
+          <div className="text-center py-12">
+            <p className="text-nilin-warmGray">No services available at the moment</p>
+          </div>
+        )}
 
         {/* Mobile View All */}
-        <div className="text-center mt-8">
-          <button
-            onClick={() => navigate('/search')}
-            className="btn-3d inline-flex items-center gap-2 px-8 py-4 rounded-full bg-gradient-to-r from-nilin-rose to-nilin-coral text-white"
-          >
-            View All Services
-            <ArrowRight className="w-5 h-5" />
-          </button>
-        </div>
+        {!isLoading && packages.length > 0 && (
+          <div className="text-center mt-8">
+            <button
+              onClick={() => navigate('/search')}
+              className="btn-3d inline-flex items-center gap-2 px-8 py-4 rounded-full bg-gradient-to-r from-nilin-rose to-nilin-coral text-white"
+            >
+              View All Services
+              <ArrowRight className="w-5 h-5" />
+            </button>
+          </div>
+        )}
       </div>
     </section>
   );

@@ -19,6 +19,7 @@ import {
   ChevronRight
 } from 'lucide-react';
 import { getOfferUsageLabel } from '../utils/offerDisplay';
+import { usePriceConversion, localizeAedAmountsInText } from '../utils/priceConverter';
 
 // FIX: Use ServiceSummary from offerService (removed duplicate definition)
 
@@ -49,6 +50,7 @@ const OfferDetailPage: React.FC = () => {
   const { offerId } = useParams<{ offerId: string }>();
   const navigate = useNavigate();
   const { isAuthenticated } = useAuthStore();
+  const { convert, format, currency } = usePriceConversion();
   const [offer, setOffer] = useState<OfferDetail | null>(null);
   const [services, setServices] = useState<ServiceSummary[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -86,7 +88,7 @@ const OfferDetailPage: React.FC = () => {
         // FIX: If offer has linked services (already populated), use them directly
         // applicableServices comes with full service objects from backend
         if (offerData.applicableServices && offerData.applicableServices.length > 0) {
-          // Check if it's already an array of service objects (has _id and name) or just IDs
+          // FIX: Added explicit length check before accessing first element
           const firstItem = offerData.applicableServices[0];
           if (firstItem && typeof firstItem === 'object' && firstItem._id) {
             // Already populated with service objects - use directly
@@ -257,10 +259,19 @@ const OfferDetailPage: React.FC = () => {
   const getDiscountText = () => {
     if (!offer) return '';
     if (offer.type === 'percentage') return `${offer.value}% OFF`;
-    if (offer.type === 'fixed') return `AED ${offer.value} OFF`;
+    if (offer.type === 'fixed') return `${format(convert(offer.value, 'AED'), currency)} OFF`;
     if (offer.type === 'free_service') return 'FREE SERVICE';
     return 'SPECIAL OFFER';
   };
+
+  const getOfferSubtitle = () => {
+    if (!offer) return '';
+    const raw = offer.displaySubtitle || offer.description || '';
+    return localizeAedAmountsInText(raw, convert, format, currency);
+  };
+
+  const formatServicePrice = (amount: number, sourceCurrency = 'AED') =>
+    format(convert(amount, sourceCurrency), currency);
 
   if (isLoading) {
     return (
@@ -317,7 +328,7 @@ const OfferDetailPage: React.FC = () => {
             {offer.displayTitle || offer.title}
           </h1>
           <p className="text-lg text-white/80 mb-6">
-            {offer.displaySubtitle || offer.description}
+            {getOfferSubtitle()}
           </p>
 
           {/* Promo Code Card */}
@@ -349,7 +360,7 @@ const OfferDetailPage: React.FC = () => {
             {offer.minOrderValue > 0 && (
               <div className="flex items-center gap-1">
                 <MapPin className="w-4 h-4" />
-                Min. order AED {offer.minOrderValue}
+                Min. order {format(convert(offer.minOrderValue, 'AED'), currency)}
               </div>
             )}
             {/* FIX: Add countdown timer for urgency */}
@@ -477,7 +488,7 @@ const OfferDetailPage: React.FC = () => {
                     <div className="flex items-center justify-between">
                       <div>
                         <span className="text-lg font-bold text-nilin-charcoal">
-                          AED {service.price?.amount || 0}
+                          {formatServicePrice(service.price?.amount || 0, service.price?.currency || 'AED')}
                         </span>
                         {service.duration && (
                           <span className="text-xs text-nilin-warmGray ml-2">

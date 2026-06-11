@@ -18,9 +18,8 @@ import {
 const router = Router();
 
 // Validation schemas for coupon routes
-// FIX P0-5: Standardize coupon code validation across all endpoints
 const createCouponSchema = Joi.object({
-  // FIX P0-5: min 6, max 20, alphanumeric only for consistency and security
+  // min 6, max 20, alphanumeric only
   code: Joi.string().required().min(6).max(20).pattern(/^[A-Z0-9]+$/).uppercase().messages({
     'string.pattern.base': 'Coupon code must be alphanumeric (A-Z, 0-9 only)',
     'string.min': 'Coupon code must be at least 6 characters',
@@ -54,8 +53,8 @@ const createCouponSchema = Joi.object({
 });
 
 const updateCouponSchema = Joi.object({
-  // FIX: Increase minimum from 3 to 6 characters for security
-  code: Joi.string().min(6).max(50).uppercase(),
+  // FIX: Standardized to min 6, max 20 to match model and create schema
+  code: Joi.string().min(6).max(20).uppercase(),
   type: Joi.string().valid('percentage', 'fixed', 'free_service'),
   value: Joi.number().min(0).when('type', {
     is: 'percentage',

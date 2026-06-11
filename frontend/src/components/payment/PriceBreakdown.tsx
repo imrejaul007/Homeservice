@@ -1,11 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { cn } from '../../lib/utils';
+import { usePriceConversion } from '../../utils/priceConverter';
 
 interface PriceBreakdownProps {
   subtotal: number;
   discount: number;
   tax: number;
   total: number;
+  /** Currency the amounts are stored in (default AED from backend) */
   currency?: string;
   couponCode?: string;
   className?: string;
@@ -72,17 +74,14 @@ const PriceBreakdown: React.FC<PriceBreakdownProps> = ({
   discount,
   tax,
   total,
-  currency = 'AED',
+  currency: sourceCurrency = 'AED',
   couponCode,
   className,
 }) => {
+  const { convert, format, currency: displayCurrency } = usePriceConversion();
+
   const formatAmount = (amount: number) => {
-    return new Intl.NumberFormat('en-AE', {
-      style: 'currency',
-      currency: currency.toUpperCase(),
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(amount);
+    return format(convert(amount, sourceCurrency), displayCurrency);
   };
 
   const hasDiscount = discount > 0;

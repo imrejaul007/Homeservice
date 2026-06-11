@@ -175,13 +175,16 @@ export interface RecommendedPro {
   totalReviews: number;
   completedJobs: number;
   services: Array<{
+    _id?: string;
     name: string;
     price: number | { amount: number; currency?: string; type?: string };
     category: string;
+    duration?: number;
   }>;
   isVerified: boolean;
   tier: 'elite' | 'premium' | 'standard';
   distance?: number;
+  score?: number;
 }
 
 export interface ServicePackage {
@@ -382,19 +385,56 @@ class CustomerDashboardApiService {
   }
 
   /**
-   * Get recommended professionals
+   * Get recommended professionals with optional location for distance calculation
+   * Returns both recommended pros and recently used providers
    */
-  async getRecommendedPros(limit: number = 10): Promise<RecommendedPro[]> {
+  async getRecommendedPros(
+    limit: number = 10,
+    location?: { latitude: number; longitude: number }
+  ): Promise<{ pros: RecommendedPro[]; recentlyUsed: RecommendedPro[] }> {
     try {
       const controller = new AbortController();
       setTimeout(() => controller.abort(), 10000);
-      const response = await api.get('/dashboard/recommended-pros', { params: { limit }, signal: controller.signal });
-      return response.data.data;
+
+      // Build params with optional location for geospatial queries
+      const params: Record<string, any> = { limit };
+      if (location?.latitude !== undefined && location?.longitude !== undefined) {
+        params.latitude = location.latitude;
+        params.longitude = location.longitude;
+      }
+
+      const response = await api.get('/dashboard/recommended-pros', { params, signal: controller.signal });
+      const data = response.data.data;
+
+      // Backend returns: { pros: [], recentlyUsed: [], pagination: {} }
+      // Extract and return both arrays
+      return {
+        pros: Array.isArray(data?.pros) ? data.pros : [],
+        recentlyUsed: Array.isArray(data?.recentlyUsed) ? data.recentlyUsed : [],
+      };
     } catch (error) {
       const err = error as AxiosError;
       const message = (err.response?.data as { message?: string })?.message || err.message || 'Failed to fetch recommended pros';
       console.error('[customerDashboardApi] getRecommendedPros error:', message, err.response?.status);
       throw new CustomerDashboardApiError(message, err.response?.status, 'GET_RECOMMENDED_PROS_FAILED');
+    }
+  }
+
+  /**
+   * Get featured packages (public route)
+   */
+  async getFeaturedPackages(options: {
+    limit?: number;
+    category?: string;
+  } = {}): Promise<{ packages: ServicePackage[]; total: number }> {
+    try {
+      const response = await api.get('/packages/featured', { params: options });
+      return response.data.data;
+    } catch (error) {
+      const err = error as AxiosError;
+      const message = (err.response?.data as { message?: string })?.message || err.message || 'Failed to fetch featured packages';
+      console.error('[customerDashboardApi] getFeaturedPackages error:', message, err.response?.status);
+      throw new CustomerDashboardApiError(message, err.response?.status, 'GET_FEATURED_PACKAGES_FAILED');
     }
   }
 

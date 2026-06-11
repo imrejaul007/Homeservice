@@ -1,20 +1,29 @@
 import React, { useEffect, useState, useRef } from 'react';
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
-import { Star, ChevronRight, ChevronLeft, Sparkles, ArrowRight } from 'lucide-react';
+import { Star, ChevronRight, ChevronLeft, Sparkles, ArrowRight, MapPin } from 'lucide-react';
 import NavigationHeader from '../components/layout/NavigationHeader';
 import Footer from '../components/layout/Footer';
 import { searchApi } from '../services/searchApi';
 import type { Service } from '../types/service';
 import { CATEGORY_IMAGES, SUBCATEGORY_IMAGES, REFERENCE_IMAGES } from '../constants/images';
+import { useAuthStore } from '../stores/authStore';
+import { useLocationStore } from '../stores/locationStore';
+import { usePriceConversion, formatPrice } from '../utils/priceConverter';
 import {
   CategoryCards,
   OfferBanner,
   CategorySpotlight,
+  RecommendedServicesSection,
   CuratedReels,
   WhyNilin,
   ProviderCTA,
 } from '../components/home';
+import RecommendedProsSection from '../components/dashboard/RecommendedProsSection';
+import PackagesSection from '../components/dashboard/PackagesSection';
+import OngoingBookings from '../components/dashboard/OngoingBookings';
+import RecentActivity from '../components/dashboard/RecentActivity';
+import NotificationsSection from '../components/dashboard/NotificationsSection';
 import LoggedInHomeBanner from '../components/home/LoggedInHomeBanner';
 import ExperienceSection from '../components/experience/ExperienceSection';
 import { PageErrorBoundary } from '../components/common/PageErrorBoundary';
@@ -58,6 +67,9 @@ const CATEGORIES = [
 
 const HomePage: React.FC = () => {
   const navigate = useNavigate();
+  const { isAuthenticated } = useAuthStore();
+  const { selectedCity, currentLocation } = useLocationStore();
+  const { convert, format, currency } = usePriceConversion();
   const [popularServices, setPopularServices] = useState<Service[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [currentSlide, setCurrentSlide] = useState(0);
@@ -117,13 +129,23 @@ const HomePage: React.FC = () => {
     return 'https://images.unsplash.com/photo-1560066984-138dadb4c035?w=600&q=80&fit=crop';
   };
 
+  // Get converted price for display (backend stores prices in AED by default)
+  const getDisplayPrice = (service: Service): string => {
+    const rawPrice = service.price?.amount || 0;
+    const sourceCurrency = service.price?.currency || 'AED';
+    return format(convert(rawPrice, sourceCurrency), currency);
+  };
+
   return (
     <div className="min-h-screen bg-nilin-cream flex flex-col">
-      <NavigationHeader showSearch={false} showCategoryTabs={false} />
+      <NavigationHeader variant="hero" showSearch={false} showCategoryTabs={false} />
 
       <PageErrorBoundary pageName="Home">
         {/* UNIFIED HERO SECTION */}
       <section className="relative h-[85vh] min-h-[600px] overflow-hidden animate-nilin-in">
+        {/* Top vignette — keeps header readable on light hero images */}
+        <div className="absolute top-0 left-0 right-0 h-32 bg-gradient-to-b from-black/55 via-black/25 to-transparent z-[15] pointer-events-none" />
+
         {/* Background Slides */}
         {HERO_SLIDES.map((slide, index) => (
           <div
@@ -249,18 +271,30 @@ const HomePage: React.FC = () => {
 
       <LoggedInHomeBanner />
 
-      {/* Category Quick Links */}
-      <section className="py-6 px-4 bg-white/95 shadow-nilin animate-nilin-in border-t border-nilin-border/20">
-        <div className="max-w-7xl mx-auto">
-          <div className="flex gap-4 overflow-x-auto pb-2 scrollbar-hide" style={{scrollbarWidth: 'none'}}>
+      {/* Active bookings — shown early when user has in-progress or today's appointments */}
+      {isAuthenticated && (
+        <OngoingBookings limit={3} showViewAll={true} />
+      )}
+
+      {/* Category Quick Links - Sticky with Location */}
+      <section className="sticky top-[64px] z-40 py-3 px-4 bg-white/95 backdrop-blur-md shadow-sm border-b border-nilin-border/20">
+        <div className="max-w-7xl mx-auto flex items-center gap-4">
+          {/* Location indicator */}
+          <div className="flex items-center gap-2 px-3 py-1.5 bg-nilin-blush/30 rounded-full text-xs font-medium text-nilin-charcoal flex-shrink-0">
+            <MapPin className="w-3.5 h-3.5 text-nilin-coral" />
+            <span>{selectedCity?.name || currentLocation?.address.city || 'All Locations'}</span>
+          </div>
+
+          {/* Category Pills */}
+          <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide flex-1" style={{scrollbarWidth: 'none'}}>
             {CATEGORIES.map((cat, i) => (
               <button
                 key={i}
                 onClick={() => navigate(cat.link)}
-                className="flex-shrink-0 flex items-center gap-3 px-5 py-3 glass-nilin rounded-nilin hover:shadow-nilin hover-lift transition-all"
+                className="flex-shrink-0 flex items-center gap-2 px-3.5 py-2 bg-white border border-nilin-border/50 rounded-full hover:border-nilin-coral/50 hover:shadow-md transition-all duration-200 group"
               >
-                <img src={cat.image} alt={cat.name} className="w-8 h-8 rounded-full object-cover" />
-                <span className="text-sm font-medium text-nilin-charcoal whitespace-nowrap">{cat.name}</span>
+                <img src={cat.image} alt={cat.name} className="w-6 h-6 rounded-full object-cover" />
+                <span className="text-xs font-medium text-nilin-charcoal whitespace-nowrap group-hover:text-nilin-coral transition-colors">{cat.name}</span>
               </button>
             ))}
           </div>
@@ -320,7 +354,7 @@ const HomePage: React.FC = () => {
                       <h3 className="font-medium text-nilin-charcoal mb-1 truncate">{service.name}</h3>
                       <p className="text-sm text-nilin-warmGray mb-3 truncate">{service.category}</p>
                       <div className="flex items-center justify-between">
-                        <span className="text-lg font-semibold text-nilin-coral">AED {service.price?.amount || 0}</span>
+                        <span className="text-lg font-semibold text-nilin-coral">{getDisplayPrice(service)}</span>
                         <div className="flex items-center gap-1">
                           <Star className="w-4 h-4 text-yellow-400 fill-yellow-400" />
                           <span className="text-sm text-nilin-charcoal">{(service.rating?.average || 4.8).toFixed(1)}</span>
@@ -354,6 +388,27 @@ const HomePage: React.FC = () => {
 
       {/* Category Spotlight */}
       <CategorySpotlight />
+
+      {/* Recommended Professionals Section - Only show for logged-in users */}
+      {isAuthenticated && (
+        <RecommendedProsSection limit={6} showViewAll={true} />
+      )}
+
+      {/* Recommended Services Section - Only show for logged-in users */}
+      {isAuthenticated && (
+        <RecommendedServicesSection limit={6} />
+      )}
+
+      {/* Personal Dashboard Sections - Only for logged-in users */}
+      {isAuthenticated && (
+        <>
+          {/* Packages Section */}
+          <PackagesSection limit={3} showViewAll={true} />
+
+          {/* Recent Activity */}
+          <RecentActivity limit={5} showViewAll={true} />
+        </>
+      )}
 
       {/* NILIN Experience Section */}
       <ExperienceSection />

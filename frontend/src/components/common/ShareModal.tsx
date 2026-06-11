@@ -171,7 +171,9 @@ export const ShareModal: React.FC<ShareModalProps> = ({
                   <Share2 className="w-5 h-5 text-nilin-coral" />
                 </div>
                 <div>
-                  <h2 className="font-semibold text-nilin-charcoal">Share this {title ? 'service' : 'content'}</h2>
+                  <h2 className="font-semibold text-nilin-charcoal">
+                    Share this {itemType === 'package' ? 'package' : itemType === 'provider' ? 'provider' : itemType === 'experience' ? 'experience' : 'service'}
+                  </h2>
                   <p className="text-xs text-nilin-warmGray line-clamp-1">{title}</p>
                 </div>
               </div>

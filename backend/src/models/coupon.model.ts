@@ -68,9 +68,6 @@ export interface ICoupon extends Document {
     bookingId?: mongoose.Types.ObjectId;
   }>;
 
-  // Limits
-  applicableServices?: string[]; // Service IDs this coupon can be used for
-
   createdBy: mongoose.Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
@@ -255,9 +252,6 @@ const couponSchema = new Schema<ICoupon>(
       usedAt: { type: Date, default: Date.now },
       orderId: String,
       bookingId: { type: Schema.Types.ObjectId, ref: 'Booking' },
-    }],
-    applicableServices: [{
-      type: String,
     }],
     createdBy: {
       type: Schema.Types.ObjectId,

@@ -565,6 +565,9 @@ export const getUserTickets = asyncHandler(async (req: AuthenticatedRequest, res
 
   const { page, limit, skip } = sanitizePagination(req.query as PaginationQuery);
   const status = req.query.status as string | undefined;
+  const priority = req.query.priority as string | undefined;
+  const category = req.query.category as string | undefined;
+  const search = req.query.search as string | undefined;
 
   const query: Record<string, unknown> = { userId: req.user._id };
 
@@ -572,9 +575,26 @@ export const getUserTickets = asyncHandler(async (req: AuthenticatedRequest, res
     query.status = status;
   }
 
+  if (priority && ['low', 'medium', 'high', 'urgent'].includes(priority)) {
+    query.priority = priority;
+  }
+
+  if (category && ['technical', 'billing', 'account', 'service', 'other'].includes(category)) {
+    query.category = category;
+  }
+
+  if (search && typeof search === 'string' && search.trim()) {
+    const term = search.trim();
+    query.$or = [
+      { subject: { $regex: term, $options: 'i' } },
+      { description: { $regex: term, $options: 'i' } },
+      { ticketNumber: { $regex: term, $options: 'i' } },
+    ];
+  }
+
   const [tickets, total] = await Promise.all([
     SupportTicket.find(query)
-      .select('ticketNumber category priority status subject userName userEmail assignedToName createdAt updatedAt')
+      .select('ticketNumber category priority status subject description userName userEmail assignedToName createdAt updatedAt')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
@@ -608,7 +628,7 @@ export const createTicket = asyncHandler(async (req: AuthenticatedRequest, res: 
     throw new ApiError(401, 'Authentication required');
   }
 
-  const { category, priority, subject, description } = req.body;
+  const { category, priority, subject, description, bookingId, bookingNumber, serviceName } = req.body;
 
   // Validate required fields
   if (!category || !subject || !description) {
@@ -641,6 +661,11 @@ export const createTicket = asyncHandler(async (req: AuthenticatedRequest, res: 
   const userType: UserType = req.user.role as UserType || 'customer';
   const userName = `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim();
 
+  const metadata: Record<string, unknown> = {};
+  if (bookingId) metadata.bookingId = bookingId;
+  if (bookingNumber) metadata.bookingNumber = bookingNumber;
+  if (serviceName) metadata.serviceName = serviceName;
+
   // Create ticket
   const ticket = new SupportTicket({
     userId: req.user._id,
@@ -651,6 +676,7 @@ export const createTicket = asyncHandler(async (req: AuthenticatedRequest, res: 
     priority: priority as TicketPriority || 'medium',
     subject,
     description,
+    ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
     messages: [{
       sender: req.user._id,
       senderType: userType,

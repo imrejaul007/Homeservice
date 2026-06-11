@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Star, BadgeCheck, Calendar, MapPin, ChevronRight, Users, Loader2, AlertCircle } from 'lucide-react';
+import { Star, BadgeCheck, Calendar, MapPin, ChevronRight, Users, Loader2, AlertCircle, Sparkles, Heart } from 'lucide-react';
 import { FadeSection } from '../ui/FadeSection';
 import { customerDashboardApi, type RecommendedPro } from '../../services/customerDashboardApi';
+import { locationService } from '../../services/locationService';
+import { usePriceConversion } from '../../utils/priceConverter';
 
 // =============================================================================
 // TIER CONFIGURATION
@@ -12,20 +14,29 @@ const TIER_CONFIG = {
   elite: {
     badge: 'bg-gradient-to-r from-amber-500 to-yellow-500 text-white',
     label: 'Elite',
-    borderColor: 'border-amber-200',
-    bgGradient: 'from-amber-50/50 to-yellow-50/50',
+    borderColor: 'border-amber-300/50',
+    bgGradient: 'from-amber-50/80 to-yellow-50/60',
+    accentColor: 'text-amber-600',
+    glowColor: 'shadow-amber-200/50',
+    icon: <Sparkles className="w-3 h-3" />,
   },
   premium: {
     badge: 'bg-gradient-to-r from-violet-500 to-purple-500 text-white',
     label: 'Premium',
-    borderColor: 'border-violet-200',
-    bgGradient: 'from-violet-50/50 to-purple-50/50',
+    borderColor: 'border-violet-300/50',
+    bgGradient: 'from-violet-50/80 to-purple-50/60',
+    accentColor: 'text-violet-600',
+    glowColor: 'shadow-violet-200/50',
+    icon: <BadgeCheck className="w-3 h-3" />,
   },
   standard: {
-    badge: 'bg-gray-500 text-white',
+    badge: 'bg-gradient-to-r from-slate-400 to-gray-500 text-white',
     label: 'Standard',
     borderColor: 'border-gray-200',
-    bgGradient: 'from-gray-50/50 to-slate-50/50',
+    bgGradient: 'from-gray-50/80 to-slate-50/60',
+    accentColor: 'text-slate-600',
+    glowColor: 'shadow-gray-200/50',
+    icon: null,
   },
 };
 
@@ -33,7 +44,6 @@ const TIER_CONFIG = {
 // HELPER FUNCTIONS
 // =============================================================================
 
-/** Generate a consistent color from a name string */
 const getAvatarColor = (name: string): string => {
   const colors = [
     'from-indigo-500 to-purple-500',
@@ -42,6 +52,8 @@ const getAvatarColor = (name: string): string => {
     'from-emerald-500 to-teal-500',
     'from-blue-500 to-cyan-500',
     'from-violet-500 to-fuchsia-500',
+    'from-rose-400 to-pink-500',
+    'from-cyan-400 to-blue-500',
   ];
   let hash = 0;
   for (let i = 0; i < name.length; i++) {
@@ -50,7 +62,6 @@ const getAvatarColor = (name: string): string => {
   return colors[Math.abs(hash) % colors.length];
 };
 
-/** Get initials from name */
 const getInitials = (firstName?: string, lastName?: string, businessName?: string): string => {
   if (businessName) {
     const words = businessName.split(' ');
@@ -67,12 +78,9 @@ const getInitials = (firstName?: string, lastName?: string, businessName?: strin
 // =============================================================================
 
 const RecommendedProCardSkeleton: React.FC = () => (
-  <div className="bg-white/60 backdrop-blur-md rounded-2xl border border-nilin-border/50 p-5 animate-pulse">
+  <div className="bg-white rounded-2xl border border-nilin-border/30 p-5 animate-pulse shadow-sm">
     <div className="flex items-start gap-4">
-      {/* Avatar skeleton */}
       <div className="w-16 h-16 rounded-2xl bg-gray-200 flex-shrink-0" />
-
-      {/* Content skeleton */}
       <div className="flex-1 space-y-3">
         <div className="h-5 bg-gray-200 rounded w-3/4" />
         <div className="h-4 bg-gray-100 rounded w-1/2" />
@@ -82,8 +90,6 @@ const RecommendedProCardSkeleton: React.FC = () => (
         </div>
       </div>
     </div>
-
-    {/* Bottom actions skeleton */}
     <div className="flex items-center justify-between mt-4 pt-4 border-t border-gray-100">
       <div className="h-4 bg-gray-100 rounded w-20" />
       <div className="h-10 bg-gray-100 rounded-xl w-24" />
@@ -108,91 +114,115 @@ const RecommendedProCard: React.FC<RecommendedProCardProps> = ({
   onViewProfile,
   index
 }) => {
+  const { convert, format, currency } = usePriceConversion();
   const tier = pro.tier || 'standard';
   const tierConfig = TIER_CONFIG[tier];
   const displayName = pro.businessName || `${pro.firstName} ${pro.lastName || ''}`.trim() || 'Professional';
   const initials = getInitials(pro.firstName, pro.lastName, pro.businessName);
   const avatarColor = getAvatarColor(displayName);
 
-  // Get lowest price from services
   const getNumericPrice = (price: number | { amount: number; currency?: string; type?: string; }): number => {
     return typeof price === 'number' ? price : price.amount;
   };
   const lowestPrice = pro.services && pro.services.length > 0
     ? Math.min(...pro.services.map(s => getNumericPrice(s.price)))
     : null;
+  const lowestPriceSource = pro.services?.[0]?.price
+    && typeof pro.services[0].price === 'object'
+    && pro.services[0].price.currency
+    ? pro.services[0].price.currency
+    : 'AED';
+  const displayStartingPrice = lowestPrice != null
+    ? format(convert(lowestPrice, lowestPriceSource), currency)
+    : null;
 
-  // Get top 3 service names
   const serviceNames = pro.services?.slice(0, 3).map(s => s.name) || [];
+  const isTopPro = tier === 'elite' || pro.averageRating >= 4.8;
 
   return (
     <FadeSection delay={index * 100}>
       <div
-        className={`relative overflow-hidden rounded-2xl border group ${tierConfig.borderColor}
+        className={`relative overflow-hidden rounded-2xl border ${tierConfig.borderColor}
                     bg-gradient-to-br ${tierConfig.bgGradient}
-                    transition-all duration-300 hover:shadow-nilin-lg hover:-translate-y-1`}
+                    transition-all duration-300 hover:shadow-nilin-lg hover:-translate-y-1.5 group cursor-pointer`}
+        onClick={() => onViewProfile(pro)}
       >
+        {/* Top Pro Badge */}
+        {isTopPro && (
+          <div className="absolute top-0 right-0 bg-gradient-to-l from-amber-400 to-amber-500 text-white text-[10px] font-bold px-3 py-1.5 rounded-bl-xl flex items-center gap-1 shadow-lg z-10">
+            <Sparkles className="w-3 h-3" />
+            TOP PRO
+          </div>
+        )}
+
         <div className="p-5">
-          {/* Top row: Avatar + info */}
+          {/* Avatar + Info Row */}
           <div className="flex items-start gap-4">
-            {/* Avatar */}
+            {/* Avatar with ring */}
             <div className="relative flex-shrink-0">
-              {pro.avatar ? (
-                <img
-                  src={pro.avatar}
-                  alt={displayName}
-                  className="w-16 h-16 rounded-2xl object-cover ring-2 ring-white/50"
-                />
-              ) : (
-                <div className={`w-16 h-16 rounded-2xl bg-gradient-to-br ${avatarColor} flex items-center justify-center ring-2 ring-white/50`}>
-                  <span className="text-white font-bold text-lg">{initials}</span>
-                </div>
-              )}
+              <div className="relative">
+                {pro.avatar ? (
+                  <img
+                    src={pro.avatar}
+                    alt={displayName}
+                    className="w-16 h-16 rounded-2xl object-cover ring-2 ring-white shadow-md group-hover:ring-nilin-coral/30 transition-all"
+                  />
+                ) : (
+                  <div className={`w-16 h-16 rounded-2xl bg-gradient-to-br ${avatarColor} flex items-center justify-center ring-2 ring-white shadow-md group-hover:ring-nilin-coral/30 transition-all`}>
+                    <span className="text-white font-bold text-lg">{initials}</span>
+                  </div>
+                )}
+
+                {/* Online/Available indicator */}
+                <div className="absolute -bottom-0.5 -right-0.5 w-4 h-4 bg-emerald-500 rounded-full border-2 border-white shadow-sm" title="Available" />
+              </div>
 
               {/* Verified badge */}
               {pro.isVerified && (
-                <div className="absolute -bottom-1 -right-1 w-6 h-6 bg-emerald-500 rounded-full flex items-center justify-center border-2 border-white shadow-sm">
+                <div className="absolute -bottom-2 -right-2 w-7 h-7 bg-gradient-to-br from-emerald-400 to-emerald-600 rounded-full flex items-center justify-center border-2 border-white shadow-lg shadow-emerald-200/50">
                   <BadgeCheck className="w-4 h-4 text-white" />
                 </div>
               )}
             </div>
 
-            {/* Info */}
-            <div className="flex-1 min-w-0">
+            {/* Info Column */}
+            <div className="flex-1 min-w-0 pt-1">
+              {/* Name + Tier Badge */}
               <div className="flex items-center gap-2 mb-1 flex-wrap">
-                <h3 className="font-bold text-nilin-charcoal truncate group-hover:text-nilin-coral transition-colors">
+                <h3 className="font-bold text-nilin-charcoal truncate group-hover:text-nilin-coral transition-colors text-base">
                   {displayName}
                 </h3>
-                <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold flex-shrink-0 ${tierConfig.badge}`}>
+                <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold flex items-center gap-1 flex-shrink-0 ${tierConfig.badge}`}>
+                  {tierConfig.icon}
                   {tierConfig.label}
                 </span>
               </div>
 
-              {/* Rating and reviews */}
+              {/* Rating Row */}
               <div className="flex items-center gap-2 mb-2">
                 {pro.averageRating > 0 ? (
                   <>
-                    <div className="flex items-center gap-1">
+                    <div className="flex items-center gap-1 bg-amber-50 px-2 py-0.5 rounded-lg">
                       <Star className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
-                      <span className="font-semibold text-nilin-charcoal text-sm">{pro.averageRating.toFixed(1)}</span>
+                      <span className="font-bold text-nilin-charcoal text-sm">{pro.averageRating.toFixed(1)}</span>
                     </div>
                     <span className="text-nilin-warmGray text-xs">({pro.totalReviews} reviews)</span>
                   </>
                 ) : (
-                  <span className="text-nilin-warmGray text-xs">New on NILIN</span>
+                  <span className="text-nilin-warmGray text-xs bg-slate-100 px-2 py-0.5 rounded-full">New on NILIN</span>
                 )}
               </div>
 
-              {/* Stats */}
-              <div className="flex items-center gap-3 text-xs text-nilin-warmGray">
+              {/* Stats Row */}
+              <div className="flex items-center gap-4 text-xs text-nilin-warmGray">
                 {pro.completedJobs > 0 && (
-                  <span className="flex items-center gap-1">
+                  <span className="flex items-center gap-1.5 bg-slate-100 px-2 py-1 rounded-full">
                     <Users className="w-3 h-3" />
                     {pro.completedJobs} jobs
                   </span>
                 )}
                 {pro.distance !== undefined && (
-                  <span className="flex items-center gap-1">
+                  <span className="flex items-center gap-1.5 bg-slate-100 px-2 py-1 rounded-full">
                     <MapPin className="w-3 h-3" />
                     {pro.distance < 1 ? '<1' : pro.distance.toFixed(1)} km
                   </span>
@@ -201,33 +231,33 @@ const RecommendedProCard: React.FC<RecommendedProCardProps> = ({
             </div>
           </div>
 
-          {/* Services tags */}
+          {/* Services Tags */}
           {serviceNames.length > 0 && (
-            <div className="flex flex-wrap gap-2 mt-3">
+            <div className="flex flex-wrap gap-2 mt-4">
               {serviceNames.map((serviceName, idx) => (
                 <span
                   key={idx}
-                  className="px-2 py-0.5 bg-white/60 text-nilin-charcoal text-xs rounded-full border border-nilin-border/30"
+                  className="px-3 py-1 bg-white/80 backdrop-blur-sm text-nilin-charcoal text-xs rounded-full border border-nilin-border/30 hover:border-nilin-coral/50 hover:text-nilin-coral transition-colors cursor-default"
                 >
                   {serviceName}
                 </span>
               ))}
               {pro.services && pro.services.length > 3 && (
-                <span className="px-2 py-0.5 bg-nilin-blush/40 text-nilin-rose text-xs rounded-full">
+                <span className="px-3 py-1 bg-nilin-coral/10 text-nilin-coral text-xs rounded-full font-medium">
                   +{pro.services.length - 3} more
                 </span>
               )}
             </div>
           )}
 
-          {/* Bottom row: Price + CTA */}
-          <div className="flex items-center justify-between mt-4 pt-4 border-t border-white/30">
+          {/* Bottom: Price + CTA */}
+          <div className="flex items-center justify-between mt-5 pt-4 border-t border-nilin-border/20">
             <div>
-              {lowestPrice !== null ? (
-                <>
-                  <span className="text-lg font-bold text-nilin-charcoal">AED {lowestPrice}</span>
-                  <span className="text-nilin-warmGray text-xs ml-1">starting</span>
-                </>
+              {displayStartingPrice ? (
+                <div className="flex items-baseline gap-1">
+                  <span className="text-xl font-bold text-nilin-charcoal">{displayStartingPrice}</span>
+                  <span className="text-nilin-warmGray text-xs">starting</span>
+                </div>
               ) : (
                 <span className="text-sm text-nilin-warmGray">Contact for pricing</span>
               )}
@@ -235,14 +265,14 @@ const RecommendedProCard: React.FC<RecommendedProCardProps> = ({
 
             <div className="flex items-center gap-2">
               <button
-                onClick={() => onViewProfile(pro)}
-                className="px-3 py-2 text-sm font-medium text-nilin-coral hover:text-nilin-rose transition-colors"
+                onClick={(e) => { e.stopPropagation(); onViewProfile(pro); }}
+                className="px-3 py-2 text-sm font-medium text-nilin-coral hover:text-nilin-rose hover:bg-nilin-coral/5 rounded-lg transition-colors"
               >
                 View Profile
               </button>
               <button
-                onClick={() => onBook(pro)}
-                className="flex items-center gap-1.5 px-4 py-2 bg-nilin-coral text-white rounded-xl text-sm font-semibold hover:bg-nilin-rose transition-all shadow-sm hover:shadow-md"
+                onClick={(e) => { e.stopPropagation(); onBook(pro); }}
+                className="flex items-center gap-1.5 px-4 py-2 bg-gradient-to-r from-nilin-coral to-nilin-rose text-white rounded-xl text-sm font-bold hover:shadow-lg hover:shadow-nilin-coral/25 transition-all active:scale-95"
               >
                 <Calendar className="w-4 h-4" />
                 Book
@@ -256,7 +286,7 @@ const RecommendedProCard: React.FC<RecommendedProCardProps> = ({
 };
 
 // =============================================================================
-// EMPTY STATE COMPONENT
+// EMPTY STATE
 // =============================================================================
 
 interface EmptyStateProps {
@@ -264,25 +294,26 @@ interface EmptyStateProps {
 }
 
 const EmptyState: React.FC<EmptyStateProps> = ({ onBrowse }) => (
-  <div className="rounded-2xl border border-nilin-border/50 bg-white/40 p-8 text-center">
-    <div className="w-16 h-16 rounded-full bg-nilin-blush/50 mx-auto mb-4 flex items-center justify-center">
-      <Users className="w-8 h-8 text-nilin-coral/60" />
+  <div className="rounded-2xl border-2 border-dashed border-nilin-border/50 bg-gradient-to-br from-white to-gray-50 p-10 text-center">
+    <div className="w-20 h-20 rounded-full bg-gradient-to-br from-nilin-blush/60 to-nilin-coral/20 mx-auto mb-5 flex items-center justify-center">
+      <Users className="w-10 h-10 text-nilin-coral/70" />
     </div>
-    <h3 className="font-semibold text-nilin-charcoal mb-2">No recommended professionals yet</h3>
-    <p className="text-sm text-nilin-warmGray mb-4 max-w-xs mx-auto">
-      Our professionals will appear here once you book your first service
+    <h3 className="font-bold text-nilin-charcoal text-lg mb-2">No recommendations yet</h3>
+    <p className="text-sm text-nilin-warmGray mb-6 max-w-sm mx-auto">
+      Book your first service and we'll recommend the best professionals for you
     </p>
     <button
       onClick={onBrowse}
-      className="px-4 py-2 bg-nilin-coral text-white rounded-xl hover:bg-nilin-rose transition-colors text-sm font-medium"
+      className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-nilin-coral to-nilin-rose text-white rounded-xl hover:shadow-lg transition-all font-medium"
     >
       Browse Services
+      <ChevronRight className="w-4 h-4" />
     </button>
   </div>
 );
 
 // =============================================================================
-// ERROR STATE COMPONENT
+// ERROR STATE
 // =============================================================================
 
 interface ErrorStateProps {
@@ -290,25 +321,26 @@ interface ErrorStateProps {
 }
 
 const ErrorState: React.FC<ErrorStateProps> = ({ onRetry }) => (
-  <div className="rounded-2xl border border-red-200 bg-red-50/50 p-8 text-center">
+  <div className="rounded-2xl border border-red-200 bg-gradient-to-br from-red-50/50 to-red-100/30 p-8 text-center">
     <div className="w-16 h-16 rounded-full bg-red-100 mx-auto mb-4 flex items-center justify-center">
       <AlertCircle className="w-8 h-8 text-red-500" />
     </div>
-    <h3 className="font-semibold text-red-700 mb-2">Unable to load professionals</h3>
-    <p className="text-sm text-red-600/80 mb-4">
+    <h3 className="font-bold text-red-700 mb-2">Unable to load professionals</h3>
+    <p className="text-sm text-red-600/80 mb-5">
       Please check your connection and try again
     </p>
     <button
       onClick={onRetry}
-      className="px-4 py-2 bg-red-500 text-white rounded-xl hover:bg-red-600 transition-colors text-sm font-medium"
+      className="inline-flex items-center gap-2 px-5 py-2.5 bg-red-500 text-white rounded-xl hover:bg-red-600 transition-colors font-medium"
     >
+      <Loader2 className="w-4 h-4" />
       Try Again
     </button>
   </div>
 );
 
 // =============================================================================
-// SECTION HEADER COMPONENT
+// SECTION HEADER
 // =============================================================================
 
 interface SectionHeaderProps {
@@ -327,34 +359,34 @@ const SectionHeader: React.FC<SectionHeaderProps> = ({
   action,
   badge
 }) => (
-  <div className="flex items-center justify-between mb-4">
-    <div className="flex items-center gap-3">
+  <div className="flex items-center justify-between mb-6">
+    <div className="flex items-center gap-4">
       {icon && (
-        <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-100 to-pink-100 flex items-center justify-center">
-          <span className="text-purple-600">{icon}</span>
+        <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-nilin-coral/20 to-nilin-rose/20 flex items-center justify-center">
+          <span className="text-nilin-coral">{icon}</span>
         </div>
       )}
       <div>
-        <h2 className="text-lg font-serif font-medium text-nilin-charcoal">{title}</h2>
+        <h2 className="text-2xl font-serif font-bold text-nilin-charcoal">{title}</h2>
         {badge && (
-          <span className="text-xs text-nilin-warmGray">{badge}</span>
+          <span className="text-sm text-nilin-warmGray mt-0.5 block">{badge}</span>
         )}
       </div>
     </div>
     {action && (
       <button
         onClick={action.onClick}
-        className="flex items-center gap-1 text-sm font-medium text-nilin-coral hover:text-nilin-rose transition-colors group"
+        className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-nilin-coral hover:text-nilin-rose hover:bg-nilin-coral/5 rounded-xl transition-all group"
       >
         {action.label}
-        <ChevronRight className="w-4 h-4 group-hover:translate-x-0.5 transition-transform" />
+        <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
       </button>
     )}
   </div>
 );
 
 // =============================================================================
-// MAIN RECOMMENDED PROS SECTION COMPONENT
+// MAIN COMPONENT
 // =============================================================================
 
 interface RecommendedProsSectionProps {
@@ -368,19 +400,30 @@ const RecommendedProsSection: React.FC<RecommendedProsSectionProps> = ({
 }) => {
   const navigate = useNavigate();
 
-  // State
   const [pros, setPros] = useState<RecommendedPro[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Fetch recommended pros
   const fetchPros = useCallback(async () => {
     setLoading(true);
     setError(null);
 
     try {
-      const data = await customerDashboardApi.getRecommendedPros(limit);
-      setPros(data || []);
+      let userLocation: { latitude: number; longitude: number } | undefined;
+      try {
+        const location = await locationService.getCurrentLocation();
+        if (location?.coordinates) {
+          userLocation = {
+            latitude: location.coordinates.latitude,
+            longitude: location.coordinates.longitude,
+          };
+        }
+      } catch (locError) {
+        console.warn('Could not get user location:', locError);
+      }
+
+      const { pros: recommendedPros } = await customerDashboardApi.getRecommendedPros(limit, userLocation);
+      setPros(recommendedPros || []);
     } catch (err) {
       console.error('Error fetching recommended pros:', err);
       setError(err instanceof Error ? err.message : 'Failed to load professionals');
@@ -390,97 +433,96 @@ const RecommendedProsSection: React.FC<RecommendedProsSectionProps> = ({
     }
   }, [limit]);
 
-  // Initial load
   useEffect(() => {
     fetchPros();
   }, [fetchPros]);
 
-  // Handle book action - navigate to search with provider pre-selected
   const handleBook = (pro: RecommendedPro) => {
-    // Navigate to search with the provider's ID to pre-select them
     navigate(`/search?provider=${pro.userId}`);
   };
 
-  // Handle view profile action
   const handleViewProfile = (pro: RecommendedPro) => {
     navigate(`/provider/${pro.userId}`);
   };
 
-  // Handle browse all
   const handleViewAll = () => {
     navigate('/search?filter=recommended');
   };
 
-  // Render loading state
   if (loading) {
     return (
-      <div>
+      <section className="py-12 px-4 bg-gradient-to-b from-nilin-cream to-white">
+        <div className="max-w-7xl mx-auto">
+          <SectionHeader
+            title="Recommended for You"
+            icon={<Users className="w-5 h-5" />}
+            badge="Based on your preferences"
+          />
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+            {[1, 2, 3].map((i) => (
+              <RecommendedProCardSkeleton key={i} />
+            ))}
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  if (error) {
+    return (
+      <section className="py-12 px-4 bg-gradient-to-b from-nilin-cream to-white">
+        <div className="max-w-7xl mx-auto">
+          <SectionHeader
+            title="Recommended for You"
+            icon={<Users className="w-5 h-5" />}
+          />
+          <ErrorState onRetry={fetchPros} />
+        </div>
+      </section>
+    );
+  }
+
+  if (pros.length === 0) {
+    return (
+      <section className="py-12 px-4 bg-gradient-to-b from-nilin-cream to-white">
+        <div className="max-w-7xl mx-auto">
+          <SectionHeader
+            title="Recommended for You"
+            icon={<Users className="w-5 h-5" />}
+          />
+          <EmptyState onBrowse={() => navigate('/search')} />
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="py-12 px-4 bg-gradient-to-b from-nilin-cream to-white">
+      <div className="max-w-7xl mx-auto">
         <SectionHeader
           title="Recommended for You"
-          icon={<Users className="w-5 h-5" />}
-          badge="Based on your booking history"
+          icon={<Heart className="w-5 h-5" />}
+          badge={pros.length > 0 ? `${pros.length} professionals matched to your preferences` : undefined}
+          action={
+            showViewAll && pros.length > 3
+              ? { label: 'View all professionals', onClick: handleViewAll }
+              : undefined
+          }
         />
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {[1, 2, 3].map((i) => (
-            <RecommendedProCardSkeleton key={i} />
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+          {pros.map((pro, index) => (
+            <RecommendedProCard
+              key={pro._id}
+              pro={pro}
+              index={index}
+              onBook={handleBook}
+              onViewProfile={handleViewProfile}
+            />
           ))}
         </div>
       </div>
-    );
-  }
-
-  // Render error state
-  if (error) {
-    return (
-      <div>
-        <SectionHeader
-          title="Recommended for You"
-          icon={<Users className="w-5 h-5" />}
-        />
-        <ErrorState onRetry={fetchPros} />
-      </div>
-    );
-  }
-
-  // Render empty state
-  if (pros.length === 0) {
-    return (
-      <div>
-        <SectionHeader
-          title="Recommended for You"
-          icon={<Users className="w-5 h-5" />}
-        />
-        <EmptyState onBrowse={() => navigate('/search')} />
-      </div>
-    );
-  }
-
-  // Render pros grid
-  return (
-    <div>
-      <SectionHeader
-        title="Recommended for You"
-        icon={<Users className="w-5 h-5" />}
-        badge={pros.length > 0 ? `${pros.length} professionals` : undefined}
-        action={
-          showViewAll && pros.length > 3
-            ? { label: 'View all', onClick: handleViewAll }
-            : undefined
-        }
-      />
-
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {pros.map((pro, index) => (
-          <RecommendedProCard
-            key={pro._id}
-            pro={pro}
-            index={index}
-            onBook={handleBook}
-            onViewProfile={handleViewProfile}
-          />
-        ))}
-      </div>
-    </div>
+    </section>
   );
 };
 

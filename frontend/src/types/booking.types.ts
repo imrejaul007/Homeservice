@@ -205,6 +205,7 @@ export interface Booking {
     category?: string;
     subcategory?: string;
     duration?: number;
+    images?: string[];
     price?: { amount: number; currency: string };
   };
 
@@ -365,7 +366,7 @@ export interface UpdateBookingData {
 // ==========================================
 
 export interface BookingFilters {
-  status?: BookingStatus | BookingStatus[];
+  status?: BookingStatus | BookingStatus[] | 'active';
   startDate?: string;
   endDate?: string;
   page?: number;

@@ -105,7 +105,30 @@ const dashboardApi = {
     );
     return response.data.tickets;
   },
+
+  async getCallbackRequests(limit: number = 10): Promise<CallbackRequestItem[]> {
+    const response = await authService.get<{
+      success: boolean;
+      data: { requests: CallbackRequestItem[] };
+    }>(`/support/admin/callbacks?limit=${limit}&status=pending`);
+    return response.data.requests || [];
+  },
+
+  async updateCallbackStatus(requestId: string, status: string): Promise<void> {
+    await authService.patch(`/support/admin/callbacks/${requestId}`, { status });
+  },
 };
+
+interface CallbackRequestItem {
+  requestId: string;
+  userName?: string;
+  phoneNumber: string;
+  preferredTime: string;
+  reason: string;
+  category: string;
+  status: string;
+  createdAt: string;
+}
 
 // ============================================
 // UTILITY FUNCTIONS
@@ -324,6 +347,64 @@ const AgentPerformanceTable: React.FC<{ agents: AgentPerformance[] }> = ({ agent
 // RECENT TICKETS COMPONENT
 // ============================================
 
+const CallbackRequestsPanel: React.FC<{
+  callbacks: CallbackRequestItem[];
+  onUpdate: () => void;
+}> = ({ callbacks, onUpdate }) => {
+  const [updating, setUpdating] = useState<string | null>(null);
+
+  const handleStatus = async (requestId: string, status: string) => {
+    setUpdating(requestId);
+    try {
+      await dashboardApi.updateCallbackStatus(requestId, status);
+      onUpdate();
+    } catch (err) {
+      console.error('Failed to update callback:', err);
+    } finally {
+      setUpdating(null);
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      {callbacks.map((cb) => (
+        <div key={cb.requestId} className="p-3 bg-gray-50 rounded-lg">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <p className="font-mono text-xs text-gray-500">{cb.requestId}</p>
+              <p className="text-sm font-medium text-gray-900">{cb.userName || 'Customer'}</p>
+              <p className="text-sm text-gray-600">{cb.phoneNumber}</p>
+              <p className="text-xs text-gray-500 mt-1 truncate">{cb.reason}</p>
+              <p className="text-xs text-gray-400 mt-1">
+                {new Date(cb.preferredTime).toLocaleString()} • {cb.category}
+              </p>
+            </div>
+            <div className="flex flex-col gap-1">
+              <button
+                disabled={updating === cb.requestId}
+                onClick={() => handleStatus(cb.requestId, 'scheduled')}
+                className="text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded hover:bg-blue-200 disabled:opacity-50"
+              >
+                Schedule
+              </button>
+              <button
+                disabled={updating === cb.requestId}
+                onClick={() => handleStatus(cb.requestId, 'completed')}
+                className="text-xs px-2 py-1 bg-green-100 text-green-700 rounded hover:bg-green-200 disabled:opacity-50"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      ))}
+      {callbacks.length === 0 && (
+        <p className="text-sm text-gray-400 text-center py-4">No pending callback requests</p>
+      )}
+    </div>
+  );
+};
+
 const RecentTickets: React.FC<{
   tickets: Array<{
     _id: string;
@@ -381,6 +462,7 @@ export const SupportDashboard: React.FC<SupportDashboardProps> = ({
   const [chatStats, setChatStats] = useState<ChatStats | null>(null);
   const [agents, setAgents] = useState<AgentPerformance[]>([]);
   const [recentTickets, setRecentTickets] = useState<any[]>([]);
+  const [pendingCallbacks, setPendingCallbacks] = useState<CallbackRequestItem[]>([]);
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
 
   // Fetch all dashboard data
@@ -389,17 +471,19 @@ export const SupportDashboard: React.FC<SupportDashboardProps> = ({
     setError(null);
 
     try {
-      const [tickets, chats, agentData, recent] = await Promise.all([
+      const [tickets, chats, agentData, recent, callbacks] = await Promise.all([
         dashboardApi.getTicketStats(),
         dashboardApi.getChatStats().catch(() => null),
         dashboardApi.getAgentPerformance(),
         dashboardApi.getRecentTickets(5),
+        dashboardApi.getCallbackRequests(8).catch(() => []),
       ]);
 
       setTicketStats(tickets);
       setChatStats(chats);
       setAgents(agentData);
       setRecentTickets(recent);
+      setPendingCallbacks(callbacks);
       setLastRefresh(new Date());
     } catch (err) {
       console.error('Failed to fetch dashboard data:', err);
@@ -574,15 +658,23 @@ export const SupportDashboard: React.FC<SupportDashboardProps> = ({
             </div>
           </div>
 
-          {/* Recent Tickets */}
-          <div className="mt-6 bg-white rounded-xl border border-gray-200 p-4">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="font-semibold text-nilin-charcoal">Recent Tickets</h3>
-              <button className="text-sm text-nilin-coral hover:text-nilin-coral/80 font-medium">
-                View All
-              </button>
+          <div className="mt-6 grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Recent Tickets */}
+            <div className="bg-white rounded-xl border border-gray-200 p-4">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-semibold text-nilin-charcoal">Recent Tickets</h3>
+              </div>
+              <RecentTickets tickets={recentTickets} onSelect={onSelectTicket || (() => {})} />
             </div>
-            <RecentTickets tickets={recentTickets} onSelect={onSelectTicket || (() => {})} />
+
+            {/* Callback Requests */}
+            <div className="bg-white rounded-xl border border-gray-200 p-4">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-semibold text-nilin-charcoal">Callback Requests</h3>
+                <Phone className="h-5 w-5 text-gray-400" />
+              </div>
+              <CallbackRequestsPanel callbacks={pendingCallbacks} onUpdate={fetchData} />
+            </div>
           </div>
         </>
       )}

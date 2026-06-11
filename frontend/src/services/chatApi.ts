@@ -94,6 +94,14 @@ export interface ChatRoom {
   updatedAt: string;
 }
 
+export interface BookingChatDetails {
+  _id: string;
+  bookingNumber?: string;
+  status?: string;
+  scheduledDate?: string;
+  serviceName?: string;
+}
+
 export interface ChatRoomListItem {
   _id: string;
   id?: string;
@@ -101,6 +109,7 @@ export interface ChatRoomListItem {
   name?: string;
   participants: ChatParticipant[];
   bookingId?: string;
+  bookingDetails?: BookingChatDetails;
   lastMessage?: {
     content: string;
     senderName: string;
@@ -133,19 +142,21 @@ export interface GetChatRoomsOptions {
   status?: 'active' | 'archived' | 'blocked';
 }
 
+export interface ChatAttachmentPayload {
+  url: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+  thumbnailUrl?: string;
+}
+
 export interface SendMessagePayload {
   receiverId: string;
-  content: string;
+  content?: string;
   type?: 'text' | 'image' | 'file';
   bookingId?: string;
   replyTo?: string;
-  attachments?: Array<{
-    url: string;
-    filename: string;
-    mimeType: string;
-    size: number;
-    thumbnailUrl?: string;
-  }>;
+  attachments?: ChatAttachmentPayload[];
 }
 
 export interface CreateChatRoomPayload {
@@ -298,6 +309,11 @@ export interface ChatApi {
     query: string,
     options?: { page?: number; limit?: number }
   ) => Promise<MessagesResponse>;
+
+  /**
+   * Upload chat attachments to Cloudinary
+   */
+  uploadChatAttachments: (files: File[]) => Promise<{ attachments: ChatAttachmentPayload[] }>;
 }
 
 export const chatApi: ChatApi = {
@@ -338,6 +354,15 @@ export const chatApi: ChatApi = {
    */
   sendMessage: async (roomId: string, payload: SendMessagePayload) => {
     const response = await api.post(`/chat/rooms/${roomId}/messages`, payload);
+    return response.data.data;
+  },
+
+  uploadChatAttachments: async (files: File[]) => {
+    const formData = new FormData();
+    files.forEach((file) => formData.append('files', file));
+    const response = await api.post('/chat/upload', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
     return response.data.data;
   },
 
@@ -465,13 +490,36 @@ export function getUnreadCountForUser(
 /**
  * Normalize chat room data (handles _id vs id inconsistencies)
  */
+function extractBookingDetails(room: ChatRoom | ChatRoomListItem): BookingChatDetails | undefined {
+  if (room.bookingDetails) {
+    return room.bookingDetails;
+  }
+  if (typeof room.bookingId === 'object' && room.bookingId) {
+    const serviceId = room.bookingId.serviceId;
+    const serviceName =
+      typeof serviceId === 'object' && serviceId && 'name' in serviceId
+        ? (serviceId as { name?: string }).name
+        : undefined;
+    return {
+      _id: room.bookingId._id,
+      bookingNumber: room.bookingId.bookingNumber,
+      status: room.bookingId.status,
+      scheduledDate: room.bookingId.scheduledDate,
+      serviceName,
+    };
+  }
+  return undefined;
+}
+
 export function normalizeChatRoom(room: ChatRoom | ChatRoomListItem): ChatRoomListItem {
+  const bookingDetails = extractBookingDetails(room);
   return {
     _id: room._id || (room as unknown as { id: string }).id,
     type: room.type,
     name: room.name,
     participants: room.participants,
     bookingId: typeof room.bookingId === 'string' ? room.bookingId : room.bookingId?._id,
+    bookingDetails,
     lastMessage: room.lastMessage ? {
       content: room.lastMessage.content,
       senderName: room.lastMessage.senderName || 'User',
@@ -481,7 +529,7 @@ export function normalizeChatRoom(room: ChatRoom | ChatRoomListItem): ChatRoomLi
         : (room.lastMessage.senderId as unknown as { _id: string })?._id,
       type: room.lastMessage.type
     } : undefined,
-    unreadCount: room.unreadCount,
+    unreadCount: room.unreadCount ?? 0,
     unreadCounts: room.unreadCounts,
     isPinned: room.isPinned,
     createdAt: room.createdAt,

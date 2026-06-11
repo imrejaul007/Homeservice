@@ -200,4 +200,51 @@ const multerPortfolioUpload = multer({
 export const uploadPortfolioMultiple = multerPortfolioUpload.array('images', 5);
 export const uploadPortfolioSingle = multerPortfolioUpload.single('image');
 
+// Experience image upload configuration (up to 10 images)
+const multerExperienceUpload = multer({
+  storage: createCloudinaryStorage('experiences'),
+  limits: {
+    fileSize: 10 * 1024 * 1024,
+    files: 10,
+  },
+  fileFilter: (_req, file, cb) => {
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only JPEG, PNG, GIF, and WebP images are allowed'));
+    }
+  },
+});
+
+export const uploadExperienceImages = multerExperienceUpload.array('images', 10);
+
+// Chat attachment upload (images + documents, up to 5 files)
+const multerChatUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 10 * 1024 * 1024,
+    files: 5,
+  },
+  fileFilter: (_req, file, cb) => {
+    const allowedTypes = [
+      'image/jpeg',
+      'image/png',
+      'image/webp',
+      'image/gif',
+      'application/pdf',
+      'text/plain',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    ];
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('File type not allowed for chat attachments'));
+    }
+  },
+});
+
+export const uploadChatFiles = multerChatUpload.array('files', 5);
+
 export default cloudinary;

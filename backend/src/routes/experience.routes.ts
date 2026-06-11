@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import experienceController from '../controllers/experience.controller';
 import { authenticate } from '../middleware/auth.middleware';
+import { uploadExperienceImages } from '../utils/cloudinary';
 
 const router = Router();
 
@@ -77,17 +78,18 @@ router.get('/:id', experienceController.getExperienceById);
 router.post(
   '/',
   authenticate,
+  uploadExperienceImages,
   experienceController.submitExperience
 );
 
 /**
  * PUT /api/experiences/:id
  * Update an existing experience (within 30 days)
- * Body: title?, description?, rating?, images?, videoUrl?
  */
 router.put(
   '/:id',
   authenticate,
+  uploadExperienceImages,
   experienceController.updateExperience
 );
 

@@ -5,7 +5,7 @@ import { ChatHistory } from './ChatHistory';
 import { MessageInput } from './MessageInput';
 import { TypingIndicator } from './TypingIndicator';
 import { Badge } from '../common/Badge';
-import { chatApi, ChatMessage as ChatMessageType, ChatRoom as ChatRoomType, normalizeChatRoom, normalizeMessage } from '../../services/chatApi';
+import { chatApi, ChatMessage as ChatMessageType, ChatRoom as ChatRoomType, ChatRoomListItem, getUnreadCountForUser, normalizeChatRoom, normalizeMessage } from '../../services/chatApi';
 import { socketService } from '../../services/socket';
 
 // =============================================================================
@@ -37,6 +37,10 @@ export interface ChatWindowProps {
   onNewMessage?: (message: ChatMessageType) => void;
   /** On unread count change */
   onUnreadChange?: (count: number) => void;
+  /** Widget (floating) vs full-page embedded layout */
+  layout?: 'widget' | 'page';
+  /** Booking page embed — conversation only, no room list */
+  embedded?: boolean;
   /** Custom className */
   className?: string;
 }
@@ -76,8 +80,11 @@ export function ChatWindow({
   onBackToRooms,
   onNewMessage,
   onUnreadChange,
+  layout = 'widget',
+  embedded = false,
   className,
 }: ChatWindowProps) {
+  const isPageLayout = layout === 'page';
   // State
   const [chatRooms, setChatRooms] = useState<ChatRoomWithDetails[]>([]);
   const [selectedRoom, setSelectedRoomState] = useState<ChatRoomWithDetails | null>(null);
@@ -91,6 +98,13 @@ export function ChatWindow({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const appliedInitialRoomIdRef = useRef<string | null>(null);
+  const activeRoomIdRef = useRef<string | null>(null);
+
+  const getRoomId = useCallback((room: ChatRoomWithDetails | ChatRoomType | null | undefined): string | null => {
+    if (!room) return null;
+    return room._id || (room as unknown as { id: string }).id || null;
+  }, []);
 
   // =============================================================================
   // Fetch Chat Rooms
@@ -106,7 +120,10 @@ export function ChatWindow({
       setChatRooms(normalizedRooms);
 
       // Calculate total unread count
-      const totalUnread = response.rooms.reduce((sum, room) => sum + (room.unreadCount || 0), 0);
+      const totalUnread = response.rooms.reduce(
+        (sum, room) => sum + getUnreadCountForUser(room, userId),
+        0
+      );
       onUnreadChange?.(totalUnread);
     } catch (err) {
       // Ignore abort errors - they are expected when component unmounts
@@ -116,7 +133,25 @@ export function ChatWindow({
     } finally {
       setIsLoading(false);
     }
-  }, [onUnreadChange]);
+  }, [onUnreadChange, userId]);
+
+  // =============================================================================
+  // Mark Messages as Read
+  // =============================================================================
+
+  const markMessagesAsRead = useCallback(async (roomId: string) => {
+    try {
+      await chatApi.markRoomAsRead(roomId);
+
+      setChatRooms(prev =>
+        prev.map(room =>
+          (room._id || (room as unknown as { id: string }).id) === roomId ? { ...room, unreadCount: 0 } : room
+        )
+      );
+    } catch (err) {
+      console.error('Error marking messages as read:', err);
+    }
+  }, []);
 
   // =============================================================================
   // Fetch Messages
@@ -142,38 +177,56 @@ export function ChatWindow({
 
       setHasMoreMessages(response.hasMore);
 
-      // Mark messages as read
       await markMessagesAsRead(roomId);
     } catch (err) {
-      // Ignore abort errors - they are expected when component unmounts
       if (signal?.aborted) return;
       console.error('Error fetching messages:', err);
     } finally {
       setIsLoadingMessages(false);
     }
-  }, []);
+  }, [markMessagesAsRead]);
 
   // =============================================================================
   // Send Message
   // =============================================================================
 
-  const sendMessage = useCallback(async (content: string, attachments?: File[]) => {
+  const sendMessage = useCallback(async (content: string, files?: File[]) => {
     if (!selectedRoom) return;
 
-    // Get receiver ID
-    const receiver = selectedRoom.participants.find(
-      p => p.userId?._id !== userId
-    );
+    const receiver = selectedRoom.participants.find(p => {
+      const participantId = (p.userId?._id || p._id || (p as unknown as { id: string }).id)?.toString();
+      return participantId && participantId !== userId.toString();
+    });
 
     if (!receiver) return;
 
     try {
       const roomId = selectedRoom._id || (selectedRoom as unknown as { id: string }).id;
+      const receiverId = (
+        receiver.userId?._id || receiver._id || receiver.id || ''
+      ).toString();
+
+      let uploadedAttachments;
+      let messageType: 'text' | 'image' | 'file' = 'text';
+
+      if (files && files.length > 0) {
+        const uploadResult = await chatApi.uploadChatAttachments(files);
+        uploadedAttachments = uploadResult.attachments;
+        const allImages = files.every((file) => file.type.startsWith('image/'));
+        messageType = allImages ? 'image' : 'file';
+      }
+
+      const bookingId =
+        typeof selectedRoom.bookingId === 'string'
+          ? selectedRoom.bookingId
+          : (selectedRoom as ChatRoomListItem).bookingDetails?._id;
 
       const response = await chatApi.sendMessage(roomId, {
-        receiverId: receiver.userId?._id || receiver.id || '',
-        content,
-        type: attachments?.length ? 'file' : 'text',
+        receiverId,
+        content: content || undefined,
+        type: messageType,
+        bookingId,
+        attachments: uploadedAttachments,
       });
 
       if (response.message) {
@@ -188,25 +241,6 @@ export function ChatWindow({
   }, [selectedRoom, userId, onNewMessage]);
 
   // =============================================================================
-  // Mark Messages as Read
-  // =============================================================================
-
-  const markMessagesAsRead = useCallback(async (roomId: string) => {
-    try {
-      await chatApi.markRoomAsRead(roomId);
-
-      // Update local unread count
-      setChatRooms(prev =>
-        prev.map(room =>
-          (room._id || (room as unknown as { id: string }).id) === roomId ? { ...room, unreadCount: 0 } : room
-        )
-      );
-    } catch (err) {
-      console.error('Error marking messages as read:', err);
-    }
-  }, []);
-
-  // =============================================================================
   // Typing Indicator
   // =============================================================================
 
@@ -217,8 +251,6 @@ export function ChatWindow({
 
     if (selectedRoom) {
       const roomId = selectedRoom._id || (selectedRoom as unknown as { id: string }).id;
-      // Emit typing start via socket service (both booking and chat room)
-      socketService.startTyping(roomId);
       socketService.startChatTyping(roomId);
     }
 
@@ -236,8 +268,6 @@ export function ChatWindow({
 
     if (selectedRoom) {
       const roomId = selectedRoom._id || (selectedRoom as unknown as { id: string }).id;
-      // Emit typing stop via socket service (both booking and chat room)
-      socketService.stopTyping(roomId);
       socketService.stopChatTyping(roomId);
     }
   }, [selectedRoom]);
@@ -247,50 +277,101 @@ export function ChatWindow({
   // =============================================================================
 
   const handleSelectRoom = useCallback((room: ChatRoomWithDetails) => {
-    // Clear typing timeout when changing rooms
     if (typingTimeoutRef.current) {
       clearTimeout(typingTimeoutRef.current);
       typingTimeoutRef.current = null;
     }
 
+    const roomId = getRoomId(room);
+    if (!roomId || activeRoomIdRef.current === roomId) {
+      return;
+    }
+
+    activeRoomIdRef.current = roomId;
+    appliedInitialRoomIdRef.current = roomId;
     setSelectedRoomState(room);
+    setMessages([]);
     onSelectRoom(room);
-    const roomId = room._id || (room as unknown as { id: string }).id;
-    fetchMessages(roomId);
-  }, [fetchMessages, onSelectRoom]);
+  }, [getRoomId, onSelectRoom]);
+
+  const handleBackToRoomsInternal = useCallback(() => {
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = null;
+    }
+    activeRoomIdRef.current = null;
+    appliedInitialRoomIdRef.current = null;
+    setSelectedRoomState(null);
+    setMessages([]);
+    setTypingUsers([]);
+    onBackToRooms();
+  }, [onBackToRooms]);
+
+  // Sync room opened by parent (deep-link from booking "Message" button)
+  useEffect(() => {
+    if (!initialSelectedRoom) {
+      if (appliedInitialRoomIdRef.current) {
+        activeRoomIdRef.current = null;
+        appliedInitialRoomIdRef.current = null;
+        setSelectedRoomState(null);
+        setMessages([]);
+      }
+      return;
+    }
+
+    const normalized = normalizeChatRoom(initialSelectedRoom) as ChatRoomWithDetails;
+    const roomId = getRoomId(normalized);
+    if (!roomId || appliedInitialRoomIdRef.current === roomId) {
+      return;
+    }
+
+    appliedInitialRoomIdRef.current = roomId;
+    activeRoomIdRef.current = roomId;
+    setSelectedRoomState(normalized);
+    setMessages([]);
+  }, [initialSelectedRoom, getRoomId]);
 
   // =============================================================================
   // Effects
   // =============================================================================
 
-  // Combined effect for initial load and socket setup
-  // Uses refs to avoid dependency changes that cause cascading renders
+  // Ensure socket is connected for real-time messages
   useEffect(() => {
-    const currentSelectedRoomId = selectedRoom?._id;
-    const currentUserId = userId;
+    socketService.connect();
+  }, []);
 
-    // Cancel any pending requests from previous effect runs
+  // Load chat rooms on mount (skip room list fetch in embedded booking chat)
+  useEffect(() => {
+    if (embedded) return;
+    const controller = new AbortController();
+    fetchChatRooms(controller.signal);
+    return () => controller.abort();
+  }, [fetchChatRooms, embedded]);
+
+  const selectedRoomId = getRoomId(selectedRoom);
+
+  // Load messages when active room changes
+  useEffect(() => {
+    if (!selectedRoomId) return;
+
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
     abortControllerRef.current = new AbortController();
-
-    // Use refs to capture current values for socket callbacks
-    // This avoids re-subscribing on every selectedRoom change
-    const selectedRoomIdRef = { current: currentSelectedRoomId };
-    const userIdRef = { current: currentUserId };
     const signal = abortControllerRef.current.signal;
 
-    // Initial load of chat rooms
-    fetchChatRooms(signal);
+    fetchMessages(selectedRoomId, undefined, signal);
 
-    // Load messages when room changes
-    if (currentSelectedRoomId) {
-      fetchMessages(currentSelectedRoomId, undefined, signal);
-    }
+    return () => {
+      abortControllerRef.current?.abort();
+    };
+  }, [selectedRoomId, fetchMessages]);
 
-    // Subscribe to socket events once (not on every dependency change)
-    const unsubNewMessage = socketService.on('message:new', (data: {
+  // Socket subscriptions (stable — uses refs for current room/user)
+  useEffect(() => {
+    const userIdRef = { current: userId };
+
+    const handleIncomingMessage = (data: {
       messageId?: string;
       chatRoomId?: string;
       senderId?: string;
@@ -301,8 +382,7 @@ export function ChatWindow({
       status?: string;
       createdAt?: string | Date;
     }) => {
-      // Use ref values to check if message belongs to current room
-      const selectedRoomId = selectedRoomIdRef.current;
+      const selectedRoomId = activeRoomIdRef.current;
       if (data.chatRoomId === selectedRoomId && data.senderId !== userIdRef.current) {
         // Convert socket message to ChatMessage format
         const chatMessage: ChatMessageType = {
@@ -319,10 +399,13 @@ export function ChatWindow({
         setMessages(prev => [...prev, chatMessage]);
         onNewMessage?.(chatMessage);
       }
-    });
+    };
 
-    const unsubTypingStart = socketService.onChatTypingStart((data) => {
-      const selectedRoomId = selectedRoomIdRef.current;
+    const unsubNewMessage = socketService.on('message:new', handleIncomingMessage);
+    const unsubChatNewMessage = socketService.on('chat:new_message', handleIncomingMessage);
+
+    const unsubTypingStart = socketService.on('typing:start', (data) => {
+      const selectedRoomId = activeRoomIdRef.current;
       if (data.chatRoomId === selectedRoomId && data.userId !== userIdRef.current) {
         setTypingUsers(prev => {
           if (prev.some(u => u.userId === data.userId)) return prev;
@@ -331,15 +414,15 @@ export function ChatWindow({
       }
     });
 
-    const unsubTypingStop = socketService.onChatTypingStop((data) => {
-      const selectedRoomId = selectedRoomIdRef.current;
+    const unsubTypingStop = socketService.on('typing:stop', (data) => {
+      const selectedRoomId = activeRoomIdRef.current;
       if (data.chatRoomId === selectedRoomId) {
         setTypingUsers(prev => prev.filter(u => u.userId !== data.userId));
       }
     });
 
     const unsubMessageDelivered = socketService.onChatMessageDelivered((data) => {
-      const selectedRoomId = selectedRoomIdRef.current;
+      const selectedRoomId = activeRoomIdRef.current;
       if (data.chatRoomId === selectedRoomId) {
         setMessages(prev =>
           prev.map(msg =>
@@ -351,31 +434,28 @@ export function ChatWindow({
       }
     });
 
-    // Join/leave chat room when selected
-    if (currentSelectedRoomId) {
-      socketService.joinChatRoom(currentSelectedRoomId);
-    }
-
-    // Cleanup function
     return () => {
-      // Cancel any pending fetch requests
-      abortControllerRef.current?.abort();
-      abortControllerRef.current = null;
-
       unsubNewMessage();
+      unsubChatNewMessage();
       unsubTypingStart();
       unsubTypingStop();
       unsubMessageDelivered();
-      if (currentSelectedRoomId) {
-        socketService.leaveChatRoom(currentSelectedRoomId);
-      }
-      // Clear typing timeout on unmount
       if (typingTimeoutRef.current) {
         clearTimeout(typingTimeoutRef.current);
         typingTimeoutRef.current = null;
       }
     };
-  }, []); // Empty deps - run once on mount, cleanup on unmount
+  }, [userId, onNewMessage]);
+
+  // Join/leave socket room when selection changes
+  useEffect(() => {
+    if (!selectedRoomId) return;
+
+    socketService.joinChatRoom(selectedRoomId);
+    return () => {
+      socketService.leaveChatRoom(selectedRoomId);
+    };
+  }, [selectedRoomId]);
 
   // Scroll to bottom when messages change (separate to avoid re-running socket setup)
   useEffect(() => {
@@ -386,41 +466,60 @@ export function ChatWindow({
   // Render
   // =============================================================================
 
-  const getParticipantName = (room: ChatRoomWithDetails): string => {
-    if (room.type === 'booking' && room.bookingId) {
-      const bookingId = typeof room.bookingId === 'object' ? room.bookingId : null;
-      return `Booking ${bookingId?.bookingNumber || room.bookingId}`;
-    }
-
-    const otherParticipant = room.participants.find(p => {
-      const participantId = p.userId?._id || p._id || (p as unknown as { id: string }).id;
-      return participantId !== userId;
+  const getOtherParticipant = (room: ChatRoomWithDetails | ChatRoomListItem) => {
+    return room.participants.find(p => {
+      const participantId = (p.userId?._id || p._id || (p as unknown as { id: string }).id)?.toString();
+      return participantId && participantId !== userId.toString();
     });
-
-    if (otherParticipant) {
-      const firstName = otherParticipant.userId?.firstName || otherParticipant.firstName || '';
-      const lastName = otherParticipant.userId?.lastName || otherParticipant.lastName || '';
-      return `${firstName} ${lastName}`.trim() || otherParticipant.name || 'Chat';
-    }
-
-    return room.name || 'Chat';
   };
 
-  const getParticipantAvatar = (room: ChatRoomWithDetails): string | undefined => {
-    const otherParticipant = room.participants.find(p => {
-      const participantId = p.userId?._id || p._id || (p as unknown as { id: string }).id;
-      return participantId !== userId;
-    });
+  const getParticipantName = (room: ChatRoomWithDetails | ChatRoomListItem): string => {
+    if (room.name && room.name !== 'Chat') {
+      return room.name;
+    }
+
+    const other = getOtherParticipant(room);
+    if (other) {
+      const firstName = other.userId?.firstName || other.firstName || '';
+      const lastName = other.userId?.lastName || other.lastName || '';
+      const fullName = `${firstName} ${lastName}`.trim();
+      if (fullName) return fullName;
+      if (other.name) return other.name;
+    }
+
+    return 'Conversation';
+  };
+
+  const getRoomSubtitle = (room: ChatRoomWithDetails | ChatRoomListItem): string | undefined => {
+    if (room.type !== 'booking') return undefined;
+
+    const details = (room as ChatRoomListItem).bookingDetails;
+    const parts: string[] = [];
+
+    if (details?.serviceName) {
+      parts.push(details.serviceName);
+    }
+    if (details?.bookingNumber) {
+      parts.push(`#${details.bookingNumber}`);
+    } else if (details?.status) {
+      parts.push(details.status.replace(/_/g, ' '));
+    }
+
+    return parts.length > 0 ? parts.join(' · ') : 'Booking conversation';
+  };
+
+  const getParticipantAvatar = (room: ChatRoomWithDetails | ChatRoomListItem): string | undefined => {
+    const otherParticipant = getOtherParticipant(room);
     return otherParticipant?.userId?.avatar || otherParticipant?.avatar;
   };
 
   return (
     <div
       className={cn(
-        'flex flex-col bg-white rounded-2xl shadow-2xl overflow-hidden transition-all duration-300 ease-out',
-        // Size
-        'w-[calc(100vw-32px)] h-[calc(100vh-100px)] max-w-md max-h-[600px]',
-        'md:w-[420px] md:h-[560px]',
+        'flex flex-col bg-white overflow-hidden transition-all duration-300 ease-out',
+        isPageLayout
+          ? 'w-full h-full min-h-0 rounded-none shadow-none'
+          : 'rounded-2xl shadow-2xl w-[calc(100vw-32px)] h-[calc(100vh-100px)] max-w-md max-h-[600px] md:w-[420px] md:h-[560px]',
         // Minimized state
         isMinimized && 'h-0 opacity-0 pointer-events-none',
         className
@@ -431,8 +530,9 @@ export function ChatWindow({
         {selectedRoom ? (
           <>
             {/* Back button */}
+            {!embedded && (
             <button
-              onClick={onBackToRooms}
+              onClick={handleBackToRoomsInternal}
               className="p-1 -ml-1 rounded-full hover:bg-white/20 transition-colors"
               aria-label="Back to conversations"
             >
@@ -440,9 +540,10 @@ export function ChatWindow({
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
               </svg>
             </button>
+            )}
 
             {/* Room info */}
-            <div className="flex items-center gap-3 flex-1 ml-2">
+            <div className={cn('flex items-center gap-3 flex-1', !embedded && 'ml-2')}>
               <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center text-sm font-semibold">
                 {getParticipantAvatar(selectedRoom) ? (
                   <img
@@ -456,9 +557,9 @@ export function ChatWindow({
               </div>
               <div className="flex-1 min-w-0">
                 <h3 className="font-semibold truncate">{getParticipantName(selectedRoom)}</h3>
-                {selectedRoom.bookingId && (
-                  <span className="text-xs text-white/80">
-                    {typeof selectedRoom.bookingId === 'object' ? selectedRoom.bookingId.status : 'Booking'}
+                {getRoomSubtitle(selectedRoom) && (
+                  <span className="text-xs text-white/80 truncate block">
+                    {getRoomSubtitle(selectedRoom)}
                   </span>
                 )}
               </div>
@@ -473,27 +574,29 @@ export function ChatWindow({
           </>
         )}
 
-        {/* Actions */}
-        <div className="flex items-center gap-1 ml-2">
-          <button
-            onClick={onMinimize}
-            className="p-1.5 rounded-full hover:bg-white/20 transition-colors"
-            aria-label="Minimize chat"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
-            </svg>
-          </button>
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded-full hover:bg-white/20 transition-colors"
-            aria-label="Close chat"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
+        {/* Actions — widget only */}
+        {!isPageLayout && (
+          <div className="flex items-center gap-1 ml-2">
+            <button
+              onClick={onMinimize}
+              className="p-1.5 rounded-full hover:bg-white/20 transition-colors"
+              aria-label="Minimize chat"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
+              </svg>
+            </button>
+            <button
+              onClick={onClose}
+              className="p-1.5 rounded-full hover:bg-white/20 transition-colors"
+              aria-label="Close chat"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Content */}
@@ -513,6 +616,10 @@ export function ChatWindow({
             >
               Retry
             </button>
+          </div>
+        ) : embedded && !selectedRoom ? (
+          <div className="flex-1 flex items-center justify-center">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#E8B4A8]" />
           </div>
         ) : selectedRoom ? (
           // Messages View
@@ -567,7 +674,7 @@ export function ChatWindow({
               disabled={false}
             />
           </>
-        ) : (
+        ) : embedded ? null : (
           // Rooms List
           <div className="flex-1 overflow-y-auto">
             {isLoading ? (
@@ -588,6 +695,7 @@ export function ChatWindow({
               <div className="divide-y divide-gray-100">
                 {chatRooms.map((room) => {
                   const roomId = room._id || (room as unknown as { id: string }).id;
+                  const unread = getUnreadCountForUser(room, userId);
                   const lastMsgSenderId = typeof room.lastMessage?.senderId === 'string'
                     ? room.lastMessage.senderId
                     : (room.lastMessage?.senderId as unknown as { _id: string })?._id;
@@ -597,7 +705,7 @@ export function ChatWindow({
                     onClick={() => handleSelectRoom(room)}
                     className={cn(
                       'w-full flex items-center gap-3 p-4 hover:bg-gray-50 transition-colors text-left',
-                      room.unreadCount && room.unreadCount > 0 && 'bg-blue-50/50'
+                      unread > 0 && 'bg-blue-50/50'
                     )}
                   >
                     {/* Avatar */}
@@ -613,9 +721,9 @@ export function ChatWindow({
                           getParticipantName(room).charAt(0).toUpperCase()
                         )}
                       </div>
-                      {room.unreadCount && room.unreadCount > 0 && (
+                      {unread > 0 && (
                         <span className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-[#E8B4A8] text-white text-xs flex items-center justify-center">
-                          {room.unreadCount > 9 ? '9+' : room.unreadCount}
+                          {unread > 9 ? '9+' : unread}
                         </span>
                       )}
                     </div>
@@ -624,8 +732,8 @@ export function ChatWindow({
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between gap-2">
                         <h4 className={cn(
-                          'font-medium truncate',
-                          room.unreadCount && room.unreadCount > 0 ? 'text-gray-900' : 'text-gray-700'
+                          'font-medium truncate flex-1 min-w-0',
+                          unread > 0 ? 'text-gray-900' : 'text-gray-700'
                         )}>
                           {getParticipantName(room)}
                         </h4>
@@ -635,10 +743,13 @@ export function ChatWindow({
                           </span>
                         )}
                       </div>
+                      {getRoomSubtitle(room) && (
+                        <p className="text-xs text-gray-400 truncate">{getRoomSubtitle(room)}</p>
+                      )}
                       {room.lastMessage && (
                         <p className={cn(
                           'text-sm truncate',
-                          room.unreadCount && room.unreadCount > 0 ? 'text-gray-700 font-medium' : 'text-gray-500'
+                          unread > 0 ? 'text-gray-700 font-medium' : 'text-gray-500'
                         )}>
                           {lastMsgSenderId === userId ? 'You: ' : ''}
                           {room.lastMessage.type === 'image' ? '[Image]' :

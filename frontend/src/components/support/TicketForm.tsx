@@ -23,6 +23,16 @@ export interface CreateTicketData {
   priority: TicketPriority;
   subject: string;
   description: string;
+  bookingId?: string;
+  bookingNumber?: string;
+  serviceName?: string;
+}
+
+export interface TicketBookingContext {
+  bookingId?: string;
+  bookingNumber?: string;
+  serviceName?: string;
+  displayRef?: string;
 }
 
 export interface TicketFormProps {
@@ -30,6 +40,9 @@ export interface TicketFormProps {
   onSuccess?: (ticketNumber: string) => void;
   onCancel?: () => void;
   preselectedCategory?: TicketCategory;
+  prefilledSubject?: string;
+  prefilledDescription?: string;
+  bookingContext?: TicketBookingContext;
 }
 
 // ============================================
@@ -242,12 +255,15 @@ export const TicketForm: React.FC<TicketFormProps> = ({
   onSuccess,
   onCancel,
   preselectedCategory,
+  prefilledSubject,
+  prefilledDescription,
+  bookingContext,
 }) => {
   // Form state
   const [category, setCategory] = useState<TicketCategory | ''>(preselectedCategory || '');
   const [priority, setPriority] = useState<TicketPriority>('medium');
-  const [subject, setSubject] = useState('');
-  const [description, setDescription] = useState('');
+  const [subject, setSubject] = useState(prefilledSubject || '');
+  const [description, setDescription] = useState(prefilledDescription || '');
 
   // UI state
   const [submitting, setSubmitting] = useState(false);
@@ -291,6 +307,9 @@ export const TicketForm: React.FC<TicketFormProps> = ({
         priority,
         subject: subject.trim(),
         description: description.trim(),
+        ...(bookingContext?.bookingId ? { bookingId: bookingContext.bookingId } : {}),
+        ...(bookingContext?.bookingNumber ? { bookingNumber: bookingContext.bookingNumber } : {}),
+        ...(bookingContext?.serviceName ? { serviceName: bookingContext.serviceName } : {}),
       });
 
       setSuccess(true);
@@ -366,6 +385,23 @@ export const TicketForm: React.FC<TicketFormProps> = ({
         <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-xl flex items-start gap-3">
           <AlertCircle className="h-5 w-5 text-red-500 mt-0.5 flex-shrink-0" />
           <p className="text-sm text-red-700">{error}</p>
+        </div>
+      )}
+
+      {bookingContext?.displayRef && (
+        <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-xl flex items-start gap-3">
+          <Info className="h-5 w-5 text-blue-600 mt-0.5 flex-shrink-0" />
+          <div>
+            <p className="text-sm font-medium text-blue-900">
+              This ticket is linked to booking {bookingContext.displayRef}
+            </p>
+            {bookingContext.serviceName && (
+              <p className="text-sm text-blue-700 mt-1">{bookingContext.serviceName}</p>
+            )}
+            <p className="text-xs text-blue-600 mt-1">
+              Describe your issue below — we&apos;ll include the booking reference automatically.
+            </p>
+          </div>
         </div>
       )}
 

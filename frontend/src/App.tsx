@@ -127,6 +127,8 @@ const ChatbotBuilderPage = lazy(() => import('./pages/admin/ChatbotBuilderPage')
 const UnsubscribePage = lazy(() => import('./pages/UnsubscribePage'));
 const HomePage = lazy(() => import('./pages/HomePage'));
 const ExperiencesPage = lazy(() => import('./pages/ExperiencesPage'));
+const TrendingPage = lazy(() => import('./pages/TrendingPage'));
+const CuratedTrendingManagement = lazy(() => import('./pages/admin/CuratedTrendingManagement'));
 const SearchPage = lazy(() => import('./pages/SearchPage'));
 const ServiceDetailPage = lazy(() => import('./pages/ServiceDetailPage'));
 const CategoryPage = lazy(() => import('./pages/CategoryPage'));
@@ -183,6 +185,7 @@ const OfferDetailPage = lazy(() => import('./pages/OfferDetailPage'));
 const PrivacyPage = lazy(() => import('./pages/PrivacyPage'));
 const TermsPage = lazy(() => import('./pages/TermsPage'));
 const FAQPage = lazy(() => import('./pages/FAQPage'));
+const CookiesPage = lazy(() => import('./pages/CookiesPage'));
 const ContactPage = lazy(() => import('./pages/ContactPage'));
 const HelpPage = lazy(() => import('./pages/HelpPage'));
 const SupportHubPage = lazy(() => import('./pages/customer/SupportHubPage'));
@@ -403,16 +406,16 @@ function App() {
 
         {/* Service Packages Routes */}
         <Route
-          path="/packages"
-          element={<PackagesPage />}
+          path="/packages/compare"
+          element={<PackageComparisonPage />}
         />
         <Route
           path="/packages/:id"
           element={<PackageDetailPage />}
         />
         <Route
-          path="/packages/compare"
-          element={<PackageComparisonPage />}
+          path="/packages"
+          element={<PackagesPage />}
         />
         <Route
           path="/book-package/:packageId"
@@ -427,6 +430,11 @@ function App() {
         <Route
           path="/experiences"
           element={<ExperiencesPage />}
+        />
+
+        <Route
+          path="/trending"
+          element={<TrendingPage />}
         />
 
         <Route
@@ -526,6 +534,7 @@ function App() {
         <Route path="/offer/:offerId" element={<OfferDetailPage />} />
         <Route path="/privacy" element={<PrivacyPage />} />
         <Route path="/terms" element={<TermsPage />} />
+        <Route path="/cookies" element={<CookiesPage />} />
         <Route path="/faq" element={<FaqGate><FAQPage /></FaqGate>} />
         <Route path="/contact" element={<ContactPage />} />
         <Route path="/help" element={<HelpPage />} />
@@ -1025,6 +1034,15 @@ function App() {
           element={
             <AdminRoute>
               <AdminOffersManagement />
+            </AdminRoute>
+          }
+        />
+
+        <Route
+          path="/admin/curated-trending"
+          element={
+            <AdminRoute>
+              <CuratedTrendingManagement />
             </AdminRoute>
           }
         />

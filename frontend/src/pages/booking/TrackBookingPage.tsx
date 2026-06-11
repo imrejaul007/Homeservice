@@ -29,6 +29,7 @@ import { useAuthStore } from '../../stores/authStore';
 import { api } from '../../services/api';
 import { experienceApi } from '../../services/experienceApi';
 import { socketService, type BookingEvent } from '../../services/socket';
+import { BookingChat } from '../../components/chat';
 
 interface PricingInfo {
   basePrice?: number;
@@ -67,7 +68,9 @@ interface TrackingData {
     subcategory?: string;
     image?: string;
   };
-  provider?: { name: string };
+  provider?: { _id?: string; name: string; phone?: string };
+  customerId?: string;
+  providerId?: string;
   location?: LocationInfo;
   scheduledDate: string;
   scheduledTime: string;
@@ -690,6 +693,51 @@ const TrackBookingPage: React.FC = () => {
                       );
                     })}
                   </div>
+                </div>
+              )}
+
+              {/* Booking Chat */}
+              {isAuthenticated &&
+                tracking._id &&
+                tracking.providerId &&
+                (user?._id || user?.id || tracking.customerId) &&
+                !['cancelled', 'rejected'].includes(tracking.status) && (
+                <div className="p-6 border-b border-nilin-border">
+                  <div className="flex items-center justify-between gap-4 mb-4">
+                    <h4 className="font-semibold text-nilin-charcoal flex items-center gap-2">
+                      <MessageCircle className="w-4 h-4 text-nilin-coral" />
+                      Message {tracking.provider?.name || 'your provider'}
+                    </h4>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        navigate('/customer/messages', {
+                          state: {
+                            bookingId: tracking._id,
+                            providerId: tracking.providerId,
+                          },
+                        })
+                      }
+                      className="text-sm font-medium text-nilin-coral hover:text-nilin-rose transition-colors"
+                    >
+                      Open in Messages
+                    </button>
+                  </div>
+                  <BookingChat
+                    bookingId={tracking._id}
+                    customerId={(user?._id || user?.id || tracking.customerId)!}
+                    customerName={
+                      `${user?.firstName || tracking.customerInfo?.firstName || ''} ${user?.lastName || tracking.customerInfo?.lastName || ''}`.trim() || 'Customer'
+                    }
+                    customerAvatar={user?.avatar}
+                    providerId={tracking.providerId}
+                    providerName={tracking.provider?.name || 'Provider'}
+                    currentUserId={(user?._id || user?.id)!}
+                    currentUserRole="customer"
+                    bookingStatus={tracking.status}
+                    serviceName={tracking.service?.name}
+                    scheduledDate={`${tracking.scheduledDate}T${tracking.scheduledTime || '00:00'}`}
+                  />
                 </div>
               )}
 

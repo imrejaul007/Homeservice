@@ -11,6 +11,7 @@ const AutoChatbot = lazy(() => import('../support/AutoChatbot'));
 const HIDDEN_ROUTES = [
   '/customer/messages',
   '/customer/messages/new',
+  '/customer/support',
   '/provider/messages',
   '/admin/chatbot-builder',
 ];

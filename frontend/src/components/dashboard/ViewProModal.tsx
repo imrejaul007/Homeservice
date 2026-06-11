@@ -26,12 +26,36 @@ import {
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { cn } from '../../lib/utils';
 import { customerDashboardApi, CustomerDashboardApiError, type RecommendedPro } from '../../services/customerDashboardApi';
+import { locationService } from '../../services/locationService';
+import { usePriceConversion } from '../../utils/priceConverter';
 
 // =============================================================================
-// CURRENCY CONFIGURATION
+// PRICE DISPLAY
 // =============================================================================
 
-const CURRENCY = 'AED';
+const ProStartingPrice: React.FC<{
+  amount: number;
+  sourceCurrency?: string;
+  className?: string;
+  suffixClassName?: string;
+  showSuffix?: boolean;
+  align?: 'left' | 'right';
+}> = ({
+  amount,
+  sourceCurrency = 'AED',
+  className = 'text-xl font-bold text-nilin-charcoal',
+  suffixClassName = 'text-xs text-nilin-warmGray ml-1',
+  showSuffix = true,
+  align,
+}) => {
+  const { convert, format, currency } = usePriceConversion();
+  return (
+    <div className={align === 'right' ? 'text-right' : align === 'left' ? 'text-left' : undefined}>
+      <span className={className}>{format(convert(amount, sourceCurrency), currency)}</span>
+      {showSuffix && <span className={suffixClassName}>starting</span>}
+    </div>
+  );
+};
 
 // =============================================================================
 // TIER CONFIGURATION
@@ -302,10 +326,7 @@ const RecentProCard: React.FC<RecentProCardProps> = ({ pro, onBook, onViewProfil
 
             {/* Price */}
             {lowestPrice !== null && (
-              <div className="text-right">
-                <span className="text-xl font-bold text-nilin-charcoal">{CURRENCY} {lowestPrice}</span>
-                <span className="text-xs text-nilin-warmGray block">starting</span>
-              </div>
+              <ProStartingPrice amount={lowestPrice} align="right" />
             )}
           </div>
 
@@ -440,7 +461,11 @@ const ProCard: React.FC<ProCardProps> = ({ pro, onBook, onViewProfile, isCompact
           {/* Price + Book */}
           <div className="flex-shrink-0 flex items-center gap-2">
             {lowestPrice !== null && (
-              <span className="font-bold text-nilin-charcoal text-sm">{CURRENCY} {lowestPrice}</span>
+              <ProStartingPrice
+                amount={lowestPrice}
+                className="font-bold text-nilin-charcoal text-sm"
+                showSuffix={false}
+              />
             )}
             <button
               onClick={(e) => { e.stopPropagation(); onBook(pro); }}
@@ -597,10 +622,11 @@ const ProCard: React.FC<ProCardProps> = ({ pro, onBook, onViewProfile, isCompact
         <div className="flex items-center justify-between mt-4 pt-3 border-t border-white/40">
           <div>
             {lowestPrice !== null ? (
-              <>
-                <span className="text-lg font-bold text-nilin-charcoal">{CURRENCY} {lowestPrice}</span>
-                <span className="text-[10px] text-nilin-warmGray ml-1">starting</span>
-              </>
+              <ProStartingPrice
+                amount={lowestPrice}
+                className="text-lg font-bold text-nilin-charcoal"
+                suffixClassName="text-[10px] text-nilin-warmGray ml-1"
+              />
             ) : (
               <span className="text-xs text-nilin-warmGray">Contact for pricing</span>
             )}
@@ -800,14 +826,26 @@ const ViewProModal: React.FC<ViewProModalProps> = ({
     setError(null);
 
     try {
-      const data = await customerDashboardApi.getRecommendedPros(limit);
+      // Get user's current location for distance calculation
+      let userLocation: { latitude: number; longitude: number } | undefined;
+      try {
+        const location = await locationService.getCurrentLocation();
+        if (location?.coordinates) {
+          userLocation = {
+            latitude: location.coordinates.latitude,
+            longitude: location.coordinates.longitude,
+          };
+        }
+      } catch (locError) {
+        console.warn('Could not get user location for distance calculation:', locError);
+        // Continue without location - distance won't be shown
+      }
+
+      const { pros: recommendedPros, recentlyUsed: recent } = await customerDashboardApi.getRecommendedPros(limit, userLocation);
       // Only update state if request wasn't aborted
       if (!abortControllerRef.current.signal.aborted) {
-        // Handle both array and object responses
-        const prosArray = Array.isArray(data) ? data : (data as any).pros || [];
-        const recentlyUsedArray = Array.isArray(data) ? [] : (data as any).recentlyUsed || [];
-        setPros(prosArray);
-        setRecentlyUsed(recentlyUsedArray);
+        setPros(recommendedPros || []);
+        setRecentlyUsed(recent || []);
       }
     } catch (err) {
       // Ignore abort errors

@@ -7,6 +7,7 @@ import Joi from 'joi';
 import mongoose from 'mongoose';
 import Booking from '../models/booking.model';
 import { escapeRegex } from '../utils/formatBookingListItem';
+import { uploadChatFiles, uploadBufferToCloudinary } from '../utils/cloudinary';
 
 const router = Router();
 
@@ -104,6 +105,49 @@ const validateMessageContent = (req: Request, _res: Response, next: NextFunction
 };
 
 // =============================================================================
+// Chat Upload
+// =============================================================================
+
+/**
+ * POST /api/chat/upload
+ * Upload chat attachments to Cloudinary
+ */
+router.post(
+  '/upload',
+  authenticate,
+  uploadChatFiles,
+  asyncHandler(async (req: Request, res: Response) => {
+    const files = req.files as Express.Multer.File[] | undefined;
+
+    if (!files || files.length === 0) {
+      throw new ApiError(400, 'No files uploaded');
+    }
+
+    const attachments = await Promise.all(
+      files.map(async (file) => {
+        const isImage = file.mimetype.startsWith('image/');
+        const result = await uploadBufferToCloudinary(file.buffer, 'chat', {
+          resourceType: isImage ? 'image' : 'raw',
+        });
+
+        return {
+          url: result.secureUrl,
+          filename: file.originalname,
+          mimeType: file.mimetype,
+          size: file.size,
+          thumbnailUrl: isImage ? result.secureUrl : undefined,
+        };
+      })
+    );
+
+    res.json({
+      success: true,
+      data: { attachments },
+    });
+  })
+);
+
+// =============================================================================
 // Chat Room Routes
 // =============================================================================
 
@@ -190,16 +234,7 @@ router.get(
     const userId = req.user!._id.toString();
     const { id } = req.params;
 
-    // Get the room
-    const { rooms } = await chatService.getChatRooms(userId, {
-      limit: 1
-    });
-
-    const chatRoom = rooms.find(r => r._id.toString() === id);
-
-    if (!chatRoom) {
-      throw new ApiError(404, 'Chat room not found');
-    }
+    const chatRoom = await chatService.getChatRoomById(id, userId);
 
     res.json({
       success: true,
@@ -497,7 +532,7 @@ router.patch(
     const { id } = req.params;
 
     // Validate query params
-    const { error, value } = markReadSchema.validate(req.query, {
+    const { error, value } = markReadSchema.validate(req.body, {
       stripUnknown: true
     });
 

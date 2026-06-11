@@ -10,12 +10,15 @@ interface NavigationHeaderProps {
   showSearch?: boolean;
   onSearch?: (query: string) => void;
   showCategoryTabs?: boolean;
+  /** Homepage hero overlay: fixed header, transparent over hero, solid on scroll */
+  variant?: 'default' | 'hero';
 }
 
 const NavigationHeader: React.FC<NavigationHeaderProps> = ({
   showSearch = true,
   onSearch,
   showCategoryTabs = true,
+  variant = 'default',
 }) => {
   const navigate = useNavigate();
   const { user, logout } = useAuthStore();
@@ -25,18 +28,22 @@ const NavigationHeader: React.FC<NavigationHeaderProps> = ({
   const [showMobileSearch, setShowMobileSearch] = useState(false);
   const [isScrolled, setIsScrolled] = useState(false);
 
+  const isHeroVariant = variant === 'hero';
+  const isHeroOverlay = isHeroVariant && !isScrolled;
+  const heroTextClass = isHeroOverlay ? 'text-white [text-shadow:0_1px_4px_rgba(0,0,0,0.5)]' : '';
+
   // Track scroll state for frosted glass effect
   useEffect(() => {
     const handleScroll = () => {
-      const scrolled = window.scrollY > 10;
-      setIsScrolled(scrolled);
+      const threshold = isHeroVariant ? 80 : 10;
+      setIsScrolled(window.scrollY > threshold);
     };
 
     window.addEventListener('scroll', handleScroll, { passive: true });
     handleScroll(); // Check initial state
 
     return () => window.removeEventListener('scroll', handleScroll);
-  }, []);
+  }, [isHeroVariant]);
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -62,12 +69,13 @@ const NavigationHeader: React.FC<NavigationHeaderProps> = ({
   return (
     <>
       <header
+        data-testid="main-header"
         className={`
-          sticky top-0 z-50 border-b border-white/20
-          transition-all duration-300 ease-out
-          ${isScrolled
-            ? 'glass-nilin-strong bg-nilin-blush/80 dark:bg-nilin-charcoal/80'
-            : 'glass glass-blur bg-white/60 dark:bg-nilin-charcoal/40'
+          top-0 left-0 right-0 min-h-16 transition-all duration-300 ease-out
+          ${isHeroVariant ? 'fixed z-[100]' : 'sticky z-50'}
+          ${isHeroOverlay
+            ? 'bg-gradient-to-b from-nilin-charcoal/90 via-nilin-charcoal/75 to-nilin-charcoal/40 backdrop-blur-lg border-b border-white/15 shadow-[0_4px_24px_rgba(0,0,0,0.25)]'
+            : 'bg-white/95 backdrop-blur-xl border-b border-gray-200/50 shadow-lg'
           }
         `}
       >
@@ -77,7 +85,7 @@ const NavigationHeader: React.FC<NavigationHeaderProps> = ({
           <div className="flex items-center justify-between px-4 py-3">
             {/* Logo */}
             <Link to="/" className="flex-shrink-0 float-3d">
-              <span className="text-2xl font-serif font-light text-nilin-charcoal tracking-wide">
+              <span className={`text-2xl font-serif font-light tracking-wide transition-colors duration-300 ${isHeroOverlay ? heroTextClass : 'text-nilin-charcoal'}`}>
                 NILIN
               </span>
             </Link>
@@ -86,26 +94,28 @@ const NavigationHeader: React.FC<NavigationHeaderProps> = ({
             <div className="flex items-center gap-3">
               <button
                 onClick={() => setShowMobileSearch(true)}
-                className="p-2 text-nilin-warmGray hover:text-nilin-charcoal transition-colors duration-200"
+                className={`p-2 transition-colors duration-200 ${isHeroOverlay ? `${heroTextClass} opacity-90 hover:opacity-100` : 'text-nilin-warmGray hover:text-nilin-charcoal'}`}
               >
                 <Search className="h-5 w-5" />
               </button>
 
-              <LocationDropdown variant="mobile" />
+              <LocationDropdown variant="mobile" overlay={isHeroOverlay} />
 
               {user ? (
                 <button
                   onClick={() => setShowMobileMenu(true)}
                   className="p-2"
                 >
-                  <div className="w-8 h-8 rounded-full bg-nilin-blush flex items-center justify-center shadow-nilin-warm transition-all duration-200 hover:shadow-lg">
-                    <User className="h-4 w-4 text-nilin-rose" />
+                  <div className={`w-8 h-8 rounded-full flex items-center justify-center transition-all duration-200 hover:shadow-lg ${
+                    isHeroOverlay ? 'bg-white/20 shadow-[0_2px_8px_rgba(0,0,0,0.25)]' : 'bg-nilin-blush shadow-nilin-warm'
+                  }`}>
+                    <User className={`h-4 w-4 ${isHeroOverlay ? 'text-white' : 'text-nilin-rose'}`} />
                   </div>
                 </button>
               ) : (
                 <Link
                   to="/login"
-                  className="px-4 py-2 text-sm font-medium text-nilin-coral hover:text-nilin-rose transition-colors duration-200"
+                  className={`px-4 py-2 text-sm font-medium transition-colors duration-200 ${isHeroOverlay ? heroTextClass : 'text-nilin-coral hover:text-nilin-rose'}`}
                 >
                   Sign in
                 </Link>
@@ -120,7 +130,7 @@ const NavigationHeader: React.FC<NavigationHeaderProps> = ({
             <div className="flex items-center justify-between h-16 gap-4">
               {/* Logo */}
               <Link to="/" className="flex-shrink-0 float-3d">
-                <h1 className="text-2xl md:text-3xl font-serif font-light text-nilin-charcoal tracking-wide transition-all duration-200 hover:scale-[1.02]">
+                <h1 className={`text-2xl md:text-3xl font-serif font-light tracking-wide transition-all duration-200 hover:scale-[1.02] ${isHeroOverlay ? heroTextClass : 'text-nilin-charcoal'}`}>
                   NILIN
                 </h1>
               </Link>
@@ -144,12 +154,16 @@ const NavigationHeader: React.FC<NavigationHeaderProps> = ({
               {/* Desktop Navigation */}
               <div className="flex items-center gap-3">
                 {/* Location Selector */}
-                <LocationDropdown variant="desktop" />
+                <LocationDropdown variant="desktop" overlay={isHeroOverlay} />
 
                 {/* Track Order */}
                 <Link
                   to="/track"
-                  className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-nilin-warmGray hover:text-nilin-charcoal hover:bg-nilin-blush/50 rounded-nilin transition-all duration-200 shadow-nilin-warm hover:shadow-lg"
+                  className={`flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-nilin transition-all duration-200 ${
+                    isHeroOverlay
+                      ? `${heroTextClass} hover:bg-white/15`
+                      : 'text-nilin-warmGray hover:text-nilin-charcoal hover:bg-nilin-blush/50 shadow-nilin-warm hover:shadow-lg'
+                  }`}
                 >
                   <Package className="h-4 w-4" />
                   <span>Track Order</span>
@@ -166,12 +180,16 @@ const NavigationHeader: React.FC<NavigationHeaderProps> = ({
                   <div className="relative">
                     <button
                       onClick={() => setShowUserMenu(!showUserMenu)}
-                      className="flex items-center gap-2 px-4 py-2 bg-nilin-blush border border-nilin-border rounded-nilin hover:bg-nilin-peach transition-all duration-200 shadow-nilin-warm hover:shadow-lg"
+                      className={`flex items-center gap-2 px-4 py-2 rounded-nilin transition-all duration-200 ${
+                        isHeroOverlay
+                          ? 'bg-white/15 border border-white/25 hover:bg-white/25 shadow-[0_2px_8px_rgba(0,0,0,0.2)]'
+                          : 'bg-nilin-blush border border-nilin-border hover:bg-nilin-peach shadow-nilin-warm hover:shadow-lg'
+                      }`}
                     >
-                      <div className="w-7 h-7 rounded-full bg-nilin-peach flex items-center justify-center transition-all duration-200">
-                        <User className="h-4 w-4 text-nilin-rose" />
+                      <div className={`w-7 h-7 rounded-full flex items-center justify-center transition-all duration-200 ${isHeroOverlay ? 'bg-white/20' : 'bg-nilin-peach'}`}>
+                        <User className={`h-4 w-4 ${isHeroOverlay ? 'text-white' : 'text-nilin-rose'}`} />
                       </div>
-                      <span className="text-sm font-medium text-nilin-charcoal max-w-[100px] truncate">
+                      <span className={`text-sm font-medium max-w-[100px] truncate ${isHeroOverlay ? heroTextClass : 'text-nilin-charcoal'}`}>
                         {user.name || 'Account'}
                       </span>
                     </button>
@@ -232,6 +250,9 @@ const NavigationHeader: React.FC<NavigationHeaderProps> = ({
                               <Link to="/provider/bookings" className="flex items-center gap-3 px-4 py-3 text-sm text-nilin-charcoal hover:bg-nilin-blush/70 rounded-nilin transition-all duration-200" onClick={() => setShowUserMenu(false)}>
                                 <Calendar className="h-4 w-4 text-nilin-warmGray" /> Bookings
                               </Link>
+                              <Link to="/provider/messages" className="flex items-center gap-3 px-4 py-3 text-sm text-nilin-charcoal hover:bg-nilin-blush/70 rounded-nilin transition-all duration-200" onClick={() => setShowUserMenu(false)}>
+                                <MessageCircle className="h-4 w-4 text-nilin-warmGray" /> Messages
+                              </Link>
                             </>
                           )}
 
@@ -262,7 +283,7 @@ const NavigationHeader: React.FC<NavigationHeaderProps> = ({
                   <div className="flex items-center gap-2">
                     <Link
                       to="/login"
-                      className="px-5 py-2.5 text-sm font-semibold text-nilin-warmGray hover:text-nilin-charcoal transition-colors duration-200"
+                      className={`px-5 py-2.5 text-sm font-semibold transition-colors duration-200 ${isHeroOverlay ? heroTextClass : 'text-nilin-warmGray hover:text-nilin-charcoal'}`}
                     >
                       Login
                     </Link>
@@ -398,6 +419,9 @@ const NavigationHeader: React.FC<NavigationHeaderProps> = ({
                       </Link>
                       <Link to="/provider/bookings" className="flex items-center gap-3 px-4 py-3 text-nilin-charcoal hover:bg-nilin-peach/30 rounded-nilin transition-all duration-200" onClick={closeMobileMenu}>
                         <Calendar className="h-5 w-5 text-nilin-warmGray" /> Bookings
+                      </Link>
+                      <Link to="/provider/messages" className="flex items-center gap-3 px-4 py-3 text-nilin-charcoal hover:bg-nilin-peach/30 rounded-nilin transition-all duration-200" onClick={closeMobileMenu}>
+                        <MessageCircle className="h-5 w-5 text-nilin-warmGray" /> Messages
                       </Link>
                     </>
                   )}

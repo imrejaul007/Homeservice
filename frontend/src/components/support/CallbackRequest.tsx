@@ -60,10 +60,13 @@ const callbackApi = {
   },
 
   async getMyCallbacks(): Promise<CallbackRequest[]> {
-    const response = await authService.get<{ success: boolean; data: CallbackRequest[] }>(
-      '/support/callback/my'
-    );
-    return response.data || [];
+    const response = await authService.get<{
+      success: boolean;
+      data: { requests: CallbackRequest[] } | CallbackRequest[];
+    }>('/support/callback/my');
+    const data = response.data;
+    if (Array.isArray(data)) return data;
+    return data?.requests || [];
   },
 };
 
@@ -95,7 +98,7 @@ const generateTimeSlots = (date: Date): Array<{ value: Date; label: string; avai
       slotDate.setHours(hour, minute, 0, 0);
 
       const isPast = slotDate <= new Date();
-      const available = !isPast && Math.random() > 0.3; // Simulate availability
+      const available = !isPast;
 
       const period = hour >= 12 ? 'PM' : 'AM';
       const displayHour = hour > 12 ? hour - 12 : hour === 0 ? 12 : hour;

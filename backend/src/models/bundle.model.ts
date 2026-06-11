@@ -163,7 +163,7 @@ const bundleSchema = new Schema<IBundle>(
     },
     categoryId: {
       type: Schema.Types.ObjectId,
-      ref: 'Category',
+      ref: 'ServiceCategory',
     },
 
     // Pricing

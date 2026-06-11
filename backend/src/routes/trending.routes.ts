@@ -28,6 +28,9 @@ router.get(
   '/',
   [
     query('location').optional().isString().withMessage('Location must be a string'),
+    query('lat').optional().isFloat({ min: -90, max: 90 }).withMessage('Valid latitude required'),
+    query('lng').optional().isFloat({ min: -180, max: 180 }).withMessage('Valid longitude required'),
+    query('radius').optional().isFloat({ min: 1, max: 100 }).withMessage('Radius must be 1-100 km'),
     query('categoryId').optional().isMongoId().withMessage('Valid category ID required'),
     query('limit').optional().isInt({ min: 1, max: 50 }).withMessage('Limit must be 1-50'),
     query('period').optional().isIn(['daily', 'weekly', 'monthly']).withMessage('Period must be daily, weekly, or monthly'),
@@ -46,6 +49,9 @@ router.get(
 
       const {
         location,
+        lat,
+        lng,
+        radius = '15',
         categoryId,
         limit = '20',
         period = 'weekly',
@@ -54,11 +60,21 @@ router.get(
       const window = mapPeriodToWindow(period as string);
       const limitNum = parseInt(limit as string, 10);
 
-      // Get trending services from the trending service
-      const trending = await trendingService.getTrendingServices(window, {
-        limit: limitNum,
-        categoryId: categoryId as string | undefined,
-      });
+      let trending;
+      if (lat && lng) {
+        const locationTrending = await trendingService.getTrendingByLocation(
+          { lat: parseFloat(lat as string), lng: parseFloat(lng as string) },
+          parseFloat(radius as string),
+          window,
+          { limit: limitNum }
+        );
+        trending = locationTrending.topServices || [];
+      } else {
+        trending = await trendingService.getTrendingServices(window, {
+          limit: limitNum,
+          categoryId: categoryId as string | undefined,
+        });
+      }
 
       res.status(200).json({
         success: true,
@@ -67,6 +83,8 @@ router.get(
           metadata: {
             period,
             location: location || null,
+            lat: lat ? parseFloat(lat as string) : null,
+            lng: lng ? parseFloat(lng as string) : null,
             categoryId: categoryId || null,
             generatedAt: new Date().toISOString(),
           },

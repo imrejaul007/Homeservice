@@ -1131,17 +1131,85 @@ export const handleWebhookEvent = async (event: Stripe.Event): Promise<{ handled
           if (booking.payment.totalRefunded >= booking.pricing.totalAmount) {
             booking.payment.status = 'refunded';
 
-            // FIX: On full refund, if coupon was reserved but not yet marked as used, clear reservation
-            // If coupon was already marked as used (payment succeeded before refund), no rollback needed
-            // The coupon has already been used by the customer - refund doesn't change that
+            // FIX: On full refund, handle coupon rollback
+            // If coupon was reserved but not yet marked as used, clear reservation
             if (booking.couponReservation && !booking.couponReservation.usedAt) {
               booking.couponReservation = undefined;
-              logger.info('Coupon reservation cleared on refund', {
+              logger.info('Coupon reservation cleared on refund (unused)', {
                 bookingId: booking._id,
                 refundAmount: refundedAmount,
                 sagaStep: 'coupon_reservation_cleared_on_refund',
               });
+            } else if (booking.couponReservation?.usedAt) {
+              // FIX: Coupon was already used — rollback the usage so the offer can be re-claimed/reused
+              // This prevents customers from getting both a refund AND keeping the coupon redemption
+              const { offerService } = await import('../services/offer.service');
+              const couponCode = booking.couponReservation.couponCode;
+              const userId = booking.customerId?.toString() || '';
+              const rolledBack = await offerService.rollbackCouponUsage(
+                couponCode,
+                userId,
+                booking._id.toString(),
+                'refund'
+              );
+              couponRolledBack = rolledBack;
+
+              // Clear coupon reservation after rollback
+              booking.couponReservation = undefined;
+
+              logger.info('Coupon usage rolled back on full refund', {
+                bookingId: booking._id,
+                couponCode,
+                refundAmount: refundedAmount,
+                rolledBack,
+                sagaStep: 'coupon_usage_rolled_back_on_refund',
+              });
             }
+
+            // FIX: Clear stale coupon discount from pricing after refund
+            if (booking.pricing.couponDiscount > 0) {
+              // Recalculate pricing without the coupon discount
+              const addOnsTotal = booking.pricing.addOns?.reduce(
+                (sum: number, addon: { price: number }) => sum + addon.price, 0
+              ) || 0;
+              const baseTotal = booking.pricing.basePrice + addOnsTotal;
+              const taxRate = 0.05; // 5% VAT
+              const newTax = Math.round(baseTotal * taxRate * 100) / 100;
+              const newTotal = Math.round((baseTotal + newTax) * 100) / 100;
+
+              // Remove coupon discount from discounts array
+              const discounts = (booking.pricing.discounts || []).filter(
+                (d: { type: string }) => d.type !== 'coupon'
+              );
+
+              booking.pricing = {
+                ...booking.pricing,
+                couponDiscount: 0,
+                subtotal: Math.round(baseTotal * 100) / 100,
+                tax: newTax,
+                totalAmount: newTotal,
+                discounts,
+              };
+
+              logger.info('Pricing recalculated after full refund', {
+                bookingId: booking._id,
+                previousCouponDiscount: booking.pricing.couponDiscount,
+                newTotal,
+                sagaStep: 'pricing_recalculated_on_refund',
+              });
+            }
+          } else if (refundedAmount > 0) {
+            // FIX: Partial refund — record the partial refund for audit purposes
+            // Partial refunds don't affect coupon usage (coupon is tied to booking, not amount)
+            // In a future enhancement, you could implement partial coupon value rollback
+            logger.info('Partial refund processed (coupon usage unchanged)', {
+              bookingId: booking._id,
+              refundedAmount,
+              totalRefunded: booking.payment.totalRefunded,
+              originalTotal: booking.pricing.totalAmount,
+              couponCode: booking.couponReservation?.couponCode || 'none',
+              sagaStep: 'partial_refund_processed',
+            });
           }
           booking.payment.refundedAt = new Date();
           await booking.save();

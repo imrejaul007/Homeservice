@@ -132,17 +132,47 @@ export interface ServicePackageDTO {
   category: string;
   basePrice: number;
   discountedPrice?: number;
-  duration: number;
-  durationLabel: string;
+  pricing?: {
+    originalPrice: number;
+    currentPrice: number;
+    currency: string;
+    type: 'fixed' | 'hourly' | 'custom';
+  };
+  duration: {
+    totalMinutes: number;
+    formatted: string;
+  };
+  durationLabel?: string;
   images: string[];
   includedItems: string[];
   addOns?: PackageAddOnDTO[];
+  features?: Array<{ name: string; included: boolean }>;
+  services?: Array<{
+    _id?: string;
+    serviceId?: string;
+    serviceName: string;
+    originalPrice: number;
+    duration?: number;
+    price?: number;
+  }>;
+  provider?: {
+    _id: string;
+    firstName: string;
+    lastName: string;
+    businessName?: string;
+    isVerified?: boolean;
+  };
   providerName: string;
-  providerId: mongoose.Types.ObjectId;
+  providerId: mongoose.Types.ObjectId | string;
   averageRating: number;
   totalReviews: number;
   isPopular: boolean;
   isFeatured: boolean;
+  stats?: {
+    rating: number;
+    reviewCount: number;
+    totalPurchases: number;
+  };
 }
 
 export interface ServicePackagesResponseDTO {

@@ -1,7 +1,8 @@
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { cn } from '../../lib/utils';
 import { ChatWidget, ChatWidgetProps } from './ChatWidget';
-import { chatApi, ChatMessage, ChatRoomListItem, ChatRoom as ChatRoomType } from '../../services/chatApi';
+import { ChatWindow } from './ChatWindow';
+import { chatApi, ChatMessage, ChatRoomListItem, ChatRoom as ChatRoomType, normalizeChatRoom } from '../../services/chatApi';
 import { socketService } from '../../services/socket';
 
 // =============================================================================
@@ -536,235 +537,104 @@ export function BookingChat({
   className,
   onMessageSent,
 }: BookingChatProps) {
-  const [message, setMessage] = useState('');
-  const [isSending, setIsSending] = useState(false);
-  const [isTyping, setIsTyping] = useState(false);
-  const [chatRoomId, setChatRoomId] = useState<string | null>(null);
-  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const [chatRoom, setChatRoom] = useState<ChatRoomType | null>(null);
+  const [initError, setInitError] = useState<string | null>(null);
+  const [isInitializing, setIsInitializing] = useState(true);
 
-  // Get the other participant info
-  const otherParticipant = useMemo(() => {
-    if (currentUserRole === 'customer') {
-      return { id: providerId, name: providerName, avatar: providerAvatar };
-    }
-    return { id: customerId, name: customerName, avatar: customerAvatar };
-  }, [currentUserRole, customerId, customerName, customerAvatar, providerId, providerName, providerAvatar]);
+  const displayName = currentUserRole === 'customer' ? customerName : providerName;
+  const displayAvatar = currentUserRole === 'customer' ? customerAvatar : providerAvatar;
 
-  // Initialize chat room on mount
   useEffect(() => {
+    let cancelled = false;
+
     const initChatRoom = async () => {
+      setIsInitializing(true);
+      setInitError(null);
       try {
         const result = await chatApi.getOrCreateBookingChat({
           bookingId,
           customerId,
           providerId,
         });
-        if (result.chatRoom) {
-          const roomId = result.chatRoom._id || (result.chatRoom as unknown as { id: string }).id;
-          setChatRoomId(roomId);
+        if (!cancelled && result.chatRoom) {
+          setChatRoom(normalizeChatRoom(result.chatRoom) as ChatRoomType);
         }
       } catch (error) {
         console.error('Error initializing booking chat room:', error);
+        if (!cancelled) {
+          setInitError('Unable to load conversation. Please try again.');
+        }
+      } finally {
+        if (!cancelled) {
+          setIsInitializing(false);
+        }
       }
     };
 
-    initChatRoom();
-  }, [bookingId, customerId, providerId]);
-
-  // Handle message send
-  const handleSend = useCallback(async () => {
-    if (!message.trim()) return;
-
-    // Ensure we have a valid chat room ID
-    if (!chatRoomId) {
-      // Try to get/create the chat room first
-      try {
-        const result = await chatApi.getOrCreateBookingChat({
-          bookingId,
-          customerId,
-          providerId,
-        });
-        if (!result.chatRoom) return;
-        const roomId = result.chatRoom._id || (result.chatRoom as unknown as { id: string }).id;
-        setChatRoomId(roomId);
-
-        await chatApi.sendMessage(roomId, {
-          receiverId: otherParticipant.id,
-          content: message.trim(),
-          type: 'text',
-        });
-        setMessage('');
-        onMessageSent?.();
-      } catch (error) {
-        console.error('Error sending message:', error);
-      }
-      return;
+    if (bookingId && customerId && providerId && currentUserId) {
+      initChatRoom();
+    } else {
+      setIsInitializing(false);
+      setInitError('Missing booking chat details.');
     }
-
-    setIsSending(true);
-    try {
-      await chatApi.sendMessage(chatRoomId, {
-        receiverId: otherParticipant.id,
-        content: message.trim(),
-        type: 'text',
-      });
-      setMessage('');
-      onMessageSent?.();
-    } catch (error) {
-      console.error('Error sending message:', error);
-    } finally {
-      setIsSending(false);
-    }
-  }, [message, bookingId, customerId, providerId, chatRoomId, otherParticipant.id, onMessageSent]);
-
-  // Handle typing indicator
-  const handleTyping = useCallback(() => {
-    if (!isTyping && chatRoomId) {
-      setIsTyping(true);
-      socketService.startTyping(chatRoomId);
-    }
-
-    // Clear existing timeout and set new one
-    if (typingTimeoutRef.current) {
-      clearTimeout(typingTimeoutRef.current);
-    }
-
-    // Auto-stop typing after 3 seconds of no input
-    typingTimeoutRef.current = setTimeout(() => {
-      setIsTyping(false);
-      if (chatRoomId) {
-        socketService.stopTyping(chatRoomId);
-      }
-    }, 3000);
-  }, [chatRoomId, isTyping]);
-
-  // Cleanup typing timeout on chatRoomId change
-  useEffect(() => {
-    return () => {
-      if (typingTimeoutRef.current) {
-        clearTimeout(typingTimeoutRef.current);
-        typingTimeoutRef.current = null;
-      }
-      // Stop typing when switching rooms
-      if (isTyping && chatRoomId) {
-        socketService.stopTyping(chatRoomId);
-      }
-    };
-  }, [chatRoomId, isTyping]);
-
-  // Subscribe to typing events
-  useEffect(() => {
-    const unsubscribe = socketService.onTypingStart(({ bookingId: bId }) => {
-      if (bId === bookingId) {
-        // Show typing indicator for other user
-      }
-    });
 
     return () => {
-      unsubscribe();
+      cancelled = true;
     };
-  }, [bookingId]);
+  }, [bookingId, customerId, providerId, currentUserId]);
+
+  if (initError) {
+    return (
+      <div className={cn('rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700', className)}>
+        {initError}
+      </div>
+    );
+  }
+
+  if (isInitializing) {
+    return (
+      <div className={cn('flex items-center justify-center rounded-xl border border-gray-200 bg-white p-8', className)}>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#E8B4A8]" />
+      </div>
+    );
+  }
 
   return (
-    <div className={cn('flex flex-col bg-white rounded-xl shadow-sm', className)}>
-      {/* Header */}
-      <div className="flex items-center gap-3 p-4 border-b border-gray-100">
-        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#E8B4A8] to-[#D4948A] flex items-center justify-center text-white font-semibold">
-          {otherParticipant.avatar ? (
-            <img
-              src={otherParticipant.avatar}
-              alt={otherParticipant.name}
-              className="w-full h-full rounded-full object-cover"
-            />
-          ) : (
-            otherParticipant.name.charAt(0).toUpperCase()
-          )}
-        </div>
-        <div className="flex-1">
-          <h4 className="font-medium text-gray-900">{otherParticipant.name}</h4>
-          {serviceName && (
-            <p className="text-xs text-gray-500 truncate">{serviceName}</p>
-          )}
-        </div>
-        {bookingStatus && (
-          <span
-            className={cn(
-              'px-2 py-1 rounded-full text-xs font-medium',
-              bookingStatus === 'confirmed'
-                ? 'bg-green-100 text-green-800'
-                : bookingStatus === 'pending'
-                ? 'bg-yellow-100 text-yellow-800'
-                : 'bg-gray-100 text-gray-600'
-            )}
-          >
-            {bookingStatus}
-          </span>
-        )}
-      </div>
-
-      {/* Booking Info */}
-      {scheduledDate && (
-        <div className="px-4 py-2 bg-gray-50 border-b border-gray-100">
-          <p className="text-xs text-gray-500">
-            Scheduled:{' '}
-            <span className="font-medium text-gray-700">
-              {new Date(scheduledDate).toLocaleDateString('en-US', {
-                weekday: 'short',
+    <div className={cn('flex flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm', className)}>
+      {(serviceName || scheduledDate || bookingStatus) && (
+        <div className="flex flex-wrap items-center gap-2 border-b border-gray-100 px-4 py-2 text-xs text-gray-500">
+          {serviceName && <span className="font-medium text-gray-700">{serviceName}</span>}
+          {scheduledDate && (
+            <span>
+              {new Date(scheduledDate).toLocaleString('en-US', {
                 month: 'short',
                 day: 'numeric',
                 hour: '2-digit',
                 minute: '2-digit',
               })}
             </span>
-          </p>
+          )}
+          {bookingStatus && (
+            <span className="rounded-full bg-gray-100 px-2 py-0.5 capitalize">{bookingStatus.replace(/_/g, ' ')}</span>
+          )}
         </div>
       )}
-
-      {/* Message Input */}
-      <div className="p-4 border-t border-gray-100">
-        <div className="flex items-center gap-2">
-          <input
-            type="text"
-            value={message}
-            onChange={(e) => {
-              setMessage(e.target.value);
-              handleTyping();
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                handleSend();
-              }
-            }}
-            placeholder="Type a message..."
-            className={cn(
-              'flex-1 px-4 py-2 rounded-full bg-gray-100',
-              'placeholder-gray-500 text-gray-800',
-              'focus:outline-none focus:ring-2 focus:ring-[#E8B4A8]/30'
-            )}
-            disabled={isSending}
-          />
-          <button
-            onClick={handleSend}
-            disabled={!message.trim() || isSending}
-            className={cn(
-              'w-10 h-10 rounded-full flex items-center justify-center transition-all',
-              message.trim()
-                ? 'bg-gradient-to-br from-[#E8B4A8] to-[#D4948A] text-white'
-                : 'bg-gray-200 text-gray-400 cursor-not-allowed'
-            )}
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"
-              />
-            </svg>
-          </button>
-        </div>
-      </div>
+      <ChatWindow
+        embedded
+        layout="page"
+        userId={currentUserId}
+        userName={displayName || (currentUserRole === 'customer' ? 'Customer' : 'Provider')}
+        userAvatar={displayAvatar}
+        initialSelectedRoom={chatRoom}
+        isMinimized={false}
+        onClose={() => undefined}
+        onMinimize={() => undefined}
+        onExpand={() => undefined}
+        onSelectRoom={() => undefined}
+        onBackToRooms={() => undefined}
+        onNewMessage={() => onMessageSent?.()}
+        className="min-h-[420px] h-[min(520px,60vh)]"
+      />
     </div>
   );
 }

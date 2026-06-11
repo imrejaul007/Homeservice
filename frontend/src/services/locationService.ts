@@ -20,6 +20,14 @@ export const SUPPORTED_CITIES: SupportedCity[] = [
 
 const DEFAULT_CITY = SUPPORTED_CITIES[0];
 
+const GEOCODED_CITY_ALIASES: Record<string, string> = {
+  bengaluru: 'bangalore',
+  'bengaluru urban': 'bangalore',
+  bombay: 'mumbai',
+  madras: 'chennai',
+  'new delhi': 'delhi',
+};
+
 class WebLocationService {
   private isNative: boolean;
 
@@ -248,6 +256,34 @@ class WebLocationService {
     return DEFAULT_CITY;
   }
 
+  /** Match a geocoded city name to a supported city (e.g. Bengaluru → Bangalore) */
+  findSupportedCityByGeocode(cityName: string, country?: string): SupportedCity | null {
+    const normalized = cityName.toLowerCase().trim();
+    const aliasId = GEOCODED_CITY_ALIASES[normalized];
+
+    if (aliasId) {
+      const byAlias = SUPPORTED_CITIES.find((city) => city.id === aliasId);
+      if (byAlias) return byAlias;
+    }
+
+    const byName = SUPPORTED_CITIES.find(
+      (city) =>
+        city.name.toLowerCase() === normalized ||
+        city.id === normalized.replace(/\s+/g, '-')
+    );
+    if (byName) return byName;
+
+    if (country) {
+      const normalizedCountry = country.toLowerCase().trim();
+      const byCountry = SUPPORTED_CITIES.find(
+        (city) => city.country.toLowerCase() === normalizedCountry
+      );
+      if (byCountry) return byCountry;
+    }
+
+    return null;
+  }
+
   getDefaultLocation(): UserLocation {
     return {
       coordinates: DEFAULT_CITY.coordinates,
@@ -261,6 +297,139 @@ class WebLocationService {
       lastUpdated: new Date(),
       source: 'manual',
     };
+  }
+
+  /**
+   * Geocode an address string to latitude/longitude coordinates
+   * Uses Nominatim (OpenStreetMap) free geocoding API
+   */
+  async geocodeAddress(address: string): Promise<LocationCoordinates | null> {
+    try {
+      if (!address || address.trim().length === 0) {
+        return null;
+      }
+
+      const encodedAddress = encodeURIComponent(address.trim());
+      const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodedAddress}&limit=1`;
+
+      const response = await fetch(url, {
+        headers: {
+          'User-Agent': 'NILIN-Homeservice/1.0',
+          'Accept': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        console.warn('Geocoding API error:', response.status);
+        return null;
+      }
+
+      const data = await response.json();
+
+      if (data && data.length > 0) {
+        const result = data[0];
+        return {
+          latitude: parseFloat(result.lat),
+          longitude: parseFloat(result.lon),
+        };
+      }
+
+      console.warn('No geocoding results found for:', address);
+      return null;
+    } catch (error) {
+      console.error('Geocoding failed:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Reverse geocode coordinates to a human-readable address
+   * Uses Nominatim (OpenStreetMap) free reverse geocoding API
+   */
+  async reverseGeocodeCoordinates(lat: number, lng: number): Promise<GeocodeResponse | null> {
+    try {
+      const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`;
+
+      const response = await fetch(url, {
+        headers: {
+          'User-Agent': 'NILIN-Homeservice/1.0',
+          'Accept': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        console.warn('Reverse geocoding API error:', response.status);
+        return null;
+      }
+
+      const data = await response.json();
+
+      if (data && data.address) {
+        const addr = data.address;
+        const city = addr.city || addr.town || addr.village || addr.suburb || addr.locality || '';
+
+        return {
+          formattedAddress: data.display_name || `${city}, ${addr.country}`,
+          city: city,
+          state: addr.state || '',
+          country: addr.country || '',
+          postalCode: addr.postcode || '',
+        };
+      }
+
+      return null;
+    } catch (error) {
+      console.error('Reverse geocoding failed:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Get coordinates for a city name
+   * Returns predefined coordinates for supported cities
+   */
+  getCityCoordinates(cityName: string): LocationCoordinates | null {
+    const normalizedCity = cityName.toLowerCase().trim();
+
+    const cityCoords: Record<string, LocationCoordinates> = {
+      'dubai': { latitude: 25.2048, longitude: 55.2708 },
+      'abu dhabi': { latitude: 24.4539, longitude: 54.3773 },
+      'abu-dhabi': { latitude: 24.4539, longitude: 54.3773 },
+      'sharjah': { latitude: 25.3463, longitude: 55.4209 },
+      'ajman': { latitude: 25.3488, longitude: 55.4209 },
+      'riyadh': { latitude: 24.7136, longitude: 46.6753 },
+      'jeddah': { latitude: 21.4858, longitude: 39.1925 },
+      'mumbai': { latitude: 19.0760, longitude: 72.8777 },
+      'delhi': { latitude: 28.7041, longitude: 77.1025 },
+      'bangalore': { latitude: 12.9716, longitude: 77.5946 },
+      'hyderabad': { latitude: 17.3850, longitude: 78.4867 },
+      'chennai': { latitude: 13.0827, longitude: 80.2707 },
+    };
+
+    return cityCoords[normalizedCity] || null;
+  }
+
+  /**
+   * Calculate distance between two coordinates in kilometers
+   * Uses Haversine formula
+   */
+  calculateDistanceFromCoords(
+    lat1: number,
+    lng1: number,
+    lat2: number,
+    lng2: number
+  ): number {
+    const R = 6371; // Earth's radius in kilometers
+    const dLat = this.toRad(lat2 - lat1);
+    const dLng = this.toRad(lng2 - lng1);
+
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(this.toRad(lat1)) * Math.cos(this.toRad(lat2)) *
+      Math.sin(dLng / 2) * Math.sin(dLng / 2);
+
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
   }
 }
 

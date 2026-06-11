@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Calendar,
@@ -20,17 +20,23 @@ import {
   CreditCard,
   MessageCircle,
   MessageSquare,
+  Flame,
+  Award,
 } from 'lucide-react';
 import NavigationHeader from '../components/layout/NavigationHeader';
 import Footer from '../components/layout/Footer';
 import CustomerHubNav from '../components/customer/CustomerHubNav';
 import ViewProModal from '../components/dashboard/ViewProModal';
+import OngoingBookings from '../components/dashboard/OngoingBookings';
+import DashboardUpcomingSection from '../components/dashboard/DashboardUpcomingSection';
 import { WriteReviewModal } from '../components/customer/WriteReviewModal';
 import { useAuthStore } from '../stores/authStore';
 import {
   customerDashboardApi,
   type DashboardStats,
   type BookingSummary,
+  type LoyaltyData,
+  type StreakData,
 } from '../services/customerDashboardApi';
 import { bookingApi } from '../services/bookingApi';
 import { chatApi, type ChatRoom, type ChatRoomListItem } from '../services/chatApi';
@@ -38,6 +44,7 @@ import type { Booking } from '../types/booking.types';
 import type { AuthUser } from '../services/AuthService';
 import type { BookingStatus } from '../types/booking.types';
 import { useSocketEvent } from '../hooks/useSocket';
+import { PriceDisplay } from '../components/common/PriceDisplay';
 import toast from 'react-hot-toast';
 
 // ============================================
@@ -311,10 +318,12 @@ const BookingMobileCard: React.FC<BookingMobileCardProps> = ({
               Review
             </button>
           )}
-          <span className="font-semibold text-nilin-charcoal text-sm">
-            {booking.currency === 'AED' ? 'AED ' : ''}
-            {(booking.totalAmount || 0).toFixed(0)}
-          </span>
+          <PriceDisplay
+            price={booking.totalAmount || 0}
+            originalCurrency={booking.currency || 'AED'}
+            size="sm"
+            className="text-sm"
+          />
         </div>
       </div>
     </button>
@@ -401,9 +410,12 @@ const BookingRow: React.FC<BookingRowProps> = ({ booking, onView, onWriteReview 
             </button>
           )}
           <div className="text-right">
-            <div className="font-bold text-nilin-charcoal">
-              {booking.currency === 'AED' ? 'AED ' : ''}{(booking.totalAmount || 0).toFixed(2)}
-            </div>
+            <PriceDisplay
+              price={booking.totalAmount || 0}
+              originalCurrency={booking.currency || 'AED'}
+              size="sm"
+              className="text-base justify-end"
+            />
             {booking.duration ? (
               <div className="text-xs text-nilin-warmGray flex items-center justify-end gap-1 mt-0.5">
                 <Clock className="w-3 h-3" />
@@ -428,6 +440,9 @@ const CustomerDashboard: React.FC = () => {
   // State
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [recentBookings, setRecentBookings] = useState<BookingSummary[]>([]);
+  const [upcomingBookings, setUpcomingBookings] = useState<BookingSummary[]>([]);
+  const [loyaltyPoints, setLoyaltyPoints] = useState<LoyaltyData | null>(null);
+  const [currentStreak, setCurrentStreak] = useState<StreakData | null>(null);
   const [recentConversations, setRecentConversations] = useState<ChatRoomListItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
@@ -436,6 +451,10 @@ const CustomerDashboard: React.FC = () => {
   const [showViewProModal, setShowViewProModal] = useState(false);
   const [showWriteReviewModal, setShowWriteReviewModal] = useState(false);
   const [writeReviewBookingId, setWriteReviewBookingId] = useState<string | undefined>();
+
+  const trackedBookingIdsRef = useRef<Set<string>>(new Set());
+  const lastStatusToastRef = useRef<{ at: number; key: string } | null>(null);
+  const STATUS_TOAST_DEBOUNCE_MS = 5000;
 
   // Fetch recent conversations
   const fetchRecentConversations = useCallback(async () => {
@@ -459,12 +478,18 @@ const CustomerDashboard: React.FC = () => {
 
       let statsData: DashboardStats | null = null;
       let recent: BookingSummary[] = [];
+      let upcoming: BookingSummary[] = [];
+      let loyalty: LoyaltyData | null = null;
+      let streak: StreakData | null = null;
 
       let unifiedFetchFailed = false;
       try {
         const dashboard = await customerDashboardApi.getDashboard();
         statsData = dashboard.stats;
         recent = dashboard.recentBookings || [];
+        upcoming = dashboard.upcomingBookings || [];
+        loyalty = dashboard.loyaltyPoints || null;
+        streak = dashboard.currentStreak || null;
       } catch (dashboardErr) {
         unifiedFetchFailed = true;
         console.warn('[CustomerDashboard] Unified fetch failed, using fallback', dashboardErr);
@@ -511,6 +536,9 @@ const CustomerDashboard: React.FC = () => {
 
       setStats(statsData);
       setRecentBookings(recent);
+      setUpcomingBookings(upcoming);
+      setLoyaltyPoints(loyalty);
+      setCurrentStreak(streak);
     } catch (err) {
       console.error('Error fetching dashboard data:', err);
       setError('Failed to load dashboard data. Please try again.');
@@ -524,12 +552,32 @@ const CustomerDashboard: React.FC = () => {
     fetchRecentConversations();
   }, [fetchDashboardData, fetchRecentConversations]);
 
+  useEffect(() => {
+    trackedBookingIdsRef.current = new Set([
+      ...recentBookings.map((b) => b._id),
+      ...upcomingBookings.map((b) => b._id),
+    ]);
+  }, [recentBookings, upcomingBookings]);
+
   // Socket event listeners for real-time updates
   useSocketEvent('booking:status_changed', (data) => {
     console.log('[CustomerDashboard] Booking status changed:', data);
-    // Refresh dashboard data when any booking status changes
     fetchDashboardData();
-    toast.success(`Booking ${data.bookingNumber} status updated to ${data.status}`);
+
+    const bookingId = data.bookingId || data._id;
+    if (bookingId && !trackedBookingIdsRef.current.has(String(bookingId))) return;
+
+    const toastKey = `${data.bookingNumber || bookingId}:${data.status}`;
+    const now = Date.now();
+    if (
+      lastStatusToastRef.current?.key === toastKey &&
+      now - lastStatusToastRef.current.at < STATUS_TOAST_DEBOUNCE_MS
+    ) {
+      return;
+    }
+
+    lastStatusToastRef.current = { at: now, key: toastKey };
+    toast.success(`Booking ${data.bookingNumber || ''} status updated to ${data.status}`.trim());
   });
 
   useSocketEvent('notification:new', (data) => {
@@ -854,6 +902,19 @@ const CustomerDashboard: React.FC = () => {
             </div>
           </div>
 
+          <DashboardUpcomingSection
+            bookings={upcomingBookings}
+            loading={isLoading}
+            onViewBooking={handleViewBooking}
+            onViewAll={() => navigate('/customer/bookings?status=active')}
+          />
+
+          {(activeBookings > 0 || (stats?.inProgressBookings ?? 0) > 0) && (
+            <div className="mb-6 md:mb-8">
+              <OngoingBookings limit={3} showViewAll />
+            </div>
+          )}
+
           {/* Main Content Grid */}
           <div className="grid lg:grid-cols-3 gap-6 lg:gap-8">
             {/* Recent Bookings Table */}
@@ -992,19 +1053,30 @@ const CustomerDashboard: React.FC = () => {
                   <div className="space-y-1">
                     {recentConversations.slice(0, 3).map((room) => {
                       const otherParticipant = room.participants?.find(
-                        (p) => p.userId?._id !== user?._id
+                        (p) => p.userId?._id !== user?._id && p.userId?._id !== user?.id
                       );
-                      const participantName = otherParticipant
-                        ? `${otherParticipant.userId?.firstName || ''} ${otherParticipant.userId?.lastName || ''}`.trim() || 'Unknown'
-                        : room.name || 'Chat';
+                      const participantName =
+                        room.type === 'support'
+                          ? 'Support'
+                          : otherParticipant
+                            ? `${otherParticipant.userId?.firstName || ''} ${otherParticipant.userId?.lastName || ''}`.trim() || 'Unknown'
+                            : room.name || 'Chat';
                       const lastMessage = room.lastMessage;
+                      const messagePreview =
+                        lastMessage?.type === 'image'
+                          ? '[Image]'
+                          : lastMessage?.type === 'file'
+                            ? '[File]'
+                            : lastMessage?.type === 'system'
+                              ? 'Support conversation'
+                              : lastMessage?.content;
                       const hasUnread = (room.unreadCount || 0) > 0;
 
                       return (
                         <button
                           key={room._id}
                           type="button"
-                          onClick={() => navigate('/customer/messages')}
+                          onClick={() => navigate('/customer/messages', { state: { roomId: room._id } })}
                           className={`w-full flex items-center gap-3 p-2.5 rounded-xl transition-colors text-left group ${
                             hasUnread
                               ? 'bg-nilin-coral/5 hover:bg-nilin-coral/10'
@@ -1043,13 +1115,11 @@ const CustomerDashboard: React.FC = () => {
                                 </span>
                               )}
                             </div>
-                            {lastMessage && (
+                            {messagePreview && (
                               <p className={`text-xs truncate mt-0.5 ${
                                 hasUnread ? 'text-nilin-charcoal font-medium' : 'text-nilin-warmGray/70'
                               }`}>
-                                {lastMessage.type === 'image' ? '[Image]' :
-                                 lastMessage.type === 'file' ? '[File]' :
-                                 lastMessage.content}
+                                {messagePreview}
                               </p>
                             )}
                           </div>
@@ -1086,6 +1156,37 @@ const CustomerDashboard: React.FC = () => {
                     <div className="text-xl font-bold text-nilin-charcoal">{stats?.cancelledBookings || 0}</div>
                     <div className="text-[11px] text-nilin-warmGray mt-0.5">Cancelled</div>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => navigate('/customer/wallet')}
+                    className="rounded-xl bg-amber-50/80 p-3.5 text-center border border-amber-200/50 hover:bg-amber-50 transition-colors"
+                  >
+                    <div className="flex items-center justify-center gap-1 text-xl font-bold text-nilin-charcoal">
+                      <Award className="w-4 h-4 text-amber-600" />
+                      {loyaltyPoints?.points ?? 0}
+                    </div>
+                    <div className="text-[11px] text-nilin-warmGray mt-0.5 capitalize">
+                      {(loyaltyPoints?.tier || 'bronze')} tier
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => navigate('/customer/wallet')}
+                    className="rounded-xl bg-orange-50/80 p-3.5 text-center border border-orange-200/50 hover:bg-orange-50 transition-colors"
+                  >
+                    <div className="flex items-center justify-center gap-1 text-xl font-bold text-nilin-charcoal">
+                      <Flame className="w-4 h-4 text-orange-500" />
+                      {currentStreak?.currentStreak ?? 0}
+                    </div>
+                    <div className="text-[11px] text-nilin-warmGray mt-0.5">
+                      Day streak
+                      {(currentStreak?.longestStreak ?? 0) > 0 && (
+                        <span className="block text-[10px] text-nilin-warmGray/70">
+                          Best: {currentStreak?.longestStreak}
+                        </span>
+                      )}
+                    </div>
+                  </button>
                 </div>
                 <button
                   type="button"

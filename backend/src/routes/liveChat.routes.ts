@@ -213,16 +213,10 @@ router.post(
       throw new ApiError(400, error.details.map(d => d.message).join('; '));
     }
 
-    // Get the chat room for this session
-    const history = await liveChatService.getChatHistory(userId, 1, 0);
-    const sessionData = history.sessions.find(s => s.sessionId === sessionId);
-
-    if (!sessionData) {
-      throw new ApiError(404, 'Chat session not found');
-    }
+    const { chatRoomId } = await liveChatService.resolveSessionContext(sessionId, userId);
 
     const message = await liveChatService.addMessage(
-      sessionData._id!.toString(),
+      chatRoomId,
       sessionId,
       userId,
       userRole === 'admin' ? 'agent' : 'customer',
@@ -251,17 +245,11 @@ router.get(
     const userId = req.user!._id.toString();
     const { limit = '50', before } = req.query;
 
-    // Find the chat room
-    const history = await liveChatService.getChatHistory(userId, 1, 0);
-    const sessionData = history.sessions.find(s => s.sessionId === sessionId);
-
-    if (!sessionData) {
-      throw new ApiError(404, 'Chat session not found');
-    }
+    const { chatRoomId } = await liveChatService.resolveSessionContext(sessionId, userId);
 
     const beforeDate = before ? new Date(before as string) : undefined;
     const result = await liveChatService.getMessages(
-      sessionData._id!.toString(),
+      chatRoomId,
       userId,
       parseInt(limit as string, 10),
       beforeDate
@@ -378,18 +366,9 @@ router.get(
     const { sessionId } = req.params;
     const userId = req.user!._id.toString();
 
-    // Find the chat room
-    const history = await liveChatService.getChatHistory(userId, 1, 0);
-    const sessionData = history.sessions.find(s => s.sessionId === sessionId);
+    const { chatRoomId } = await liveChatService.resolveSessionContext(sessionId, userId);
 
-    if (!sessionData) {
-      throw new ApiError(404, 'Chat session not found');
-    }
-
-    const count = await liveChatService.markAsRead(
-      sessionData._id!.toString(),
-      userId
-    );
+    const count = await liveChatService.markAsRead(chatRoomId, userId);
 
     res.json({
       success: true,

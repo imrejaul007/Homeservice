@@ -17,7 +17,7 @@ if (!MONGODB_URI) {
 }
 
 async function check() {
-  await mongoose.connect(MONGODB_URI, { maxPoolSize: 5 });
+  await mongoose.connect(MONGODB_URI!, { maxPoolSize: 5 });
   const db = mongoose.connection.db;
   if (!db) {
     throw new Error('Database connection not established');

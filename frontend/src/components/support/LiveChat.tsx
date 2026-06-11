@@ -62,6 +62,8 @@ export interface LiveChatProps {
   className?: string;
   onClose?: () => void;
   initialOpen?: boolean;
+  embedded?: boolean;
+  onRequestCallback?: () => void;
 }
 
 // ============================================
@@ -114,6 +116,48 @@ const formatTime = (date: Date): string => {
     hour: 'numeric',
     minute: '2-digit',
   });
+};
+
+type ApiChatMessage = {
+  _id?: string;
+  id?: string;
+  content?: string;
+  sender?: 'customer' | 'agent' | 'system';
+  senderType?: 'customer' | 'agent' | 'system';
+  senderName?: string;
+  timestamp?: string | Date;
+  createdAt?: string | Date;
+  type?: MessageType;
+  attachments?: ChatMessage['attachments'];
+};
+
+const normalizeLiveChatMessage = (raw: ApiChatMessage): ChatMessage => {
+  const senderRaw = raw.sender || raw.senderType || 'customer';
+  const sender: ChatMessage['sender'] =
+    senderRaw === 'agent' ? 'agent' : senderRaw === 'system' ? 'system' : 'customer';
+
+  return {
+    id: raw.id || raw._id || `msg-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    content: raw.content || '',
+    sender,
+    senderName: raw.senderName || (sender === 'customer' ? 'You' : sender === 'system' ? 'System' : 'Support'),
+    timestamp: new Date(raw.timestamp || raw.createdAt || Date.now()),
+    type: raw.type || 'text',
+    attachments: raw.attachments,
+  };
+};
+
+const mapSessionStatus = (status?: string): ChatStatus => {
+  switch (status) {
+    case 'waiting':
+      return 'waiting';
+    case 'active':
+      return 'active';
+    case 'ended':
+      return 'ended';
+    default:
+      return 'idle';
+  }
 };
 
 const formatDuration = (minutes: number): string => {
@@ -373,9 +417,11 @@ export const LiveChat: React.FC<LiveChatProps> = ({
   className,
   onClose,
   initialOpen = false,
+  embedded = false,
+  onRequestCallback,
 }) => {
   // State
-  const [isOpen, setIsOpen] = useState(initialOpen);
+  const [isOpen, setIsOpen] = useState(embedded || initialOpen);
   const [chatStatus, setChatStatus] = useState<ChatStatus>('idle');
   const [session, setSession] = useState<ChatSession | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -391,6 +437,8 @@ export const LiveChat: React.FC<LiveChatProps> = ({
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const durationIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const autoStartAttemptedRef = useRef(false);
+  const [startError, setStartError] = useState<string | null>(null);
 
   // Quick replies for common questions
   const quickReplies: QuickReply[] = [
@@ -402,6 +450,7 @@ export const LiveChat: React.FC<LiveChatProps> = ({
 
   // Start a new chat session
   const startChat = useCallback(async () => {
+    setStartError(null);
     setChatStatus('connecting');
 
     try {
@@ -409,10 +458,11 @@ export const LiveChat: React.FC<LiveChatProps> = ({
 
       setSession(newSession);
 
-      if (newSession.status === 'waiting' && newSession.queuePosition) {
+      const sessionStatus = mapSessionStatus(newSession.status as string);
+      if (sessionStatus === 'waiting' && newSession.queuePosition) {
         setChatStatus('waiting');
         setWaitTime(newSession.estimatedWaitTime || 0);
-      } else {
+      } else if (sessionStatus === 'active' || newSession.agentName) {
         setChatStatus('active');
         // Add welcome message
         setMessages([
@@ -443,17 +493,11 @@ export const LiveChat: React.FC<LiveChatProps> = ({
       }
     } catch (error) {
       console.error('Failed to start chat:', error);
+      const message =
+        error instanceof Error ? error.message : 'Unable to connect. Please try again.';
+      setStartError(message);
       setChatStatus('idle');
-      setMessages([
-        {
-          id: `sys-${Date.now()}`,
-          content: 'Unable to connect. Please try again.',
-          sender: 'system',
-          senderName: 'System',
-          timestamp: new Date(),
-          type: 'system',
-        },
-      ]);
+      setMessages([]);
     }
   }, []);
 
@@ -464,11 +508,10 @@ export const LiveChat: React.FC<LiveChatProps> = ({
     const pollMessages = async () => {
       try {
         const { messages: newMessages } = await liveChatApi.getMessages(session.sessionId);
+        const normalized = newMessages.map((msg) => normalizeLiveChatMessage(msg as ApiChatMessage));
 
-        if (newMessages.length > messages.length) {
-          setMessages(newMessages);
-
-          // Mark as read
+        if (normalized.length !== messages.length) {
+          setMessages(normalized);
           await liveChatApi.markRead(session.sessionId);
         }
 
@@ -508,6 +551,13 @@ export const LiveChat: React.FC<LiveChatProps> = ({
       inputRef.current?.focus();
     }
   }, [isOpen, chatStatus]);
+
+  // Auto-start once when embedded in support hub tab (avoid retry loop on failure)
+  useEffect(() => {
+    if (!embedded || autoStartAttemptedRef.current || session) return;
+    autoStartAttemptedRef.current = true;
+    startChat();
+  }, [embedded, session, startChat]);
 
   // Handle send message
   const handleSend = useCallback(async () => {
@@ -605,17 +655,23 @@ export const LiveChat: React.FC<LiveChatProps> = ({
     inputRef.current?.focus();
   };
 
+  const chatOpen = embedded || isOpen;
+
   return (
     <div
       className={cn(
-        'fixed z-50 transition-all duration-300',
-        'bottom-4 right-4',
+        embedded ? 'w-full' : 'fixed z-50 transition-all duration-300 bottom-4 right-4',
         className
       )}
     >
       {/* Chat Window */}
-      {isOpen && (
-        <div className="bg-white rounded-2xl shadow-2xl overflow-hidden mb-4 w-96 max-h-[600px] flex flex-col">
+      {chatOpen && (
+        <div
+          className={cn(
+            'bg-white rounded-2xl shadow-2xl overflow-hidden flex flex-col',
+            embedded ? 'w-full min-h-[520px] max-h-[70vh]' : 'mb-4 w-96 max-h-[600px]'
+          )}
+        >
           {/* Header */}
           <div className="bg-gradient-to-r from-nilin-rose to-nilin-coral p-4 text-white flex-shrink-0">
             <div className="flex items-center justify-between">
@@ -634,12 +690,14 @@ export const LiveChat: React.FC<LiveChatProps> = ({
                   </>
                 )}
               </div>
-              <button
-                onClick={handleClose}
-                className="p-2 rounded-lg hover:bg-white/20 transition-colors"
-              >
-                <X className="h-5 w-5" />
-              </button>
+              {!embedded && (
+                <button
+                  onClick={handleClose}
+                  className="p-2 rounded-lg hover:bg-white/20 transition-colors"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              )}
             </div>
           </div>
 
@@ -655,6 +713,9 @@ export const LiveChat: React.FC<LiveChatProps> = ({
                 <p className="text-sm text-gray-500 mb-6">
                   Our support team is ready to help you with any questions.
                 </p>
+                {startError && (
+                  <p className="text-sm text-red-600 mb-4 px-4">{startError}</p>
+                )}
                 <button
                   onClick={startChat}
                   className="px-6 py-3 bg-gradient-to-r from-nilin-rose to-nilin-coral text-white rounded-xl font-medium hover:shadow-lg transition-all"
@@ -765,7 +826,11 @@ export const LiveChat: React.FC<LiveChatProps> = ({
                   End Chat
                 </button>
                 <div className="flex items-center gap-3">
-                  <button className="text-xs text-gray-500 hover:text-gray-700 flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={onRequestCallback}
+                    className="text-xs text-gray-500 hover:text-gray-700 flex items-center gap-1"
+                  >
                     <Phone className="h-3 w-3" />
                     Request callback
                   </button>
@@ -777,7 +842,7 @@ export const LiveChat: React.FC<LiveChatProps> = ({
       )}
 
       {/* Chat Toggle Button */}
-      {!isOpen && (
+      {!embedded && !isOpen && (
         <button
           onClick={toggleChat}
           className="w-16 h-16 rounded-full bg-gradient-to-r from-nilin-rose to-nilin-coral text-white shadow-lg hover:shadow-xl transition-all flex items-center justify-center"

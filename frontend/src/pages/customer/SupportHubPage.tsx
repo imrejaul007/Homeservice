@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import {
   Ticket,
   MessageCircle,
@@ -24,8 +24,19 @@ import { EventCategory, ContactEvent } from '../../lib/eventTaxonomy';
 
 type SupportTab = 'faq' | 'tickets' | 'new-ticket' | 'chat' | 'callback';
 
+interface SupportLocationState {
+  tab?: SupportTab;
+  bookingId?: string;
+  bookingNumber?: string;
+  serviceName?: string;
+}
+
+const VALID_TABS: SupportTab[] = ['faq', 'tickets', 'new-ticket', 'chat', 'callback'];
+
 const SupportHubPage: React.FC = () => {
   const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { t, locale, isRTL } = useTranslation();
 
   const TABS: Array<{ id: SupportTab; label: string; icon: React.ElementType }> = [
@@ -35,20 +46,73 @@ const SupportHubPage: React.FC = () => {
     { id: 'chat', label: t('support.tab_chat'), icon: MessageCircle },
     { id: 'callback', label: t('support.tab_callback'), icon: Phone },
   ];
-  const [activeTab, setActiveTab] = useState<SupportTab>('faq');
+  const tabFromUrl = searchParams.get('tab') as SupportTab | null;
+  const [activeTab, setActiveTab] = useState<SupportTab>(
+    tabFromUrl && VALID_TABS.includes(tabFromUrl) ? tabFromUrl : 'faq'
+  );
   const [faqs, setFaqs] = useState<SupportFaq[]>([]);
+  const [faqLoading, setFaqLoading] = useState(true);
+  const [faqError, setFaqError] = useState<string | null>(null);
   const [openFaq, setOpenFaq] = useState<string | null>(null);
   const [ticketRefresh, setTicketRefresh] = useState(0);
+  const [ticketPrefill, setTicketPrefill] = useState<{
+    category?: 'service';
+    subject?: string;
+    description?: string;
+    bookingId?: string;
+    bookingNumber?: string;
+    serviceName?: string;
+  }>({});
+
+  const loadFaqs = () => {
+    setFaqLoading(true);
+    setFaqError(null);
+    fetchSupportFaqs()
+      .then(setFaqs)
+      .catch(() => setFaqError('Unable to load FAQs. Please try again.'))
+      .finally(() => setFaqLoading(false));
+  };
+
+  useEffect(() => {
+    const state = location.state as SupportLocationState | null;
+    if (!state) return;
+
+    if (state.tab) setActiveTab(state.tab);
+
+    if (state.bookingId || state.bookingNumber) {
+      const ref = state.bookingNumber
+        ? `#${state.bookingNumber.slice(-8).toUpperCase()}`
+        : `#${state.bookingId?.slice(-8).toUpperCase()}`;
+      setTicketPrefill({
+        category: 'service',
+        subject: state.serviceName ? `Help with ${state.serviceName}` : `Help with booking ${ref}`,
+        description: '',
+        bookingId: state.bookingId,
+        bookingNumber: state.bookingNumber,
+        serviceName: state.serviceName,
+      });
+    }
+
+    navigate(location.pathname, { replace: true, state: null });
+  }, [location.state, location.pathname, navigate]);
+
+  useEffect(() => {
+    const urlTab = searchParams.get('tab') as SupportTab | null;
+    if (urlTab && VALID_TABS.includes(urlTab)) {
+      setActiveTab(urlTab);
+    }
+  }, [searchParams]);
 
   useEffect(() => {
     analyticsService.track(EventCategory.CONTACT, ContactEvent.PAGE_VIEWED, {
       page: '/customer/support',
     });
-    fetchSupportFaqs().then(setFaqs);
+    loadFaqs();
   }, []);
 
   const handleTabChange = (tab: SupportTab) => {
     setActiveTab(tab);
+    setSearchParams({ tab }, { replace: true });
     analyticsService.track(EventCategory.CONTACT, ContactEvent.SUPPORT_TAB_CHANGED, { tab });
   };
 
@@ -102,8 +166,20 @@ const SupportHubPage: React.FC = () => {
             {activeTab === 'faq' && (
               <div data-testid="support-faq-panel">
                 <h2 className="text-xl font-serif text-nilin-charcoal mb-6">{t('support.faq_title')}</h2>
-                {faqs.length === 0 ? (
+                {faqError ? (
+                  <div className="text-center py-6">
+                    <p className="text-red-600 mb-3">{faqError}</p>
+                    <button
+                      onClick={loadFaqs}
+                      className="px-4 py-2 bg-nilin-coral text-white rounded-nilin text-sm font-medium"
+                    >
+                      Retry
+                    </button>
+                  </div>
+                ) : faqLoading ? (
                   <p className="text-nilin-warmGray">{t('support.faq_loading')}</p>
+                ) : faqs.length === 0 ? (
+                  <p className="text-nilin-warmGray">No FAQs available right now.</p>
                 ) : (
                   <div className="space-y-2">
                     {faqs.map((faq) => (
@@ -154,6 +230,23 @@ const SupportHubPage: React.FC = () => {
             {activeTab === 'new-ticket' && (
               <div data-testid="support-new-ticket-panel">
                 <TicketForm
+                  preselectedCategory={ticketPrefill.category}
+                  prefilledSubject={ticketPrefill.subject}
+                  prefilledDescription={ticketPrefill.description}
+                  bookingContext={
+                    ticketPrefill.bookingId || ticketPrefill.bookingNumber
+                      ? {
+                          bookingId: ticketPrefill.bookingId,
+                          bookingNumber: ticketPrefill.bookingNumber,
+                          serviceName: ticketPrefill.serviceName,
+                          displayRef: ticketPrefill.bookingNumber
+                            ? `#${ticketPrefill.bookingNumber.slice(-8).toUpperCase()}`
+                            : ticketPrefill.bookingId
+                              ? `#${ticketPrefill.bookingId.slice(-8).toUpperCase()}`
+                              : undefined,
+                        }
+                      : undefined
+                  }
                   onSuccess={() => {
                     setTicketRefresh((n) => n + 1);
                     handleTabChange('tickets');
@@ -165,7 +258,11 @@ const SupportHubPage: React.FC = () => {
 
             {activeTab === 'chat' && (
               <div data-testid="support-chat-panel">
-                <LiveChat />
+                <LiveChat
+                  embedded
+                  initialOpen
+                  onRequestCallback={() => handleTabChange('callback')}
+                />
               </div>
             )}
 

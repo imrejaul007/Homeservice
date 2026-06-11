@@ -59,3 +59,70 @@ export const getMyCallbackRequests = asyncHandler(async (req: AuthRequest, res: 
 
   res.json({ success: true, data: { requests } });
 });
+
+export const getAdminCallbackRequests = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const status = req.query.status as string | undefined;
+  const page = Math.max(1, parseInt(String(req.query.page || '1'), 10));
+  const limit = Math.min(50, Math.max(1, parseInt(String(req.query.limit || '20'), 10)));
+  const skip = (page - 1) * limit;
+
+  const query: Record<string, unknown> = {};
+  const validStatuses = ['pending', 'scheduled', 'in_progress', 'completed', 'cancelled', 'no_answer'];
+  if (status && validStatuses.includes(status)) {
+    query.status = status;
+  }
+
+  const [requests, total] = await Promise.all([
+    CallbackRequest.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+    CallbackRequest.countDocuments(query),
+  ]);
+
+  res.json({
+    success: true,
+    data: {
+      requests,
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit),
+        hasNext: page * limit < total,
+        hasPrev: page > 1,
+      },
+    },
+  });
+});
+
+export const updateCallbackStatus = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { requestId } = req.params;
+  const { status, notes, assignedAgentName } = req.body;
+
+  const validStatuses = ['pending', 'scheduled', 'in_progress', 'completed', 'cancelled', 'no_answer'];
+  if (!status || !validStatuses.includes(status)) {
+    throw new ApiError(400, `Invalid status. Must be one of: ${validStatuses.join(', ')}`);
+  }
+
+  const callback = await CallbackRequest.findOne({ requestId });
+  if (!callback) {
+    throw new ApiError(404, 'Callback request not found');
+  }
+
+  callback.status = status;
+  if (notes) callback.notes = notes;
+  if (assignedAgentName) callback.assignedAgentName = assignedAgentName;
+  if (req.user?._id) callback.assignedAgentId = req.user._id as unknown as typeof callback.assignedAgentId;
+  if (status === 'completed') callback.completedAt = new Date();
+  if (status === 'scheduled' && !callback.scheduledAt) {
+    callback.scheduledAt = callback.preferredTime;
+  }
+
+  await callback.save();
+
+  logger.info('Callback status updated', {
+    requestId,
+    status,
+    action: 'CALLBACK_STATUS_UPDATED',
+  });
+
+  res.json({ success: true, data: callback });
+});

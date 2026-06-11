@@ -56,8 +56,17 @@ const BookPackagePage: React.FC = () => {
   const [proceeding, setProceeding] = useState(false);
   const [showWizard, setShowWizard] = useState(false);
 
-  // Get packageId from route params or location state
-  const resolvedPackageId = packageId || (location.state as { packageId?: string })?.packageId;
+  // Get packageId and pre-selected slot from route params or location state
+  const locationState = location.state as {
+    packageId?: string;
+    scheduledDate?: string;
+    scheduledTime?: string;
+    fromPackageDetail?: boolean;
+  } | null;
+  const resolvedPackageId = packageId || locationState?.packageId;
+  const preselectedDate = locationState?.scheduledDate;
+  const preselectedTime = locationState?.scheduledTime;
+  const fromPackageDetail = locationState?.fromPackageDetail;
 
   useEffect(() => {
     if (resolvedPackageId) {
@@ -88,6 +97,11 @@ const BookPackagePage: React.FC = () => {
       if (services.length > 0) {
         setSelectedServiceId(services[0]._id);
       }
+
+      // Open wizard when arriving from package detail with a pre-selected slot
+      if (fromPackageDetail && preselectedDate && preselectedTime && isAuthenticated) {
+        setShowWizard(true);
+      }
     } catch (err: unknown) {
       const error = err as { response?: { data?: { message?: string } }; message?: string };
       setError(error.response?.data?.message || 'Failed to load package details');
@@ -114,7 +128,9 @@ const BookPackagePage: React.FC = () => {
         packageId: pkg._id,
         packageName: pkg.name,
         packagePrice: pkg.pricing.currentPrice,
-        isFromPackage: true
+        isFromPackage: true,
+        scheduledDate: preselectedDate,
+        scheduledTime: preselectedTime,
       }
     });
   };
@@ -436,6 +452,8 @@ const BookPackagePage: React.FC = () => {
               }}
               onComplete={handleWizardComplete}
               onCancel={handleWizardCancel}
+              initialScheduledDate={preselectedDate}
+              initialScheduledTime={preselectedTime}
             />
           </div>
         </div>

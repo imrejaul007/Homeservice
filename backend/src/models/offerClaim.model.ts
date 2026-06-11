@@ -36,7 +36,7 @@ export interface IOfferClaim extends Document {
   isDeleted: boolean;
   deletedAt?: Date;
 
-  // FIX P0-3: Idempotency key for network retry protection
+  // Idempotency key for network retry protection
   idempotencyKey?: string;
 
   createdAt: Date;
@@ -140,7 +140,7 @@ const offerClaimSchema = new Schema<IOfferClaim>(
       type: Date,
     },
 
-    // FIX P0-3: Idempotency key for network retry protection
+    // Idempotency key for network retry protection
     idempotencyKey: {
       type: String,
       sparse: true, // Sparse index allows null values

@@ -105,6 +105,8 @@ export interface PackageBookingWizardProps {
   };
   onComplete: (bookingId: string) => void;
   onCancel: () => void;
+  initialScheduledDate?: string;
+  initialScheduledTime?: string;
 }
 
 interface FormData {
@@ -201,7 +203,9 @@ const PackageBookingWizard: React.FC<PackageBookingWizardProps> = ({
   selectedAddOns,
   calculatedPrice,
   onComplete,
-  onCancel
+  onCancel,
+  initialScheduledDate,
+  initialScheduledTime,
 }) => {
   const navigate = useNavigate();
   const { user, isAuthenticated, tokens } = useAuthStore();
@@ -262,7 +266,11 @@ const PackageBookingWizard: React.FC<PackageBookingWizardProps> = ({
     return normalizedServices.reduce((sum, service) => sum + (typeof service.price === 'number' ? service.price : 0), 0);
   }, [normalizedServices]);
 
-  const [formData, setFormData] = useState<FormData>(createInitialFormData());
+  const [formData, setFormData] = useState<FormData>(() => ({
+    ...createInitialFormData(),
+    ...(initialScheduledDate ? { scheduledDate: initialScheduledDate } : {}),
+    ...(initialScheduledTime ? { scheduledTime: initialScheduledTime } : {}),
+  }));
 
   const steps = [
     { number: 1, title: 'Package Summary', icon: Package },
@@ -399,8 +407,7 @@ const PackageBookingWizard: React.FC<PackageBookingWizardProps> = ({
       // Validate coupon with backend
       const response = await api.post('/coupons/validate', {
         code: formData.couponCode.trim(),
-        packageId: packageData.id,
-        subtotal: calculatedPrice.subtotal + calculatedPrice.addOnsTotal
+        orderValue: calculatedPrice.subtotal + calculatedPrice.addOnsTotal,
       });
 
       const result = response.data;

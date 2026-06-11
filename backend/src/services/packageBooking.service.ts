@@ -315,13 +315,13 @@ class PackageBookingService {
               duration: pkgService.duration || 60,
               status: 'pending',
               pricing: {
-                basePrice: pkgService.price || 0,
+                basePrice: pkgService.originalPrice || pkgService.price || 0,
                 addOns: [],
                 discounts: [],
                 couponDiscount: 0,
-                subtotal: pkgService.price || 0,
-                tax: (pkgService.price || 0) * taxRate,
-                totalAmount: (pkgService.price || 0) * (1 + taxRate),
+                subtotal: pkgService.originalPrice || pkgService.price || 0,
+                tax: (pkgService.originalPrice || pkgService.price || 0) * taxRate,
+                totalAmount: (pkgService.originalPrice || pkgService.price || 0) * (1 + taxRate),
                 currency: bundleAny.currency || 'AED',
               },
               location: {

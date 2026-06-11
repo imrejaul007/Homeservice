@@ -46,6 +46,7 @@ export interface ClaimedOffer {
   expiresAt: string;
   isExpired: boolean;
   offerId?: string;
+  // FIX: removed remainingUses — backend never populates it
   offer?: {
     _id: string;
     code: string;

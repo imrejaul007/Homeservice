@@ -127,8 +127,13 @@ export const useLocationStore = create<LocationStoreState>()(
 
           if (location) {
             void locationService.cacheLocation(location);
+            const matchedCity = locationService.findSupportedCityByGeocode(
+              location.address.city,
+              location.address.country
+            );
             set(() => ({
               currentLocation: location,
+              ...(matchedCity ? { selectedCity: matchedCity } : {}),
               permissionStatus: 'granted',
               isLoading: false,
             }));

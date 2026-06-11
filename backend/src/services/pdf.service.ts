@@ -937,6 +937,26 @@ export class PDFService {
   // Package PDF Generation
   // ============================================
 
+  /** ASCII-safe rating text — Unicode stars (★) render as "&" in PDFKit default fonts */
+  private formatPackageRatingText(rating: number, totalReviews: number): string {
+    const reviewLabel = totalReviews === 1 ? 'review' : 'reviews';
+    return `Rating: ${rating.toFixed(1)} / 5 (${totalReviews} ${reviewLabel})`;
+  }
+
+  /** Draw a checkmark icon using vector paths (no Unicode glyphs) */
+  private drawPdfCheckmark(
+    doc: typeof PDFDocument.prototype,
+    cx: number,
+    cy: number,
+    fillColor: string
+  ): void {
+    doc.save();
+    doc.fillColor(fillColor).circle(cx, cy, 8).fill();
+    doc.strokeColor('#FFFFFF').lineWidth(1.5);
+    doc.moveTo(cx - 3, cy).lineTo(cx - 1, cy + 3).lineTo(cx + 4, cy - 3).stroke();
+    doc.restore();
+  }
+
   /**
    * Generate a professional PDF document for package details
    */
@@ -950,38 +970,28 @@ export class PDFService {
         doc.on('end', () => resolve(Buffer.concat(chunks)));
         doc.on('error', reject);
 
-        // Draw header
-        this.drawPackageHeader(doc, data);
+        this.drawPackageHeader(doc);
 
-        // Draw package title and basic info
-        this.drawPackageInfo(doc, data);
+        let y = 95;
+        y = this.drawPackageInfo(doc, data, y);
+        y = this.drawPackagePricing(doc, data, y);
+        y = this.drawPackageFeatures(doc, data, y);
 
-        // Draw pricing section
-        this.drawPackagePricing(doc, data);
-
-        // Draw features/inclusions
-        this.drawPackageFeatures(doc, data);
-
-        // Draw exclusions if any
         if (data.exclusions && data.exclusions.length > 0) {
-          this.drawPackageExclusions(doc, data.exclusions);
+          y = this.drawPackageExclusions(doc, data.exclusions, y);
         }
 
-        // Draw add-ons if any
         if (data.addOns && data.addOns.length > 0) {
-          this.drawPackageAddOns(doc, data.addOns, data.pricing.currency);
+          y = this.drawPackageAddOns(doc, data.addOns, data.pricing.currency, y);
         }
 
-        // Draw provider info
-        this.drawPackageProvider(doc, data.provider);
+        y = this.drawPackageProvider(doc, data.provider, y);
 
-        // Draw terms if any
         if (data.terms) {
-          this.drawPackageTerms(doc, data.terms);
+          y = this.drawPackageTerms(doc, data.terms, y);
         }
 
-        // Draw footer
-        this.drawPackageFooter(doc, data);
+        this.drawPackageFooter(doc, data, y);
 
         doc.end();
       } catch (error) {
@@ -992,145 +1002,145 @@ export class PDFService {
   }
 
   // Package PDF drawing methods - Modern Professional Design
-  private drawPackageHeader(doc: typeof PDFDocument.prototype, data: PackagePDFData): void {
+  private drawPackageHeader(doc: typeof PDFDocument.prototype): void {
     const { colors } = COMPANY_BRANDING;
 
-    // Gradient-style header bar at top
     doc.rect(0, 0, 595, 80).fill(colors.primary);
 
-    // Company name
     doc.fillColor('#FFFFFF')
        .fontSize(26)
        .text(COMPANY_BRANDING.name, 50, 25);
 
-    // Tagline
-    doc.fillColor('rgba(255,255,255,0.8)')
+    doc.fillColor('#BFDBFE')
        .fontSize(11)
        .text(COMPANY_BRANDING.tagline, 50, 52);
 
-    // Package badge on right
-    doc.fillColor('rgba(255,255,255,0.2)')
+    // Badge — solid fill (rgba is unreliable in PDFKit)
+    doc.fillColor('#3B82F6')
        .roundedRect(420, 20, 130, 40, 8)
        .fill();
     doc.fillColor('#FFFFFF')
-       .fontSize(14)
-       .text('PACKAGE DETAILS', 435, 32, { width: 100, align: 'center' });
+       .fontSize(11)
+       .text('PACKAGE DETAILS', 425, 33, { width: 120, align: 'center' });
   }
 
-  private drawPackageInfo(doc: typeof PDFDocument.prototype, data: PackagePDFData): void {
+  private drawPackageInfo(doc: typeof PDFDocument.prototype, data: PackagePDFData, startY: number): number {
     const { colors } = COMPANY_BRANDING;
-    const startY = 100;
+    let y = startY;
 
-    // Package name with elegant styling
     const packageName = data.name || 'Package Details';
     doc.fillColor(colors.text)
-       .fontSize(26)
-       .text(packageName, 50, startY);
+       .fontSize(24)
+       .text(packageName, 50, y, { width: 495 });
+    y += 38;
 
-    // Decorative line
     doc.strokeColor(colors.primary)
        .lineWidth(3)
-       .moveTo(50, startY + 35)
-       .lineTo(150, startY + 35)
+       .moveTo(50, y)
+       .lineTo(150, y)
        .stroke();
+    y += 14;
 
-    // Category badge
-    const category = data.category || 'Package';
-    const badgeWidth = Math.min(category.length * 8 + 30, 150);
+    const category = (data.category || 'Package').replace(/_/g, ' ');
+    const badgeLabel = category.toUpperCase();
+    const badgeWidth = Math.min(badgeLabel.length * 7 + 24, 180);
     doc.fillColor(colors.primary)
-       .roundedRect(50, startY + 48, badgeWidth, 28, 6)
+       .roundedRect(50, y, badgeWidth, 24, 6)
        .fill();
     doc.fillColor('#FFFFFF')
-       .fontSize(11)
-       .text(category.toUpperCase(), 60, startY + 55);
+       .fontSize(10)
+       .text(badgeLabel, 58, y + 7);
+    y += 34;
 
-    // Description
     if (data.description && data.description.length > 0) {
       doc.fillColor(colors.lightText)
-         .fontSize(12)
-         .text(data.description, 50, startY + 95, { width: 495, lineGap: 4 });
+         .fontSize(11)
+         .text(data.description, 50, y, { width: 495, lineGap: 3 });
+      const descHeight = doc.heightOfString(data.description, { width: 495, lineGap: 3 });
+      y += descHeight + 16;
     }
+
+    return y;
   }
 
-  private drawPackagePricing(doc: typeof PDFDocument.prototype, data: PackagePDFData): void {
+  private drawPackagePricing(doc: typeof PDFDocument.prototype, data: PackagePDFData, startY: number): number {
     const { colors } = COMPANY_BRANDING;
-    const startY = 200;
+    const cardHeight = 88;
+    const y = startY;
 
-    // Pricing card with rounded corners
     doc.fillColor(colors.background)
-       .roundedRect(50, startY, 495, 90, 12)
+       .roundedRect(50, y, 495, cardHeight, 12)
        .fill();
     doc.strokeColor(colors.border)
        .lineWidth(1)
-       .roundedRect(50, startY, 495, 90, 12)
+       .roundedRect(50, y, 495, cardHeight, 12)
        .stroke();
 
-    // Left side - Price
     if (data.pricing.currentPrice > 0) {
-      // Current price
+      const priceText = this.formatCurrency(data.pricing.currentPrice, data.pricing.currency);
       doc.fillColor(colors.primary)
-         .fontSize(36)
-         .text(this.formatCurrency(data.pricing.currentPrice, data.pricing.currency), 70, startY + 15);
+         .fontSize(32)
+         .text(priceText, 70, y + 10);
 
-      // Original price with strikethrough
       if (data.pricing.originalPrice > data.pricing.currentPrice && data.pricing.originalPrice > 0) {
+        const originalText = this.formatCurrency(data.pricing.originalPrice, data.pricing.currency);
         doc.fillColor(colors.lightText)
-           .fontSize(16)
-           .text(this.formatCurrency(data.pricing.originalPrice, data.pricing.currency), 70, startY + 55);
+           .fontSize(14)
+           .text(originalText, 70, y + 50);
 
-        // Savings badge
         const savingsPct = data.pricing.savingsPercentage ?? 0;
         if (savingsPct > 0) {
+          const badgeText = `SAVE ${savingsPct}%`;
+          doc.fontSize(10);
+          const badgeTextWidth = doc.widthOfString(badgeText);
+          const badgeWidth = badgeTextWidth + 16;
+          const badgeX = 70 + doc.widthOfString(originalText) + 12;
+
           doc.fillColor('#10B981')
-             .roundedRect(250, startY + 15, 80, 28, 6)
+             .roundedRect(badgeX, y + 47, badgeWidth, 20, 5)
              .fill();
           doc.fillColor('#FFFFFF')
-             .fontSize(12)
-             .text(`SAVE ${savingsPct}%`, 258, startY + 22);
+             .fontSize(10)
+             .text(badgeText, badgeX + 8, y + 52);
         }
       }
 
-      // Duration info on right side
       if (data.duration?.totalMinutes && data.duration.totalMinutes > 0) {
         doc.fillColor(colors.lightText)
-           .fontSize(11)
-           .text('Duration:', 350, startY + 20);
+           .fontSize(10)
+           .text('Duration:', 350, y + 16);
         doc.fillColor(colors.text)
-           .fontSize(14)
-           .text(data.duration.formatted, 350, startY + 38);
+           .fontSize(13)
+           .text(data.duration.formatted, 350, y + 32);
       }
 
-      // Rating on right
       if (data.reviews && data.reviews.totalReviews > 0 && data.reviews.averageRating > 0) {
-        const stars = '★'.repeat(Math.round(data.reviews.averageRating));
-        doc.fillColor('#F59E0B')
-           .fontSize(14)
-           .text(stars, 350, startY + 55);
+        const ratingText = this.formatPackageRatingText(
+          data.reviews.averageRating,
+          data.reviews.totalReviews
+        );
         doc.fillColor(colors.lightText)
-           .fontSize(11)
-           .text(`(${data.reviews.totalReviews} reviews)`, 400, startY + 57);
+           .fontSize(10)
+           .text(ratingText, 350, y + 56, { width: 180 });
       }
     } else {
       doc.fillColor(colors.primary)
-         .fontSize(20)
-         .text('Contact for Pricing', 70, startY + 35);
+         .fontSize(18)
+         .text('Contact for Pricing', 70, y + 32);
     }
+
+    return y + cardHeight + 20;
   }
 
-  private drawPackageFeatures(doc: typeof PDFDocument.prototype, data: PackagePDFData): void {
+  private drawPackageFeatures(doc: typeof PDFDocument.prototype, data: PackagePDFData, startY: number): number {
     const { colors } = COMPANY_BRANDING;
-    const startY = 310;
+    let y = startY;
 
     doc.fillColor(colors.text)
-       .fontSize(16)
-       .text("What's Included", 50, startY);
+       .fontSize(15)
+       .text("What's Included", 50, y);
+    y += 28;
 
-    // Decorative dot
-    doc.fillColor(colors.primary)
-       .circle(195, startY + 8, 4)
-       .fill();
-
-    // Collect all features
     const features: string[] = [];
     if (data.features && data.features.length > 0) {
       data.features.forEach(f => {
@@ -1141,188 +1151,178 @@ export class PDFService {
       features.push(...data.includedItems);
     }
 
-    if (features.length === 0) {
+    const uniqueFeatures = [...new Set(features)];
+
+    if (uniqueFeatures.length === 0) {
       doc.fillColor(colors.lightText)
          .fontSize(11)
-         .text('Premium package with quality services', 50, startY + 35);
-      return;
+         .text('Premium package with quality services', 50, y);
+      return y + 24;
     }
 
-    // Draw features as elegant list
-    let yPos = startY + 35;
-    features.forEach((feature, index) => {
-      // Checkmark circle
-      doc.fillColor(colors.primary)
-         .circle(60, yPos + 6, 8)
-         .fill();
-      doc.fillColor('#FFFFFF')
-         .fontSize(10)
-         .text('✓', 56, yPos + 1, { width: 10, align: 'center' });
-
-      // Feature text
+    uniqueFeatures.forEach((feature) => {
+      this.drawPdfCheckmark(doc, 60, y + 6, colors.primary);
       doc.fillColor(colors.text)
-         .fontSize(12)
-         .text(feature, 80, yPos);
-
-      yPos += 28;
+         .fontSize(11)
+         .text(feature, 80, y, { width: 460 });
+      y += 26;
     });
+
+    return y + 8;
   }
 
-  private drawPackageExclusions(doc: typeof PDFDocument.prototype, exclusions: string[]): void {
-    if (!exclusions || exclusions.length === 0) return;
+  private drawPackageExclusions(doc: typeof PDFDocument.prototype, exclusions: string[], startY: number): number {
+    if (!exclusions || exclusions.length === 0) return startY;
 
     const { colors } = COMPANY_BRANDING;
-    const startY = 450;
+    let y = startY;
 
     doc.fillColor(colors.text)
        .fontSize(14)
-       .text('Not Included', 50, startY);
+       .text('Not Included', 50, y);
+    y += 22;
 
-    doc.strokeColor(colors.border)
-       .lineWidth(0.5)
-       .moveTo(50, startY + 20)
-       .lineTo(545, startY + 20)
-       .stroke();
-
-    exclusions.slice(0, 4).forEach((exclusion, index) => {
-      const yPos = startY + 35 + (index * 22);
-
-      // X circle
-      doc.fillColor('#EF4444')
-         .circle(60, yPos + 6, 8)
-         .fill();
-      doc.fillColor('#FFFFFF')
-         .fontSize(10)
-         .text('✕', 56, yPos + 1, { width: 10, align: 'center' });
-
+    exclusions.slice(0, 4).forEach((exclusion) => {
+      doc.fillColor('#EF4444').circle(60, y + 6, 8).fill();
+      doc.fillColor('#FFFFFF').fontSize(10).text('x', 57, y + 1, { width: 8, align: 'center' });
       doc.fillColor(colors.lightText)
          .fontSize(11)
-         .text(exclusion, 80, yPos);
+         .text(exclusion, 80, y, { width: 460 });
+      y += 24;
     });
+
+    return y + 8;
   }
 
-  private drawPackageAddOns(doc: typeof PDFDocument.prototype, addOns: PackageAddOn[], currency: string): void {
-    if (!addOns || addOns.length === 0) return;
+  private drawPackageAddOns(
+    doc: typeof PDFDocument.prototype,
+    addOns: PackageAddOn[],
+    currency: string,
+    startY: number
+  ): number {
+    if (!addOns || addOns.length === 0) return startY;
 
     const { colors } = COMPANY_BRANDING;
-    const startY = 540;
+    let y = startY;
 
     doc.fillColor(colors.text)
        .fontSize(14)
-       .text('Available Add-Ons', 50, startY);
-
-    doc.strokeColor(colors.border)
-       .lineWidth(0.5)
-       .moveTo(50, startY + 20)
-       .lineTo(545, startY + 20)
-       .stroke();
+       .text('Available Add-Ons', 50, y);
+    y += 22;
 
     addOns.slice(0, 4).forEach((addon, index) => {
-      const yPos = startY + 35 + (index * 30);
-
-      // Add-on box
       doc.fillColor(index % 2 === 0 ? '#FFFFFF' : colors.background)
-         .roundedRect(50, yPos - 5, 495, 28, 6)
+         .roundedRect(50, y - 4, 495, 26, 6)
          .fill();
 
-      // Plus icon
-      doc.fillColor(colors.primary)
-         .circle(65, yPos + 10, 8)
-         .fill();
-      doc.fillColor('#FFFFFF')
-         .fontSize(12)
-         .text('+', 61, yPos + 4, { width: 10, align: 'center' });
+      doc.fillColor(colors.primary).circle(65, y + 9, 8).fill();
+      doc.fillColor('#FFFFFF').fontSize(11).text('+', 62, y + 3, { width: 8, align: 'center' });
 
       doc.fillColor(colors.text)
          .fontSize(11)
-         .text(addon.name, 85, yPos);
+         .text(addon.name, 85, y, { width: 360 });
 
       doc.fillColor(colors.primary)
-         .fontSize(12)
-         .text(`+${this.formatCurrency(addon.price, currency)}`, 500, yPos, { align: 'right' });
+         .fontSize(11)
+         .text(`+${this.formatCurrency(addon.price, currency)}`, 450, y, { width: 90, align: 'right' });
+
+      y += 30;
     });
+
+    return y + 8;
   }
 
-  private drawPackageProvider(doc: typeof PDFDocument.prototype, provider: PackagePDFData['provider']): void {
+  private drawPackageProvider(
+    doc: typeof PDFDocument.prototype,
+    provider: PackagePDFData['provider'],
+    startY: number
+  ): number {
     const { colors } = COMPANY_BRANDING;
-    const startY = 600;
+    let y = startY;
 
     doc.fontSize(14).fillColor(colors.text)
-       .text('Service Provider', 50, startY);
+       .text('Service Provider', 50, y);
+    y += 26;
 
+    const boxHeight = 52;
+    doc.fillColor(colors.background)
+       .roundedRect(50, y, 495, boxHeight, 8)
+       .fill();
     doc.strokeColor(colors.border)
        .lineWidth(0.5)
-       .moveTo(50, startY + 25)
-       .lineTo(545, startY + 25)
+       .roundedRect(50, y, 495, boxHeight, 8)
        .stroke();
 
-    // Provider info box
-    doc.rect(50, startY + 30, 495, 50).fill(colors.background);
-
-    // Provider name or default - use full name from providerName passed by controller
-    const providerName = provider.name && provider.name.trim() ? provider.name.trim() : 'Service Provider';
+    const providerName = provider.name?.trim() || 'Service Provider';
     const initial = providerName.charAt(0).toUpperCase();
+    const avatarY = y + boxHeight / 2;
 
-    // Provider initial circle
-    doc.fillColor(colors.primary)
-       .circle(75, startY + 55, 15)
-       .fill();
-
+    doc.fillColor(colors.primary).circle(75, avatarY, 15).fill();
     doc.fillColor('#FFFFFF').fontSize(12)
-       .text(initial, 70, startY + 48, { width: 20, align: 'center' });
+       .text(initial, 70, avatarY - 7, { width: 20, align: 'center' });
 
-    // Provider name - show full name
     doc.fillColor(colors.text).fontSize(12)
-       .text(providerName, 100, startY + 48);
+       .text(providerName, 100, y + 14);
 
-    // Only show rating if we have meaningful data (less than 1000 reviews is realistic for a local service)
     const reviewsCount = provider.totalReviews || 0;
-    // Sanity check: cap at 999 reviews and only show if rating is between 1-5
     const providerRating = provider.rating || 0;
     const validRating = providerRating >= 1 && providerRating <= 5;
     const reasonableReviews = reviewsCount > 0 && reviewsCount <= 999;
 
     if (validRating && reasonableReviews) {
       doc.fillColor(colors.lightText).fontSize(10)
-         .text(`★ ${providerRating.toFixed(1)} (${reviewsCount} reviews)`, 100, startY + 62);
+         .text(this.formatPackageRatingText(providerRating, reviewsCount), 100, y + 32);
     } else if (validRating) {
-      // Has rating but unreasonable review count - just show the rating
       doc.fillColor(colors.lightText).fontSize(10)
-         .text(`★ ${providerRating.toFixed(1)}`, 100, startY + 62);
+         .text(`Rating: ${providerRating.toFixed(1)} / 5`, 100, y + 32);
     } else {
-      // No rating, show placeholder
       doc.fillColor(colors.lightText).fontSize(10)
-         .text('Premium service provider', 100, startY + 62);
+         .text('Premium service provider', 100, y + 32);
     }
+
+    return y + boxHeight + 24;
   }
 
-  private drawPackageTerms(doc: typeof PDFDocument.prototype, terms: string): void {
+  private drawPackageTerms(doc: typeof PDFDocument.prototype, terms: string, startY: number): number {
     const { colors } = COMPANY_BRANDING;
-    const startY = 670;
+    let y = startY;
 
     doc.fontSize(12).fillColor(colors.text)
-       .text('Terms & Conditions', 50, startY);
+       .text('Terms & Conditions', 50, y);
+    y += 18;
 
     doc.fontSize(9).fillColor(colors.lightText)
-       .text(terms.substring(0, 500), 50, startY + 15, { width: 495, lineGap: 2 });
+       .text(terms.substring(0, 500), 50, y, { width: 495, lineGap: 2 });
+    const termsHeight = doc.heightOfString(terms.substring(0, 500), { width: 495, lineGap: 2 });
+
+    return y + termsHeight + 16;
   }
 
-  private drawPackageFooter(doc: typeof PDFDocument.prototype, data: PackagePDFData): void {
+  private drawPackageFooter(doc: typeof PDFDocument.prototype, data: PackagePDFData, contentEndY: number): void {
     const { colors } = COMPANY_BRANDING;
-    const footerY = 750;
+    const pageBottom = 842 - 50;
+    const footerY = Math.max(contentEndY + 20, pageBottom - 55);
 
-    doc.moveTo(50, footerY - 10).lineTo(545, footerY - 10).stroke();
+    doc.strokeColor(colors.border)
+       .lineWidth(0.5)
+       .moveTo(50, footerY - 8)
+       .lineTo(545, footerY - 8)
+       .stroke();
 
-    // Printed date
     doc.fontSize(9).fillColor(colors.lightText)
-       .text(`Document generated on ${new Date().toLocaleString('en-AE')}`, 50, footerY);
+       .text(`Document generated on ${new Date().toLocaleString('en-AE')}`, 50, footerY, { width: 320 });
 
-    // Source URL
-    doc.text(`${COMPANY_BRANDING.website}/packages/${data.packageId}`, 400, footerY);
-
-    // Disclaimer
+    const packageUrl = `${COMPANY_BRANDING.website}/packages/${data.packageId}`;
     doc.fontSize(8).fillColor(colors.lightText)
-       .text('This is a promotional document. Prices and availability are subject to change.', 50, footerY + 15);
+       .text(packageUrl, 320, footerY, { width: 225, align: 'right', lineBreak: false });
+
+    doc.fontSize(8).fillColor(colors.lightText)
+       .text(
+         'This is a promotional document. Prices and availability are subject to change.',
+         50,
+         footerY + 14,
+         { width: 495 }
+       );
   }
 }
 

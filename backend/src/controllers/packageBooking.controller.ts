@@ -122,7 +122,7 @@ const packageBookingInputSchema = Joi.object({
  * creating individual bookings for each service in the package.
  */
 export const bookPackage = asyncHandler(async (req: Request, res: Response) => {
-  const { id } = req.params;
+  const id = req.params.id || req.body?.bundleId;
   const customerId = (req.user as IUser)?._id?.toString();
   const tenantId = (req as any).tenantId;
 

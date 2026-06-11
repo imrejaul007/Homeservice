@@ -1,79 +1,27 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Star, User, X, ChevronLeft, ChevronRight, Loader2, AlertCircle } from 'lucide-react';
+import React, { useState } from 'react';
+import { Star, User } from 'lucide-react';
 import type { Experience } from '../../types/experience';
+import ExperienceDetailModal from './ExperienceDetailModal';
 import { cn } from '@/lib/utils';
 
 interface ExperienceCardProps {
   experience: Experience;
   isFeatured?: boolean;
+  onSelect?: (experience: Experience) => void;
 }
 
-interface LightboxState {
-  isOpen: boolean;
-  currentIndex: number;
-  images: string[];
-}
+const ExperienceCard: React.FC<ExperienceCardProps> = ({
+  experience,
+  isFeatured = false,
+  onSelect,
+}) => {
+  const [detailOpen, setDetailOpen] = useState(false);
 
-const ExperienceCard: React.FC<ExperienceCardProps> = ({ experience, isFeatured = false }) => {
-  const [lightbox, setLightbox] = useState<LightboxState>({
-    isOpen: false,
-    currentIndex: 0,
-    images: [],
-  });
-
-  // Keyboard navigation for lightbox
-  useEffect(() => {
-    if (!lightbox.isOpen) return;
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        closeLightbox();
-      } else if (e.key === 'ArrowLeft') {
-        goToPrevious();
-      } else if (e.key === 'ArrowRight') {
-        goToNext();
-      }
-    };
-
-    document.addEventListener('keydown', handleKeyDown);
-    document.body.style.overflow = 'hidden';
-
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-      document.body.style.overflow = 'unset';
-    };
-  }, [lightbox.isOpen, lightbox.currentIndex]);
-
-  const openLightbox = (index: number, images: string[]) => {
-    setLightbox({ isOpen: true, currentIndex: index, images });
-  };
-
-  const closeLightbox = useCallback(() => {
-    setLightbox((prev) => ({ ...prev, isOpen: false }));
-  }, []);
-
-  const goToPrevious = useCallback(() => {
-    setLightbox((prev) => ({
-      ...prev,
-      currentIndex: prev.currentIndex === 0 ? prev.images.length - 1 : prev.currentIndex - 1,
-    }));
-  }, []);
-
-  const goToNext = useCallback(() => {
-    setLightbox((prev) => ({
-      ...prev,
-      currentIndex: prev.currentIndex === prev.images.length - 1 ? 0 : prev.currentIndex + 1,
-    }));
-  }, []);
-
-  const handleImageClick = (e: React.MouseEvent, index: number) => {
-    e.stopPropagation();
-    openLightbox(index, experience.images);
-  };
-
-  const handleOverlayClick = (e: React.MouseEvent) => {
-    if (e.target === e.currentTarget) {
-      closeLightbox();
+  const openDetail = () => {
+    if (onSelect) {
+      onSelect(experience);
+    } else {
+      setDetailOpen(true);
     }
   };
 
@@ -89,10 +37,6 @@ const ExperienceCard: React.FC<ExperienceCardProps> = ({ experience, isFeatured 
     if (diffDays < 30) return `${Math.floor(diffDays / 7)} weeks ago`;
     if (diffDays < 365) return `${Math.floor(diffDays / 30)} months ago`;
     return `${Math.floor(diffDays / 365)} years ago`;
-  };
-
-  const getInitials = (firstName: string, lastName: string) => {
-    return `${firstName.charAt(0)}${lastName?.charAt(0) || ''}`.toUpperCase();
   };
 
   const renderStars = (rating: number) => {
@@ -115,12 +59,16 @@ const ExperienceCard: React.FC<ExperienceCardProps> = ({ experience, isFeatured 
   if (isFeatured) {
     return (
       <>
-        <div className="relative overflow-hidden rounded-nilin shadow-nilin card-3d hover-lift group cursor-pointer">
+        <div
+          className="relative overflow-hidden rounded-nilin shadow-nilin card-3d hover-lift group cursor-pointer"
+          onClick={openDetail}
+          onKeyDown={(e) => e.key === 'Enter' && openDetail()}
+          role="button"
+          tabIndex={0}
+          aria-label={`View experience: ${experience.title}`}
+        >
           {/* Main Image */}
-          <div
-            className="relative h-full min-h-[400px]"
-            onClick={(e) => handleImageClick(e, 0)}
-          >
+          <div className="relative h-full min-h-[400px]">
             {experience.images && experience.images.length > 0 ? (
               <img
                 src={experience.images[0]}
@@ -196,39 +144,12 @@ const ExperienceCard: React.FC<ExperienceCardProps> = ({ experience, isFeatured 
             </div>
           </div>
 
-          {/* Thumbnail Strip for multiple images */}
-          {experience.images && experience.images.length > 1 && (
-            <div className="absolute bottom-28 left-6 right-6 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-              {experience.images.slice(1, 4).map((img, idx) => (
-                <button
-                  key={idx}
-                  onClick={(e) => handleImageClick(e, idx + 1)}
-                  className="w-16 h-16 rounded-lg overflow-hidden border-2 border-white/50 hover:border-white transition-colors"
-                >
-                  <img src={img} alt={`Thumbnail ${idx + 1}`} className="w-full h-full object-cover" />
-                </button>
-              ))}
-              {experience.images.length > 4 && (
-                <button
-                  onClick={(e) => handleImageClick(e, 4)}
-                  className="w-16 h-16 rounded-lg bg-black/50 border-2 border-white/50 hover:border-white transition-colors flex items-center justify-center"
-                >
-                  <span className="text-white text-xs font-medium">+{experience.images.length - 4}</span>
-                </button>
-              )}
-            </div>
-          )}
         </div>
 
-        {/* Lightbox Modal */}
-        <LightboxModal
-          isOpen={lightbox.isOpen}
-          images={lightbox.images}
-          currentIndex={lightbox.currentIndex}
-          onClose={closeLightbox}
-          onPrevious={goToPrevious}
-          onNext={goToNext}
-          onOverlayClick={handleOverlayClick}
+        <ExperienceDetailModal
+          experience={experience}
+          isOpen={detailOpen}
+          onClose={() => setDetailOpen(false)}
         />
       </>
     );
@@ -237,12 +158,16 @@ const ExperienceCard: React.FC<ExperienceCardProps> = ({ experience, isFeatured 
   // Standard card
   return (
     <>
-      <div className="relative overflow-hidden rounded-nilin shadow-nilin card-3d hover-lift group cursor-pointer">
+      <div
+        className="relative overflow-hidden rounded-nilin shadow-nilin card-3d hover-lift group cursor-pointer"
+        onClick={openDetail}
+        onKeyDown={(e) => e.key === 'Enter' && openDetail()}
+        role="button"
+        tabIndex={0}
+        aria-label={`View experience: ${experience.title}`}
+      >
         {/* Image */}
-        <div
-          className="relative h-48"
-          onClick={(e) => handleImageClick(e, 0)}
-        >
+        <div className="relative h-48">
           {experience.images && experience.images.length > 0 ? (
             <img
               src={experience.images[0]}
@@ -302,130 +227,12 @@ const ExperienceCard: React.FC<ExperienceCardProps> = ({ experience, isFeatured 
         </div>
       </div>
 
-      {/* Lightbox Modal */}
-      <LightboxModal
-        isOpen={lightbox.isOpen}
-        images={lightbox.images}
-        currentIndex={lightbox.currentIndex}
-        onClose={closeLightbox}
-        onPrevious={goToPrevious}
-        onNext={goToNext}
-        onOverlayClick={handleOverlayClick}
+      <ExperienceDetailModal
+        experience={experience}
+        isOpen={detailOpen}
+        onClose={() => setDetailOpen(false)}
       />
     </>
-  );
-};
-
-// Lightbox Modal Component
-interface LightboxModalProps {
-  isOpen: boolean;
-  images: string[];
-  currentIndex: number;
-  onClose: () => void;
-  onPrevious: () => void;
-  onNext: () => void;
-  onOverlayClick: (e: React.MouseEvent) => void;
-}
-
-const LightboxModal: React.FC<LightboxModalProps> = ({
-  isOpen,
-  images,
-  currentIndex,
-  onClose,
-  onPrevious,
-  onNext,
-  onOverlayClick,
-}) => {
-  if (!isOpen || images.length === 0) return null;
-
-  return (
-    <div
-      className="fixed inset-0 z-50 bg-black/90 backdrop-blur-sm flex items-center justify-center animate-in fade-in duration-200"
-      onClick={onOverlayClick}
-    >
-      {/* Close Button */}
-      <button
-        onClick={onClose}
-        className="absolute top-4 right-4 z-10 p-2 rounded-full bg-white/10 hover:bg-white/20 transition-colors"
-        aria-label="Close lightbox"
-      >
-        <X className="w-6 h-6 text-white" />
-      </button>
-
-      {/* Close on click outside hint */}
-      <div className="absolute top-4 left-4 text-white/60 text-sm">
-        Click outside or press ESC to close
-      </div>
-
-      {/* Image Counter */}
-      <div className="absolute top-4 left-1/2 -translate-x-1/2 px-4 py-2 bg-white/10 backdrop-blur-sm rounded-full text-white text-sm font-medium">
-        {currentIndex + 1} / {images.length}
-      </div>
-
-      {/* Previous Button */}
-      {images.length > 1 && (
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onPrevious();
-          }}
-          className="absolute left-4 top-1/2 -translate-y-1/2 p-3 rounded-full bg-white/10 hover:bg-white/20 transition-colors"
-          aria-label="Previous image"
-        >
-          <ChevronLeft className="w-8 h-8 text-white" />
-        </button>
-      )}
-
-      {/* Main Image */}
-      <div
-        className="relative max-w-5xl max-h-[85vh] w-full h-full flex items-center justify-center p-8"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <img
-          src={images[currentIndex]}
-          alt={`Image ${currentIndex + 1}`}
-          className="max-w-full max-h-full object-contain rounded-lg shadow-2xl"
-        />
-      </div>
-
-      {/* Next Button */}
-      {images.length > 1 && (
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onNext();
-          }}
-          className="absolute right-4 top-1/2 -translate-y-1/2 p-3 rounded-full bg-white/10 hover:bg-white/20 transition-colors"
-          aria-label="Next image"
-        >
-          <ChevronRight className="w-8 h-8 text-white" />
-        </button>
-      )}
-
-      {/* Thumbnail Strip */}
-      {images.length > 1 && (
-        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-2 p-2 bg-white/10 backdrop-blur-sm rounded-full">
-          {images.map((img, idx) => (
-            <button
-              key={idx}
-              onClick={(e) => {
-                e.stopPropagation();
-                // Navigate to this index - we need to call a different function
-                // For now, we can just trigger a custom event or use state
-              }}
-              className={cn(
-                'w-12 h-12 rounded-lg overflow-hidden border-2 transition-all',
-                idx === currentIndex
-                  ? 'border-white scale-110'
-                  : 'border-transparent opacity-60 hover:opacity-100'
-              )}
-            >
-              <img src={img} alt={`Thumbnail ${idx + 1}`} className="w-full h-full object-cover" />
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
   );
 };
 

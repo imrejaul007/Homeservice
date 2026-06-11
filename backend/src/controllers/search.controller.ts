@@ -903,9 +903,13 @@ async function processSearchResults(services: any[], filters: SearchFilters) {
         avatar: result.providerId.avatar || '',
         rating: result.providerId.rating || 0,
         location: result.providerId.location || null,
+        // isVerified will be populated from Meilisearch indexed data if available
+        isVerified: result.providerId.isVerified || false,
       };
     } else {
       result.provider = result.provider || {};
+      // Ensure isVerified field exists
+      result.provider.isVerified = result.provider.isVerified || false;
     }
     result.fullLocation = service.fullLocation;
     

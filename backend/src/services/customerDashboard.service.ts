@@ -22,9 +22,18 @@ const RECOMMENDATIONS_CACHE_PREFIX = 'recommendations';
 const PACKAGES_CACHE_TTL = 600; // 10 minutes TTL
 const PACKAGES_CACHE_PREFIX = 'packages';
 
+// Cache configuration for featured packages
+const FEATURED_PACKAGES_CACHE_TTL = 600; // 10 minutes TTL
+const FEATURED_PACKAGES_CACHE_PREFIX = 'featured-packages';
+
 // Generate cache key for service packages
 const getPackagesCacheKey = (tenantId: string, options: object): string => {
   return `${PACKAGES_CACHE_PREFIX}:${tenantId}:${JSON.stringify(options)}`;
+};
+
+// Generate cache key for featured packages
+const getFeaturedPackagesCacheKey = (tenantId: string, category?: string): string => {
+  return `${FEATURED_PACKAGES_CACHE_PREFIX}:${tenantId}:${category || 'all'}`;
 };
 
 // Category limit for recommendations (configurable via environment variable)
@@ -142,7 +151,7 @@ export interface ServicePackage {
   };
   durationLabel: string;
   features: Array<{ name: string; included: boolean }>;
-  services: Array<{ _id: string; name: string; duration: number; price: number }>;
+  services: Array<{ _id?: string; name?: string; serviceName?: string; duration: number; price: number; originalPrice?: number }>;
   images: string[];
   includedItems: string[];
   addOns?: Array<{
@@ -150,12 +159,24 @@ export interface ServicePackage {
     price: number;
     description?: string;
   }>;
+  provider?: {
+    _id: string;
+    firstName: string;
+    lastName: string;
+    businessName?: string;
+    isVerified?: boolean;
+  };
   providerName: string;
-  providerId: mongoose.Types.ObjectId;
+  providerId: mongoose.Types.ObjectId | string;
   averageRating: number;
   totalReviews: number;
   isPopular: boolean;
   isFeatured: boolean;
+  stats?: {
+    rating: number;
+    reviewCount: number;
+    totalPurchases: number;
+  };
 }
 
 // ============================================
@@ -950,13 +971,14 @@ export class CustomerDashboardService {
     const now = new Date();
 
     // Get user's preferred service categories and recently used providers in parallel
+    // Include all non-cancelled bookings for preference analysis
     const [preferredCategories, recentBookings] = await Promise.all([
       Booking.aggregate([
         {
           $match: {
             customerId: customerObjectId,
             tenantId: tenantObjectId,
-            status: 'completed',
+            status: { $in: ['completed', 'confirmed', 'in_progress'] }, // Include all non-cancelled bookings
             deletedAt: { $exists: false },
           },
         },
@@ -982,7 +1004,7 @@ export class CustomerDashboardService {
       Booking.find({
         customerId: customerObjectId,
         tenantId: tenantObjectId,
-        status: 'completed',
+        status: { $in: ['completed', 'confirmed', 'in_progress'] }, // Include all non-cancelled bookings
         deletedAt: { $exists: false },
       })
         .sort({ updatedAt: -1 })
@@ -1030,7 +1052,7 @@ export class CustomerDashboardService {
                   ...matchCondition,
                   ...excludeProviderIds,
                   // Only include providers with valid location data
-                  'location.coordinates': { $exists: true, $ne: null },
+                  'locationInfo.primaryAddress.coordinates': { $exists: true, $ne: null },
                 },
               },
             } as any,
@@ -1425,8 +1447,12 @@ export class CustomerDashboardService {
           break;
       }
 
-      // Query Bundle collection directly
+      // Query Bundle collection directly with provider and category population
       const bundleQuery = Bundle.find(query)
+        .populate({
+          path: 'providerId',
+          select: 'firstName lastName businessName avatar instagramStyleProfile verificationStatus',
+        })
         .sort(sort)
         .skip(skip)
         .limit(limit);
@@ -1437,11 +1463,43 @@ export class CustomerDashboardService {
       // Transform Bundle data to match frontend ServicePackage format
       const packages = bundles.map((bundle: any) => {
         const serviceNames = (bundle.services || []).map((s: any) => s.serviceName).join(', ');
+
+        // Extract provider data
+        const providerData = bundle.providerId || {};
+        const providerId = typeof bundle.providerId === 'object'
+          ? providerData._id?.toString()
+          : bundle.providerId?.toString() || bundle.createdBy?.toString();
+
+        // Check if provider is verified (from populated provider profile or bundle createdBy)
+        let isVerified = false;
+        let providerFirstName = '';
+        let providerLastName = '';
+        let providerBusinessName = '';
+
+        if (typeof bundle.providerId === 'object' && providerData) {
+          // Provider profile is populated - extract real data
+          providerFirstName = providerData.firstName || '';
+          providerLastName = providerData.lastName || '';
+          providerBusinessName = providerData.businessName || '';
+          // Check verification status
+          isVerified = providerData.instagramStyleProfile?.isVerified ||
+            providerData.verificationStatus?.overall === 'approved' ||
+            providerData.verificationStatus?.overall === 'verified';
+        } else if (bundle.createdBy) {
+          // Try to get provider info from createdBy
+          providerFirstName = 'Provider';
+        }
+
+        // Get category name from tags or fallback to 'general'
+        const categoryName = (Array.isArray(bundle.tags) && bundle.tags[0]) ||
+          bundle.tags ||
+          'general';
+
         return {
           _id: bundle._id.toString(),
           name: bundle.name,
           description: bundle.description,
-          category: (bundle.categoryId || bundle.tags?.[0] || 'general').toString(),
+          category: typeof categoryName === 'string' ? categoryName : 'general',
           basePrice: bundle.originalPrice,
           discountedPrice: bundle.bundlePrice,
           pricing: {
@@ -1457,23 +1515,28 @@ export class CustomerDashboardService {
           durationLabel: `${(bundle.services || []).length} services`,
           features: (bundle.services || []).map((s: any) => ({ name: s.serviceName, included: true })),
           services: (bundle.services || []).map((s: any) => ({
-            ...s,
+            _id: s.serviceId,
+            name: s.serviceName, // Map serviceName to name for frontend compatibility
+            serviceName: s.serviceName, // Keep original for backward compatibility
             // Include duration if available, otherwise use default (60 min per service)
             duration: s.duration || 60,
             // Ensure price is available as both originalPrice and price for compatibility
             price: s.originalPrice || s.price || 0,
+            originalPrice: s.originalPrice,
+            description: s.description,
           })),
           images: bundle.images || (bundle.image ? [bundle.image] : []),
           includedItems: (bundle.services || []).map((s: any) => s.serviceName),
           addOns: [],
           provider: {
-            _id: bundle.createdBy?.toString() || '',
-            firstName: 'NILIN',
-            lastName: 'Beauty',
-            businessName: 'NILIN Beauty & Wellness',
+            _id: providerId || '',
+            firstName: providerFirstName,
+            lastName: providerLastName,
+            businessName: providerBusinessName,
+            isVerified: isVerified,
           },
-          providerName: 'NILIN Beauty & Wellness',
-          providerId: bundle.createdBy?.toString(),
+          providerName: providerBusinessName || `${providerFirstName} ${providerLastName}`.trim() || 'Service Provider',
+          providerId: providerId || '',
           stats: {
             rating: Math.round((bundle.rating?.average || 4.0) * 10) / 10,
             reviewCount: bundle.rating?.count || 0,
@@ -1563,26 +1626,58 @@ export class CustomerDashboardService {
         isActive: true,
         validFrom: { $lte: new Date() },
         validUntil: { $gte: new Date() },
-      }).populate('providerId', 'firstName lastName avatar');
+      })
+        .populate({
+          path: 'providerId',
+          select: 'firstName lastName businessName avatar instagramStyleProfile verificationStatus',
+        })
+        .exec();
 
       if (!bundle) {
         return null;
       }
 
-      // Transform Bundle to ServicePackage format
+      // Transform Bundle to ServicePackage format (aligned with getServicePackages)
       const serviceNames = (bundle.services || []).map((s: any) => s.serviceName).join(', ');
-      // FIX: Use actual duration from service data, default to 60 minutes if not available
       const totalDuration = (bundle.services || []).reduce((sum: number, s: any) => sum + (s.duration || 60), 0);
-      const provider: any = bundle.providerId || {};
-      const providerName = provider.firstName
-        ? `${provider.firstName} ${provider.lastName || ''}`.trim()
-        : 'Service Provider';
+
+      // Extract provider data
+      const providerData: any = bundle.providerId && typeof bundle.providerId === 'object' && '_id' in bundle.providerId
+        ? bundle.providerId
+        : {};
+      const providerId = typeof bundle.providerId === 'object' && bundle.providerId !== null && '_id' in (bundle.providerId as object)
+        ? (providerData._id as mongoose.Types.ObjectId)?.toString()
+        : bundle.providerId?.toString() || bundle.createdBy?.toString() || '';
+
+      // Check if provider is verified
+      let isVerified = false;
+      let providerFirstName = '';
+      let providerLastName = '';
+      let providerBusinessName = '';
+
+      if (typeof bundle.providerId === 'object' && bundle.providerId !== null && '_id' in (bundle.providerId as object)) {
+        providerFirstName = providerData.firstName || '';
+        providerLastName = providerData.lastName || '';
+        providerBusinessName = providerData.businessName || '';
+        isVerified = providerData.instagramStyleProfile?.isVerified ||
+          providerData.verificationStatus?.overall === 'approved' ||
+          providerData.verificationStatus?.overall === 'verified';
+      } else if (bundle.createdBy) {
+        providerFirstName = 'Provider';
+      }
+
+      const providerName = providerBusinessName || `${providerFirstName} ${providerLastName}`.trim() || 'Service Provider';
+
+      // Category from tags (same as list endpoint — categoryId ref was broken: no Category model)
+      const categoryName = (Array.isArray(bundle.tags) && bundle.tags[0]) ||
+        bundle.tags ||
+        'general';
 
       const formattedPackage: ServicePackage = {
         _id: bundle._id as mongoose.Types.ObjectId,
         name: bundle.name,
         description: bundle.description,
-        category: (bundle.categoryId || bundle.tags?.[0] || 'general').toString(),
+        category: typeof categoryName === 'string' ? categoryName : 'general',
         basePrice: bundle.originalPrice,
         discountedPrice: bundle.bundlePrice,
         pricing: {
@@ -1595,37 +1690,83 @@ export class CustomerDashboardService {
           totalMinutes: totalDuration,
           formatted: this.formatDuration(totalDuration),
         },
-        durationLabel: this.formatDuration(totalDuration),
+        durationLabel: `${(bundle.services || []).length} services`,
         features: (bundle.services || []).map((s: any) => ({ name: s.serviceName, included: true })),
-        services: (bundle.services || []).map((s: any) => ({
-          ...s,
-          // Include duration if available, otherwise use default (60 min per service)
-          duration: s.duration || 60,
-          // Ensure price is available as both originalPrice and price for compatibility
-          price: s.originalPrice || s.price || 0,
-        })),
-        images: bundle.images || [],
+        services: (bundle.services || []).map((s: any) => {
+          const sid = s.serviceId?.toString?.() || String(s.serviceId || '');
+          return {
+            _id: sid,
+            serviceId: sid,
+            name: s.serviceName,
+            serviceName: s.serviceName,
+            duration: s.duration || 60,
+            price: s.originalPrice || s.price || 0,
+            originalPrice: s.originalPrice,
+            description: s.description,
+          };
+        }),
+        images: bundle.images || (bundle.image ? [bundle.image] : []),
         includedItems: bundle.services?.map((s: any) => s.serviceName) || [],
         addOns: [],
+        provider: {
+          _id: providerId || '',
+          firstName: providerFirstName,
+          lastName: providerLastName,
+          businessName: providerBusinessName,
+          isVerified: isVerified,
+        },
         providerName,
-        providerId: typeof bundle.providerId === 'object' ? (bundle.providerId as any)._id : bundle.providerId,
-        averageRating: bundle.rating?.average || 0,
+        providerId: providerId || '',
+        averageRating: bundle.rating?.average
+          ? Math.round(bundle.rating.average * 10) / 10
+          : 0,
         totalReviews: bundle.rating?.count || 0,
-        isPopular: bundle.bookingCount > 5,
-        isFeatured: bundle.isFeatured,
+        isPopular: (bundle.redemptionsUsed || 0) > 10,
+        isFeatured: bundle.isFeatured || false,
       };
 
-      // Reviews are linked to services, not bundles - return empty for bundle pages
-      const reviews: Array<{
-        _id: string;
-        user: { name: string; avatar?: string };
-        rating: number;
-        comment: string;
-        createdAt: Date;
-      }> = [];
+      const reviewDocs = await Review.find({
+        serviceId: packageObjectId,
+        moderationStatus: 'approved',
+        isHidden: { $ne: true },
+      })
+        .populate('reviewerId', 'firstName lastName avatar name')
+        .sort({ createdAt: -1 })
+        .limit(20)
+        .lean();
+
+      const reviews = reviewDocs.map((r: any) => {
+        const reviewer = r.reviewerId || {};
+        const reviewerName =
+          reviewer.name ||
+          [reviewer.firstName, reviewer.lastName].filter(Boolean).join(' ') ||
+          'Customer';
+        return {
+          _id: r._id.toString(),
+          user: { name: reviewerName, avatar: reviewer.avatar },
+          rating: r.rating,
+          comment: r.comment,
+          createdAt: r.createdAt,
+        };
+      });
+
+      if (reviews.length > 0) {
+        formattedPackage.totalReviews = reviews.length;
+        formattedPackage.averageRating =
+          Math.round((reviews.reduce((sum, rv) => sum + rv.rating, 0) / reviews.length) * 10) / 10;
+      }
+
+      const packageWithExtras = {
+        ...formattedPackage,
+        providerAvatar: providerData.avatar || undefined,
+        isActive: bundle.isActive,
+        terms: bundle.terms,
+        savingsAmount: bundle.savingsAmount,
+        savingsPercentage: bundle.savingsPercentage,
+      };
 
       return {
-        package: formattedPackage,
+        package: packageWithExtras as ServicePackage,
         reviews,
       };
     } catch (error) {
@@ -1644,7 +1785,8 @@ export class CustomerDashboardService {
 
   /**
    * Get featured service packages for homepage carousel
-   * Optimized query with Redis caching for performance
+   * Queries Bundle collection (where packages are actually stored)
+   * Uses Redis caching with 10-minute TTL for performance
    */
   async getFeaturedPackages(
     tenantId: string,
@@ -1665,129 +1807,166 @@ export class CustomerDashboardService {
 
       const tenantObjectId = new mongoose.Types.ObjectId(tenantId);
 
-      // Build query for featured packages
+      // Create cache key
+      const cacheKey = getFeaturedPackagesCacheKey(tenantId, category);
+
+      // Try to get from cache first
+      try {
+        const cachedData = await cache.get(cacheKey);
+        if (cachedData) {
+          logger.debug('Cache hit for featured packages', { tenantId, cacheKey });
+          return JSON.parse(cachedData);
+        }
+      } catch (error) {
+        logger.warn('Failed to get featured packages from cache', {
+          tenantId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+
+      logger.debug('Cache miss for featured packages, fetching from Bundle database', { tenantId, cacheKey });
+
+      // Build query for Bundle model - featured packages
       const query: any = {
         tenantId: tenantObjectId,
         isActive: true,
-        'services.isActive': true,
-        'services.isFeatured': true,
+        isFeatured: true,
+        validFrom: { $lte: new Date() },
+        validUntil: { $gte: new Date() },
       };
 
       if (category) {
-        query['services.category'] = category;
+        // Filter by categoryId if it's a valid ObjectId, otherwise use tags
+        if (mongoose.Types.ObjectId.isValid(category)) {
+          query.categoryId = new mongoose.Types.ObjectId(category);
+        } else {
+          query.tags = new RegExp(category, 'i');
+        }
       }
 
-      // Aggregation pipeline optimized for carousel display
-      const [facetResult] = await ProviderProfile.aggregate([
-        { $match: query },
-        {
-          $lookup: {
-            from: 'users',
-            localField: 'userId',
-            foreignField: '_id',
-            as: 'user',
-          },
-        },
-        { $unwind: '$user' },
-        { $unwind: '$services' },
-        {
-          $match: {
-            'services.isActive': true,
-            'services.isFeatured': true,
-            ...(category ? { 'services.category': category } : {}),
-          },
-        },
-        {
-          $lookup: {
-            from: 'reviews',
-            let: { providerId: '$userId' },
-            pipeline: [
-              {
-                $match: {
-                  $expr: { $eq: ['$revieweeId', '$$providerId'] },
-                  tenantId: tenantObjectId,
-                },
-              },
-              {
-                $group: {
-                  _id: null,
-                  averageRating: { $avg: '$rating' },
-                  totalReviews: { $sum: 1 },
-                },
-              },
-            ],
-            as: 'reviewsData',
-          },
-        },
-        { $unwind: { path: '$reviewsData', preserveNullAndEmptyArrays: true } },
-        {
-          $project: {
-            _id: '$services._id',
-            name: '$services.name',
-            description: '$services.description',
-            category: '$services.category',
-            basePrice: '$services.price.amount',
-            discountedPrice: '$services.price.amount',
-            pricing: {
-              originalPrice: '$services.price.amount',
-              currentPrice: '$services.price.amount',
-              currency: { $ifNull: ['$services.price.currency', 'AED'] },
-              type: 'fixed',
-            },
-            duration: {
-              totalMinutes: '$services.duration',
-              formatted: {
-                $switch: {
-                  branches: [
-                    { case: { $lte: ['$services.duration', 30] }, then: '30 min' },
-                    { case: { $lte: ['$services.duration', 60] }, then: '1 hour' },
-                    { case: { $lte: ['$services.duration', 90] }, then: '1.5 hours' },
-                    { case: { $lte: ['$services.duration', 120] }, then: '2 hours' },
-                  ],
-                  default: {
-                    $concat: [
-                      { $toString: { $divide: ['$services.duration', 60] } },
-                      ' hours',
-                    ],
-                  },
-                },
-              },
-            },
-            images: '$services.images',
-            includedItems: '$services.includedItems',
-            addOns: '$services.addOns',
-            providerName: {
-              $concat: ['$user.firstName', ' ', { $ifNull: ['$user.lastName', ''] }],
-            },
-            providerId: '$userId',
-            averageRating: { $ifNull: ['$reviewsData.averageRating', 0] },
-            totalReviews: { $ifNull: ['$reviewsData.totalReviews', 0] },
-            isPopular: { $ifNull: ['$services.isPopular', false] },
-            isFeatured: true,
-          },
-        },
-        {
-          $sort: {
-            averageRating: -1,
-            totalReviews: -1,
-          },
-        },
-        { $limit: limit },
-      ]);
+      // Query Bundle collection with populated provider and category data
+      const bundles = await Bundle.find(query)
+        .populate({
+          path: 'providerId',
+          select: 'firstName lastName businessName avatar instagramStyleProfile verificationStatus',
+        })
+        .sort({ 'rating.average': -1, redemptionsUsed: -1 })
+        .limit(limit)
+        .exec();
 
-      const packages = (facetResult || []).map((p: any) => ({
-        ...p,
-        averageRating: Math.round((p.averageRating || 0) * 10) / 10,
-        totalReviews: p.totalReviews || 0,
-        durationLabel: p.duration?.formatted,
-        features: (p.includedItems || []).map((item: string) => ({ name: item, included: true })),
-        services: [],
-      }));
+      // Transform Bundle data to match frontend ServicePackage format
+      const packages = bundles.map((bundle: any) => {
+        const serviceNames = (bundle.services || []).map((s: any) => s.serviceName).join(', ');
 
-      return {
+        // Extract provider data
+        const providerData = bundle.providerId || {};
+        const providerId = typeof bundle.providerId === 'object'
+          ? providerData._id?.toString()
+          : bundle.providerId?.toString() || bundle.createdBy?.toString();
+
+        // Check if provider is verified
+        let isVerified = false;
+        let providerFirstName = '';
+        let providerLastName = '';
+        let providerBusinessName = '';
+
+        if (typeof bundle.providerId === 'object' && providerData) {
+          providerFirstName = providerData.firstName || '';
+          providerLastName = providerData.lastName || '';
+          providerBusinessName = providerData.businessName || '';
+          isVerified = providerData.instagramStyleProfile?.isVerified ||
+            providerData.verificationStatus?.overall === 'approved' ||
+            providerData.verificationStatus?.overall === 'verified';
+        } else if (bundle.createdBy) {
+          providerFirstName = 'Provider';
+        }
+
+        // Get category name from tags or fallback
+        const categoryName = (Array.isArray(bundle.tags) && bundle.tags[0]) ||
+          bundle.tags ||
+          'general';
+
+        const totalDuration = (bundle.services || []).reduce((sum: number, s: any) => sum + (s.duration || 60), 0);
+
+        return {
+          _id: bundle._id.toString(),
+          name: bundle.name,
+          description: bundle.description,
+          category: typeof categoryName === 'string' ? categoryName : 'general',
+          basePrice: bundle.originalPrice,
+          discountedPrice: bundle.bundlePrice,
+          pricing: {
+            originalPrice: bundle.originalPrice,
+            currentPrice: bundle.bundlePrice,
+            currency: DEFAULT_CURRENCY,
+            type: 'fixed' as const,
+          },
+          duration: {
+            totalMinutes: totalDuration,
+            formatted: this.formatDuration(totalDuration),
+          },
+          durationLabel: `${(bundle.services || []).length} services`,
+          features: (bundle.services || []).map((s: any) => ({ name: s.serviceName, included: true })),
+          services: (bundle.services || []).map((s: any) => ({
+            _id: s.serviceId,
+            name: s.serviceName,
+            serviceName: s.serviceName,
+            duration: s.duration || 60,
+            price: s.originalPrice || s.price || 0,
+            originalPrice: s.originalPrice,
+            description: s.description,
+          })),
+          images: bundle.images || (bundle.image ? [bundle.image] : []),
+          includedItems: (bundle.services || []).map((s: any) => s.serviceName),
+          addOns: [],
+          provider: {
+            _id: providerId || '',
+            firstName: providerFirstName,
+            lastName: providerLastName,
+            businessName: providerBusinessName,
+            isVerified: isVerified,
+          },
+          providerName: providerBusinessName || `${providerFirstName} ${providerLastName}`.trim() || 'Service Provider',
+          providerId: providerId || '',
+          stats: {
+            rating: Math.round((bundle.rating?.average || 4.0) * 10) / 10,
+            reviewCount: bundle.rating?.count || 0,
+            totalPurchases: bundle.redemptionsUsed || 0,
+          },
+          averageRating: Math.round((bundle.rating?.average || 4.0) * 10) / 10,
+          totalReviews: bundle.rating?.count || 0,
+          isPopular: (bundle.redemptionsUsed || 0) > 10,
+          isFeatured: true,
+          isActive: bundle.isActive,
+          validity: { days: 30 },
+          savingsAmount: bundle.savingsAmount || 0,
+          savingsPercentage: bundle.savingsPercentage || 0,
+          serviceCount: (bundle.services || []).length,
+          serviceNames: serviceNames,
+          tags: bundle.tags || [],
+          image: bundle.image,
+          createdAt: bundle.createdAt?.toISOString() || new Date().toISOString(),
+          updatedAt: bundle.updatedAt?.toISOString() || new Date().toISOString(),
+        };
+      });
+
+      const result = {
         packages,
         total: packages.length,
       };
+
+      // Store in cache
+      try {
+        await cache.set(cacheKey, JSON.stringify(result), FEATURED_PACKAGES_CACHE_TTL);
+        logger.debug('Featured packages cached', { tenantId, cacheKey, ttl: FEATURED_PACKAGES_CACHE_TTL });
+      } catch (error) {
+        logger.warn('Failed to cache featured packages', {
+          tenantId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+
+      return result;
     } catch (error) {
       if (error instanceof ApiError) {
         throw error;

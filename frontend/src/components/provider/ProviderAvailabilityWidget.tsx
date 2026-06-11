@@ -50,6 +50,7 @@ interface AvailabilitySlotsResponse {
 interface ProviderAvailabilityWidgetProps {
   providerId: string;
   serviceId?: string;
+  durationMinutes?: number;
   onSlotSelect?: (slot: TimeSlot, date: string) => void;
   selectedDate?: string;
   selectedSlot?: string;
@@ -148,6 +149,7 @@ availabilityApi.interceptors.response.use(
 const ProviderAvailabilityWidget: React.FC<ProviderAvailabilityWidgetProps> = ({
   providerId,
   serviceId,
+  durationMinutes = 60,
   onSlotSelect,
   selectedDate,
   selectedSlot,
@@ -253,14 +255,12 @@ const ProviderAvailabilityWidget: React.FC<ProviderAvailabilityWidgetProps> = ({
           const today = new Date();
           today.setHours(0, 0, 0, 0);
           const isPast = date < today;
-          const isWeekend = index === 0 || index === 6;
 
           let slots: TimeSlot[] = [];
 
-          if (!isPast && !isWeekend) {
+          if (!isPast) {
             try {
-              // Use service-specific duration if available, default to 60 minutes
-              const duration = serviceId ? 60 : 60;
+              const duration = durationMinutes || 60;
               slots = await fetchSlotsForDate(dateStr, duration);
             } catch {
               // If fetch fails for a specific day, return empty slots
@@ -271,7 +271,7 @@ const ProviderAvailabilityWidget: React.FC<ProviderAvailabilityWidgetProps> = ({
           return {
             date: dateStr,
             dayOfWeek: dayNames[date.getDay()],
-            isAvailable: !isPast && !isWeekend && slots.length > 0,
+            isAvailable: !isPast && slots.length > 0,
             slots,
           };
         })
@@ -303,7 +303,7 @@ const ProviderAvailabilityWidget: React.FC<ProviderAvailabilityWidgetProps> = ({
       setIsNavigating(false);
       weekDatesRef.current = getWeekDates(currentWeekOffset);
     }
-  }, [providerId, currentWeekOffset, serviceId, getWeekDates]);
+  }, [providerId, currentWeekOffset, serviceId, durationMinutes, getWeekDates]);
 
   // Fetch availability on mount and when dependencies change
   useEffect(() => {

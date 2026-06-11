@@ -251,8 +251,8 @@ export async function calculateProviderEarnings(
   const totalBeforeDiscount = subtotal + tax;
 
   // Calculate discount from booking
-  const discountApplied = (booking.pricing.discounts || []).reduce(
-    (sum: number, discount: { type: string; amount: number; description: string }) => sum + (discount.amount || 0),
+  const discountApplied: number = (booking.pricing.discounts || []).reduce(
+    (sum: number, discount: { type: string; amount: number | undefined; description?: string }) => sum + (discount.amount || 0),
     0
   );
 
@@ -331,7 +331,7 @@ export async function calculateProviderEarningsFromBooking(
 
   // Calculate discount from booking
   const discountApplied = (booking.pricing?.discounts || []).reduce(
-    (sum: number, discount: { type: string; amount: number; description: string }) => sum + (discount.amount || 0),
+    (sum: number, discount: { type: string; amount: number | undefined; description?: string }) => sum + (discount.amount || 0),
     0
   );
 

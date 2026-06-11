@@ -1,11 +1,14 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { Mail, Phone, MapPin, ArrowRight, Heart } from 'lucide-react';
+import { Mail, Phone, MapPin, ArrowRight, Heart, CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
+import { subscribeToNewsletter, isValidEmail } from '../../services/newsletterApi';
 
 const Footer: React.FC = () => {
   const currentYear = new Date().getFullYear();
   const [email, setEmail] = useState('');
   const [isSubscribed, setIsSubscribed] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const services = [
     { name: 'Hair Styling', path: '/category/hair' },
@@ -18,13 +21,9 @@ const Footer: React.FC = () => {
 
   const company = [
     { name: 'About Us', path: '/about' },
-    // { name: 'Careers', path: '/careers' },
-    // { name: 'Blog', path: '/blog' },
-    // { name: 'Press', path: '/press' },
-    // { name: 'Partners', path: '/partners' },
     { name: 'Home', path: '/' },
     { name: 'Search', path: '/search' },
-    { name: 'For Providers', path: '/register/provider' }, // FIX: Was '/provider/register'
+    { name: 'For Providers', path: '/register/provider' },
   ];
 
   const support = [
@@ -34,14 +33,45 @@ const Footer: React.FC = () => {
     { name: 'Safety', path: '/safety' },
   ];
 
-  const handleSubscribe = async () => {
-    if (!email || !email.includes('@')) {
+  const handleSubscribe = useCallback(async () => {
+    // Validate email
+    if (!email.trim()) {
+      setError('Please enter your email address');
       return;
     }
-    // In a real app, this would call an API endpoint
-    // await fetch('/api/newsletter/subscribe', { method: 'POST', body: JSON.stringify({ email }) });
-    setIsSubscribed(true);
-    setEmail('');
+
+    if (!isValidEmail(email)) {
+      setError('Please enter a valid email address');
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const result = await subscribeToNewsletter(email, 'footer');
+
+      if (result.success) {
+        setIsSubscribed(true);
+        setEmail('');
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to subscribe. Please try again.';
+      setError(message);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [email]);
+
+  const handleEmailChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setEmail(e.target.value);
+    setError(null);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      handleSubscribe();
+    }
   };
 
   return (
@@ -62,27 +92,68 @@ const Footer: React.FC = () => {
               Flow of Opportunity. Connecting professionals and clients in a trusted, intelligent ecosystem where skills meet opportunity.
             </p>
 
-            {/* Newsletter */}
+            {/* Newsletter Subscription - Improved UI */}
             <div className="max-w-md">
-              <p className="text-white/80 text-sm mb-3">Subscribe for updates</p>
+              <p className="text-white/80 text-sm mb-3">Subscribe for updates & exclusive offers</p>
+
               {isSubscribed ? (
-                <p className="text-[#E8B4A8] text-sm">Thank you for subscribing!</p>
+                <div className="flex items-center gap-3 p-4 bg-[#E8B4A8]/20 rounded-xl border border-[#E8B4A8]/30">
+                  <div className="w-10 h-10 rounded-full bg-[#E8B4A8] flex items-center justify-center flex-shrink-0">
+                    <CheckCircle className="w-5 h-5 text-white" />
+                  </div>
+                  <div>
+                    <p className="text-white font-medium">You're subscribed!</p>
+                    <p className="text-white/60 text-sm">Check your inbox for a welcome email.</p>
+                  </div>
+                </div>
               ) : (
-                <div className="flex gap-2">
-                  <input
-                    type="email"
-                    placeholder="Your email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className="flex-1 px-4 py-3 bg-white/10 backdrop-blur-sm border border-white/20 rounded-xl text-white placeholder-white/40 focus:outline-none focus:border-[#E8B4A8]/60 focus:bg-white/15 transition-all"
-                  />
-                  <button
-                    onClick={handleSubscribe}
-                    className="px-5 py-3 bg-[#E8B4A8] text-white font-medium rounded-xl hover:bg-[#D4A89A] hover:shadow-lg hover:shadow-[#E8B4A8]/20 transition-all flex items-center gap-2"
-                  >
-                    <span>Join</span>
-                    <ArrowRight className="w-4 h-4" />
-                  </button>
+                <div className="space-y-3">
+                  <div className="flex gap-2">
+                    <div className="flex-1 relative">
+                      <input
+                        type="email"
+                        placeholder="Enter your email"
+                        value={email}
+                        onChange={handleEmailChange}
+                        onKeyDown={handleKeyDown}
+                        disabled={isLoading}
+                        className={`w-full px-4 py-3 bg-white/10 backdrop-blur-sm border rounded-xl text-white placeholder-white/40 focus:outline-none focus:bg-white/15 transition-all ${
+                          error ? 'border-red-500/60 focus:border-red-500' : 'border-white/20 focus:border-[#E8B4A8]/60'
+                        }`}
+                        aria-label="Email address"
+                        aria-invalid={!!error}
+                        aria-describedby={error ? 'newsletter-error' : undefined}
+                      />
+                    </div>
+                    <button
+                      onClick={handleSubscribe}
+                      disabled={isLoading}
+                      className="px-5 py-3 bg-[#E8B4A8] text-white font-medium rounded-xl hover:bg-[#D4A89A] hover:shadow-lg hover:shadow-[#E8B4A8]/20 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {isLoading ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <>
+                          <span>Subscribe</span>
+                          <ArrowRight className="w-4 h-4" />
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                  {error && (
+                    <div className="flex items-center gap-2 text-red-400 text-sm" id="newsletter-error" role="alert">
+                      <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                      <span>{error}</span>
+                    </div>
+                  )}
+
+                  <p className="text-white/40 text-xs">
+                    By subscribing, you agree to our{' '}
+                    <Link to="/privacy" className="text-[#E8B4A8] hover:underline">Privacy Policy</Link>
+                    {' '}and{' '}
+                    <Link to="/cookies" className="text-[#E8B4A8] hover:underline">Cookie Policy</Link>.
+                  </p>
                 </div>
               )}
             </div>
@@ -91,10 +162,10 @@ const Footer: React.FC = () => {
           {/* Social Links */}
           <div className="flex flex-wrap items-start gap-4 lg:justify-end">
             {[
-              { name: 'Instagram', icon: 'instagram', href: 'https://instagram.com' },
-              { name: 'Twitter', icon: 'twitter', href: 'https://twitter.com' },
-              { name: 'LinkedIn', icon: 'linkedin', href: 'https://linkedin.com' },
-              { name: 'TikTok', icon: 'tiktok', href: 'https://tiktok.com' },
+              { name: 'Instagram', icon: 'instagram', href: 'https://instagram.com/nilin' },
+              { name: 'Twitter', icon: 'twitter', href: 'https://twitter.com/nilin' },
+              { name: 'LinkedIn', icon: 'linkedin', href: 'https://linkedin.com/company/nilin' },
+              { name: 'TikTok', icon: 'tiktok', href: 'https://tiktok.com/@nilin' },
             ].map((social) => (
               <a
                 key={social.name}
@@ -102,6 +173,7 @@ const Footer: React.FC = () => {
                 target="_blank"
                 rel="noopener noreferrer"
                 className="group w-12 h-12 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center hover:bg-[#E8B4A8]/20 hover:border-[#E8B4A8]/30 hover:-translate-y-1 transition-all"
+                aria-label={`Follow us on ${social.name}`}
               >
                 <SocialIcon name={social.icon} className="w-5 h-5 text-white/60 group-hover:text-[#E8B4A8] transition-colors" />
               </a>
@@ -216,20 +288,30 @@ const Footer: React.FC = () => {
         <div className="flex flex-col sm:flex-row justify-between items-center gap-4 pt-8 border-t border-white/10">
           <div className="flex items-center gap-2 text-white/40 text-sm">
             <span>© {currentYear} NILIN. All rights reserved.</span>
+            <span className="hidden sm:inline">•</span>
             <span className="flex items-center gap-1">
               Made with <Heart className="w-3 h-3 text-[#E8B4A8] fill-[#E8B4A8]" /> in Dubai
             </span>
           </div>
           <div className="flex gap-6">
-            {['Privacy', 'Terms', 'Cookies'].map((item) => (
-              <Link
-                key={item}
-                to={`/${item.toLowerCase()}`}
-                className="text-white/40 text-sm hover:text-white/80 transition-colors"
-              >
-                {item}
-              </Link>
-            ))}
+            <Link
+              to="/privacy"
+              className="text-white/40 text-sm hover:text-white/80 transition-colors"
+            >
+              Privacy
+            </Link>
+            <Link
+              to="/terms"
+              className="text-white/40 text-sm hover:text-white/80 transition-colors"
+            >
+              Terms
+            </Link>
+            <Link
+              to="/cookies"
+              className="text-white/40 text-sm hover:text-white/80 transition-colors"
+            >
+              Cookies
+            </Link>
           </div>
         </div>
       </div>

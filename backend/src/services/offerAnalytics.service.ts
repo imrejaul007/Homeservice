@@ -5,7 +5,7 @@ import Booking from '../models/booking.model';
 import { ApiError } from '../utils/ApiError';
 import logger from '../utils/logger';
 
-// FIX P0-6: Timezone utility for analytics
+// Timezone utility for analytics
 // Default to UTC, can be overridden via environment or request header
 const getAnalyticsTimezone = (timezoneHeader?: string): number => {
   // Check if timezone header is provided (from request)
@@ -399,7 +399,7 @@ export class OfferAnalyticsService {
       },
     ]);
 
-    // FIX P0-6: Get popular days with timezone awareness
+    // Get popular days with timezone awareness
     const timezoneOffset = getAnalyticsTimezone();
     const popularDays = await OfferClaim.aggregate([
       { $match: { offerId: new Types.ObjectId(offerId) } },
@@ -418,7 +418,7 @@ export class OfferAnalyticsService {
       count: d.count,
     }));
 
-    // FIX P0-6: Get popular hours with timezone awareness
+    // Get popular hours with timezone awareness
     const popularHours = await OfferClaim.aggregate([
       { $match: { offerId: new Types.ObjectId(offerId) } },
       {

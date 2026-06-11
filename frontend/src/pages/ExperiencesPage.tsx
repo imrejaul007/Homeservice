@@ -1,14 +1,20 @@
 import React, { useState, useEffect } from 'react';
-import { Star, Search, Filter, ChevronLeft, ChevronRight, Loader2, Sparkles, X } from 'lucide-react';
+import { Star, Search, Filter, ChevronLeft, ChevronRight, Loader2, Sparkles, X, PenLine } from 'lucide-react';
 import NavigationHeader from '../components/layout/NavigationHeader';
 import Footer from '../components/layout/Footer';
 import Breadcrumb from '../components/common/Breadcrumb';
 import ExperienceCard from '../components/experience/ExperienceCard';
+import ExperienceSubmissionForm from '../components/experience/ExperienceSubmissionForm';
+import MyExperiencesSection from '../components/experience/MyExperiencesSection';
 import { experienceApi } from '../services/experienceApi';
+import useWriteExperience from '../hooks/useWriteExperience';
+import { useAuthStore } from '../stores/authStore';
 import type { Experience } from '../types/experience';
 import { cn } from '@/lib/utils';
 
 const ExperiencesPage: React.FC = () => {
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+  const { isFormOpen, prefilledBookingId, openWriteExperience, closeWriteExperience } = useWriteExperience();
   const [experiences, setExperiences] = useState<Experience[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -40,12 +46,10 @@ const ExperiencesPage: React.FC = () => {
         setExperiences(response.data.experiences || []);
         setTotalPages(response.data.pages || 1);
         setTotalExperiences(response.data.total || 0);
-        if (response.data.stats) {
-          setStats({
-            total: response.data.stats.total || 0,
-            averageRating: response.data.stats.averageRating || 0,
-          });
-        }
+        setStats({
+          total: response.data.total || 0,
+          averageRating: response.data.stats?.averageRating || 0,
+        });
       }
     } catch (err: any) {
       console.error('Error fetching experiences:', err);
@@ -172,7 +176,9 @@ const ExperiencesPage: React.FC = () => {
         </div>
       </section>
 
-      {/* Experiences Grid */}
+      {isAuthenticated && <MyExperiencesSection />}
+
+      {/* Experiences Grid Section */}
       <section className="py-12 px-4">
         <div className="max-w-7xl mx-auto">
           {/* Results count */}
@@ -325,17 +331,25 @@ const ExperiencesPage: React.FC = () => {
           <p className="text-nilin-warmGray mb-6">
             Completed a service? We'd love to hear about your experience!
           </p>
-          <a
-            href="/customer/bookings"
+          <button
+            onClick={() => openWriteExperience()}
             className="inline-flex items-center gap-2 px-8 py-4 bg-nilin-coral text-white rounded-nilin hover:bg-nilin-rose transition-colors hover-lift"
           >
-            View Your Bookings
-            <ChevronRight className="w-5 h-5" />
-          </a>
+            <PenLine className="w-5 h-5" />
+            Write Your Experience
+          </button>
         </div>
       </section>
 
       <Footer />
+
+      <ExperienceSubmissionForm
+        isOpen={isFormOpen}
+        onClose={closeWriteExperience}
+        onSuccess={fetchExperiences}
+        bookingId={prefilledBookingId}
+        lockBooking={!!prefilledBookingId}
+      />
     </div>
   );
 };

@@ -69,7 +69,7 @@ router.post('/:id/view', asyncHandler(async (req: Request, res: Response) => {
 // ============================================
 
 // GET /api/offers/my/claims - Get user's claimed offers with pagination
-// FIX P0-8: Added pagination support (page, limit query params)
+// Pagination support (page, limit query params)
 router.get('/my/claims', authenticate, asyncHandler(async (req: Request, res: Response) => {
   const userId = (req as any).user._id?.toString() || (req as any).user.id;
   const page = Math.max(1, parseInt(req.query.page as string) || 1);
@@ -152,8 +152,8 @@ router.post('/verify-challenge', bodyLimitMiddleware, authenticate, asyncHandler
 }));
 
 // POST /api/offers/claim - Claim an offer
-// SECURITY: Enhanced with honeypot, challenge verification, and abuse detection
-// FIX P0-1: Make CAPTCHA challenge verification MANDATORY for all claim attempts
+// POST /api/offers/claim - Claim an offer
+// Challenge verification is MANDATORY for all claim attempts
 router.post('/claim', bodyLimitMiddleware, authenticate, offerClaimLimiter, claimHoneypot, asyncHandler(async (req: Request, res: Response) => {
   const { offerId, challengeId, challengeAnswer, utmSource, utmMedium, utmCampaign, utmTerm, utmContent, referrer } = req.body;
   const userId = (req as any).user._id?.toString() || (req as any).user.id;
@@ -163,7 +163,7 @@ router.post('/claim', bodyLimitMiddleware, authenticate, offerClaimLimiter, clai
     return;
   }
 
-  // FIX P0-1: Enforce challenge verification - challenge is REQUIRED for all claims
+  // Challenge verification is REQUIRED for all claims
   // This prevents automated bot attacks on the claim endpoint
   if (!challengeId || !challengeAnswer) {
     logger.warn('Challenge required but not provided on claim', {
@@ -203,7 +203,7 @@ router.post('/claim', bodyLimitMiddleware, authenticate, offerClaimLimiter, clai
     || req.headers['x-real-ip']?.toString()
     || req.ip;
 
-  // FIX P0-3: Extract idempotency key from header for network retry protection
+  // Extract idempotency key from header for network retry protection
   const idempotencyKey = req.headers['x-idempotency-key'] as string;
 
   // Standardize response format with device info and attribution data

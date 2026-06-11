@@ -494,7 +494,12 @@ export const getRecommendedPros = asyncHandler(async (req: Request, res: Respons
   const pros = await customerDashboardService.getRecommendedPros(
     userId,
     tenantId,
-    value.limit
+    value.limit,
+    {
+      latitude: value.latitude,
+      longitude: value.longitude,
+      maxDistanceKm: value.radius,
+    }
   );
 
   res.json({
@@ -652,8 +657,12 @@ export const printPackageDetails = asyncHandler(async (req: Request, res: Respon
   // Clamp review count to reasonable range (0-999)
   const totalReviews = Math.min(999, Math.max(0, Math.round(rawCount)));
 
-  // Get category from first service or use default
-  const category = bundleData.services?.[0]?.serviceName?.split(' ')[0] || 'Package';
+  // Category from bundle tags (same as getPackageById — not first service name word)
+  const categoryRaw =
+    (Array.isArray(bundleData.tags) && bundleData.tags[0]) ||
+    bundleData.tags ||
+    'Package';
+  const category = typeof categoryRaw === 'string' ? categoryRaw : 'Package';
 
   // Build package PDF data with proper field mapping from Bundle model
   const packagePDFData = {

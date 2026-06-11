@@ -1129,14 +1129,14 @@ class SocketService {
    * Join a chat room to receive messages
    */
   joinChatRoom(chatRoomId: string): void {
-    this.emit('join:chat_room', chatRoomId);
+    this.emit('join:chat_room', { chatRoomId });
   }
 
   /**
    * Leave a chat room to stop receiving messages
    */
   leaveChatRoom(chatRoomId: string): void {
-    this.emit('leave:chat_room', chatRoomId);
+    this.emit('leave:chat_room', { chatRoomId });
   }
 
   /**
@@ -1171,14 +1171,14 @@ class SocketService {
    * Send typing indicator in chat room
    */
   startChatTyping(chatRoomId: string): void {
-    this.emit('chat:typing:start', { chatRoomId });
+    this.emit('typing:start', { chatRoomId });
   }
 
   /**
    * Stop typing indicator in chat room
    */
   stopChatTyping(chatRoomId: string): void {
-    this.emit('chat:typing:stop', { chatRoomId });
+    this.emit('typing:stop', { chatRoomId });
   }
 
   // ---------------------------------------------------------------------------

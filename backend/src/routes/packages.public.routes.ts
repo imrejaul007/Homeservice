@@ -3,7 +3,7 @@ import Joi from 'joi';
 import mongoose from 'mongoose';
 import { authenticate, requireRole } from '../middleware/auth.middleware';
 import customerDashboardController from '../controllers/customerDashboard.controller';
-import packageBookingController from '../controllers/packageBooking.controller';
+import packageBookingController, { bookPackage } from '../controllers/packageBooking.controller';
 import { validateObjectId } from '../middleware/security-validation.middleware';
 import { validateTenantAccess } from '../middleware/tenantValidation.middleware';
 import { asyncHandler } from '../utils/asyncHandler';
@@ -183,6 +183,20 @@ router.get(
   customerDashboardController.printPackageDetails
 );
 
+/**
+ * POST /api/packages/:id/book-package
+ * Book entire package (multi-service) — must be before GET /:id
+ */
+router.post(
+  '/:id/book-package',
+  authenticate,
+  requireRole('customer'),
+  tenantMiddleware,
+  validateObjectId('id'),
+  validateTenantAccess,
+  bookPackage
+);
+
 router.get(
   '/:id',
   tenantMiddleware,
@@ -229,7 +243,9 @@ const bookPackageSchema = Joi.object({
     notes: Joi.string().allow('').optional(),
   }).required(),
   customerInfo: Joi.object({
-    name: Joi.string().required(),
+    firstName: Joi.string().allow('').optional(),
+    lastName: Joi.string().allow('').optional(),
+    name: Joi.string().allow('').optional(),
     email: Joi.string().email().required(),
     phone: Joi.string().required(),
     specialRequests: Joi.string().allow('').optional(),
@@ -291,17 +307,23 @@ router.post(
       throw new ApiError(400, error.details.map(d => d.message).join(', '));
     }
 
+    const bundleId = value.bundleId || req.body?.bundleId;
+    if (!bundleId) {
+      throw new ApiError(400, 'Package ID is required (bundleId in body)');
+    }
+    req.params.id = bundleId;
+
     logger.info('Book package request received', {
       context: 'PackagesPublic',
       action: 'BOOK_PACKAGE_REQUEST',
       userId,
       tenantId,
+      bundleId,
       scheduledDate: value.scheduledDate,
       scheduledTime: value.scheduledTime,
     });
 
-    // Delegate to the package booking controller
-    await packageBookingController.bookPackage(req, res, next);
+    await bookPackage(req, res, next);
   })
 );
 

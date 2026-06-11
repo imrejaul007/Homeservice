@@ -49,7 +49,7 @@ function validateEnvironment(): void {
   }
 
   // Validate password strength
-  if (ADMIN_PASSWORD.length < 12) {
+  if ((ADMIN_PASSWORD as string).length < 12) {
     console.error('❌ Password must be at least 12 characters long');
     process.exit(1);
   }

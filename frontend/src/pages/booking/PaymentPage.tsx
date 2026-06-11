@@ -11,6 +11,7 @@ import authService from '../../services/AuthService';
 import { bookingApi, type Booking } from '../../services/bookingApi';
 import type { PaymentMethodType } from '../../services/PaymentService';
 import { cn } from '../../lib/utils';
+import { usePriceConversion } from '../../utils/priceConverter';
 
 interface AppliedCoupon {
   code: string;
@@ -21,6 +22,7 @@ const PaymentPage: React.FC = () => {
   const { bookingId } = useParams<{ bookingId: string }>();
   const navigate = useNavigate();
   const { isAuthenticated } = useAuthStore();
+  const { convert, format, currency: displayCurrency } = usePriceConversion();
 
   const [booking, setBooking] = useState<Booking | null>(null);
   const [loading, setLoading] = useState(true);
@@ -75,11 +77,12 @@ const PaymentPage: React.FC = () => {
           discountAmount: couponDiscount?.amount || 0,
         });
 
+        const bookingCurrency = updatedBooking.booking?.pricing?.currency || 'AED';
         return {
           valid: true,
           code,
           discountAmount: couponDiscount?.amount || 0,
-          message: `Coupon applied! You save AED ${couponDiscount?.amount || 0}`,
+          message: `Coupon applied! You save ${format(convert(couponDiscount?.amount || 0, bookingCurrency), displayCurrency)}`,
         };
       }
 
@@ -162,6 +165,14 @@ const PaymentPage: React.FC = () => {
     if (bookingId) {
       console.warn('Payment failed', { bookingId, error: errorMessage });
     }
+
+    // FIX: Remove applied coupon on payment failure so user can retry with a fresh coupon state
+    // This prevents stale coupon state after payment failure
+    if (appliedCoupon && bookingId) {
+      handleCouponRemove().catch((removeErr) => {
+        console.warn('Failed to remove coupon after payment error:', removeErr);
+      });
+    }
   };
 
   const handleBack = () => {
@@ -172,11 +183,10 @@ const PaymentPage: React.FC = () => {
     }
   };
 
-  const formatAmount = (amount: number, currency: string = 'AED') => {
-    return new Intl.NumberFormat('en-AE', {
-      style: 'currency',
-      currency: currency.toUpperCase(),
-    }).format(amount);
+  const sourceCurrency = booking?.pricing?.currency || 'AED';
+
+  const formatAmount = (amount: number, fromCurrency: string = sourceCurrency) => {
+    return format(convert(amount, fromCurrency), displayCurrency);
   };
 
   if (loading) {

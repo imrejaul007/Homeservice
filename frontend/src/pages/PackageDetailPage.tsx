@@ -24,10 +24,9 @@ import NavigationHeader from '../components/layout/NavigationHeader';
 import Footer from '../components/layout/Footer';
 import Breadcrumb from '../components/common/Breadcrumb';
 import Button from '../components/common/Button';
-import { api as apiClient } from '../services/api';
 import { useAuthStore } from '../stores/authStore';
 import toast from 'react-hot-toast';
-import { normalizeFeatures } from '../services/packageApi';
+import { normalizeFeatures, packageApi } from '../services/packageApi';
 import { PackagePriceCalculator } from '../components/price-calculator';
 import type { PriceBreakdown } from '../services/priceCalculatorApi';
 import ProviderAvailabilityWidget from '../components/provider/ProviderAvailabilityWidget';
@@ -36,6 +35,27 @@ import { ShareModal } from '../components/common/ShareModal';
 import { wishlistApi } from '../services/wishlistApi';
 import { PrintButton } from '../components/common/PrintButton';
 import PackageBookingWizard from '../components/booking/PackageBookingWizard';
+import { PriceDisplay, ServicePriceDisplay } from '../components/common/PriceDisplay';
+import { CATEGORY_IMAGES } from '../constants/images';
+
+const PACKAGE_CATEGORY_IMAGES: Record<string, string> = {
+  bridal: CATEGORY_IMAGES.makeup.hero,
+  makeup: CATEGORY_IMAGES.makeup.hero,
+  hair: CATEGORY_IMAGES.hair.hero,
+  spa: CATEGORY_IMAGES['massage-body'].hero,
+  nails: CATEGORY_IMAGES.nails.hero,
+  skincare: CATEGORY_IMAGES['skin-aesthetics'].hero,
+  'skin & aesthetics': CATEGORY_IMAGES['skin-aesthetics'].hero,
+  'massage & body': CATEGORY_IMAGES['massage-body'].hero,
+};
+
+const DEFAULT_PACKAGE_IMAGE = CATEGORY_IMAGES.makeup.hero;
+
+const getPackageDisplayImages = (pkg: BackendServicePackage): string[] => {
+  if (pkg.images && pkg.images.length > 0) return pkg.images;
+  const cat = pkg.category?.toLowerCase().trim() || '';
+  return [PACKAGE_CATEGORY_IMAGES[cat] || DEFAULT_PACKAGE_IMAGE];
+};
 
 interface Review {
   _id: string;
@@ -71,7 +91,7 @@ interface BackendServicePackage {
   };
   features?: Array<{ name: string; included: boolean }>;
   includedItems?: string[];
-  services?: Array<{ serviceId: string; serviceName: string; duration: number; originalPrice: number }>;
+  services?: Array<{ _id?: string; serviceId?: string; serviceName?: string; name?: string; duration: number; originalPrice: number }>;
   images?: string[];
   isActive: boolean;
   isFeatured: boolean;
@@ -101,6 +121,8 @@ const PackageDetailPage: React.FC = () => {
   const [selectedImageIndex, setSelectedImageIndex] = useState(0);
   const [selectedDate, setSelectedDate] = useState<string | undefined>();
   const [selectedSlot, setSelectedSlot] = useState<string | undefined>();
+  const [selectedSlotTime, setSelectedSlotTime] = useState<string | undefined>();
+  const [imageLoadError, setImageLoadError] = useState(false);
   const [showAvailabilityCalendar, setShowAvailabilityCalendar] = useState(false);
   const [showReviewModal, setShowReviewModal] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
@@ -160,9 +182,11 @@ const PackageDetailPage: React.FC = () => {
     setError(null);
 
     try {
-      const response = await apiClient.get(`/packages/${id}`);
-      setPkg(response.data.data.package);
-      setReviews(response.data.data.reviews || []);
+      const { package: packageData, reviews: packageReviews } = await packageApi.getPackage(id!);
+      setPkg(packageData as BackendServicePackage);
+      setReviews(packageReviews || []);
+      setImageLoadError(false);
+      setSelectedImageIndex(0);
     } catch (err: any) {
       setError(err.response?.data?.message || 'Failed to load package details');
     } finally {
@@ -185,9 +209,7 @@ const PackageDetailPage: React.FC = () => {
       return;
     }
     if (pkg?.providerId) {
-      // Navigate to new message page with provider info
-      const providerName = encodeURIComponent(pkg.providerName || 'Provider');
-      navigate(`/customer/messages/new?providerId=${pkg.providerId}&providerName=${providerName}`);
+      navigate('/customer/messages', { state: { providerId: pkg.providerId } });
     } else {
       toast.error('Unable to contact provider. Please try again later.');
     }
@@ -197,9 +219,10 @@ const PackageDetailPage: React.FC = () => {
     setShowShareModal(true);
   };
 
-  const handleSlotSelect = (slot: any, date: string) => {
+  const handleSlotSelect = (slot: { id: string; startTime: string }, date: string) => {
     setSelectedDate(date);
     setSelectedSlot(slot.id);
+    setSelectedSlotTime(slot.startTime);
     // Show toast with selected date/time for confirmation
     const slotTime = slot.startTime;
     const formattedDate = new Date(date + 'T00:00:00').toLocaleDateString('en-AE', {
@@ -217,23 +240,25 @@ const PackageDetailPage: React.FC = () => {
   };
 
   const handleBookWithSelectedSlot = () => {
-    // Always navigate to booking page - user can select date/time there
-    // Only require authentication
     if (!isAuthenticated) {
       navigate('/login', { state: { returnTo: `/packages/${id}` } });
       return;
     }
-    // Navigate to package booking flow
-    navigate(`/book-package/${id}`);
+    navigate(`/book-package/${id}`, {
+      state: {
+        scheduledDate: selectedDate,
+        scheduledTime: selectedSlotTime,
+        fromPackageDetail: true,
+      },
+    });
   };
 
-  const formatPrice = (price: number) => {
-    return new Intl.NumberFormat('en-AE', {
-      style: 'currency',
-      currency: 'AED',
-      minimumFractionDigits: 0,
-    }).format(price);
-  };
+  const mapPackageService = (s: NonNullable<BackendServicePackage['services']>[number]) => ({
+    _id: s.serviceId || s._id || '',
+    name: s.serviceName || s.name || 'Service',
+    duration: s.duration || 60,
+    price: s.originalPrice || 0,
+  });
 
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString('en-AE', {
@@ -276,15 +301,12 @@ const PackageDetailPage: React.FC = () => {
     // We'll pass whatever add-ons were selected in the calculator
 
     // If there's a price breakdown with add-ons, extract them
-    const selectedAddOns = calculatedPrice?.addOns?.map((addon, index) => ({
-      id: `addon-${index}`,
-      name: addon.name,
-      price: addon.price,
-    })) || calculatorAddOns.filter(addon => {
-      // Only include add-ons that might have been selected
-      // In a real implementation, we'd track which add-ons are actually selected
-      return true;
-    });
+    const selectedAddOns =
+      calculatedPrice?.addOns?.map((addon, index) => ({
+        id: `addon-${index}`,
+        name: addon.name,
+        price: addon.price,
+      })) || [];
 
     setWizardSelectedAddOns(selectedAddOns);
     setShowPackageWizard(true);
@@ -345,6 +367,8 @@ const PackageDetailPage: React.FC = () => {
     );
   }
 
+  const displayImages = getPackageDisplayImages(pkg);
+
   return (
     <div className="min-h-screen bg-nilin-cream flex flex-col">
       <NavigationHeader />
@@ -366,8 +390,38 @@ const PackageDetailPage: React.FC = () => {
             <div className="lg:col-span-2 space-y-6">
               {/* Image Gallery */}
               <div className="bg-white rounded-xl overflow-hidden">
-                <div className="relative h-80 md:h-96 bg-gradient-to-br from-nilin-coral/20 to-nilin-blush/30 flex items-center justify-center">
-                  <span className="text-9xl opacity-30">📦</span>
+                <div className="relative h-80 md:h-96 bg-gradient-to-br from-nilin-coral/20 to-nilin-blush/30">
+                  {displayImages.length > 0 && !imageLoadError ? (
+                    <img
+                      src={displayImages[selectedImageIndex]}
+                      alt={pkg.name}
+                      className="w-full h-full object-cover"
+                      onError={() => setImageLoadError(true)}
+                    />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center">
+                      <span className="text-9xl opacity-30">📦</span>
+                    </div>
+                  )}
+
+                  {displayImages.length > 1 && !imageLoadError && (
+                    <div className="absolute bottom-4 right-4 flex gap-2">
+                      {displayImages.map((img, index) => (
+                        <button
+                          key={index}
+                          onClick={() => setSelectedImageIndex(index)}
+                          className={`w-12 h-12 rounded-lg overflow-hidden border-2 transition-colors ${
+                            selectedImageIndex === index
+                              ? 'border-nilin-coral'
+                              : 'border-white/80 opacity-80 hover:opacity-100'
+                          }`}
+                          aria-label={`View image ${index + 1}`}
+                        >
+                          <img src={img} alt="" className="w-full h-full object-cover" />
+                        </button>
+                      ))}
+                    </div>
+                  )}
 
                   {/* Badges */}
                   <div className="absolute top-4 left-4 flex gap-2">
@@ -579,7 +633,7 @@ const PackageDetailPage: React.FC = () => {
                         <div className="flex items-start gap-4">
                           <div className="w-10 h-10 bg-nilin-coral/20 rounded-full flex items-center justify-center">
                             <span className="text-sm font-medium text-nilin-coral">
-                              {review.user.name.charAt(0)}
+                              {(review.user?.name || 'Customer').charAt(0).toUpperCase()}
                             </span>
                           </div>
                           <div className="flex-1">
@@ -613,8 +667,8 @@ const PackageDetailPage: React.FC = () => {
 
             {/* Sidebar - Booking Card */}
             <div className="lg:col-span-1 space-y-4">
-              {/* Price Calculator */}
-              {(showPriceCalculator || calculatorAddOns.length > 0 || (pkg.durationOptions && pkg.durationOptions.length > 0)) && (
+              {/* Price Calculator (optional) */}
+              {showPriceCalculator && (calculatorAddOns.length > 0 || (pkg.durationOptions && pkg.durationOptions.length > 0)) && (
                 <PackagePriceCalculator
                   packageId={pkg._id}
                   basePrice={pkg.pricing.currentPrice}
@@ -626,27 +680,31 @@ const PackageDetailPage: React.FC = () => {
                 />
               )}
 
-              {/* Standard Booking Card (shown when calculator is hidden) */}
-              {!showPriceCalculator && calculatorAddOns.length === 0 && !(pkg.durationOptions && pkg.durationOptions.length > 0) && (
-                <div className="bg-white rounded-xl p-6 shadow-sm sticky top-4">
-                  {/* Price */}
-                  <div className="mb-6">
-                    <div className="flex items-baseline gap-3">
-                      <span className="text-3xl font-bold text-nilin-charcoal">
-                        {formatPrice(calculatedPrice?.totalAmount || pkg.pricing.currentPrice)}
-                      </span>
-                      {pkg.pricing.originalPrice > pkg.pricing.currentPrice && (
-                        <span className="text-lg text-nilin-warmGray line-through">
-                          {formatPrice(pkg.pricing.originalPrice)}
-                        </span>
-                      )}
-                    </div>
-                    {pkg.pricing.originalPrice > pkg.pricing.currentPrice && (
-                      <span className="text-green-600 font-medium text-sm">
-                        Save {formatPrice(pkg.pricing.originalPrice - pkg.pricing.currentPrice)}
-                      </span>
-                    )}
-                  </div>
+              {/* Booking Card — always visible */}
+              <div className="bg-white rounded-xl p-6 shadow-sm sticky top-4">
+                {/* Price */}
+                <div className="mb-6">
+                  <ServicePriceDisplay
+                    price={calculatedPrice?.totalAmount || pkg.pricing.currentPrice}
+                    originalPrice={
+                      pkg.pricing.originalPrice > pkg.pricing.currentPrice
+                        ? pkg.pricing.originalPrice
+                        : undefined
+                    }
+                    originalCurrency={pkg.pricing.currency}
+                  />
+                  {pkg.pricing.originalPrice > pkg.pricing.currentPrice && (
+                    <p className="text-green-600 font-medium text-sm mt-1">
+                      Save{' '}
+                      <PriceDisplay
+                        price={pkg.pricing.originalPrice - pkg.pricing.currentPrice}
+                        originalCurrency={pkg.pricing.currency}
+                        size="sm"
+                        className="inline"
+                      />
+                    </p>
+                  )}
+                </div>
 
                 {/* Book Button */}
                 <Button
@@ -673,14 +731,16 @@ const PackageDetailPage: React.FC = () => {
                 {/* Compare Button */}
                 <button
                   onClick={() => {
-                    // Store current package ID in session storage and navigate to compare page
                     const existingIds = sessionStorage.getItem('comparePackageIds');
                     let currentIds: string[] = existingIds ? JSON.parse(existingIds) : [];
+                    const wasAdded = id && !currentIds.includes(id);
 
-                    // Add current package if not already there
-                    if (id && !currentIds.includes(id)) {
+                    if (wasAdded && id) {
                       currentIds.push(id);
                       sessionStorage.setItem('comparePackageIds', JSON.stringify(currentIds));
+                      toast.success('Package added to compare list');
+                    } else if (id && currentIds.includes(id)) {
+                      toast('Package already in compare list', { icon: '📊' });
                     }
 
                     navigate('/packages/compare');
@@ -729,7 +789,11 @@ const PackageDetailPage: React.FC = () => {
                         onClick={() => setShowAvailabilityCalendar(!showAvailabilityCalendar)}
                         className="font-medium text-nilin-coral hover:underline"
                       >
-                        {selectedDate ? 'Date selected' : 'Check available dates'}
+                        {selectedDate && selectedSlotTime
+                          ? `${selectedDate} at ${selectedSlotTime}`
+                          : selectedDate
+                            ? 'Date selected'
+                            : 'Check available dates'}
                       </button>
                     </div>
                   </div>
@@ -759,6 +823,7 @@ const PackageDetailPage: React.FC = () => {
                       onSlotSelect={handleSlotSelect}
                       compact={false}
                       showCalendar={true}
+                      durationMinutes={pkg.duration.totalMinutes}
                     />
                   </div>
                 )}
@@ -776,7 +841,6 @@ const PackageDetailPage: React.FC = () => {
                   </div>
                 </div>
               </div>
-              )}
             </div>
           </div>
         </div>
@@ -803,13 +867,13 @@ const PackageDetailPage: React.FC = () => {
               packageData={{
                 id: pkg._id,
                 name: pkg.name,
-                services: (pkg.services || []).map((s) => ({
-                  // Normalize from backend Bundle format (serviceId, serviceName, originalPrice)
-                  // to frontend Service format (_id, name, price)
-                  _id: s.serviceId || '',
-                  name: s.serviceName || 'Service',
-                  duration: s.duration || 60,
-                  price: s.originalPrice || 0,
+                services: (pkg.services || []).map((s) => {
+                  const mapped = mapPackageService(s);
+                  return {
+                    _id: mapped._id,
+                    name: mapped.name,
+                    duration: mapped.duration,
+                    price: mapped.price,
                   category: pkg.category,
                   description: pkg.description || '',
                   providerId: pkg.providerId,
@@ -830,7 +894,8 @@ const PackageDetailPage: React.FC = () => {
                   tags: [],
                   createdAt: '',
                   updatedAt: '',
-                })),
+                };
+                }),
                 basePrice: pkg.pricing.currentPrice,
                 provider: {
                   _id: pkg.providerId,
@@ -856,6 +921,8 @@ const PackageDetailPage: React.FC = () => {
               }}
               onComplete={handlePackageWizardComplete}
               onCancel={handlePackageWizardCancel}
+              initialScheduledDate={selectedDate}
+              initialScheduledTime={selectedSlotTime}
             />
           </div>
         </div>
@@ -868,6 +935,7 @@ const PackageDetailPage: React.FC = () => {
         title={pkg?.name || 'Package'}
         description={pkg?.description}
         url={typeof window !== 'undefined' ? window.location.href : ''}
+        image={displayImages[0]}
         itemType="package"
         itemId={pkg?._id}
       />

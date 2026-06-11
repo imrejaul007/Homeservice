@@ -1,7 +1,8 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Calendar, Clock, MapPin, User, Phone, MoreVertical, Eye, Edit, X } from 'lucide-react';
+import { Calendar, Clock, MapPin, User, Phone, MoreVertical, Eye, Edit, X, Sparkles } from 'lucide-react';
 import { Booking } from '../../services/BookingService';
+import { PriceDisplay } from '../common/PriceDisplay';
 
 // Adapter interface for component-specific display fields
 interface BookingCardBooking extends Omit<Booking, 'service' | 'provider' | 'customer' | 'location' | 'pricing'> {
@@ -28,6 +29,7 @@ interface BookingCardBooking extends Omit<Booking, 'service' | 'provider' | 'cus
   pricing?: {
     totalAmount?: number;
     total?: number;
+    currency?: string;
   };
   location?: {
     address?: string | { street?: string; city?: string; state?: string; zipCode?: string; country?: string };
@@ -84,12 +86,16 @@ const getTotalPrice = (booking: BookingCardBooking): number => {
   return booking.pricing?.totalAmount ?? booking.pricing?.total ?? 0;
 };
 
+const getBookingCurrency = (booking: BookingCardBooking): string =>
+  booking.pricing?.currency || 'AED';
+
 interface BookingCardProps {
   booking: BookingCardBooking;
   showActions?: boolean;
   onView?: (bookingId: string) => void;
   onReschedule?: (bookingId: string) => void;
   onCancel?: (bookingId: string) => void;
+  onShareExperience?: (bookingId: string) => void;
   isCancelling?: boolean;
 }
 
@@ -99,6 +105,7 @@ const BookingCard: React.FC<BookingCardProps> = ({
   onView,
   onReschedule,
   onCancel,
+  onShareExperience,
   isCancelling = false
 }) => {
   const navigate = useNavigate();
@@ -123,6 +130,11 @@ const BookingCard: React.FC<BookingCardProps> = ({
     if (onCancel) {
       onCancel(booking._id);
     }
+  };
+
+  const handleShareExperience = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onShareExperience?.(booking._id);
   };
 
   // Status configuration
@@ -270,8 +282,34 @@ const BookingCard: React.FC<BookingCardProps> = ({
       <div className="p-4 bg-gray-50 border-t border-gray-100 flex items-center justify-between">
         <div>
           <p className="text-xs text-gray-500 mb-0.5">Total Price</p>
-          <p className="text-xl font-bold text-gray-900">AED {getTotalPrice(booking)}</p>
+          <PriceDisplay
+            price={getTotalPrice(booking)}
+            originalCurrency={getBookingCurrency(booking)}
+            size="md"
+            className="text-xl"
+          />
         </div>
+
+        {showActions && booking.status === 'completed' && (
+          <div className="flex gap-2">
+            <button
+              onClick={handleView}
+              className="px-4 py-2 bg-white border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors text-sm font-medium flex items-center gap-1"
+            >
+              <Eye className="h-4 w-4" />
+              View
+            </button>
+            {onShareExperience && (
+              <button
+                onClick={handleShareExperience}
+                className="px-4 py-2 bg-nilin-coral text-white rounded-lg hover:bg-nilin-rose transition-colors text-sm font-medium flex items-center gap-1"
+              >
+                <Sparkles className="h-4 w-4" />
+                Share Experience
+              </button>
+            )}
+          </div>
+        )}
 
         {showActions && booking.status !== 'cancelled' && booking.status !== 'completed' && (
           <div className="flex gap-2">

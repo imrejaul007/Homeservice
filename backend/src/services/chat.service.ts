@@ -1,6 +1,8 @@
 import mongoose, { Types } from 'mongoose';
 import Message, { IMessage, MessageType, MessageStatus } from '../models/message.model';
 import ChatRoom, { IChatRoom, ChatRoomType } from '../models/chatRoom.model';
+import Booking from '../models/booking.model';
+import Service from '../models/service.model';
 import User from '../models/user.model';
 import { ApiError } from '../utils/ApiError';
 import logger from '../utils/logger';
@@ -108,8 +110,12 @@ export class ChatService {
     }
 
     // Validate content for text messages
-    if (type === 'text' && !content?.trim()) {
+    if (type === 'text' && !content?.trim() && (!attachments || attachments.length === 0)) {
       throw new ApiError(400, 'Message content is required');
+    }
+
+    if ((type === 'image' || type === 'file') && (!attachments || attachments.length === 0)) {
+      throw new ApiError(400, 'At least one attachment is required');
     }
 
     if (type === 'text' && content.length > 5000) {
@@ -485,7 +491,11 @@ export class ChatService {
       .limit(limit)
       .populate('participants.userId', 'firstName lastName avatar role')
       .populate('lastMessage')
-      .populate('bookingId', 'bookingNumber status scheduledDate serviceId')
+      .populate({
+        path: 'bookingId',
+        select: 'bookingNumber status scheduledDate serviceId',
+        populate: { path: 'serviceId', select: 'name' },
+      })
       .lean() as unknown as ChatRoomWithParticipants[];
 
     // Get last message details for each room
@@ -508,6 +518,38 @@ export class ChatService {
     }
 
     return { rooms, total };
+  }
+
+  /**
+   * Get a single chat room by ID for a participant
+   */
+  async getChatRoomById(chatRoomId: string, userId: string): Promise<ChatRoomWithParticipants> {
+    if (!mongoose.Types.ObjectId.isValid(chatRoomId)) {
+      throw new ApiError(400, 'Invalid chat room ID');
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      throw new ApiError(400, 'Invalid user ID');
+    }
+
+    const chatRoom = await ChatRoom.findOne({
+      _id: new mongoose.Types.ObjectId(chatRoomId),
+      'participants.userId': new mongoose.Types.ObjectId(userId),
+      isDeleted: false,
+    })
+      .populate('participants.userId', 'firstName lastName avatar role')
+      .populate({
+        path: 'bookingId',
+        select: 'bookingNumber status scheduledDate serviceId',
+        populate: { path: 'serviceId', select: 'name' },
+      })
+      .lean() as unknown as ChatRoomWithParticipants | null;
+
+    if (!chatRoom) {
+      throw new ApiError(404, 'Chat room not found');
+    }
+
+    return chatRoom;
   }
 
   /**
@@ -623,8 +665,26 @@ export class ChatService {
       new mongoose.Types.ObjectId(providerId)
     );
 
-    // Populate participants
+    if (!chatRoom.name) {
+      const booking = await Booking.findById(bookingId)
+        .select('bookingNumber serviceId')
+        .lean();
+      let serviceName = 'Service';
+      if (booking?.serviceId) {
+        const service = await Service.findById(booking.serviceId).select('name').lean();
+        serviceName = service?.name || serviceName;
+      }
+      const bookingRef = booking?.bookingNumber ? `#${booking.bookingNumber}` : '';
+      chatRoom.name = `${serviceName}${bookingRef ? ` ${bookingRef}` : ''}`.trim();
+      await chatRoom.save();
+    }
+
     await chatRoom.populate('participants.userId', 'firstName lastName avatar role');
+    await chatRoom.populate({
+      path: 'bookingId',
+      select: 'bookingNumber status scheduledDate serviceId',
+      populate: { path: 'serviceId', select: 'name' },
+    });
 
     return chatRoom;
   }
@@ -745,7 +805,7 @@ export class ChatService {
   private emitNewMessage(chatRoomId: string, message: IMessage): void {
     const socketServer = getSocketServer();
     if (socketServer) {
-      socketServer.emitToBooking(chatRoomId, 'message:new', {
+      socketServer.emitToChatRoom(chatRoomId, 'message:new', {
         messageId: message._id.toString(),
         chatRoomId,
         senderId: (message.senderId as mongoose.Types.ObjectId).toString(),
@@ -765,7 +825,7 @@ export class ChatService {
   private emitMessagesRead(chatRoomId: string, userId: string, messageIds?: string[]): void {
     const socketServer = getSocketServer();
     if (socketServer) {
-      socketServer.emitToBooking(chatRoomId, 'message:read' as any, {
+      socketServer.emitToChatRoom(chatRoomId, 'message:read' as any, {
         chatRoomId,
         userId,
         messageIds: messageIds || [],
@@ -780,7 +840,7 @@ export class ChatService {
   private emitMessageDeleted(chatRoomId: string, messageId: string): void {
     const socketServer = getSocketServer();
     if (socketServer) {
-      socketServer.emitToBooking(chatRoomId, 'message:deleted' as any, {
+      socketServer.emitToChatRoom(chatRoomId, 'message:deleted' as any, {
         chatRoomId,
         messageId
       });

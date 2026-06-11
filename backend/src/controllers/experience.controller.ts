@@ -4,6 +4,47 @@ import Experience from '../models/experience.model';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
 
+/** Extract Cloudinary URLs from multer-uploaded files */
+function extractUploadedImageUrls(req: Request): string[] {
+  if (!req.files || !Array.isArray(req.files)) return [];
+  return (req.files as Express.Multer.File[]).map(
+    (file) => (file as any).path || (file as any).secure_url || file.filename
+  ).filter(Boolean);
+}
+
+/** Parse existing image URLs from multipart body */
+function parseExistingImages(body: Record<string, unknown>): string[] {
+  const raw = body.existingImages;
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw.filter((v): v is string => typeof v === 'string');
+  if (typeof raw === 'string') return [raw];
+  return [];
+}
+
+function parseRating(value: unknown): number {
+  const rating = typeof value === 'string' ? parseInt(value, 10) : Number(value);
+  if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+    throw new ApiError(400, 'Rating must be a whole number between 1 and 5');
+  }
+  return rating;
+}
+
+function validateExperienceContent(title: string, description: string, rating: number, videoUrl?: string) {
+  if (!title || title.length < 5 || title.length > 100) {
+    throw new ApiError(400, 'Title must be between 5 and 100 characters');
+  }
+  if (!description || description.length < 20 || description.length > 2000) {
+    throw new ApiError(400, 'Description must be between 20 and 2000 characters');
+  }
+  if (videoUrl) {
+    try {
+      new URL(videoUrl);
+    } catch {
+      throw new ApiError(400, 'Invalid video URL format');
+    }
+  }
+}
+
 /**
  * Get Public Experiences (Paginated, Approved Only)
  * GET /api/experiences
@@ -217,114 +258,85 @@ export const checkExperienceExists = asyncHandler(async (req: Request, res: Resp
 });
 
 /**
- * Submit Experience (For Completed Booking)
+ * Submit Experience (any authenticated customer; booking optional)
  * POST /api/experiences
  */
 export const submitExperience = asyncHandler(async (req: Request, res: Response) => {
   const user = req.user as any;
-  const { bookingId, serviceId, providerId, title, description, rating, images, videoUrl } = req.body;
+  const {
+    bookingId: rawBookingId,
+    title,
+    description,
+    rating: rawRating,
+    videoUrl,
+  } = req.body;
 
-  // Validate required fields
-  if (!bookingId) {
-    throw new ApiError(400, 'Booking ID is required');
+  if (!title || !description || rawRating === undefined || rawRating === null || rawRating === '') {
+    throw new ApiError(400, 'Title, description, and rating are required');
   }
 
-  if (!serviceId) {
-    throw new ApiError(400, 'Service ID is required');
+  const rating = parseRating(rawRating);
+  const trimmedTitle = String(title).trim();
+  const trimmedDescription = String(description).trim();
+  const trimmedVideoUrl = videoUrl ? String(videoUrl).trim() : undefined;
+
+  validateExperienceContent(trimmedTitle, trimmedDescription, rating, trimmedVideoUrl);
+
+  const bookingId = rawBookingId && String(rawBookingId).trim() ? String(rawBookingId).trim() : undefined;
+  let resolvedServiceId: string | undefined;
+  let resolvedProviderId: string | undefined;
+
+  if (bookingId) {
+    const booking = await Booking.findOne({
+      _id: bookingId,
+      customerId: user._id,
+    });
+
+    if (!booking) {
+      throw new ApiError(404, 'Booking not found or does not belong to you');
+    }
+
+    if (booking.status !== 'completed') {
+      throw new ApiError(400, 'You can only link an experience to a completed booking');
+    }
+
+    const existingExperience = await Experience.findOne({
+      bookingId,
+      isDeleted: false,
+    });
+
+    if (existingExperience) {
+      throw new ApiError(400, 'An experience has already been submitted for this booking');
+    }
+
+    resolvedServiceId = booking.serviceId?.toString();
+    resolvedProviderId = booking.providerId?.toString();
   }
 
-  if (!providerId) {
-    throw new ApiError(400, 'Provider ID is required');
-  }
+  const uploadedImages = extractUploadedImageUrls(req);
+  const existingImages = parseExistingImages(req.body);
+  const images = [...existingImages, ...uploadedImages];
 
-  if (!title) {
-    throw new ApiError(400, 'Title is required');
-  }
-
-  if (!description) {
-    throw new ApiError(400, 'Description is required');
-  }
-
-  if (rating === undefined || rating === null) {
-    throw new ApiError(400, 'Rating is required');
-  }
-
-  // Validate title length
-  if (title.length < 5 || title.length > 100) {
-    throw new ApiError(400, 'Title must be between 5 and 100 characters');
-  }
-
-  // Validate description length
-  if (description.length < 20 || description.length > 2000) {
-    throw new ApiError(400, 'Description must be between 20 and 2000 characters');
-  }
-
-  // Validate rating
-  if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
-    throw new ApiError(400, 'Rating must be a whole number between 1 and 5');
-  }
-
-  // Validate images count
-  if (images && images.length > 10) {
+  if (images.length > 10) {
     throw new ApiError(400, 'Maximum 10 images allowed');
   }
 
-  // Validate video URL format if provided
-  if (videoUrl) {
-    try {
-      new URL(videoUrl);
-    } catch {
-      throw new ApiError(400, 'Invalid video URL format');
-    }
-  }
-
-  // Check if booking exists and belongs to user
-  const booking = await Booking.findOne({
-    _id: bookingId,
-    customerId: user._id,
-  });
-
-  if (!booking) {
-    throw new ApiError(404, 'Booking not found or does not belong to you');
-  }
-
-  // Check if booking is completed
-  if (booking.status !== 'completed') {
-    throw new ApiError(400, 'You can only submit an experience for a completed booking');
-  }
-
-  // Check if experience already exists for this booking
-  const existingExperience = await Experience.findOne({
-    bookingId,
-    isDeleted: false,
-  });
-
-  if (existingExperience) {
-    throw new ApiError(400, 'An experience has already been submitted for this booking');
-  }
-
-  // Create the experience
   const experience = new Experience({
     userId: user._id,
-    bookingId,
-    serviceId,
-    providerId,
-    title,
-    description,
+    ...(bookingId && { bookingId }),
+    ...(resolvedServiceId && { serviceId: resolvedServiceId }),
+    ...(resolvedProviderId && { providerId: resolvedProviderId }),
+    title: trimmedTitle,
+    description: trimmedDescription,
     rating,
-    images: images || [],
-    videoUrl: videoUrl || undefined,
+    images,
+    videoUrl: trimmedVideoUrl || undefined,
     status: 'pending',
     isFeatured: false,
   });
 
   await experience.save();
 
-  // Update booking to reference the experience
-  booking.customerReview = experience._id as any;
-  await booking.save();
-
-  // Populate and return
   await experience.populate([
     { path: 'serviceId', select: 'name category' },
     { path: 'providerId', select: 'firstName lastName avatar' },
@@ -347,9 +359,8 @@ export const submitExperience = asyncHandler(async (req: Request, res: Response)
 export const updateExperience = asyncHandler(async (req: Request, res: Response) => {
   const user = req.user as any;
   const { id } = req.params;
-  const { title, description, rating, images, videoUrl } = req.body;
+  const { title, description, rating: rawRating, videoUrl } = req.body;
 
-  // Find the experience
   const experience = await Experience.findOne({
     _id: id,
     userId: user._id,
@@ -360,58 +371,56 @@ export const updateExperience = asyncHandler(async (req: Request, res: Response)
     throw new ApiError(404, 'Experience not found');
   }
 
-  // Check if within 30 days of creation
   const daysSinceCreation = (Date.now() - experience.createdAt.getTime()) / (1000 * 60 * 60 * 24);
   if (daysSinceCreation > 30) {
     throw new ApiError(400, 'Experiences can only be edited within 30 days of submission');
   }
 
-  // Validate title length if provided
   if (title !== undefined) {
-    if (title.length < 5 || title.length > 100) {
+    const trimmedTitle = String(title).trim();
+    if (trimmedTitle.length < 5 || trimmedTitle.length > 100) {
       throw new ApiError(400, 'Title must be between 5 and 100 characters');
     }
-    experience.title = title;
+    experience.title = trimmedTitle;
   }
 
-  // Validate description length if provided
   if (description !== undefined) {
-    if (description.length < 20 || description.length > 2000) {
+    const trimmedDescription = String(description).trim();
+    if (trimmedDescription.length < 20 || trimmedDescription.length > 2000) {
       throw new ApiError(400, 'Description must be between 20 and 2000 characters');
     }
-    experience.description = description;
+    experience.description = trimmedDescription;
   }
 
-  // Validate rating if provided
-  if (rating !== undefined) {
-    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
-      throw new ApiError(400, 'Rating must be a whole number between 1 and 5');
-    }
-    experience.rating = rating;
+  if (rawRating !== undefined && rawRating !== '') {
+    experience.rating = parseRating(rawRating);
   }
 
-  // Validate images count if provided
-  if (images !== undefined) {
-    if (images.length > 10) {
+  const uploadedImages = extractUploadedImageUrls(req);
+  const existingImages = parseExistingImages(req.body);
+  if (uploadedImages.length > 0 || existingImages.length > 0 || req.body.replaceImages === 'true') {
+    const merged = existingImages.length > 0 || uploadedImages.length > 0
+      ? [...existingImages, ...uploadedImages]
+      : experience.images;
+    if (merged.length > 10) {
       throw new ApiError(400, 'Maximum 10 images allowed');
     }
-    experience.images = images;
+    experience.images = merged;
   }
 
-  // Validate video URL format if provided
   if (videoUrl !== undefined) {
-    if (videoUrl) {
+    const trimmedVideoUrl = videoUrl ? String(videoUrl).trim() : '';
+    if (trimmedVideoUrl) {
       try {
-        new URL(videoUrl);
+        new URL(trimmedVideoUrl);
       } catch {
         throw new ApiError(400, 'Invalid video URL format');
       }
     }
-    experience.videoUrl = videoUrl || undefined;
+    experience.videoUrl = trimmedVideoUrl || undefined;
   }
 
-  // If experience was approved, reset to pending for re-review
-  if (experience.status === 'approved') {
+  if (experience.status === 'approved' || experience.status === 'rejected') {
     experience.status = 'pending';
     experience.isFeatured = false;
   }
@@ -458,11 +467,6 @@ export const deleteExperience = asyncHandler(async (req: Request, res: Response)
   // Soft delete
   await experience.softDelete();
 
-  // Remove reference from booking
-  await Booking.findByIdAndUpdate(experience.bookingId, {
-    customerReview: null,
-  });
-
   return res.json({
     success: true,
     message: 'Experience deleted successfully',
@@ -478,6 +482,7 @@ export const getExperienceById = asyncHandler(async (req: Request, res: Response
 
   const experience = await Experience.findOne({
     _id: id,
+    status: 'approved',
     isDeleted: false,
   })
     .populate('userId', 'firstName lastName avatar')
@@ -541,29 +546,26 @@ export const getAvailableBookings = asyncHandler(async (req: Request, res: Respo
   const paginatedBookings = availableBookings.slice(skip, skip + limitNum);
 
   // Transform to response format
-  const bookings = paginatedBookings.map(booking => ({
-    bookingId: booking._id,
-    bookingNumber: booking.bookingNumber,
-    service: booking.serviceId
-      ? {
-          id: (booking.serviceId as any)._id,
-          name: (booking.serviceId as any).name,
-          category: (booking.serviceId as any).category,
-          images: (booking.serviceId as any).images,
-        }
-      : null,
-    provider: booking.providerId
-      ? {
-          id: (booking.providerId as any)._id,
-          name: `${(booking.providerId as any).firstName || ''} ${(booking.providerId as any).lastName || ''}`.trim(),
-          avatar: (booking.providerId as any).avatar,
-        }
-      : null,
-    scheduledDate: booking.scheduledDate,
-    scheduledTime: booking.scheduledTime,
-    completedAt: booking.updatedAt,
-    hasReview: !!(booking as any).customerReview,
-  }));
+  const bookings = paginatedBookings.map((booking) => {
+    const service = booking.serviceId as any;
+    const provider = booking.providerId as any;
+    return {
+      _id: booking._id,
+      bookingNumber: booking.bookingNumber,
+      service: service
+        ? { _id: service._id, name: service.name }
+        : { _id: '', name: 'Unknown service' },
+      provider: provider
+        ? {
+            _id: provider._id,
+            firstName: provider.firstName || '',
+            lastName: provider.lastName || '',
+          }
+        : { _id: '', firstName: 'Unknown', lastName: 'Provider' },
+      completedAt: booking.updatedAt,
+      hasExperience: false,
+    };
+  });
 
   return res.json({
     success: true,

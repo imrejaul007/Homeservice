@@ -2,8 +2,10 @@ export { default as HeroCarousel } from './HeroCarousel';
 export { default as CategoryCards } from './CategoryCards';
 export { default as OfferBanner } from './OfferBanner';
 export { default as CategorySpotlight } from './CategorySpotlight';
+export { default as RecommendedServicesSection } from './RecommendedServicesSection';
 export { default as WhyNilin } from './WhyNilin';
-export { default as CuratedReels } from './CuratedReels';
+export { default as CuratedReels, TrendingNowSection } from './CuratedReels';
+export { default as TrendingFeedCard } from './TrendingFeedCard';
 export { default as ProviderCTA } from './ProviderCTA';
 export { default as SimpleFooter } from './SimpleFooter';
 

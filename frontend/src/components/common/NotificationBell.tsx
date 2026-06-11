@@ -219,8 +219,18 @@ const NotificationBell: React.FC<NotificationBellProps> = ({ userId, userRole = 
       navigate(isProvider ? `/provider/bookings/${bookingId}` : `/customer/bookings/${bookingId}`);
     } else if (notification.type === 'booking') {
       navigate(isProvider ? '/provider/bookings' : '/customer/bookings');
-    } else if (notification.type === 'message') {
-      navigate(isProvider ? '/provider/messages' : '/customer/messages');
+    } else if (notification.type === 'message' || notification.type === 'message_received') {
+      const chatRoomId = notification.data?.chatRoomId as string | undefined;
+      const bookingIdFromChat = notification.data?.bookingId as string | undefined;
+      navigate(isProvider ? '/provider/messages' : '/customer/messages', {
+        state: chatRoomId || bookingIdFromChat
+          ? {
+              bookingId: bookingIdFromChat,
+              providerId: notification.data?.providerId as string | undefined,
+              customerId: notification.data?.customerId as string | undefined,
+            }
+          : undefined,
+      });
     } else {
       navigate(isProvider ? '/provider/dashboard' : '/customer/notifications');
     }

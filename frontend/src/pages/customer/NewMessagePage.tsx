@@ -91,7 +91,7 @@ const NewMessagePage: React.FC = () => {
       });
 
       toast.success('Message sent successfully!');
-      navigate('/customer/messages');
+      navigate('/customer/messages', { state: { roomId } });
     } catch (error: any) {
       console.error('Failed to send message:', error);
       toast.error(error?.response?.data?.message || 'Failed to send message');
@@ -102,7 +102,7 @@ const NewMessagePage: React.FC = () => {
 
   const handleGoToConversation = () => {
     if (existingRoomId) {
-      navigate(`/customer/messages?room=${existingRoomId}`);
+      navigate('/customer/messages', { state: { roomId: existingRoomId } });
     } else {
       navigate('/customer/messages');
     }

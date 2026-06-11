@@ -20,7 +20,7 @@ if (!MONGODB_URI) {
 
 async function simulateApiResponse() {
   try {
-    await mongoose.connect(MONGODB_URI, { maxPoolSize: 5, serverSelectionTimeoutMS: 30000 });
+    await mongoose.connect(MONGODB_URI!, { maxPoolSize: 5, serverSelectionTimeoutMS: 30000 });
     console.log('✅ Connected to MongoDB Atlas\n');
 
     const db = mongoose.connection.db!;

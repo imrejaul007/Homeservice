@@ -1,5 +1,6 @@
 import React from 'react';
 import { cn } from '../../../lib/utils';
+import { usePriceConversion } from '../../../utils/priceConverter';
 
 interface DurationOption {
   duration: number;
@@ -11,6 +12,7 @@ interface DurationSelectorProps {
   options: DurationOption[];
   selected: number;
   onSelect: (duration: number) => void;
+  /** Source currency for option prices (default AED) */
   currency?: string;
 }
 
@@ -18,13 +20,12 @@ const DurationSelector: React.FC<DurationSelectorProps> = ({
   options,
   selected,
   onSelect,
-  currency = 'AED'
+  currency: sourceCurrency = 'AED',
 }) => {
+  const { convert, format, currency: displayCurrency } = usePriceConversion();
+
   const formatPrice = (price: number) => {
-    if (currency === 'AED') {
-      return `AED ${price.toLocaleString('en-AE')}`;
-    }
-    return `${currency} ${price.toLocaleString('en-US')}`;
+    return format(convert(price, sourceCurrency), displayCurrency);
   };
 
   // If no options provided, don't Render

@@ -5,9 +5,11 @@ import type { SupportedCity } from '@/types/location.types';
 
 interface LocationDropdownProps {
   variant?: 'desktop' | 'mobile';
+  /** Light styling for transparent hero header */
+  overlay?: boolean;
 }
 
-const LocationDropdown: React.FC<LocationDropdownProps> = ({ variant = 'desktop' }) => {
+const LocationDropdown: React.FC<LocationDropdownProps> = ({ variant = 'desktop', overlay = false }) => {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -22,7 +24,7 @@ const LocationDropdown: React.FC<LocationDropdownProps> = ({ variant = 'desktop'
   } = useLocationStore();
 
   const currentCity = selectedCity || SUPPORTED_CITIES[0];
-  const displayLocation = currentLocation?.address.city || currentCity.name;
+  const displayLocation = selectedCity?.name || currentLocation?.address.city || currentCity.name;
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -52,7 +54,11 @@ const LocationDropdown: React.FC<LocationDropdownProps> = ({ variant = 'desktop'
     return (
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center gap-1 px-2 py-1 text-sm text-nilin-warmGray hover:text-nilin-charcoal transition-colors duration-200"
+        className={`flex items-center gap-1 px-2 py-1 text-sm transition-colors duration-200 ${
+          overlay
+            ? 'text-white/90 hover:text-white [text-shadow:0_1px_3px_rgba(0,0,0,0.4)]'
+            : 'text-nilin-warmGray hover:text-nilin-charcoal'
+        }`}
       >
         <MapPin className="h-4 w-4" />
         <span className="text-xs font-medium">{displayLocation}</span>
@@ -65,7 +71,11 @@ const LocationDropdown: React.FC<LocationDropdownProps> = ({ variant = 'desktop'
     <div className="relative" ref={dropdownRef}>
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-nilin-warmGray hover:text-nilin-charcoal hover:bg-nilin-blush/50 rounded-nilin transition-all duration-200 shadow-nilin-warm hover:shadow-lg"
+        className={`flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-nilin transition-all duration-200 ${
+          overlay
+            ? 'text-white/95 hover:text-white hover:bg-white/15 [text-shadow:0_1px_3px_rgba(0,0,0,0.4)]'
+            : 'text-nilin-warmGray hover:text-nilin-charcoal hover:bg-nilin-blush/50 shadow-nilin-warm hover:shadow-lg'
+        }`}
       >
         <MapPin className="h-4 w-4" />
         <span>{displayLocation}</span>

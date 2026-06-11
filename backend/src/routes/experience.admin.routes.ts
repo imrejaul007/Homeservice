@@ -41,6 +41,12 @@ router.get('/user/:userId', experienceAdminController.getExperiencesByUser);
  */
 router.get('/provider/:providerId', experienceAdminController.getExperiencesByProvider);
 
+/**
+ * POST /api/admin/experiences/batch-action
+ * Bulk action on multiple experiences (must be before /:id routes)
+ */
+router.post('/batch-action', experienceAdminController.bulkAction);
+
 // ============================================
 // ROUTES WITH :id - Specific routes BEFORE parameterized /:id
 // ============================================
@@ -83,12 +89,5 @@ router.delete('/:id', experienceAdminController.deleteExperience);
  * Get single experience by ID (must be last for /:id routes)
  */
 router.get('/:id', experienceAdminController.getExperienceById);
-
-/**
- * POST /api/admin/experiences/batch-action
- * Bulk action on multiple experiences
- * Body: experienceIds (array), action ('approve' | 'reject' | 'delete' | 'feature' | 'unfeature'), reason? (required for reject)
- */
-router.post('/batch-action', experienceAdminController.bulkAction);
 
 export default router;

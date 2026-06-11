@@ -154,9 +154,14 @@ const AdminExperiencePanel: React.FC<AdminExperiencePanelProps> = ({
   };
 
   const handleReject = async (id: string) => {
+    const reason = window.prompt('Please provide a reason for rejection (required):');
+    if (!reason || !reason.trim()) {
+      return;
+    }
+
     setActionLoading(id);
     try {
-      const response = await experienceApi.rejectExperience(id);
+      const response = await experienceApi.rejectExperience(id, reason.trim());
       if (response.success) {
         await Promise.all([fetchExperiences(), fetchStats()]);
       }
@@ -225,9 +230,14 @@ const AdminExperiencePanel: React.FC<AdminExperiencePanelProps> = ({
   const handleBulkReject = async () => {
     if (selectedExperiences.size === 0) return;
 
+    const reason = window.prompt('Please provide a reason for rejection (required):');
+    if (!reason || !reason.trim()) {
+      return;
+    }
+
     setActionLoading('bulk-reject');
     try {
-      const response = await experienceApi.bulkReject(Array.from(selectedExperiences));
+      const response = await experienceApi.bulkReject(Array.from(selectedExperiences), reason.trim());
       if (response.success) {
         setSelectedExperiences(new Set());
         await Promise.all([fetchExperiences(), fetchStats()]);

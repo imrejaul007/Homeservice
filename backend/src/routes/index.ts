@@ -76,6 +76,8 @@ import chatRoutes from './chat.routes';
 import bundleRoutes from './bundle.routes';
 import invoiceRoutes from './invoice.routes';
 import trendingRoutes from './trending.routes';
+import homeRoutes from './home.routes';
+import curatedTrendAdminRoutes from './curatedTrend.admin.routes';
 import geolocationRoutes from './geolocation.routes';
 import leadRoutes from './lead.routes';
 import corporateRoutes from './corporate.routes';
@@ -91,6 +93,7 @@ import iaAgentRoutes from './iaAgent.routes';
 import bundleAdminRoutes from './bundleAdmin.routes';
 import bundleCustomerRoutes from './bundleCustomer.routes';
 import batchRoutes from './batch.routes';
+import newsletterRoutes from './newsletter.routes';
 
 const router = Router();
 
@@ -392,8 +395,14 @@ router.use('/', bundleCustomerRoutes);
 // Invoice routes
 router.use('/invoices', invoiceRoutes);
 
+// Homepage discovery feed
+router.use('/home', homeRoutes);
+
 // Trending analytics routes
 router.use('/trending', trendingRoutes);
+
+// Admin curated homepage trending
+router.use('/admin/curated-trends', curatedTrendAdminRoutes);
 
 // Geolocation/nearby providers routes
 router.use('/nearby', geolocationRoutes);
@@ -452,5 +461,8 @@ router.use('/admin/automation/winback', winbackRoutes);
 // Share analytics routes
 import shareRoutes from './share.routes';
 router.use('/share', shareRoutes);
+
+// Newsletter subscription routes
+router.use('/newsletter', newsletterRoutes);
 
 export default router;

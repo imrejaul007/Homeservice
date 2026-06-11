@@ -107,6 +107,17 @@ export class LiveChatService {
   /**
    * Start a new chat session
    */
+  /**
+   * Resolve a support-side participant so support rooms satisfy the 2-participant schema.
+   */
+  private async getDefaultSupportAgentId(): Promise<Types.ObjectId | null> {
+    const admin = await User.findOne({ role: 'admin', accountStatus: 'active' })
+      .select('_id')
+      .lean();
+
+    return admin?._id ? new Types.ObjectId(admin._id.toString()) : null;
+  }
+
   async startSession(
     customerId: string,
     customerName: string,
@@ -117,7 +128,15 @@ export class LiveChatService {
   ): Promise<{ session: ChatSession; chatRoomId: string }> {
     await hydrateQueueFromRedis();
 
-    // Create a support chat room
+    const supportAgentId = await this.getDefaultSupportAgentId();
+    if (!supportAgentId) {
+      throw new ApiError(
+        503,
+        'Support chat is temporarily unavailable. Please create a ticket or request a callback.'
+      );
+    }
+
+    // Create a support chat room (schema requires at least 2 participants)
     const chatRoom = new ChatRoom({
       type: 'support',
       name: `Support Chat - ${customerName}`,
@@ -125,6 +144,11 @@ export class LiveChatService {
         {
           userId: new Types.ObjectId(customerId),
           role: 'member',
+          joinedAt: new Date()
+        },
+        {
+          userId: supportAgentId,
+          role: 'admin',
           joinedAt: new Date()
         }
       ],
@@ -140,6 +164,8 @@ export class LiveChatService {
     // Generate unique session ID
     const sessionId = `CS${Date.now()}${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
 
+    const chatRoomId = chatRoom._id.toString();
+
     // Create session record (stored in memory for real-time, persisted to DB)
     const session: ChatSession = {
       _id: new Types.ObjectId(),
@@ -152,9 +178,14 @@ export class LiveChatService {
       tags,
       queuePosition: 1,
       estimatedWaitTime: this.calculateEstimatedWaitTime(),
+      metadata: { chatRoomId },
       createdAt: new Date(),
       updatedAt: new Date()
     } as ChatSession;
+
+    await ChatRoom.findByIdAndUpdate(chatRoom._id, {
+      name: `Support Chat - ${customerName} (${sessionId})`,
+    });
 
     // Add to queue
     this.addToQueue(session);
@@ -181,16 +212,16 @@ export class LiveChatService {
       session.queuePosition = undefined;
       session.estimatedWaitTime = undefined;
 
-      // Add agent to chat room
-      await ChatRoom.findByIdAndUpdate(chatRoom._id, {
-        $push: {
-          participants: {
-            userId: agentAssignment.agentId,
-            role: 'admin',
-            joinedAt: new Date()
+      // Swap placeholder admin if a different agent was assigned
+      if (!agentAssignment.agentId.equals(supportAgentId)) {
+        await ChatRoom.findByIdAndUpdate(chatRoom._id, {
+          $set: {
+            'participants.$[admin].userId': agentAssignment.agentId
           }
-        }
-      });
+        }, {
+          arrayFilters: [{ 'admin.role': 'admin' }]
+        });
+      }
 
       // Add system message
       await this.addSystemMessage(
@@ -211,7 +242,113 @@ export class LiveChatService {
       status: session.status
     });
 
-    return { session, chatRoomId: chatRoom._id.toString() };
+    return { session, chatRoomId };
+  }
+
+  /**
+   * Resolve session ID to chat room for API handlers
+   */
+  async resolveSessionContext(
+    sessionId: string,
+    userId: string
+  ): Promise<{ chatRoomId: string; session: ChatSession }> {
+    let session = await this.getSession(sessionId);
+
+    if (!session) {
+      const escapedSessionId = sessionId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const room = await ChatRoom.findOne({
+        type: 'support',
+        name: { $regex: `\\(${escapedSessionId}\\)$` },
+        isDeleted: false,
+      }).lean();
+
+      if (room) {
+        const member = room.participants.find((p) => p.role === 'member');
+        session = {
+          _id: room._id,
+          sessionId,
+          customerId: member?.userId || new Types.ObjectId(),
+          customerName: room.name?.replace(/^Support Chat - /, '').replace(/\s*\([^)]+\)$/, '') || '',
+          customerEmail: '',
+          status: 'ended',
+          priority: 'normal',
+          tags: [],
+          metadata: { chatRoomId: room._id.toString() },
+          createdAt: room.createdAt,
+          updatedAt: room.updatedAt,
+        } as ChatSession;
+      }
+    }
+
+    if (!session) {
+      throw new ApiError(404, 'Chat session not found');
+    }
+
+    const chatRoomId = session.metadata?.chatRoomId as string | undefined;
+    if (!chatRoomId) {
+      throw new ApiError(404, 'Chat room not found for session');
+    }
+
+    const room = await ChatRoom.findById(chatRoomId).lean();
+    if (!room) {
+      throw new ApiError(404, 'Chat room not found');
+    }
+
+    const isParticipant = room.participants.some((p) => p.userId.toString() === userId);
+    if (!isParticipant) {
+      const user = await User.findById(userId).select('role').lean();
+      if (user?.role !== 'admin') {
+        throw new ApiError(403, 'Not authorized for this chat session');
+      }
+    }
+
+    return { chatRoomId, session };
+  }
+
+  private async resolveMessageParticipants(
+    chatRoomId: string,
+    senderId: string,
+    senderType: 'customer' | 'agent' | 'system'
+  ): Promise<{ senderObjectId: Types.ObjectId; receiverObjectId: Types.ObjectId }> {
+    const room = await ChatRoom.findById(chatRoomId).lean();
+    if (!room) {
+      throw new ApiError(404, 'Chat room not found');
+    }
+
+    const customer = room.participants.find((p) => p.role === 'member');
+    let agent = room.participants.find((p) => p.role === 'admin');
+
+    if (!agent) {
+      const adminUser = await User.findOne({ role: 'admin', accountStatus: 'active' })
+        .select('_id')
+        .lean();
+      if (adminUser?._id) {
+        agent = { userId: adminUser._id as Types.ObjectId, role: 'admin' as const, joinedAt: new Date() };
+      }
+    }
+
+    const customerId = customer?.userId;
+    const agentId = agent?.userId;
+
+    if (!customerId || !agentId) {
+      throw new ApiError(400, 'Chat participants not configured');
+    }
+
+    if (senderType === 'system') {
+      return { senderObjectId: agentId, receiverObjectId: customerId };
+    }
+
+    if (senderType === 'customer' || senderId === customerId.toString()) {
+      return {
+        senderObjectId: new Types.ObjectId(senderId),
+        receiverObjectId: agentId,
+      };
+    }
+
+    return {
+      senderObjectId: new Types.ObjectId(senderId),
+      receiverObjectId: customerId,
+    };
   }
 
   /**
@@ -411,16 +548,21 @@ export class LiveChatService {
     type: 'text' | 'image' | 'file' | 'system' = 'text',
     attachments?: Array<{ url: string; filename: string; mimeType: string; size: number }>
   ): Promise<ChatMessage> {
+    const { senderObjectId, receiverObjectId } = await this.resolveMessageParticipants(
+      chatRoomId,
+      senderId,
+      senderType
+    );
+
     const message = new Message({
-      chatRoom: new Types.ObjectId(chatRoomId),
-      sender: new Types.ObjectId(senderId),
-      senderType,
-      senderName,
+      chatRoomId: new Types.ObjectId(chatRoomId),
+      senderId: senderObjectId,
+      receiverId: receiverObjectId,
       content,
       type,
       attachments,
+      status: senderType !== 'customer' ? 'read' : 'sent',
       readAt: senderType !== 'customer' ? new Date() : undefined,
-      metadata: { sessionId }
     });
 
     await message.save();
@@ -436,7 +578,7 @@ export class LiveChatService {
       _id: message._id,
       chatRoomId: new Types.ObjectId(chatRoomId),
       sessionId,
-      senderId: new Types.ObjectId(senderId),
+      senderId: senderObjectId,
       senderType,
       senderName,
       content,
@@ -475,47 +617,79 @@ export class LiveChatService {
     limit: number = 50,
     before?: Date
   ): Promise<{ messages: ChatMessage[]; hasMore: boolean }> {
-    const query: Record<string, unknown> = { chatRoom: new Types.ObjectId(chatRoomId) };
+    const query: Record<string, unknown> = { chatRoomId: new Types.ObjectId(chatRoomId) };
 
     if (before) {
       query.createdAt = { $lt: before };
     }
 
+    const room = await ChatRoom.findById(chatRoomId).lean();
+    const customerId = room?.participants.find((p) => p.role === 'member')?.userId?.toString();
+
     const messages = await Message.find(query)
       .sort({ createdAt: -1 })
       .limit(limit + 1)
+      .populate('senderId', 'firstName lastName')
       .lean();
 
     const hasMore = messages.length > limit;
     const resultMessages = hasMore ? messages.slice(0, limit) : messages;
 
-    // Mark messages as read for the user
-    const unreadMessages = resultMessages.filter(
-      (m) => {
-        const msg = m as any;
-        return msg.senderId?.toString() !== userId && msg.sender?.toString() !== userId && !msg.readAt;
-      }
-    );
+    const unreadMessages = resultMessages.filter((m) => {
+      const msg = m as { senderId?: { _id?: Types.ObjectId } | Types.ObjectId; readAt?: Date };
+      const senderIdStr =
+        typeof msg.senderId === 'object' && msg.senderId && '_id' in msg.senderId
+          ? msg.senderId._id?.toString()
+          : msg.senderId?.toString();
+      return senderIdStr !== userId && !msg.readAt;
+    });
 
     if (unreadMessages.length > 0) {
       await Message.updateMany(
-        {
-          _id: { $in: unreadMessages.map(m => m._id) }
-        },
-        { readAt: new Date() }
+        { _id: { $in: unreadMessages.map((m) => m._id) } },
+        { readAt: new Date(), status: 'read' }
       );
     }
 
     return {
       messages: resultMessages.reverse().map((m) => {
-        const msg = m as any;
+        const msg = m as {
+          _id: Types.ObjectId;
+          chatRoomId?: Types.ObjectId;
+          senderId?: { _id?: Types.ObjectId; firstName?: string; lastName?: string } | Types.ObjectId;
+          content: string;
+          type: ChatMessage['type'];
+          attachments?: ChatMessage['attachments'];
+          readAt?: Date;
+          createdAt: Date;
+        };
+        const senderObject =
+          typeof msg.senderId === 'object' && msg.senderId && 'firstName' in msg.senderId
+            ? msg.senderId
+            : null;
+        const senderIdStr = senderObject?._id?.toString() || (msg.senderId as Types.ObjectId)?.toString();
+        const senderType: ChatMessage['senderType'] =
+          msg.type === 'system'
+            ? 'system'
+            : senderIdStr === customerId
+              ? 'customer'
+              : 'agent';
+        const senderName =
+          senderType === 'system'
+            ? 'System'
+            : senderObject
+              ? `${senderObject.firstName || ''} ${senderObject.lastName || ''}`.trim() || 'User'
+              : senderType === 'customer'
+                ? 'Customer'
+                : 'Support Agent';
+
         return {
           _id: msg._id,
-          chatRoomId: msg.chatRoomId ?? msg.chatRoom,
-          sessionId: (msg.metadata as Record<string, string>)?.sessionId || '',
-          senderId: msg.senderId ?? msg.sender,
-          senderType: msg.senderType ?? 'customer',
-          senderName: msg.senderName ?? 'User',
+          chatRoomId: msg.chatRoomId ?? new Types.ObjectId(chatRoomId),
+          sessionId: '',
+          senderId: new Types.ObjectId(senderIdStr || userId),
+          senderType,
+          senderName,
           content: msg.content,
           type: msg.type,
           attachments: msg.attachments,
@@ -533,11 +707,11 @@ export class LiveChatService {
   async markAsRead(chatRoomId: string, userId: string): Promise<number> {
     const result = await Message.updateMany(
       {
-        chatRoom: new Types.ObjectId(chatRoomId),
-        sender: { $ne: new Types.ObjectId(userId) },
+        chatRoomId: new Types.ObjectId(chatRoomId),
+        senderId: { $ne: new Types.ObjectId(userId) },
         readAt: { $exists: false }
       },
-      { readAt: new Date() }
+      { readAt: new Date(), status: 'read' }
     );
 
     return result.modifiedCount;
@@ -749,16 +923,21 @@ export class LiveChatService {
       isDeleted: false
     });
 
-    const sessions = rooms.map(room => ({
-      _id: room._id,
-      sessionId: room._id.toString(),
-      customerId: room.participants.find(p => p.role === 'member')?.userId || new Types.ObjectId(),
-      customerName: room.name?.replace('Support Chat - ', '') || 'Customer',
-      status: room.lastMessageAt ? 'ended' as ChatSessionStatus : 'waiting' as ChatSessionStatus,
-      tags: [],
-      createdAt: room.createdAt,
-      updatedAt: room.updatedAt
-    }));
+    const sessions = rooms.map((room) => {
+      const sessionIdMatch = room.name?.match(/\((CS[^)]+)\)$/);
+      const sessionId = sessionIdMatch?.[1] || room._id.toString();
+      return {
+        _id: room._id,
+        sessionId,
+        chatRoomId: room._id.toString(),
+        customerId: room.participants.find((p) => p.role === 'member')?.userId || new Types.ObjectId(),
+        customerName: room.name?.replace(/^Support Chat - /, '').replace(/\s*\([^)]+\)$/, '') || 'Customer',
+        status: room.lastMessageAt ? ('ended' as ChatSessionStatus) : ('waiting' as ChatSessionStatus),
+        tags: [],
+        createdAt: room.createdAt,
+        updatedAt: room.updatedAt,
+      };
+    });
 
     return { sessions, total };
   }

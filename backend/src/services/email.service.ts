@@ -892,8 +892,8 @@ export const sendWelcomeEmail = async (
 };
 
 export const sendPasswordResetEmail = async (
-  email: string, 
-  firstName: string, 
+  email: string,
+  firstName: string,
   resetToken: string
 ): Promise<void> => {
   await sendPlatformEmail({
@@ -902,6 +902,136 @@ export const sendPasswordResetEmail = async (
     variables: { userName: firstName, firstName, resetToken },
     fallbackHtmlBuilder: () => getPasswordResetEmailTemplate(firstName, resetToken, email),
   });
+};
+
+// ===================================
+// NEWSLETTER EMAIL TEMPLATES
+// ===================================
+
+/**
+ * Send newsletter welcome/confirmation email
+ */
+export const sendNewsletterWelcomeEmail = async (
+  email: string,
+  verificationToken: string
+): Promise<void> => {
+  const verifyUrl = `${FRONTEND_URL || process.env.CLIENT_URL || ''}/newsletter/verify/${verificationToken}`;
+  const html = getNewsletterWelcomeTemplate(email, verifyUrl, verificationToken);
+  await sendEmail(email, 'Welcome to NILIN Newsletter!', html.html, html.text);
+};
+
+/**
+ * Newsletter Welcome Email Template
+ */
+const getNewsletterWelcomeTemplate = (email: string, verifyUrl: string, token: string): { html: string; text: string } => {
+  const unsubscribeUrl = `${FRONTEND_URL || process.env.CLIENT_URL || ''}/newsletter/unsubscribe?token=${token}`;
+
+  return {
+    html: `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Welcome to NILIN Newsletter</title>
+</head>
+<body style="margin: 0; padding: 0; background: ${BRAND_COLORS.background}; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background: ${BRAND_COLORS.background};">
+    <tr>
+      <td style="padding: 40px 20px;">
+        <table role="presentation" width="100%" max-width="560px" cellspacing="0" cellpadding="0" style="margin: 0 auto; background: ${BRAND_COLORS.white}; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 24px rgba(0,0,0,0.08);">
+          <!-- Header -->
+          <tr>
+            <td style="background: linear-gradient(135deg, ${BRAND_COLORS.primary} 0%, ${BRAND_COLORS.primaryDark} 100%); padding: 40px 32px; text-align: center;">
+              <h1 style="margin: 0 0 8px; font-size: 32px; font-weight: 700; color: ${BRAND_COLORS.white}; letter-spacing: -0.5px;">NILIN</h1>
+              <p style="margin: 0; font-size: 14px; color: rgba(255,255,255,0.8);">Flow of Opportunity</p>
+            </td>
+          </tr>
+          <!-- Content -->
+          <tr>
+            <td style="padding: 40px 32px;">
+              <!-- Welcome Icon -->
+              <div style="text-align: center; margin-bottom: 24px;">
+                <div style="display: inline-flex; width: 64px; height: 64px; background: ${BRAND_COLORS.primaryLight}; border-radius: 50%; align-items: center; justify-content: center;">
+                  <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="${BRAND_COLORS.primary}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
+                    <polyline points="22,6 12,13 2,6"/>
+                  </svg>
+                </div>
+              </div>
+
+              <h2 style="margin: 0 0 16px; font-size: 24px; font-weight: 600; color: ${BRAND_COLORS.text}; text-align: center;">Welcome to the NILIN Family!</h2>
+
+              <p style="margin: 0 0 24px; font-size: 16px; line-height: 1.6; color: ${BRAND_COLORS.textLight}; text-align: center;">
+                Thank you for subscribing to our newsletter. You'll be the first to know about exclusive offers, new services, and beauty tips from our community of professionals.
+              </p>
+
+              <!-- What's Next Section -->
+              <div style="background: ${BRAND_COLORS.background}; border-radius: 12px; padding: 24px; margin: 24px 0;">
+                <h3 style="margin: 0 0 16px; font-size: 16px; font-weight: 600; color: ${BRAND_COLORS.text};">What to expect:</h3>
+                <ul style="margin: 0; padding: 0 0 0 20px; color: ${BRAND_COLORS.textLight}; font-size: 14px; line-height: 1.8;">
+                  <li>Exclusive deals and promotions</li>
+                  <li>New service announcements</li>
+                  <li>Beauty and wellness tips</li>
+                  <li>Updates from our professional community</li>
+                </ul>
+              </div>
+
+              <!-- CTA Button -->
+              <table role="presentation" cellspacing="0" cellpadding="0" style="margin: 32px auto;">
+                <tr>
+                  <td style="border-radius: 8px; background: ${BRAND_COLORS.primary}; text-align: center;">
+                    <a href="${FRONTEND_URL || process.env.CLIENT_URL || ''}" style="display: inline-block; padding: 14px 32px; color: ${BRAND_COLORS.white}; text-decoration: none; font-weight: 600; font-size: 16px;">Explore NILIN</a>
+                  </td>
+                </tr>
+              </table>
+
+              <p style="margin: 0; font-size: 13px; color: ${BRAND_COLORS.textLight}; text-align: center;">
+                Questions? Reply to this email or visit our <a href="${FRONTEND_URL || process.env.CLIENT_URL || ''}/help" style="color: ${BRAND_COLORS.primary};">Help Center</a>.
+              </p>
+            </td>
+          </tr>
+          <!-- Footer -->
+          <tr>
+            <td style="padding: 24px 32px; background: ${BRAND_COLORS.background}; text-align: center;">
+              <p style="margin: 0 0 8px; font-size: 12px; color: ${BRAND_COLORS.textLight};">
+                &copy; ${new Date().getFullYear()} NILIN. All rights reserved.
+              </p>
+              <p style="margin: 0; font-size: 12px;">
+                <a href="${unsubscribeUrl}" style="color: ${BRAND_COLORS.textLight}; text-decoration: underline;">Unsubscribe</a>
+                <span style="color: ${BRAND_COLORS.border}; margin: 0 8px;">|</span>
+                <a href="${FRONTEND_URL || process.env.CLIENT_URL || ''}/privacy" style="color: ${BRAND_COLORS.textLight}; text-decoration: underline;">Privacy Policy</a>
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+    `,
+    text: `
+Welcome to NILIN Newsletter!
+
+Thank you for subscribing. You'll be the first to know about exclusive offers, new services, and beauty tips.
+
+What to expect:
+- Exclusive deals and promotions
+- New service announcements
+- Beauty and wellness tips
+- Updates from our professional community
+
+Visit us at: ${FRONTEND_URL || process.env.CLIENT_URL || ''}
+
+Questions? Reply to this email or visit our Help Center.
+
+&copy; ${new Date().getFullYear()} NILIN
+
+To unsubscribe: ${unsubscribeUrl}
+Privacy Policy: ${FRONTEND_URL || process.env.CLIENT_URL || ''}/privacy
+    `,
+  };
 };
 
 // ===================================

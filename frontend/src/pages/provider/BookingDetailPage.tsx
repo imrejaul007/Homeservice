@@ -23,6 +23,7 @@ import Breadcrumb from '../../components/common/Breadcrumb';
 import { useBookingStore } from '../../stores/bookingStore';
 import { useAuthStore } from '../../stores/authStore';
 import { useToastActions } from '../../components/common/Toast';
+import { BookingChat } from '../../components/chat';
 
 interface BookingDetailPageProps {
   isProvider?: boolean;
@@ -276,6 +277,24 @@ const ProviderBookingDetailPage: React.FC<BookingDetailPageProps> = ({ isProvide
   const status = currentBooking.status as keyof typeof statusConfig;
   const StatusIcon = statusConfig[status].icon;
 
+  const customerId = currentBooking.customerId || currentBooking.customer?._id || '';
+  const providerId = user._id || user.id || currentBooking.providerId || currentBooking.provider?._id || '';
+  const customerName = `${currentBooking.customer?.firstName || currentBooking.customerInfo?.firstName || ''} ${currentBooking.customer?.lastName || currentBooking.customerInfo?.lastName || ''}`.trim() || 'Customer';
+  const providerName = `${user.firstName || ''} ${user.lastName || ''}`.trim() || 'Provider';
+  const canMessageCustomer = Boolean(customerId && providerId && currentBooking._id);
+  const showBookingChat = canMessageCustomer && !['cancelled', 'rejected'].includes(currentBooking.status);
+
+  const handleMessageCustomer = () => {
+    if (!canMessageCustomer) return;
+    navigate('/provider/messages', {
+      state: {
+        bookingId: currentBooking._id,
+        customerId,
+        providerId,
+      },
+    });
+  };
+
   return (
     <div className="min-h-screen bg-nilin-cream flex flex-col">
       <NavigationHeader />
@@ -399,6 +418,39 @@ const ProviderBookingDetailPage: React.FC<BookingDetailPageProps> = ({ isProvide
             </div>
           </div>
 
+          {/* Booking Chat */}
+          {showBookingChat && (
+            <div className="bg-white rounded-xl border border-nilin-border p-6 mb-6 shadow-nilin">
+              <div className="flex items-center justify-between gap-4 mb-4">
+                <h2 className="text-xl font-bold text-nilin-charcoal flex items-center gap-2">
+                  <MessageCircle className="h-5 w-5 text-nilin-coral" />
+                  Messages
+                </h2>
+                <button
+                  type="button"
+                  onClick={handleMessageCustomer}
+                  className="text-sm font-medium text-nilin-coral hover:text-nilin-rose transition-colors"
+                >
+                  Open in Messages
+                </button>
+              </div>
+              <BookingChat
+                bookingId={currentBooking._id}
+                customerId={customerId}
+                customerName={customerName}
+                customerAvatar={currentBooking.customer?.avatar}
+                providerId={providerId}
+                providerName={providerName}
+                providerAvatar={user.avatar}
+                currentUserId={providerId}
+                currentUserRole="provider"
+                bookingStatus={currentBooking.status}
+                serviceName={currentBooking.service?.name}
+                scheduledDate={`${currentBooking.scheduledDate}T${currentBooking.scheduledTime || '00:00'}`}
+              />
+            </div>
+          )}
+
           {/* Timeline */}
           <div className="bg-white rounded-xl border border-nilin-border p-6 mb-6 shadow-nilin">
             <h2 className="text-xl font-bold text-nilin-charcoal mb-6">Booking Timeline</h2>
@@ -509,6 +561,17 @@ const ProviderBookingDetailPage: React.FC<BookingDetailPageProps> = ({ isProvide
                   <Star className="h-5 w-5" />
                   Booking Completed - Payment Processing
                 </div>
+              )}
+
+              {canMessageCustomer && (
+                <button
+                  type="button"
+                  onClick={handleMessageCustomer}
+                  className="flex items-center gap-2 bg-nilin-blush/60 hover:bg-nilin-blush text-nilin-charcoal px-6 py-3 rounded-nilin font-semibold transition-colors"
+                >
+                  <MessageCircle className="h-5 w-5" />
+                  Message Customer
+                </button>
               )}
 
               <button

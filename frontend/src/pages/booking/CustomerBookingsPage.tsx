@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Filter, Search, Calendar, X } from 'lucide-react';
 import NavigationHeader from '../../components/layout/NavigationHeader';
 import Footer from '../../components/layout/Footer';
@@ -12,9 +12,17 @@ import { PageErrorBoundary } from '../../components/common/PageErrorBoundary';
 import { BookingCardSkeleton } from '../../components/common/Loading';
 import { useBookingAdminUpdates } from '../../hooks/useSocket';
 import { CANCELLATION_REASONS } from '../../constants/booking';
+import ExperienceSubmissionForm from '../../components/experience/ExperienceSubmissionForm';
+import useWriteExperience from '../../hooks/useWriteExperience';
+import { PenLine } from 'lucide-react';
 
 const CustomerBookingsPage: React.FC = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const initialStatus = searchParams.get('status');
+  const validStatuses = ['active', 'pending', 'confirmed', 'in_progress', 'completed', 'cancelled'];
+  const statusFromUrl = initialStatus && validStatuses.includes(initialStatus) ? initialStatus : undefined;
+
   const {
     customerBookings,
     customerBookingsPagination,
@@ -26,14 +34,15 @@ const CustomerBookingsPage: React.FC = () => {
   const [filters, setFilters] = useState<BookingFilters>({
     page: 1,
     limit: 12,
-    status: undefined
+    status: statusFromUrl as BookingFilters['status'],
   });
 
-  const [selectedStatus, setSelectedStatus] = useState<string>('all');
+  const [selectedStatus, setSelectedStatus] = useState<string>(statusFromUrl || 'all');
   const [cancellingBookingId, setCancellingBookingId] = useState<string | null>(null);
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [cancelBookingId, setCancelBookingId] = useState<string | null>(null);
   const isFetchingRef = useRef(false);
+  const { isFormOpen, prefilledBookingId, openWriteExperience, closeWriteExperience } = useWriteExperience();
 
   // Keep a ref to filters to avoid stale closure in the useEffect
   const filtersRef = useRef(filters);
@@ -102,6 +111,7 @@ const CustomerBookingsPage: React.FC = () => {
 
   const statusOptions = [
     { value: 'all', label: 'All' },
+    { value: 'active', label: 'Active' },
     { value: 'pending', label: 'Pending' },
     { value: 'confirmed', label: 'Confirmed' },
     { value: 'in_progress', label: 'In Progress' },
@@ -121,9 +131,18 @@ const CustomerBookingsPage: React.FC = () => {
         <PageErrorBoundary pageName="My Bookings">
           <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
             {/* Header */}
-            <div className="mb-8">
-              <h1 className="text-3xl font-serif text-nilin-charcoal mb-2">My Bookings</h1>
-              <p className="text-nilin-warmGray">Manage and track your service bookings</p>
+            <div className="mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+              <div>
+                <h1 className="text-3xl font-serif text-nilin-charcoal mb-2">My Bookings</h1>
+                <p className="text-nilin-warmGray">Manage and track your service bookings</p>
+              </div>
+              <button
+                onClick={() => openWriteExperience()}
+                className="inline-flex items-center gap-2 px-5 py-2.5 bg-nilin-coral text-white rounded-nilin hover:bg-nilin-rose transition-colors font-medium self-start"
+              >
+                <PenLine className="h-4 w-4" />
+                Write Experience
+              </button>
             </div>
 
             {/* Filters */}
@@ -195,6 +214,11 @@ const CustomerBookingsPage: React.FC = () => {
                       onCancel={
                         booking.status === 'pending' || booking.status === 'confirmed'
                           ? () => handleCancelClick(booking._id)
+                          : undefined
+                      }
+                      onShareExperience={
+                        booking.status === 'completed'
+                          ? (id) => openWriteExperience(id)
                           : undefined
                       }
                       isCancelling={cancellingBookingId === booking._id}
@@ -281,6 +305,13 @@ const CustomerBookingsPage: React.FC = () => {
           </div>
         </div>
       )}
+
+      <ExperienceSubmissionForm
+        isOpen={isFormOpen}
+        onClose={closeWriteExperience}
+        bookingId={prefilledBookingId}
+        lockBooking={!!prefilledBookingId}
+      />
     </div>
   );
 };

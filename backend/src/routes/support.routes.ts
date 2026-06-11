@@ -3,7 +3,12 @@ import { authenticate, requireRole } from '../middleware/auth.middleware';
 import { adminLimiter } from '../middleware/rateLimiter';
 import Joi from 'joi';
 import { SUPPORT_FAQS } from '../constants/supportFaqs';
-import { createCallbackRequest, getMyCallbackRequests } from '../controllers/callback.controller';
+import {
+  createCallbackRequest,
+  getMyCallbackRequests,
+  getAdminCallbackRequests,
+  updateCallbackStatus,
+} from '../controllers/callback.controller';
 import {
   // Admin Controllers
   getAllTickets,
@@ -58,7 +63,10 @@ const createTicketSchema = Joi.object({
       'string.min': 'Description must be at least 20 characters',
       'string.max': 'Description cannot exceed 5000 characters',
       'any.required': 'Description is required'
-    })
+    }),
+  bookingId: Joi.string().hex().length(24).optional(),
+  bookingNumber: Joi.string().max(50).optional(),
+  serviceName: Joi.string().max(200).optional(),
 });
 
 const addMessageSchema = Joi.object({
@@ -292,8 +300,13 @@ router.get('/callback/my', authenticate, getMyCallbackRequests);
 // ADMIN TICKET MANAGEMENT ROUTES
 // ============================================
 
-// All admin routes require authentication, admin role, and rate limiting
-router.use('/admin/tickets', authenticate, requireRole('admin'), adminLimiter);
+const adminSupportMiddleware = [authenticate, requireRole('admin'), adminLimiter];
+
+router.get('/admin/callbacks', ...adminSupportMiddleware, getAdminCallbackRequests);
+router.patch('/admin/callbacks/:requestId', ...adminSupportMiddleware, updateCallbackStatus);
+
+// All admin ticket routes require authentication, admin role, and rate limiting
+router.use('/admin/tickets', ...adminSupportMiddleware);
 
 // Get all tickets with filtering and pagination
 // Query params: page, limit, status, priority, category, search, assignedTo

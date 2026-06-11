@@ -238,6 +238,7 @@ import ProfessionalPreference from './ui/ProfessionalPreference';
 import PaymentMethodSelector from './ui/PaymentMethodSelector';
 import BookingSummaryCard from './ui/BookingSummaryCard';
 import { TrustBadge } from './ui/TrustBadge';
+import { usePriceConversion } from '../../utils/priceConverter';
 
 interface BookingFormWizardProps {
   service: Service;
@@ -340,6 +341,7 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
   preloadedOffer
 }) => {
   const navigate = useNavigate();
+  const { convert, format, currency } = usePriceConversion();
   const { user, isAuthenticated, tokens } = useAuthStore();
   const {
     createBooking,
@@ -366,6 +368,11 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
   const [appliedCoupon, setAppliedCoupon] = useState<AppliedCoupon | null>(null);
   const [couponError, setCouponError] = useState<string | null>(null);
   const [preloadedOfferApplied, setPreloadedOfferApplied] = useState(false);
+
+  const formatMoney = useCallback(
+    (amount: number, sourceCurrency = 'AED') => format(convert(amount, sourceCurrency), currency),
+    [convert, format, currency],
+  );
 
   // Saved addresses state
   const [savedAddresses, setSavedAddresses] = useState<Address[]>([]);
@@ -1343,7 +1350,7 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
                       <p className="text-sm text-green-600">
                         {appliedCoupon.discountType === 'percentage'
                           ? `${appliedCoupon.discountAmount}% off your booking`
-                          : `AED ${appliedCoupon.discountAmount} off your booking`}
+                          : `${formatMoney(appliedCoupon.discountAmount)} off your booking`}
                       </p>
                     </div>
                     <div className="flex-shrink-0">
@@ -1734,7 +1741,7 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
                               const discountText = offer.type === 'percentage'
                                 ? `${offer.value}% OFF`
                                 : offer.type === 'fixed'
-                                  ? `AED ${offer.value} OFF`
+                                  ? `${formatMoney(offer.value)} OFF`
                                   : 'Free Service';
                               const expiresAt = new Date(claim.expiresAt);
                               const daysLeft = Math.ceil((expiresAt.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
@@ -1756,7 +1763,7 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
                                 <p className="text-sm font-medium text-green-800">
                                   {appliedCoupon.discountType === 'percentage'
                                     ? `${appliedCoupon.discountAmount}% OFF`
-                                    : `AED ${appliedCoupon.discountAmount} OFF`} Applied!
+                                    : `${formatMoney(appliedCoupon.discountAmount)} OFF`} Applied!
                                 </p>
                                 <p className="text-xs text-green-600">
                                   Code: {appliedCoupon.code}

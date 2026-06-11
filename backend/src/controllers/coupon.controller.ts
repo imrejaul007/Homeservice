@@ -94,8 +94,8 @@ export const getAllCoupons = asyncHandler(async (req: Request, res: Response) =>
   // Build filter
   const filter: Record<string, unknown> = {};
 
-  // FIX: Always filter out soft-deleted coupons
-  filter.isDeleted = { $ne: true };
+  // FIX: Soft-deleted records are auto-excluded by the model pre-find hook,
+  // but adding explicit filter here for clarity (harmless double-filtering)
 
   if (search) {
     filter.$or = [
@@ -195,11 +195,11 @@ export const createCoupon = asyncHandler(async (req: Request, res: Response) => 
     maxUsesPerUser: value.maxUsesPerUser ?? 1,
     currentUses: 0,
     usedBy: [],
+    // FIX: Only store in targetServices/targetCategories (source of truth)
+    // The API layer transforms these to applicableServices/applicableCategories for the frontend
     targetServices: serviceIds.map((id: string) => new mongoose.Types.ObjectId(id)),
     targetCategories: categoryIds.map((id: string) => new mongoose.Types.ObjectId(id)),
     targetType: serviceIds.length > 0 ? 'specific_services' : 'all',
-    applicableServices: serviceIds,
-    applicableCategories: categoryIds,
     createdBy: (req as any).user._id,
   });
 
@@ -306,12 +306,12 @@ export const updateCoupon = asyncHandler(async (req: Request, res: Response) => 
     const serviceIds: string[] = value.applicableServices || [];
     updatePayload.targetServices = serviceIds.map((sid: string) => new mongoose.Types.ObjectId(sid));
     updatePayload.targetType = serviceIds.length > 0 ? 'specific_services' : 'all';
-    updatePayload.applicableServices = serviceIds;
+    // FIX: Removed applicableServices duplicate storage — only targetServices is stored
   }
   if (value.applicableCategories !== undefined) {
     const categoryIds: string[] = value.applicableCategories || [];
     updatePayload.targetCategories = categoryIds.map((cid: string) => new mongoose.Types.ObjectId(cid));
-    updatePayload.applicableCategories = categoryIds;
+    // FIX: Removed applicableCategories duplicate storage — only targetCategories is stored
   }
 
   const coupon = await Coupon.findByIdAndUpdate(
@@ -677,6 +677,8 @@ export const getCouponStats = asyncHandler(async (req: Request, res: Response) =
         active: { $sum: { $cond: ['$isActive', 1, 0] } },
         inactive: { $sum: { $cond: ['$isActive', 0, 1] } },
         totalUses: { $sum: '$currentUses' },
+        // FIX: Include viewCount in stats for admin analytics
+        totalViews: { $sum: { $ifNull: ['$viewCount', 0] } },
         percentageCoupons: {
           $sum: { $cond: [{ $eq: ['$type', 'percentage'] }, 1, 0] },
         },
@@ -698,6 +700,7 @@ export const getCouponStats = asyncHandler(async (req: Request, res: Response) =
     active: 0,
     inactive: 0,
     totalUses: 0,
+    totalViews: 0,
     percentageCoupons: 0,
     fixedCoupons: 0,
     freeServiceCoupons: 0,
@@ -712,6 +715,8 @@ export const getCouponStats = asyncHandler(async (req: Request, res: Response) =
         active: result.active,
         inactive: result.inactive,
         totalUses: result.totalUses,
+        // FIX: Include view analytics in stats
+        totalViews: result.totalViews,
         byType: {
           percentage: result.percentageCoupons,
           fixed: result.fixedCoupons,

@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowRight, Loader2, AlertCircle, Sparkles } from 'lucide-react';
+import { ArrowRight, Loader2, AlertCircle, Sparkles, PenLine } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { experienceApi } from '../../services/experienceApi';
 import type { Experience } from '../../types/experience';
 import ExperienceCard from './ExperienceCard';
+import ExperienceSubmissionForm from './ExperienceSubmissionForm';
+import useWriteExperience from '../../hooks/useWriteExperience';
 
 interface ExperienceSectionProps {
   limit?: number;
@@ -45,6 +47,7 @@ const ExperienceSection: React.FC<ExperienceSectionProps> = ({
   subtitle = 'Crafted for perfection',
 }) => {
   const navigate = useNavigate();
+  const { isFormOpen, prefilledBookingId, openWriteExperience, closeWriteExperience } = useWriteExperience();
   const [experiences, setExperiences] = useState<Experience[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -148,13 +151,26 @@ const ExperienceSection: React.FC<ExperienceSectionProps> = ({
             <p className="text-nilin-charcoal font-medium mb-2">No experiences yet</p>
             <p className="text-nilin-warmGray text-sm">Be the first to share your NILIN experience!</p>
             <button
-              onClick={() => navigate('/bookings')}
+              onClick={() => navigate('/customer/bookings')}
               className="mt-4 px-6 py-2 bg-nilin-coral text-white rounded-nilin hover-lift transition-all"
             >
               Book a Service
             </button>
+            <button
+              onClick={() => openWriteExperience()}
+              className="mt-3 ml-0 block mx-auto px-6 py-2 glass-nilin rounded-nilin text-nilin-charcoal font-medium hover-lift transition-all"
+            >
+              Write Your Experience
+            </button>
           </div>
         </div>
+        <ExperienceSubmissionForm
+          isOpen={isFormOpen}
+          onClose={closeWriteExperience}
+          onSuccess={fetchExperiences}
+          bookingId={prefilledBookingId}
+          lockBooking={!!prefilledBookingId}
+        />
       </section>
     );
   }
@@ -197,15 +213,22 @@ const ExperienceSection: React.FC<ExperienceSectionProps> = ({
           )}
         </div>
 
-        {/* View All Link */}
+        {/* View All + Write Experience */}
         {showViewAll && (
-          <div className="text-center mt-10 animate-nilin-in" style={{ animationDelay: '0.2s' }}>
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-4 mt-10 animate-nilin-in" style={{ animationDelay: '0.2s' }}>
             <button
               onClick={handleViewAll}
               className="inline-flex items-center gap-2 px-8 py-4 glass-nilin rounded-nilin text-nilin-charcoal font-medium hover-lift transition-all"
             >
               View All Experiences
               <ArrowRight className="w-5 h-5" />
+            </button>
+            <button
+              onClick={() => openWriteExperience()}
+              className="inline-flex items-center gap-2 px-8 py-4 bg-nilin-coral text-white rounded-nilin font-medium hover-lift transition-all"
+            >
+              <PenLine className="w-5 h-5" />
+              Write Your Experience
             </button>
           </div>
         )}
@@ -229,6 +252,14 @@ const ExperienceSection: React.FC<ExperienceSectionProps> = ({
           ))}
         </div>
       </div>
+
+      <ExperienceSubmissionForm
+        isOpen={isFormOpen}
+        onClose={closeWriteExperience}
+        onSuccess={fetchExperiences}
+        bookingId={prefilledBookingId}
+        lockBooking={!!prefilledBookingId}
+      />
     </section>
   );
 };
