@@ -23,7 +23,8 @@ import { useBookingStore } from '../../stores/bookingStore';
 import { useAuthStore } from '../../stores/authStore';
 import type { Booking } from '../../services/BookingService';
 import bookingService from '../../services/BookingService';
-import { cn, formatPrice } from '../../lib/utils';
+import { cn } from '../../lib/utils';
+import { formatBookingPrice } from '../../utils/formatting';
 import ExperienceSubmissionForm from '../experience/ExperienceSubmissionForm';
 import { experienceApi } from '../../services/experienceApi';
 import { useToastActions } from '../common/Toast';
@@ -587,7 +588,7 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
                   <div className="space-y-2 text-sm">
                     <div className="flex justify-between">
                       <span className="text-nilin-warmGray">Base Service:</span>
-                      <span className="text-nilin-charcoal">{new Intl.NumberFormat(locale, { style: 'currency', currency: currentBooking.pricing.currency }).format(currentBooking.pricing.basePrice || currentBooking.service?.price.amount || 0)}</span>
+                      <span className="text-nilin-charcoal">{formatBookingPrice(currentBooking.pricing.basePrice || currentBooking.service?.price?.amount || 0, currentBooking.pricing.currency)}</span>
                     </div>
 
                     {currentBooking.pricing.addOns?.length > 0 && (
@@ -595,7 +596,7 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
                         {currentBooking.pricing.addOns.map((addon, index) => (
                           <div key={index} className="flex justify-between text-nilin-warmGray">
                             <span>{addon.name}:</span>
-                            <span className="text-nilin-charcoal">{new Intl.NumberFormat(locale, { style: 'currency', currency: currentBooking.pricing.currency }).format(addon.price)}</span>
+                            <span className="text-nilin-charcoal">{formatBookingPrice(addon.price, currentBooking.pricing.currency)}</span>
                           </div>
                         ))}
                       </>
@@ -603,17 +604,17 @@ const BookingDetail: React.FC<BookingDetailProps> = ({ userType, className }) =>
 
                     <div className="flex justify-between border-t border-nilin-border/30 pt-2">
                       <span className="text-nilin-warmGray">Subtotal:</span>
-                      <span className="text-nilin-charcoal">{new Intl.NumberFormat(locale, { style: 'currency', currency: currentBooking.pricing.currency }).format(currentBooking.pricing.subtotal)}</span>
+                      <span className="text-nilin-charcoal">{formatBookingPrice(currentBooking.pricing.subtotal, currentBooking.pricing.currency)}</span>
                     </div>
 
                     <div className="flex justify-between">
                       <span className="text-nilin-warmGray">Taxes:</span>
-                      <span className="text-nilin-charcoal">{new Intl.NumberFormat(locale, { style: 'currency', currency: currentBooking.pricing.currency }).format(currentBooking.pricing.tax)}</span>
+                      <span className="text-nilin-charcoal">{formatBookingPrice(currentBooking.pricing.tax, currentBooking.pricing.currency)}</span>
                     </div>
 
                     <div className="flex justify-between border-t border-nilin-border/30 pt-2 font-semibold text-lg">
                       <span className="text-nilin-charcoal">Total:</span>
-                      <span className="text-nilin-coral">{new Intl.NumberFormat(locale, { style: 'currency', currency: currentBooking.pricing.currency }).format(currentBooking.pricing.totalAmount)}</span>
+                      <span className="text-nilin-coral">{formatBookingPrice(currentBooking.pricing.totalAmount, currentBooking.pricing.currency)}</span>
                     </div>
                   </div>
                 </div>

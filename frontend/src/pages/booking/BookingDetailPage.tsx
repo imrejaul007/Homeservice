@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Calendar,
@@ -24,6 +24,7 @@ import { toast } from 'react-hot-toast';
 import { socketService } from '../../services/socket';
 // Issue #7 fix: Import useBookingAdminUpdates for real-time admin update notifications
 import { useBookingAdminUpdates } from '../../hooks/useSocket';
+import { formatBookingPrice } from '../../utils/formatting';
 
 interface BookingError {
   message: string;
@@ -382,7 +383,7 @@ const BookingDetailPage: React.FC = () => {
                 </div>
                 <div className="p-4 bg-nilin-blush/30 rounded-lg">
                   <div className="text-sm text-nilin-warmGray mb-1">Total Amount</div>
-                  <div className="text-2xl font-bold text-nilin-coral">{currentBooking.pricing.currency || 'AED'} {currentBooking.pricing.totalAmount}</div>
+                  <div className="text-2xl font-bold text-nilin-coral">{formatBookingPrice(currentBooking.pricing.totalAmount, currentBooking.pricing.currency || 'AED')}</div>
                 </div>
               </div>
             </div>

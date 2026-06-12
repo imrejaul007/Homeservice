@@ -81,6 +81,77 @@ export function formatCurrencySimple(
 }
 
 // =============================================================================
+// Booking Price Formatting
+// =============================================================================
+
+/**
+ * Format booking price with proper locale and currency
+ * Optimized for AED (UAE) with fallback to en-US locale
+ *
+ * @param amount - The amount to format
+ * @param currency - Currency code (default: 'AED')
+ * @returns Formatted currency string with proper decimals
+ *
+ * @example
+ * formatBookingPrice(1410) // "AED 1,410.00"
+ * formatBookingPrice(99.9, 'USD') // "USD 99.90"
+ */
+export function formatBookingPrice(
+  amount: number,
+  currency: string = 'AED'
+): string {
+  if (typeof amount !== 'number' || isNaN(amount)) {
+    return formatBookingPrice(0, currency);
+  }
+
+  // Use AED locale for UAE marketplace, en-US for others
+  const locale = currency === 'AED' ? 'en-AE' : 'en-US';
+
+  return new Intl.NumberFormat(locale, {
+    style: 'currency',
+    currency,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(amount);
+}
+
+/**
+ * Format booking price with custom options
+ * Use when you need more control over the formatting
+ *
+ * @param amount - The amount to format
+ * @param options - Custom formatting options
+ * @returns Formatted currency string
+ */
+export function formatBookingPriceWithOptions(
+  amount: number,
+  options: {
+    currency?: string;
+    showSymbol?: boolean;
+    decimals?: number;
+    locale?: string;
+  } = {}
+): string {
+  const {
+    currency = 'AED',
+    showSymbol = true,
+    decimals = 2,
+    locale = currency === 'AED' ? 'en-AE' : 'en-US'
+  } = options;
+
+  if (typeof amount !== 'number' || isNaN(amount)) {
+    return `0.${'0'.repeat(decimals)}`;
+  }
+
+  return new Intl.NumberFormat(locale, {
+    style: showSymbol ? 'currency' : 'decimal',
+    currency: showSymbol ? currency : undefined,
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  }).format(amount);
+}
+
+// =============================================================================
 // Date/Time Formatting
 // =============================================================================
 
@@ -657,6 +728,8 @@ function parseDate(date: string | Date | number): Date | null {
 export const formatting = {
   currency: formatCurrency,
   currencySimple: formatCurrencySimple,
+  bookingPrice: formatBookingPrice,
+  bookingPriceWithOptions: formatBookingPriceWithOptions,
   date: formatDate,
   time: formatTime,
   dateTime: formatDateTime,

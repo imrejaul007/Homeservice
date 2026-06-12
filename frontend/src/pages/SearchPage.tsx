@@ -5,6 +5,7 @@ import Footer from '../components/layout/Footer';
 import ServiceCard from '../components/customer/ServiceCard';
 import type { Service } from '../components/customer/ServiceCard';
 import ProviderCard from '../components/service/ProviderCard';
+import axios from 'axios';
 import { searchApi, SearchApiError } from '../services/searchApi';
 import type { SearchProvider, SavedSearch } from '../types/search';
 import {
@@ -207,6 +208,8 @@ const SearchPage: React.FC = () => {
           }
         }
       } catch (err) {
+        // Ignore aborted requests — expected when filters change or component unmounts
+        if (axios.isCancel(err)) return;
         if (err instanceof Error && err.name === 'AbortError') return;
         const message = err instanceof SearchApiError
           ? err.message
