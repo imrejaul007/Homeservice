@@ -64,11 +64,12 @@ interface SlotLockResult {
 // ============================================
 const VALID_TRANSITIONS: Record<string, string[]> = {
   pending: ['confirmed', 'cancelled'],
-  confirmed: ['in_progress', 'cancelled', 'no_show'],
+  confirmed: ['in_progress', 'cancelled', 'no_show', 'rejected'],
   in_progress: ['completed', 'cancelled', 'no_show'],
   completed: ['refunded'],
   cancelled: [],
   no_show: [],
+  rejected: [],
 };
 
 /**

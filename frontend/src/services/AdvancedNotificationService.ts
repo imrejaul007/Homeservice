@@ -435,7 +435,7 @@ class AdvancedNotificationService {
 
     // Create notification center item
     const centerItem: NotificationCenterItem = {
-      _id: (data?.id as string) || `local_${Date.now()}`,
+      id: (data?.id as string) || `local_${Date.now()}`,
       userId: '',
       type: type as Notification['type'],
       title: title || '',

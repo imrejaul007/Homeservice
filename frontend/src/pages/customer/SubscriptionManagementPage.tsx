@@ -165,14 +165,17 @@ const SubscriptionManagementPage: React.FC = () => {
         subscriptionApi.getMembership(),
       ]);
 
-      if (subRes.status === 'fulfilled' && subRes.value.data) {
-        setCurrentSubscription(subRes.value.data);
+      // getSubscription returns Subscription directly, not wrapped in .data
+      if (subRes.status === 'fulfilled') {
+        setCurrentSubscription(subRes.value as Subscription);
       }
 
+      // getUsageStats returns { success: boolean; data: UsageStats }
       if (usageRes.status === 'fulfilled' && usageRes.value.data) {
         setUsageStats(usageRes.value.data);
       }
 
+      // getMembership returns { success: boolean; data: Membership }
       if (membershipRes.status === 'fulfilled' && membershipRes.value.data) {
         setMembershipTier(membershipRes.value.data);
       }
@@ -255,18 +258,20 @@ const SubscriptionManagementPage: React.FC = () => {
     setError(null);
 
     try {
-      const response = await subscriptionApi.changePlan(newPlan, {
+      const subscription = await subscriptionApi.changePlan(newPlan, {
         billingCycle,
         immediate: true,
         reason: 'User initiated change',
       });
 
-      setCurrentSubscription(response.data);
+      setCurrentSubscription(subscription);
       setSuccessMessage(`Successfully changed to ${PLANS[newPlan].name} plan!`);
 
       // Refresh usage stats
       const usageRes = await subscriptionApi.getUsageStats();
-      setUsageStats(usageRes.data);
+      if (usageRes.success && usageRes.data) {
+        setUsageStats(usageRes.data);
+      }
 
       setTimeout(() => setSuccessMessage(null), 3000);
     } catch (err: any) {
@@ -282,12 +287,12 @@ const SubscriptionManagementPage: React.FC = () => {
     setError(null);
 
     try {
-      const response = await subscriptionApi.cancelSubscription({
+      const subscription = await subscriptionApi.cancelSubscription({
         immediate: false,
         reason: cancelReason,
       });
 
-      setCurrentSubscription(response.data);
+      setCurrentSubscription(subscription);
       setShowCancelModal(false);
       setCancelReason('');
       setSuccessMessage('Your subscription will be cancelled at the end of the billing period.');
@@ -306,8 +311,8 @@ const SubscriptionManagementPage: React.FC = () => {
     setError(null);
 
     try {
-      const response = await subscriptionApi.reactivateSubscription();
-      setCurrentSubscription(response.data);
+      const subscription = await subscriptionApi.reactivateSubscription();
+      setCurrentSubscription(subscription);
       setSuccessMessage('Your subscription has been reactivated!');
       setTimeout(() => setSuccessMessage(null), 3000);
     } catch (err: any) {

@@ -10,6 +10,7 @@ interface BreadcrumbItem {
 interface AdminPageShellProps {
   title: string;
   subtitle?: string;
+  description?: string;
   breadcrumbItems?: BreadcrumbItem[];
   headerActions?: React.ReactNode;
   backHref?: string;

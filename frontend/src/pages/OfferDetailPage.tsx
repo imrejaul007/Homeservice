@@ -35,8 +35,9 @@ interface OfferDetail {
   type: 'percentage' | 'fixed' | 'free_service';
   value: number;
   validUntil?: string;
-  minOrderValue: number;
-  applicableServices?: string[];
+  minOrderValue?: number;
+  maxDiscount?: number;
+  applicableServices?: (string | ServiceSummary)[];
   applicableCategories?: string[];
   hasActiveClaim?: boolean;
   isClaimed?: boolean;
@@ -89,23 +90,29 @@ const OfferDetailPage: React.FC = () => {
         // applicableServices comes with full service objects from backend
         if (offerData.applicableServices && offerData.applicableServices.length > 0) {
           // FIX: Added explicit length check before accessing first element
-          const firstItem = offerData.applicableServices[0];
-          if (firstItem && typeof firstItem === 'object' && firstItem._id) {
+          const firstItem = offerData.applicableServices[0] as ServiceSummary | string | undefined;
+          if (firstItem && typeof firstItem === 'object' && '_id' in firstItem) {
             // Already populated with service objects - use directly
-            setServices(offerData.applicableServices);
+            setServices(offerData.applicableServices as unknown as ServiceSummary[]);
           } else {
             // It's an array of IDs - fetch the services
-            await loadLinkedServices(offerData.applicableServices);
+            const serviceIds = offerData.applicableServices.filter((id): id is string => typeof id === 'string');
+            if (serviceIds.length > 0) {
+              await loadLinkedServices(serviceIds);
+            }
           }
         }
 
         // FIX: If offer has linked categories, load services by category
         if (offerData.applicableCategories && offerData.applicableCategories.length > 0) {
           // Check if it's already an array of category objects or just IDs
-          const firstItem = offerData.applicableCategories[0];
-          if (firstItem && typeof firstItem === 'object' && firstItem._id) {
-            // Already populated with category objects - fetch services by category
-            await loadServicesByCategory(offerData.applicableCategories);
+          const firstItem = offerData.applicableCategories[0] as { _id?: string } | string | undefined;
+          if (firstItem && typeof firstItem === 'object' && '_id' in firstItem) {
+            // Already populated with category objects - extract IDs and fetch services
+            const categoryIds = offerData.applicableCategories.map((c: any) =>
+              typeof c === 'string' ? c : c._id
+            );
+            await loadServicesByCategory(categoryIds);
           } else {
             // It's an array of IDs - fetch services
             const categoryIds = offerData.applicableCategories.filter((id: any) => typeof id === 'string');

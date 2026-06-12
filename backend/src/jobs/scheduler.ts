@@ -50,8 +50,9 @@ import { runOffPeakPromotionAnalysis, generatePromotionSuggestions } from '../au
 const CRON_TIMEZONE = 'Asia/Dubai';
 const LOCK_TTL_SECONDS = 3600; // 1 hour lock expiry
 
-const STALE_BOOKING_HOURS = 48; // Auto-cancel pending bookings after 48 hours
+const STALE_BOOKING_HOURS = 24; // Auto-cancel pending bookings after 24 hours (no provider response)
 const WEBHOOK_RETENTION_DAYS = 30; // Keep processed webhook cache entries for 30 days
+const EXPIRED_BOOKING_GRACE_MINUTES = 30; // Grace period after scheduled time before auto-reject
 
 // Track cron job references for graceful shutdown
 const scheduledTasks: cron.ScheduledTask[] = [];
@@ -92,6 +93,7 @@ async function withLock(lockKey: string, jobName: string, fn: () => Promise<void
 
 /**
  * Auto-cancel stale pending bookings that providers haven't responded to
+ * Runs every 15 minutes to check for pending bookings older than 24 hours
  */
 async function autoCancelStaleBookings(): Promise<void> {
   try {
@@ -113,7 +115,7 @@ async function autoCancelStaleBookings(): Promise<void> {
         await booking.updateStatus(
           'cancelled',
           'system',
-          'Auto-cancelled: provider did not respond within 48 hours',
+          `Auto-cancelled: provider did not respond within ${STALE_BOOKING_HOURS} hours`,
           'Automatic system cancellation due to no provider response'
         );
         logger.info(`Auto-cancelled stale booking: ${booking.bookingNumber}`);
@@ -125,6 +127,78 @@ async function autoCancelStaleBookings(): Promise<void> {
     logger.info(`Completed auto-cancellation of ${staleBookings.length} stale bookings`);
   } catch (error) {
     logger.error('Error in auto-cancel stale bookings job:', error);
+  }
+}
+
+/**
+ * Auto-reject confirmed bookings where scheduled time has passed
+ * Providers accepted but didn't show up - auto-reject after grace period
+ * Runs every 15 minutes to check for confirmed bookings past their scheduled time
+ */
+async function autoRejectExpiredConfirmedBookings(): Promise<void> {
+  try {
+    const now = new Date();
+    // Calculate threshold: current time minus grace period
+    const gracePeriodMs = EXPIRED_BOOKING_GRACE_MINUTES * 60 * 1000;
+    const thresholdTime = new Date(now.getTime() - gracePeriodMs);
+
+    // Build date string for the threshold (e.g., "2026-06-12")
+    const thresholdDate = thresholdTime.toISOString().split('T')[0];
+    const thresholdTimeStr = thresholdTime.toTimeString().slice(0, 5); // "HH:MM" format
+
+    // Find confirmed bookings where scheduledDate + scheduledTime has passed
+    // We need to query for bookings on or before the threshold date
+    const expiredBookings = await Booking.find({
+      status: 'confirmed',
+      $or: [
+        // Same day: scheduledTime is before threshold
+        {
+          scheduledDate: {
+            $gte: new Date(thresholdDate + 'T00:00:00.000Z'),
+            $lt: new Date(thresholdDate + 'T23:59:59.999Z')
+          },
+          scheduledTime: { $lt: thresholdTimeStr }
+        },
+        // Previous days: any booking from previous days
+        {
+          scheduledDate: { $lt: new Date(thresholdDate + 'T00:00:00.000Z') }
+        }
+      ]
+    });
+
+    if (expiredBookings.length === 0) {
+      return;
+    }
+
+    logger.info(`Found ${expiredBookings.length} expired confirmed bookings to auto-reject`);
+
+    for (const booking of expiredBookings) {
+      try {
+        // Double-check: ensure the booking is actually past its scheduled time
+        const scheduledDateTime = new Date(booking.scheduledDate);
+        const [hours, minutes] = booking.scheduledTime.split(':').map(Number);
+        scheduledDateTime.setHours(hours, minutes, 0, 0);
+
+        if (scheduledDateTime.getTime() + gracePeriodMs > now.getTime()) {
+          // Not yet past grace period, skip
+          continue;
+        }
+
+        await booking.updateStatus(
+          'rejected',
+          'system',
+          'Auto-rejected: provider accepted but did not show up',
+          `Automatic system rejection - scheduled time ${booking.scheduledDate.toISOString().split('T')[0]} ${booking.scheduledTime} has passed`
+        );
+        logger.info(`Auto-rejected expired booking: ${booking.bookingNumber}`);
+      } catch (error) {
+        logger.error(`Failed to auto-reject booking ${booking.bookingNumber}:`, error);
+      }
+    }
+
+    logger.info(`Completed auto-rejection of expired confirmed bookings`);
+  } catch (error) {
+    logger.error('Error in auto-reject expired bookings job:', error);
   }
 }
 
@@ -449,16 +523,27 @@ async function expireOldPoints(): Promise<void> {
 export function initializeScheduledJobs(): void {
   logger.info('Initializing scheduled jobs with node-cron...');
 
-  // Auto-cancel stale bookings - every hour at minute 0
+  // Auto-cancel stale bookings - every 15 minutes (pending bookings with no provider response)
   const staleBookingTask = cron.schedule(
-    '0 * * * *',
+    '*/15 * * * *',
     async () => {
       await withLock('lock:scheduler:stale_bookings', 'StaleBookingsJob', autoCancelStaleBookings);
     },
     { timezone: CRON_TIMEZONE }
   );
   scheduledTasks.push(staleBookingTask);
-  logger.info(`Stale booking auto-cancel scheduled: every hour at minute 0 (cron: 0 * * * *, tz: ${CRON_TIMEZONE})`);
+  logger.info(`Stale booking auto-cancel scheduled: every 15 minutes (cron: */15 * * * *, tz: ${CRON_TIMEZONE})`);
+
+  // Auto-reject expired confirmed bookings - every 15 minutes (provider accepted but didn't show up)
+  const expiredBookingTask = cron.schedule(
+    '*/15 * * * *',
+    async () => {
+      await withLock('lock:scheduler:expired_bookings', 'ExpiredBookingsJob', autoRejectExpiredConfirmedBookings);
+    },
+    { timezone: CRON_TIMEZONE }
+  );
+  scheduledTasks.push(expiredBookingTask);
+  logger.info(`Expired booking auto-reject scheduled: every 15 minutes (cron: */15 * * * *, tz: ${CRON_TIMEZONE})`);
 
   // Process withdrawals - every 15 minutes
   const withdrawalTask = cron.schedule(
@@ -1167,6 +1252,7 @@ export default {
   initializeScheduledJobs,
   shutdownScheduledJobs,
   autoCancelStaleBookings,
+  autoRejectExpiredConfirmedBookings,
   processPendingWithdrawals,
   sendBookingReminders,
   cleanupExpiredWebhooks,

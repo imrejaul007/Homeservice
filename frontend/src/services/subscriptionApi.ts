@@ -30,6 +30,23 @@ export {
   type PaymentMethod,
 } from '../types/subscription.types';
 
+// PlanType is already exported as CustomerPlanType above
+
+import type {
+  Subscription,
+  Membership,
+  UsageStats,
+  MembershipTier,
+  CustomerPlanType,
+  SubscriptionStatus,
+  BillingCycle,
+  FeaturedListing,
+  MembershipBenefits,
+  BillingHistoryItem,
+  TierUpgradeEligibility,
+  PaymentMethod,
+} from '../types/subscription.types';
+
 // ============================================
 // Invoice Types (for subscription invoices)
 // ============================================
@@ -139,12 +156,17 @@ interface StatsResponse {
 
 function getErrorMessage(error: unknown, fallback: string): string {
   if (error && typeof error === 'object') {
-    const err = error as Record<string, unknown>;
+    const err = error as { response?: { data?: { message?: string; error?: string }; message?: string }; message?: string };
     if (err.response?.data?.message) {
       return String(err.response.data.message);
     }
     if (err.response?.data?.error) {
       return String(err.response.data.error);
+    }
+    if (err.response?.data) {
+      const data = err.response.data as Record<string, unknown>;
+      if (data.message) return String(data.message);
+      if (data.error) return String(data.error);
     }
     if (err.message) {
       return String(err.message);
@@ -165,10 +187,10 @@ class SubscriptionApiService {
   /**
    * Get current user's subscription
    */
-  async getSubscription(): Promise<SubscriptionResponse> {
+  async getSubscription(): Promise<Subscription> {
     try {
       const response = await api.get('/subscriptions/me');
-      return response.data;
+      return response.data.data || response.data;
     } catch (error) {
       throw new Error(getErrorMessage(error, 'Failed to fetch subscription'));
     }
@@ -177,10 +199,10 @@ class SubscriptionApiService {
   /**
    * Get available subscription plans
    */
-  async getPlans(): Promise<{ success: boolean; data: SubscriptionPlan[] }> {
+  async getPlans(): Promise<Array<{ id: CustomerPlanType; name: string; price: number; currency: string; features: string[]; limits: Record<string, unknown> }>> {
     try {
       const response = await api.get('/subscriptions/plans');
-      return response.data;
+      return (response.data.data || response.data) as Array<{ id: CustomerPlanType; name: string; price: number; currency: string; features: string[]; limits: Record<string, unknown> }>;
     } catch (error) {
       throw new Error(getErrorMessage(error, 'Failed to fetch subscription plans'));
     }
@@ -194,10 +216,10 @@ class SubscriptionApiService {
     billingCycle: BillingCycle;
     paymentMethodId?: string;
     trialDays?: number;
-  }): Promise<SubscriptionResponse> {
+  }): Promise<Subscription> {
     try {
       const response = await api.post('/subscriptions', data);
-      return response.data;
+      return response.data.data || response.data;
     } catch (error) {
       throw new Error(getErrorMessage(error, 'Failed to create subscription'));
     }
@@ -213,13 +235,13 @@ class SubscriptionApiService {
       immediate?: boolean;
       reason?: string;
     }
-  ): Promise<SubscriptionResponse> {
+  ): Promise<Subscription> {
     try {
       const response = await api.patch('/subscriptions/plan', {
         plan: newPlan,
         ...options,
       });
-      return response.data;
+      return response.data.data || response.data;
     } catch (error) {
       throw new Error(getErrorMessage(error, 'Failed to change subscription plan'));
     }
@@ -231,10 +253,10 @@ class SubscriptionApiService {
   async cancelSubscription(options?: {
     immediate?: boolean;
     reason?: string;
-  }): Promise<SubscriptionResponse> {
+  }): Promise<Subscription> {
     try {
       const response = await api.post('/subscriptions/cancel', options || {});
-      return response.data;
+      return response.data.data || response.data;
     } catch (error) {
       throw new Error(getErrorMessage(error, 'Failed to cancel subscription'));
     }
@@ -243,10 +265,10 @@ class SubscriptionApiService {
   /**
    * Reactivate cancelled subscription
    */
-  async reactivateSubscription(): Promise<SubscriptionResponse> {
+  async reactivateSubscription(): Promise<Subscription> {
     try {
       const response = await api.post('/subscriptions/reactivate');
-      return response.data;
+      return response.data.data || response.data;
     } catch (error) {
       throw new Error(getErrorMessage(error, 'Failed to reactivate subscription'));
     }
@@ -255,12 +277,12 @@ class SubscriptionApiService {
   /**
    * Update payment method
    */
-  async updatePaymentMethod(paymentMethodId: string): Promise<SubscriptionResponse> {
+  async updatePaymentMethod(paymentMethodId: string): Promise<Subscription> {
     try {
       const response = await api.patch('/subscriptions/payment-method', {
         paymentMethodId,
       });
-      return response.data;
+      return response.data.data || response.data;
     } catch (error) {
       throw new Error(getErrorMessage(error, 'Failed to update payment method'));
     }

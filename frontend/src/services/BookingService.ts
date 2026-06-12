@@ -794,7 +794,7 @@ class BookingService {
       days?: number;
       serviceId?: string; // Optional service ID for per-service availability
     }
-  ): Promise<BookingResponse<{ slots: AvailableSlot[] }>> {
+  ): Promise<BookingResponse<{ slots: AvailableSlot[]; minBookingAdvanceHours?: number }>> {
     try {
       const searchParams = new URLSearchParams();
       Object.entries(params).forEach(([key, value]) => {
@@ -952,6 +952,7 @@ class BookingService {
       cancelled: 'text-red-600 bg-red-100',
       no_show: 'text-orange-600 bg-orange-100',
       refunded: 'text-teal-600 bg-teal-100',
+      rejected: 'text-red-600 bg-red-100',
     };
     return colors[status] || 'text-gray-600 bg-gray-100';
   }
@@ -968,6 +969,7 @@ class BookingService {
       cancelled: 'Cancelled',
       no_show: 'No Show',
       refunded: 'Refunded',
+      rejected: 'Rejected',
     };
     return labels[status] || status;
   }

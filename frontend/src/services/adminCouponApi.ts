@@ -94,7 +94,7 @@ export const adminCouponApi = {
   },
 
   update: async (id: string, form: Partial<CouponFormPayload>) => {
-    const payload = { ...form };
+    const payload: Record<string, unknown> = { ...form };
     if (form.validFrom) {
       payload.validFrom = new Date(`${form.validFrom}T00:00:00`).toISOString() as unknown as string;
     }

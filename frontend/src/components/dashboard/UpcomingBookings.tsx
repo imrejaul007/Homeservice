@@ -88,6 +88,12 @@ const STATUS_CONFIG: Record<
     bgColor: 'bg-gray-50 border-gray-200',
     icon: RefreshCw,
   },
+  rejected: {
+    label: 'Rejected',
+    color: 'text-red-700',
+    bgColor: 'bg-red-50 border-red-200',
+    icon: XCircle,
+  },
 };
 
 // =============================================================================

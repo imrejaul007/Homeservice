@@ -1,8 +1,8 @@
 // API Types
 export * from './api';
 
-// Auth Types
-export * from './auth';
+// Auth Types - export explicitly to avoid VerificationStatus conflict
+export type { BusinessInfo, LocationInfo, ServiceInput, VerificationStatus, ProviderVerificationData, DashboardStats } from './auth';
 
 // Existing type exports
 export * from './category';

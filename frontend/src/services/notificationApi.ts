@@ -14,6 +14,7 @@ export const FRONTEND_NOTIFICATION_TYPES = [
   'booking',
   'payment',
   'message',
+  'message_received',
   'review',
   'promotion',
   'system',
@@ -97,14 +98,15 @@ export function normalizeBackendNotificationType(type: string): string {
  * - Uses `createdAt` as ISO string for API compatibility
  */
 export interface Notification {
-  id: string;
-  userId: string;
-  type: NotificationType;
-  title: string;
-  message: string;
-  isRead: boolean;
+  _id?: string;
+  id?: string;
+  userId?: string;
+  type?: NotificationType;
+  title?: string;
+  message?: string;
+  isRead?: boolean;
   data?: Record<string, unknown>;
-  createdAt: string;
+  createdAt?: string;
   readAt?: string;
 }
 
@@ -429,7 +431,11 @@ class NotificationApiService {
     startDate?: string;
     endDate?: string;
     search?: string;
-  }): Promise<NotificationsResponse> {
+  }): Promise<{
+    notifications: Notification[];
+    total: number;
+    unreadCount: number;
+  }> {
     const params = new URLSearchParams();
     if (options?.page) params.append('page', options.page.toString());
     if (options?.limit) params.append('limit', options.limit.toString());
@@ -443,7 +449,7 @@ class NotificationApiService {
     const url = queryString ? `/notifications?${queryString}` : '/notifications';
 
     const response = await api.get(url);
-    return response.data;
+    return (response.data as { data: { notifications: Notification[]; total: number; unreadCount: number } }).data;
   }
 
   // =============================================================================

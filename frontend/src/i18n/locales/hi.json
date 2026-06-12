@@ -38,7 +38,11 @@
       "pending": "लंबित",
       "confirmed": "पुष्टि हो गई",
       "completed": "पूर्ण",
-      "cancelled": "रद्द"
+      "cancelled": "रद्द",
+      "no_show": "उपस्थित नहीं",
+      "refunded": "वापस किया गया",
+      "rejected": "अस्वीकृत",
+      "in_progress": "प्रगति में"
     }
   },
   "payment": {

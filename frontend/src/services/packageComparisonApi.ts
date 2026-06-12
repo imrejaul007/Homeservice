@@ -40,7 +40,7 @@ export interface ComparisonPackage {
     price: number;
     label: string;
   }>;
-  includedItems: string[];
+  includedItems: Array<string | { name: string; included?: boolean }>;
   requirements?: string[];
   addOns?: Array<{
     name: string;

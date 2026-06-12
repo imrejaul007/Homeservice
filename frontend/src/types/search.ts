@@ -54,10 +54,13 @@ export interface Service {
   rating: {
     average: number;
     count: number;
+    searchMetadata?: {
+      searchCount?: number;
+    };
   };
   isActive: boolean;
-  isFeatured: boolean;
-  isPopular: boolean;
+  isFeatured?: boolean;
+  isPopular?: boolean;
   // Package identification fields
   isPackage?: boolean;
   bundleId?: string;
@@ -121,6 +124,21 @@ export interface SuggestionsResponse {
   success: boolean;
   data: {
     suggestions: Suggestion[];
+  };
+}
+
+export interface TrendingSearch {
+  term: string;
+  category: string;
+  searchCount: number;
+  icon?: string;
+}
+
+export interface TrendingSearchesResponse {
+  success: boolean;
+  data: {
+    trendingSearches: TrendingSearch[];
+    timeframe: string;
   };
 }
 

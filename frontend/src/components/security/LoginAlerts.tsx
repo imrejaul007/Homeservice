@@ -38,6 +38,7 @@ interface LoginAlertsProps {
   userId: string;
   onAlertResolved?: (alertId: string) => void;
   onSessionRevoked?: (sessionId: string) => void;
+  onAllRevoked?: () => void;
 }
 
 interface ApiResponse<T> {
@@ -50,6 +51,7 @@ export const LoginAlerts: React.FC<LoginAlertsProps> = ({
   userId,
   onAlertResolved,
   onSessionRevoked,
+  onAllRevoked,
 }) => {
   const [alerts, setAlerts] = useState<LoginAlert[]>([]);
   const [sessions, setSessions] = useState<LoginSession[]>([]);

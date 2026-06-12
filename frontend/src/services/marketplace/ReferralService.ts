@@ -128,8 +128,8 @@ export const useReferralStore = create<ReferralState>()(
                 createdAt: codeResponse.data.createdAt ? new Date(codeResponse.data.createdAt).getTime() : Date.now(),
                 uses: codeResponse.data.totalUses || 0,
                 rewards: {
-                  referrer: codeResponse.data.referrerReward || DEFAULT_REFERRER_REWARD,
-                  referee: codeResponse.data.refereeReward || DEFAULT_REFEREE_REWARD,
+                  referrer: DEFAULT_REFERRER_REWARD,
+                  referee: DEFAULT_REFEREE_REWARD,
                 },
               },
             });

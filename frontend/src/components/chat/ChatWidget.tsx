@@ -44,7 +44,7 @@ export function ChatWidget({
 }: ChatWidgetProps) {
   const [isOpen, setIsOpen] = useState(!defaultMinimized);
   const [isMinimized, setIsMinimized] = useState(defaultMinimized);
-  const [selectedRoom, setSelectedRoom] = useState<ChatRoom | null>(null);
+  const [selectedRoom, setSelectedRoom] = useState<ChatRoom | ChatRoomListItem | null>(null);
   const [chatRooms, setChatRooms] = useState<ChatRoomListItem[]>([]);
   const [unreadCount, setUnreadCount] = useState(unreadCountProp);
   const [isLoadingRooms, setIsLoadingRooms] = useState(false);
@@ -237,12 +237,12 @@ export function ChatWidget({
           userId={userId}
           userName={userName}
           userAvatar={userAvatar}
-          initialSelectedRoom={selectedRoom}
+          initialSelectedRoom={selectedRoom as ChatRoom | null}
           isMinimized={isMinimized}
           onClose={handleClose}
           onMinimize={() => setIsMinimized(true)}
           onExpand={() => setIsMinimized(false)}
-          onSelectRoom={setSelectedRoom}
+          onSelectRoom={(room) => setSelectedRoom(room as ChatRoom | ChatRoomListItem | null)}
           onBackToRooms={handleBackToRooms}
           onNewMessage={onNewMessage}
           onUnreadChange={handleUnreadChange}

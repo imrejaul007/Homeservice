@@ -30,7 +30,6 @@ import Breadcrumb from '../components/common/Breadcrumb';
 import { useAuthStore } from '../stores/authStore';
 import {
   subscriptionApi,
-  type SubscriptionPlan,
   type Subscription,
   type UsageStats,
   type Membership,
@@ -40,11 +39,30 @@ import {
   type PaymentMethod,
 } from '../services/subscriptionApi';
 
+// Customer-facing subscription plan type (different from provider SubscriptionPlan)
+interface CustomerSubscriptionPlan {
+  id: PlanType;
+  name: string;
+  price: number;
+  currency: string;
+  features: string[];
+  limits: {
+    bookingsPerMonth?: number;
+    maxAddresses?: number;
+    maxPaymentMethods?: number;
+    featuredListings?: number;
+    commissionDiscount?: number;
+    prioritySupport?: boolean;
+    exclusiveOffers?: boolean;
+    earlyAccess?: boolean;
+  };
+}
+
 // ============================================
 // Plan Configuration
 // ============================================
 
-const PLANS: Record<string, SubscriptionPlan> = {
+const PLANS: Record<PlanType, CustomerSubscriptionPlan> = {
   free: {
     id: 'free',
     name: 'Free',
@@ -186,7 +204,7 @@ const SubscriptionPlansPage: React.FC = () => {
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
   const [activeTab, setActiveTab] = useState<'plans' | 'membership' | 'billing'>('plans');
-  const [billingHistory, setBillingHistory] = useState<BillingHistoryItem[]>([]);
+  const [billingHistory, setBillingHistory] = useState<Subscription[]>([]);
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
   const [defaultPaymentMethod, setDefaultPaymentMethod] = useState<PaymentMethod | null>(null);
 
@@ -213,24 +231,32 @@ const SubscriptionPlansPage: React.FC = () => {
       ]);
 
       if (subRes.status === 'fulfilled') {
-        setCurrentSubscription(subRes.value.data);
+        setCurrentSubscription(subRes.value as Subscription);
       }
 
       if (usageRes.status === 'fulfilled') {
-        setUsageStats(usageRes.value.data);
+        const usageData = usageRes.value as { success: boolean; data: UsageStats };
+        if (usageData.data) {
+          setUsageStats(usageData.data);
+        }
       }
 
       if (membershipRes.status === 'fulfilled') {
-        setMembershipTier(membershipRes.value.data);
+        const membershipData = membershipRes.value as { success: boolean; data: Membership };
+        if (membershipData.data) {
+          setMembershipTier(membershipData.data);
+        }
       }
 
       if (historyRes.status === 'fulfilled') {
-        setBillingHistory(historyRes.value.data.subscriptions || []);
+        const historyData = historyRes.value as { data?: { subscriptions?: Subscription[] } };
+        setBillingHistory(historyData.data?.subscriptions || []);
       }
 
       if (paymentMethodsRes.status === 'fulfilled') {
-        setPaymentMethods(paymentMethodsRes.value.data.paymentMethods);
-        setDefaultPaymentMethod(paymentMethodsRes.value.data.defaultMethod);
+        const paymentData = paymentMethodsRes.value as { data?: { paymentMethods: PaymentMethod[]; defaultMethod: PaymentMethod | null } };
+        setPaymentMethods(paymentData.data?.paymentMethods || []);
+        setDefaultPaymentMethod(paymentData.data?.defaultMethod || null);
       }
     } catch (err) {
       // Don't show error for missing subscription (user might not have one)
@@ -256,19 +282,21 @@ const SubscriptionPlansPage: React.FC = () => {
     try {
       // In a real implementation, this would redirect to Stripe checkout
       // or open a payment modal
-      const response = await subscriptionApi.createSubscription({
+      const subscription = await subscriptionApi.createSubscription({
         plan,
         billingCycle,
         trialDays: plan === 'basic' ? 7 : 0, // 7-day trial for basic plan
       });
 
-      setCurrentSubscription(response.data);
+      setCurrentSubscription(subscription);
       setSuccessMessage(`Successfully subscribed to ${PLANS[plan].name} plan!`);
-      toast.success(response.data.message || `Successfully subscribed to ${PLANS[plan].name} plan!`);
+      toast.success(`Successfully subscribed to ${PLANS[plan].name} plan!`);
 
       // Refresh usage stats
-      const usageRes = await subscriptionApi.getUsageStats();
-      setUsageStats(usageRes.data);
+      const usageStatsRes = await subscriptionApi.getUsageStats();
+      if (usageStatsRes.success && usageStatsRes.data) {
+        setUsageStats(usageStatsRes.data);
+      }
 
       // Clear success message after 3 seconds
       setTimeout(() => setSuccessMessage(null), 3000);
@@ -287,18 +315,20 @@ const SubscriptionPlansPage: React.FC = () => {
     setError(null);
 
     try {
-      const response = await subscriptionApi.changePlan(newPlan, {
+      const subscription = await subscriptionApi.changePlan(newPlan, {
         immediate: true,
         reason: 'User initiated change',
       });
 
-      setCurrentSubscription(response.data);
+      setCurrentSubscription(subscription);
       setSuccessMessage(`Successfully changed to ${PLANS[newPlan].name} plan!`);
-      toast.success(response.data.message || `Successfully changed to ${PLANS[newPlan].name} plan!`);
+      toast.success(`Successfully changed to ${PLANS[newPlan].name} plan!`);
 
       // Refresh usage stats
-      const usageRes = await subscriptionApi.getUsageStats();
-      setUsageStats(usageRes.data);
+      const usageStatsRes = await subscriptionApi.getUsageStats();
+      if (usageStatsRes.success && usageStatsRes.data) {
+        setUsageStats(usageStatsRes.data);
+      }
 
       setTimeout(() => setSuccessMessage(null), 3000);
     } catch (err) {
@@ -316,16 +346,16 @@ const SubscriptionPlansPage: React.FC = () => {
     setError(null);
 
     try {
-      const response = await subscriptionApi.cancelSubscription({
+      const subscription = await subscriptionApi.cancelSubscription({
         immediate: false,
         reason: cancelReason,
       });
 
-      setCurrentSubscription(response.data);
+      setCurrentSubscription(subscription);
       setShowCancelModal(false);
       setCancelReason('');
       setSuccessMessage('Your subscription will be cancelled at the end of the billing period.');
-      toast.success(response.data.message || 'Your subscription will be cancelled at the end of the billing period.');
+      toast.success('Your subscription will be cancelled at the end of the billing period.');
 
       setTimeout(() => setSuccessMessage(null), 5000);
     } catch (err) {
@@ -343,10 +373,10 @@ const SubscriptionPlansPage: React.FC = () => {
     setError(null);
 
     try {
-      const response = await subscriptionApi.reactivateSubscription();
-      setCurrentSubscription(response.data);
+      const subscription = await subscriptionApi.reactivateSubscription();
+      setCurrentSubscription(subscription);
       setSuccessMessage('Your subscription has been reactivated!');
-      toast.success(response.data.message || 'Your subscription has been reactivated!');
+      toast.success('Your subscription has been reactivated!');
       setTimeout(() => setSuccessMessage(null), 3000);
     } catch (err) {
       const error = err as { response?: { data?: { message?: string } } };
@@ -948,15 +978,16 @@ const SubscriptionPlansPage: React.FC = () => {
                     {billingHistory.map((item, index) => (
                       <div key={index} className="flex items-center justify-between py-3 border-b border-gray-100 last:border-0">
                         <div>
-                          <p className="font-medium text-gray-900">{item.description}</p>
-                          <p className="text-sm text-gray-500">{new Date(item.date).toLocaleDateString()}</p>
+                          <p className="font-medium text-gray-900">{PLANS[item.plan]?.name || item.plan} Subscription</p>
+                          <p className="text-sm text-gray-500">{new Date(item.createdAt).toLocaleDateString()}</p>
                         </div>
                         <div className="text-right">
-                          <p className="font-medium text-gray-900">AED {item.amount.toFixed(2)}</p>
+                          <p className="font-medium text-gray-900">AED {item.price.toFixed(2)}</p>
                           <span className={`text-xs px-2 py-0.5 rounded-full ${
-                            item.status === 'paid' ? 'bg-green-100 text-green-700' :
-                            item.status === 'pending' ? 'bg-yellow-100 text-yellow-700' :
-                            'bg-red-100 text-red-700'
+                            item.status === 'active' ? 'bg-green-100 text-green-700' :
+                            item.status === 'past_due' ? 'bg-yellow-100 text-yellow-700' :
+                            item.status === 'cancelled' ? 'bg-red-100 text-red-700' :
+                            'bg-gray-100 text-gray-700'
                           }`}>
                             {item.status}
                           </span>

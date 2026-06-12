@@ -7,7 +7,7 @@ import { useAuthStore } from '../../stores/authStore';
 
 interface Notification {
   _id: string;
-  type: 'booking' | 'message' | 'system' | 'promotion' | 'payment' | 'review';
+  type: 'booking' | 'message' | 'message_received' | 'chat' | 'support' | 'system' | 'promotion' | 'payment' | 'review';
   title: string;
   message: string;
   isRead: boolean;
@@ -49,7 +49,7 @@ const NotificationBell: React.FC<NotificationBellProps> = ({ userId, userRole = 
     // Add new notification to the list
     const newNotification: Notification = {
       _id: event.id,
-      type: event.type,
+      type: (event.type as string) as Notification['type'],
       title: event.title,
       message: event.message,
       isRead: false,
@@ -219,7 +219,8 @@ const NotificationBell: React.FC<NotificationBellProps> = ({ userId, userRole = 
       navigate(isProvider ? `/provider/bookings/${bookingId}` : `/customer/bookings/${bookingId}`);
     } else if (notification.type === 'booking') {
       navigate(isProvider ? '/provider/bookings' : '/customer/bookings');
-    } else if (notification.type === 'message' || notification.type === 'message_received') {
+    } else if (notification.type === 'message' || notification.type === 'message_received' || notification.type === 'chat' || notification.type === 'support') {
+      // For chat/support types, treat as message navigation
       const chatRoomId = notification.data?.chatRoomId as string | undefined;
       const bookingIdFromChat = notification.data?.bookingId as string | undefined;
       navigate(isProvider ? '/provider/messages' : '/customer/messages', {

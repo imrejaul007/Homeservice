@@ -136,6 +136,7 @@ const statusConfig: Record<BookingStatus, { color: string; bgColor: string; labe
   cancelled: { color: 'text-red-600', bgColor: 'bg-red-50', label: 'Cancelled' },
   no_show: { color: 'text-gray-600', bgColor: 'bg-gray-50', label: 'No Show' },
   refunded: { color: 'text-teal-600', bgColor: 'bg-teal-50', label: 'Refunded' },
+  rejected: { color: 'text-red-600', bgColor: 'bg-red-50', label: 'Rejected' },
 };
 
 // ============================================

@@ -44,10 +44,9 @@ export interface AllServiceSchedulesResponse {
  * Get availability schedule for a specific service
  */
 export const getServiceSchedule = async (serviceId: string): Promise<ServiceScheduleResponse> => {
-  const response = await authService.get<{ data: ServiceScheduleResponse }>(
+  return authService.get<ServiceScheduleResponse>(
     `/availability/service/${serviceId}/schedule`
   );
-  return response.data.data;
 };
 
 /**
@@ -58,31 +57,28 @@ export const updateServiceSchedule = async (
   schedule: ServiceSchedule,
   useGlobal: boolean = false
 ): Promise<ServiceScheduleResponse> => {
-  const response = await authService.put<{ data: ServiceScheduleResponse }>(
+  return authService.put<ServiceScheduleResponse>(
     `/availability/service/${serviceId}/schedule`,
     { schedule, useGlobal }
   );
-  return response.data.data;
 };
 
 /**
  * Get all service schedules for the provider
  */
 export const getAllServiceSchedules = async (): Promise<AllServiceSchedulesResponse> => {
-  const response = await authService.get<{ data: AllServiceSchedulesResponse }>(
+  return authService.get<AllServiceSchedulesResponse>(
     '/availability/service/schedules'
   );
-  return response.data.data;
 };
 
 /**
  * Copy global schedule to a specific service
  */
 export const copyGlobalToService = async (serviceId: string): Promise<{ serviceId: string; schedule: ServiceSchedule }> => {
-  const response = await authService.post<{ data: { serviceId: string; schedule: ServiceSchedule } }>(
+  return authService.post<{ serviceId: string; schedule: ServiceSchedule }>(
     `/availability/service/${serviceId}/copy-global`
   );
-  return response.data.data;
 };
 
 /**

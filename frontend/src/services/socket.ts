@@ -22,6 +22,7 @@
 import { io, Socket } from 'socket.io-client';
 import { secureStorage } from '@/lib/security';
 import { getSocketUrl } from '@/lib/getApiUrl';
+import { NotificationType } from './notificationApi';
 
 // =============================================================================
 // Type Definitions
@@ -31,6 +32,7 @@ import { getSocketUrl } from '@/lib/getApiUrl';
  * Booking status change event from server
  */
 export interface BookingEvent {
+  _id?: string;
   bookingId: string;
   bookingNumber: string;
   status: string;
@@ -74,8 +76,10 @@ export interface MessageEvent {
  * Typing indicator event
  */
 export interface TypingEvent {
-  bookingId: string;
+  bookingId?: string;
+  chatRoomId?: string;
   userId: string;
+  userName?: string;
 }
 
 /**
@@ -559,10 +563,10 @@ export interface ClientToServerEvents {
   'leave:booking_room': (bookingId: string) => void;
 
   /** Join chat room */
-  'join:chat_room': (chatRoomId: string) => void;
+  'join:chat_room': (data: { chatRoomId: string }) => void;
 
   /** Leave chat room */
-  'leave:chat_room': (chatRoomId: string) => void;
+  'leave:chat_room': (data: { chatRoomId: string }) => void;
 
   /** Send chat message */
   'send:message': (data: {
@@ -585,10 +589,10 @@ export interface ClientToServerEvents {
   'mark:read': (data: { chatRoomId: string; messageIds?: string[] }) => void;
 
   /** Start typing indicator in booking chat */
-  'typing:start': (data: { bookingId: string }) => void;
+  'typing:start': (data: { bookingId?: string; chatRoomId?: string }) => void;
 
   /** Stop typing indicator in booking chat */
-  'typing:stop': (data: { bookingId: string }) => void;
+  'typing:stop': (data: { bookingId?: string; chatRoomId?: string }) => void;
 
   /** Start typing in chat room */
   'chat:typing:start': (data: { chatRoomId: string }) => void;

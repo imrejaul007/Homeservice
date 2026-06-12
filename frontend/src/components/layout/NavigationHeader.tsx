@@ -1,10 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Search, MapPin, User, LogOut, BarChart3, X, Calendar, Heart, ChevronDown, Package, Gift, MessageCircle, Bell } from 'lucide-react';
+import { Search, MapPin, User, LogOut, BarChart3, X, Calendar, Heart, ChevronDown, Package, Gift, MessageCircle, Bell, Clock, TrendingUp } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
 import CategoryTabs from './CategoryTabs';
 import LocationDropdown from '../location/LocationDropdown';
 import NotificationBell from '../common/NotificationBell';
+import HeaderSearchDropdown from '../search/HeaderSearchDropdown';
+import { useSearchStore } from '../../stores/searchStore';
 
 interface NavigationHeaderProps {
   showSearch?: boolean;
@@ -22,11 +24,14 @@ const NavigationHeader: React.FC<NavigationHeaderProps> = ({
 }) => {
   const navigate = useNavigate();
   const { user, logout } = useAuthStore();
+  const { addToSearchHistory } = useSearchStore();
   const [searchQuery, setSearchQuery] = useState('');
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showMobileMenu, setShowMobileMenu] = useState(false);
   const [showMobileSearch, setShowMobileSearch] = useState(false);
   const [isScrolled, setIsScrolled] = useState(false);
+  const [showSearchDropdown, setShowSearchDropdown] = useState(false);
+  const searchContainerRef = useRef<HTMLDivElement>(null);
 
   const isHeroVariant = variant === 'hero';
   const isHeroOverlay = isHeroVariant && !isScrolled;
@@ -44,6 +49,32 @@ const NavigationHeader: React.FC<NavigationHeaderProps> = ({
 
     return () => window.removeEventListener('scroll', handleScroll);
   }, [isHeroVariant]);
+
+  // Close search dropdown on outside click
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (searchContainerRef.current && !searchContainerRef.current.contains(event.target as Node)) {
+        setShowSearchDropdown(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Global keyboard shortcut for search
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Open search with "/" key (when not in input)
+      if (e.key === '/' && !['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) {
+        e.preventDefault();
+        setShowSearchDropdown(true);
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -135,20 +166,38 @@ const NavigationHeader: React.FC<NavigationHeaderProps> = ({
                 </h1>
               </Link>
 
-              {/* Search Bar */}
+              {/* Enhanced Search Bar with Dropdown */}
               {showSearch && (
-                <form onSubmit={handleSearch} className="flex flex-1 max-w-md lg:max-w-lg">
-                  <div className="relative w-full">
-                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-nilin-warmGray transition-colors duration-200" />
-                    <input
-                      type="text"
-                      placeholder="Search for services..."
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      className="w-full pl-12 pr-4 py-2.5 glass-input rounded-nilin text-sm text-nilin-charcoal placeholder:text-nilin-warmGray focus:outline-none focus:ring-2 focus:ring-nilin-coral/30 focus:border-nilin-coral transition-all duration-200"
-                    />
-                  </div>
-                </form>
+                <div ref={searchContainerRef} className="relative flex flex-1 max-w-md lg:max-w-lg">
+                  <button
+                    onClick={() => setShowSearchDropdown(!showSearchDropdown)}
+                    className={`
+                      flex items-center gap-3 w-full px-4 py-2.5 rounded-nilin text-sm transition-all duration-200
+                      ${isHeroOverlay
+                        ? 'bg-white/10 border border-white/20 text-white placeholder:text-white/60 hover:bg-white/15'
+                        : 'glass-input text-nilin-charcoal placeholder:text-nilin-warmGray hover:border-nilin-coral/50'
+                      }
+                    `}
+                  >
+                    <Search className={`h-5 w-5 ${isHeroOverlay ? 'text-white/70' : 'text-nilin-warmGray'}`} />
+                    <span className={isHeroOverlay ? 'text-white/80' : 'text-nilin-warmGray'}>
+                      {searchQuery || 'Search for services...'}
+                    </span>
+                    <kbd className={`
+                      ml-auto px-2 py-0.5 text-xs rounded border hidden sm:inline-block
+                      ${isHeroOverlay ? 'border-white/30 text-white/60' : 'border-nilin-border text-nilin-warmGray'}
+                    `}>
+                      /
+                    </kbd>
+                  </button>
+
+                  {/* Search Dropdown */}
+                  <HeaderSearchDropdown
+                    isOpen={showSearchDropdown}
+                    onClose={() => setShowSearchDropdown(false)}
+                    isHeroOverlay={isHeroOverlay}
+                  />
+                </div>
               )}
 
               {/* Desktop Navigation */}
@@ -314,7 +363,7 @@ const NavigationHeader: React.FC<NavigationHeaderProps> = ({
             <form onSubmit={handleSearch} className="flex-1">
               <input
                 type="text"
-                placeholder="Search for services..."
+                placeholder="Search services, providers, locations..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 autoFocus
@@ -331,6 +380,7 @@ const NavigationHeader: React.FC<NavigationHeaderProps> = ({
                   key={term}
                   onClick={() => {
                     setSearchQuery(term);
+                    addToSearchHistory(term);
                     navigate(`/search?q=${encodeURIComponent(term)}`);
                     setShowMobileSearch(false);
                   }}

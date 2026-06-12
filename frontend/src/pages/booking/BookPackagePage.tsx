@@ -419,9 +419,9 @@ const BookPackagePage: React.FC = () => {
                     lastName: '',
                     isVerified: true,
                   },
-                  rating: pkg.averageRating,
-                  reviewCount: pkg.totalReviews,
-                  images: pkg.images,
+                  rating: pkg.stats?.rating || 0,
+                  reviewCount: pkg.stats?.reviewCount || 0,
+                  images: pkg.images || [],
                   isActive: pkg.isActive,
                   variants: [],
                   variantDetails: null,
@@ -437,7 +437,7 @@ const BookPackagePage: React.FC = () => {
                   firstName: (pkg as any).providerName || 'Provider',
                   lastName: '',
                   isVerified: true,
-                  rating: pkg.averageRating,
+                  rating: pkg.stats?.rating || 0,
                 },
               }}
               selectedAddOns={[]}

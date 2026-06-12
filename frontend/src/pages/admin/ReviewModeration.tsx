@@ -31,6 +31,7 @@ import {
   type AdminReview,
   type AdminReviewStats,
   type ReviewModerationStatus,
+  type ReviewDisplayStatus,
   getReviewDisplayStatus,
   formatReviewUserName,
 } from '../../services/adminReviewApi';
@@ -63,7 +64,7 @@ const statusStyles: Record<
   hidden: { bg: 'bg-slate-100', text: 'text-slate-600', label: 'Hidden' },
 };
 
-const StatusBadge: React.FC<{ status: ReviewModerationStatus | 'all' }> = ({ status }) => {
+const StatusBadge: React.FC<{ status: ReviewDisplayStatus | 'all' }> = ({ status }) => {
   const { bg, text, label } = statusStyles[status] || statusStyles.pending;
   return (
     <span className={cn('px-2.5 py-0.5 rounded-full text-xs font-medium capitalize', bg, text)}>

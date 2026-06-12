@@ -78,11 +78,7 @@ export interface ChatRoom {
     scheduledDate?: string;
     serviceId?: string;
   } | string;
-  bookingDetails?: {
-    serviceName: string;
-    scheduledDate?: string;
-    status: string;
-  };
+  bookingDetails?: BookingChatDetails;
   lastMessage?: ChatMessage;
   lastMessageAt?: string;
   unreadCount: number;
@@ -95,7 +91,8 @@ export interface ChatRoom {
 }
 
 export interface BookingChatDetails {
-  _id: string;
+  _id?: string;
+  id?: string;
   bookingNumber?: string;
   status?: string;
   scheduledDate?: string;
@@ -120,6 +117,8 @@ export interface ChatRoomListItem {
   unreadCount: number;
   unreadCounts?: Record<string, number>; // Per-user unread counts Map<string, number>
   isPinned: boolean;
+  isMuted: boolean;
+  status: 'active' | 'archived' | 'blocked';
   createdAt: string;
   updatedAt: string;
 }
@@ -502,8 +501,9 @@ function extractBookingDetails(room: ChatRoom | ChatRoomListItem): BookingChatDe
         : undefined;
     return {
       _id: room.bookingId._id,
+      id: room.bookingId._id,
       bookingNumber: room.bookingId.bookingNumber,
-      status: room.bookingId.status,
+      status: room.bookingId.status || 'active',
       scheduledDate: room.bookingId.scheduledDate,
       serviceName,
     };
@@ -532,6 +532,8 @@ export function normalizeChatRoom(room: ChatRoom | ChatRoomListItem): ChatRoomLi
     unreadCount: room.unreadCount ?? 0,
     unreadCounts: room.unreadCounts,
     isPinned: room.isPinned,
+    isMuted: room.isMuted ?? false,
+    status: room.status ?? 'active',
     createdAt: room.createdAt,
     updatedAt: room.updatedAt
   };

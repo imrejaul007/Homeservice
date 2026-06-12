@@ -27,7 +27,6 @@ import PaymentMethodSelector from './ui/PaymentMethodSelector';
 import { TrustBadge } from './ui/TrustBadge';
 import { useBookingStore } from '../../stores/bookingStore';
 import { useAuthStore } from '../../stores/authStore';
-import type { Service } from '../../types/search';
 import { API_BASE_URL } from '../../config/api';
 import { api } from '../../services/api';
 
@@ -87,11 +86,39 @@ interface AddOn {
   duration?: number;
 }
 
+// Package service type - accepts both simple format (price as number) and full Service format
+export interface PackageService {
+  _id: string;
+  name: string;
+  duration: number;
+  price: number | { amount: number; currency: string; type?: string };
+  category?: string;
+  description?: string;
+  providerId?: string;
+  provider?: {
+    _id: string;
+    firstName: string;
+    lastName: string;
+    isVerified?: boolean;
+  };
+  rating?: number;
+  reviewCount?: number;
+  images?: string[];
+  isActive?: boolean;
+  variants?: unknown[];
+  variantDetails?: unknown;
+  selectedVariant?: number;
+  location?: { type: string; coordinates: number[] };
+  tags?: string[];
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface PackageBookingWizardProps {
   packageData: {
     id: string;
     name: string;
-    services: Service[];
+    services: PackageService[];
     basePrice: number;
     provider: Provider;
   };
@@ -229,7 +256,7 @@ const PackageBookingWizard: React.FC<PackageBookingWizardProps> = ({
   const submitInProgressRef = useRef(false);
 
   // Helper to extract price amount from service (handles both number and object formats)
-  const getServicePrice = (service: Service): number => {
+  const getServicePrice = (service: PackageService): number => {
     if (typeof service.price === 'number') {
       return service.price;
     }
@@ -237,7 +264,7 @@ const PackageBookingWizard: React.FC<PackageBookingWizardProps> = ({
   };
 
   // Normalize service fields for display (handles backend format: serviceId, serviceName, originalPrice)
-  const normalizeService = (service: Service) => {
+  const normalizeService = (service: PackageService) => {
     // Handle backend format where fields are: serviceId, serviceName, originalPrice
     const normalizedService = service as any;
     return {

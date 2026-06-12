@@ -241,7 +241,7 @@ export function ChatTab({
   const handleRoomSelect = useCallback(
     (room: ChatRoomListItem) => {
       setSelectedRoom(room);
-      onRoomSelected?.(room as ChatRoomType);
+      onRoomSelected?.(room as unknown as ChatRoomType);
     },
     [onRoomSelected]
   );
@@ -557,7 +557,7 @@ export function BookingChat({
           providerId,
         });
         if (!cancelled && result.chatRoom) {
-          setChatRoom(normalizeChatRoom(result.chatRoom) as ChatRoomType);
+          setChatRoom(normalizeChatRoom(result.chatRoom) as unknown as ChatRoomType);
         }
       } catch (error) {
         console.error('Error initializing booking chat room:', error);

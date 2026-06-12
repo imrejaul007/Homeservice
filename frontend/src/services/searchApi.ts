@@ -7,6 +7,8 @@ import type {
   Suggestion,
   SuggestionsResponse,
   ProviderSearchResponse,
+  TrendingSearch,
+  TrendingSearchesResponse,
 } from '@/types/search';
 import { api as centralizedApi } from './api';
 
@@ -163,6 +165,28 @@ export const searchApi = {
       const message = (err.response?.data as { message?: string })?.message || err.message || 'Failed to get popular services';
       console.error('[searchApi] getPopularServices error:', message, err.response?.status);
       throw new SearchApiError(message, err.response?.status, 'POPULAR_FAILED');
+    }
+  },
+
+  // Get trending searches
+  getTrendingSearches: async (limit = 10, signal?: AbortSignal): Promise<TrendingSearch[]> => {
+    try {
+      const response = await api.get('/trending', {
+        params: { limit },
+        signal
+      });
+      // Return trending searches array (backend returns services, we extract search terms)
+      const trendingServices = response.data?.data?.services || response.data?.services || [];
+      return trendingServices.map((service: Service) => ({
+        term: service.name,
+        category: service.category,
+        searchCount: service.rating?.searchMetadata?.searchCount || 0,
+      }));
+    } catch (error) {
+      const err = error as AxiosError;
+      const message = (err.response?.data as { message?: string })?.message || err.message || 'Failed to get trending searches';
+      console.error('[searchApi] getTrendingSearches error:', message, err.response?.status);
+      throw new SearchApiError(message, err.response?.status, 'TRENDING_FAILED');
     }
   },
 

@@ -5,6 +5,7 @@ interface AddressFormData {
   city: string;
   state: string;
   zipCode: string;
+  country: string;
 }
 
 interface AddressFormProps {

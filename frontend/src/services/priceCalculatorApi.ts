@@ -62,7 +62,7 @@ export interface PriceCalculationResult {
     originalPrice: number;
     savings: number;
     savingsPercentage: number;
-  };
+  } | null;
   error?: string;
 }
 
@@ -99,7 +99,7 @@ export const priceCalculatorApi = {
     discountCode?: string;
   }): Promise<PriceCalculationResult> => {
     try {
-      const response = await authService.post('/packages/calculate-price', {
+      const response = await authService.post<PriceCalculationResult>('/packages/calculate-price', {
         packageId: params.packageId,
         selectedAddOns: params.selectedAddOns || [],
         selectedDuration: params.selectedDuration,
@@ -107,7 +107,7 @@ export const priceCalculatorApi = {
         discountCode: params.discountCode,
         isPackage: true,
       });
-      return response.data;
+      return (response as unknown as PriceCalculationResult);
     } catch (error: unknown) {
       const err = error as { response?: { data?: { error?: string } }; message?: string };
       return {
@@ -122,7 +122,7 @@ export const priceCalculatorApi = {
    */
   getEstimate: async (packageId: string): Promise<PriceCalculationResult> => {
     try {
-      const response = await api.get(`/packages/${packageId}/estimate`);
+      const response = await api.get<PriceCalculationResult>(`/packages/${packageId}/estimate`);
       return response.data;
     } catch (error: unknown) {
       const err = error as { response?: { data?: { error?: string } }; message?: string };
@@ -143,7 +143,7 @@ export const priceCalculatorApi = {
   }> => {
     try {
       const response = await api.get(`/packages/${packageId}/addons`);
-      return response.data;
+      return (response.data as { success: boolean; addOns?: PackageAddOn[]; error?: string });
     } catch (error: unknown) {
       const err = error as { response?: { data?: { error?: string } }; message?: string };
       return {
@@ -182,12 +182,12 @@ export const priceCalculatorApi = {
     subtotal: number
   ): Promise<DiscountValidationResult> => {
     try {
-      const response = await authService.post('/packages/validate-discount', {
+      const response = await authService.post<{ data?: DiscountValidationResult }>('/packages/validate-discount', {
         code,
         packageId,
         subtotal,
       });
-      return response.data.data;
+      return (response as { data?: DiscountValidationResult }).data;
     } catch (error: unknown) {
       const err = error as { response?: { data?: { error?: string } }; message?: string };
       return {

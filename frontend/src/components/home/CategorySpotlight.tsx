@@ -148,12 +148,12 @@ const CategorySpotlight: React.FC<CategorySpotlightProps> = ({
               const localizedPrice = format(convert(displayPrice, sourceCurrency), currency);
 
               // Get image
-              const imageUrl = pkg.images?.[0] || pkg.image ||
+              const imageUrl = pkg.images?.[0] ||
                 'https://images.unsplash.com/photo-1560066984-138dadb4c035?w=600&q=80';
 
-              // Get first service name for subtitle (handle both serviceName and name)
+              // Get first service name for subtitle
               const firstService = pkg.services?.[0];
-              const subtitle = firstService?.serviceName || firstService?.name || pkg.category || 'Professional Service';
+              const subtitle = firstService?.name || pkg.category || 'Professional Service';
 
               return (
                 <button
@@ -181,7 +181,7 @@ const CategorySpotlight: React.FC<CategorySpotlightProps> = ({
                       <div className="absolute top-4 left-4">
                         <span className="glass rounded-full px-3 py-1.5 text-xs font-medium text-nilin-charcoal flex items-center gap-1 backdrop-blur-md">
                           <Sparkles className="w-3 h-3 text-nilin-coral" />
-                          {pkg.provider?.isVerified ? 'Verified' : 'NILIN Certified'}
+                          NILIN Certified
                         </span>
                       </div>
 

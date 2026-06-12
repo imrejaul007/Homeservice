@@ -18,11 +18,22 @@ export interface BusinessInfo {
 
 // Location Info for Provider Registration
 export interface LocationInfo {
-  city: string;
-  state: string;
-  country: string;
+  city?: string;
+  state?: string;
+  country?: string;
   zipCode?: string;
   address?: string;
+  primaryAddress?: {
+    street: string;
+    city: string;
+    state: string;
+    zipCode: string;
+    country: string;
+    coordinates?: {
+      type: string;
+      coordinates: [number, number];
+    };
+  };
   coordinates?: {
     latitude: number;
     longitude: number;

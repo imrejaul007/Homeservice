@@ -38,7 +38,11 @@
       "pending": "Pending",
       "confirmed": "Confirmed",
       "completed": "Completed",
-      "cancelled": "Cancelled"
+      "cancelled": "Cancelled",
+      "no_show": "No Show",
+      "refunded": "Refunded",
+      "rejected": "Rejected",
+      "in_progress": "In Progress"
     }
   },
   "payment": {

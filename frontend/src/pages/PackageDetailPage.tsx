@@ -182,9 +182,11 @@ const PackageDetailPage: React.FC = () => {
     setError(null);
 
     try {
-      const { package: packageData, reviews: packageReviews } = await packageApi.getPackage(id!);
-      setPkg(packageData as BackendServicePackage);
-      setReviews(packageReviews || []);
+      const result = await packageApi.getPackage(id!);
+      const packageData = result.package;
+      setPkg(packageData as unknown as BackendServicePackage);
+      // Cast to any to access reviews - the API returns them but type doesn't include them
+      setReviews((result as unknown as { reviews?: Review[] }).reviews || []);
       setImageLoadError(false);
       setSelectedImageIndex(0);
     } catch (err: any) {
@@ -874,27 +876,27 @@ const PackageDetailPage: React.FC = () => {
                     name: mapped.name,
                     duration: mapped.duration,
                     price: mapped.price,
-                  category: pkg.category,
-                  description: pkg.description || '',
-                  providerId: pkg.providerId,
-                  provider: {
-                    _id: pkg.providerId,
-                    firstName: pkg.providerName || 'Provider',
-                    lastName: '',
-                    isVerified: true,
-                  },
-                  rating: pkg.averageRating,
-                  reviewCount: pkg.totalReviews,
-                  images: pkg.images || [],
-                  isActive: pkg.isActive,
-                  variants: [],
-                  variantDetails: null,
-                  selectedVariant: 0,
-                  location: { type: 'provider', coordinates: [0, 0] },
-                  tags: [],
-                  createdAt: '',
-                  updatedAt: '',
-                };
+                    category: pkg.category,
+                    description: pkg.description || '',
+                    providerId: pkg.providerId,
+                    provider: {
+                      _id: pkg.providerId,
+                      firstName: pkg.providerName || 'Provider',
+                      lastName: '',
+                      isVerified: true,
+                    },
+                    rating: pkg.averageRating || 0,
+                    reviewCount: pkg.totalReviews || 0,
+                    images: pkg.images || [],
+                    isActive: pkg.isActive,
+                    variants: [],
+                    variantDetails: null,
+                    selectedVariant: 0,
+                    location: { type: 'provider', coordinates: [0, 0] },
+                    tags: [],
+                    createdAt: '',
+                    updatedAt: '',
+                  };
                 }),
                 basePrice: pkg.pricing.currentPrice,
                 provider: {
@@ -902,7 +904,7 @@ const PackageDetailPage: React.FC = () => {
                   firstName: pkg.providerName || 'Provider',
                   lastName: '',
                   isVerified: true,
-                  rating: pkg.averageRating,
+                  rating: pkg.averageRating || 0,
                   avatar: pkg.providerAvatar,
                 },
               }}

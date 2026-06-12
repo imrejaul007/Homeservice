@@ -87,12 +87,18 @@ function generateSlug(name: string): string {
  * Transform a single bundle service
  */
 function transformService(service: BackendBundleService): BundleService {
-  const serviceId = typeof service.serviceId === 'object' && service.serviceId !== null && !('$oid' in service.serviceId)
-    ? (service.serviceId as { _id: string })._id
-    : service.serviceId;
-  const populatedService = typeof service.serviceId === 'object' && service.serviceId !== null && !('$oid' in service.serviceId)
-    ? service.serviceId as BackendBundleService
-    : null;
+  // Handle different serviceId formats: string, ObjectId, or populated object
+  const serviceIdValue = service.serviceId;
+  let serviceId: string | { $oid: string } | { _id: string };
+  let populatedService: { _id?: string; name?: string; description?: string; duration?: number } | null = null;
+
+  if (typeof serviceIdValue === 'object' && serviceIdValue !== null && !('$oid' in serviceIdValue)) {
+    // Populated service object
+    serviceId = (serviceIdValue as { _id: string })._id;
+    populatedService = serviceIdValue as { _id: string; name?: string; description?: string; duration?: number };
+  } else {
+    serviceId = serviceIdValue;
+  }
 
   return {
     serviceId: toStringId(serviceId),
@@ -104,7 +110,7 @@ function transformService(service: BackendBundleService): BundleService {
     quantity: service.quantity || 1,
     duration: populatedService?.duration || service.duration || 60,
     categoryName: '',
-  };
+  } as BundleService;
 }
 
 /**

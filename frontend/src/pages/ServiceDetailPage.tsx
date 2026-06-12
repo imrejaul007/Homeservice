@@ -61,8 +61,8 @@ interface ServiceDetail {
       count: number;
     } | number;
   };
-  isFeatured: boolean;
-  isPopular: boolean;
+  isFeatured?: boolean;
+  isPopular?: boolean;
   createdAt: string;
 }
 

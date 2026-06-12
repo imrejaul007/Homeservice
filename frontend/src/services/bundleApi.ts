@@ -13,6 +13,7 @@ import {
 export interface BundleService {
   serviceId: string;
   serviceName: string;
+  name?: string; // Alias for serviceName for backward compatibility
   description: string;
   originalPrice: number;
   discountedPrice: number;

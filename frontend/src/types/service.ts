@@ -42,8 +42,8 @@ export interface Service {
   };
   status?: 'draft' | 'active' | 'inactive' | 'pending_review' | 'rejected';
   isActive: boolean;
-  isFeatured: boolean;
-  isPopular: boolean;
+  isFeatured?: boolean;
+  isPopular?: boolean;
   isNew?: boolean;
   isDeleted?: boolean;
   deletedAt?: string;
@@ -52,6 +52,7 @@ export interface Service {
     firstName: string;
     lastName: string;
     name?: string; // Computed full name
+    businessName?: string;
     avatar?: string;
     rating?: number;
     location?: string;

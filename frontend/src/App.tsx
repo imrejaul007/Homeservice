@@ -9,6 +9,8 @@ import { MaintenanceGuard } from './components/common/MaintenanceGuard';
 import { PlatformConfigProvider, usePlatformConfig } from './components/common/PlatformConfigProvider';
 import { AppShell } from './components/mobile/AppShell';
 import FloatingChatWidget from './components/chat/FloatingChatWidget';
+import { SearchModalProvider, useSearchModal } from './context/SearchModalContext';
+import SearchModal from './components/search/SearchModal';
 
 // =============================================================================
 // Error Boundary Component
@@ -297,6 +299,12 @@ const FaqGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   return <>{children}</>;
 };
 
+// Search Modal Wrapper Component
+const SearchModalWrapper: React.FC = () => {
+  const { isOpen, initialQuery, close } = useSearchModal();
+  return <SearchModal isOpen={isOpen} onClose={close} initialQuery={initialQuery} />;
+};
+
 function App() {
   const { initialize, isInitialized } = useAuthStore();
   const { isCapacitor, isMobile } = useCapacitor();
@@ -316,13 +324,16 @@ function App() {
     <AppErrorBoundary>
       <ToastProvider>
         <PlatformConfigProvider>
-        {/* CRITICAL FIX: Global offline indicator */}
-        <OfflineBanner autoHideDelay={3000} showCloseButton={true} />
-        <MaintenanceGuard>
-        <div className="App">
-          <ScrollToTop />
-          <Suspense fallback={<LoadingSpinner />}>
-          <Routes>
+          <SearchModalProvider>
+            {/* Global Search Modal */}
+            <SearchModalWrapper />
+            {/* CRITICAL FIX: Global offline indicator */}
+            <OfflineBanner autoHideDelay={3000} showCloseButton={true} />
+            <MaintenanceGuard>
+              <div className="App">
+                <ScrollToTop />
+                <Suspense fallback={<LoadingSpinner />}>
+                  <Routes>
         {/* Public Routes */}
         <Route
           path="/unsubscribe"
@@ -1156,6 +1167,7 @@ function App() {
         </Suspense>
         </div>
         </MaintenanceGuard>
+        </SearchModalProvider>
         </PlatformConfigProvider>
       </ToastProvider>
     </AppErrorBoundary>

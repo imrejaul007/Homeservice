@@ -38,7 +38,11 @@
       "pending": "قيد الانتظار",
       "confirmed": "مؤكد",
       "completed": "مكتمل",
-      "cancelled": "ملغي"
+      "cancelled": "ملغي",
+      "no_show": "لم يحضر",
+      "refunded": "تم الاسترداد",
+      "rejected": "مرفوض",
+      "in_progress": "قيد التنفيذ"
     }
   },
   "payment": {

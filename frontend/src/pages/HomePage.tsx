@@ -4,6 +4,8 @@ import { useNavigate } from 'react-router-dom';
 import { Star, ChevronRight, ChevronLeft, Sparkles, ArrowRight, MapPin } from 'lucide-react';
 import NavigationHeader from '../components/layout/NavigationHeader';
 import Footer from '../components/layout/Footer';
+import HeroSearchBar from '../components/search/HeroSearchBar';
+import TrendingSearches from '../components/search/TrendingSearches';
 import { searchApi } from '../services/searchApi';
 import type { Service } from '../types/service';
 import { CATEGORY_IMAGES, SUBCATEGORY_IMAGES, REFERENCE_IMAGES } from '../constants/images';
@@ -230,6 +232,15 @@ const HomePage: React.FC = () => {
                   <span className="ml-1 text-white font-medium">4.9</span>
                 </div>
               </div>
+
+              {/* Hero Search Bar - NILIN Premium Search Experience */}
+              <div className="mt-8 animate-nilin-in" style={{animationDelay: '0.6s'}}>
+                <HeroSearchBar
+                  variant="hero"
+                  placeholder="What service are you looking for?"
+                  className="max-w-2xl"
+                />
+              </div>
             </div>
           </div>
         </div>
@@ -266,6 +277,19 @@ const HomePage: React.FC = () => {
               }`}
             />
           ))}
+        </div>
+      </section>
+
+      {/* Trending Searches Section */}
+      <section className="py-8 px-4 bg-nilin-cream">
+        <div className="max-w-7xl mx-auto">
+          <TrendingSearches
+            variant="default"
+            title="Trending Searches"
+            subtitle="Popular services this week"
+            limit={8}
+            showViewAll={true}
+          />
         </div>
       </section>
 

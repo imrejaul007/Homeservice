@@ -104,9 +104,12 @@ export interface ChatRoom {
     serviceId?: string;
   } | string;
   bookingDetails?: {
-    serviceName: string;
+    _id?: string;
+    id?: string;
+    bookingNumber?: string;
+    serviceName?: string;
     scheduledDate?: string;
-    status: string;
+    status?: string;
   };
   lastMessage?: ChatMessage;
   lastMessageAt?: string;
@@ -143,6 +146,8 @@ export interface ChatRoomListItem {
   };
   unreadCount: number;
   isPinned: boolean;
+  isMuted: boolean;
+  status: 'active' | 'archived' | 'blocked';
   createdAt: string;
   updatedAt: string;
 }

@@ -240,26 +240,30 @@ export const useBookingStore = create<BookingState>()(
           });
 
           const response = await bookingService.createBooking(data);
-          const booking = response.data?.booking;
+          const responseData = response.data as (Record<string, unknown> & { booking?: unknown; isDuplicate?: boolean });
+          const booking = responseData?.booking as (Record<string, unknown> & { _id?: string; isDuplicate?: boolean });
 
           if (!booking?._id) {
             console.error('[bookingStore] createBooking missing booking in response', response);
             throw new Error('Invalid booking response from server');
           }
 
-          if (response.data?.isDuplicate) {
-            booking.isDuplicate = true;
+          const isDuplicate = responseData?.isDuplicate ?? false;
+          if (isDuplicate) {
+            (booking as { isDuplicate?: boolean }).isDuplicate = true;
           }
 
+          const validBooking = booking as unknown as Booking;
+
           set((state) => {
-            if (!response.data?.isDuplicate) {
-              state.customerBookings.unshift(booking);
+            if (!isDuplicate) {
+              state.customerBookings.unshift(validBooking);
             }
-            state.currentBooking = booking;
+            state.currentBooking = validBooking;
             state.isSubmitting = false;
           });
 
-          return booking;
+          return validBooking;
         } catch (error) {
           const message = error instanceof Error ? error.message : 'Failed to create booking';
           console.error('[bookingStore] createBooking failed', { message, error });

@@ -1004,7 +1004,7 @@ const CustomerManagement: React.FC = () => {
     if (selectedUserIds.size === customers.length) {
       setSelectedUserIds(new Set());
     } else {
-      setSelectedUserIds(new Set(customers.map((c) => c.user._id || (c.user as any).id)));
+      setSelectedUserIds(new Set(customers.map((c) => c.user.id || (c.user as any)._id)));
     }
   };
 

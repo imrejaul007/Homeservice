@@ -18,6 +18,7 @@ export enum BookingStatusValue {
   CANCELLED = 'cancelled',
   NO_SHOW = 'no_show',
   REFUNDED = 'refunded',
+  REJECTED = 'rejected',
 }
 
 /**
@@ -42,6 +43,7 @@ const VALID_TRANSITIONS: Record<BookingStatusValue, BookingStatusValue[]> = {
     BookingStatusValue.IN_PROGRESS,
     BookingStatusValue.CANCELLED,
     BookingStatusValue.NO_SHOW,
+    BookingStatusValue.REJECTED, // Provider accepted but didn't show up
   ],
   [BookingStatusValue.IN_PROGRESS]: [
     BookingStatusValue.COMPLETED,
@@ -53,6 +55,7 @@ const VALID_TRANSITIONS: Record<BookingStatusValue, BookingStatusValue[]> = {
   [BookingStatusValue.CANCELLED]: [], // Terminal state
   [BookingStatusValue.NO_SHOW]: [], // Terminal state
   [BookingStatusValue.REFUNDED]: [], // Terminal state
+  [BookingStatusValue.REJECTED]: [], // Terminal state
 };
 
 /**
@@ -93,6 +96,11 @@ const STATUS_INFO: Record<BookingStatusValue, { label: string; color: string; ic
     label: 'Refunded',
     color: 'orange',
     icon: 'dollar-sign',
+  },
+  [BookingStatusValue.REJECTED]: {
+    label: 'Rejected',
+    color: 'red',
+    icon: 'x-circle',
   },
 };
 
@@ -164,6 +172,13 @@ export class BookingStatusVO {
    */
   static refunded(): BookingStatusVO {
     return new BookingStatusVO(BookingStatusValue.REFUNDED);
+  }
+
+  /**
+   * Create rejected status (provider accepted but didn't show up)
+   */
+  static rejected(): BookingStatusVO {
+    return new BookingStatusVO(BookingStatusValue.REJECTED);
   }
 
   // Getters
@@ -254,6 +269,13 @@ export class BookingStatusVO {
   }
 
   /**
+   * Check if booking is rejected (provider accepted but didn't show up)
+   */
+  isRejected(): boolean {
+    return this._status === BookingStatusValue.REJECTED;
+  }
+
+  /**
    * Check equality
    */
   equals(other: BookingStatusVO): boolean {
@@ -293,6 +315,7 @@ export function canActorTransition(
       [BookingStatusValue.CANCELLED]: [],
       [BookingStatusValue.NO_SHOW]: [],
       [BookingStatusValue.REFUNDED]: [],
+      [BookingStatusValue.REJECTED]: [], // Terminal state
     },
     [StatusActor.PROVIDER]: {
       [BookingStatusValue.PENDING]: [BookingStatusValue.CONFIRMED, BookingStatusValue.CANCELLED],
@@ -302,15 +325,17 @@ export function canActorTransition(
       [BookingStatusValue.CANCELLED]: [],
       [BookingStatusValue.NO_SHOW]: [],
       [BookingStatusValue.REFUNDED]: [],
+      [BookingStatusValue.REJECTED]: [], // Terminal state
     },
     [StatusActor.SYSTEM]: {
       [BookingStatusValue.PENDING]: [BookingStatusValue.CONFIRMED, BookingStatusValue.CANCELLED],
-      [BookingStatusValue.CONFIRMED]: [BookingStatusValue.CANCELLED, BookingStatusValue.NO_SHOW],
+      [BookingStatusValue.CONFIRMED]: [BookingStatusValue.CANCELLED, BookingStatusValue.NO_SHOW, BookingStatusValue.REJECTED],
       [BookingStatusValue.IN_PROGRESS]: [BookingStatusValue.COMPLETED],
       [BookingStatusValue.COMPLETED]: [BookingStatusValue.REFUNDED],
       [BookingStatusValue.CANCELLED]: [],
       [BookingStatusValue.NO_SHOW]: [],
       [BookingStatusValue.REFUNDED]: [],
+      [BookingStatusValue.REJECTED]: [], // Terminal state
     },
     [StatusActor.ADMIN]: {
       [BookingStatusValue.PENDING]: Object.values(BookingStatusValue) as BookingStatusValue[],
@@ -320,6 +345,7 @@ export function canActorTransition(
       [BookingStatusValue.CANCELLED]: [], // Admin cannot change cancelled
       [BookingStatusValue.NO_SHOW]: [], // Admin cannot change no-show
       [BookingStatusValue.REFUNDED]: [], // Terminal state
+      [BookingStatusValue.REJECTED]: [], // Terminal state
     },
   };
 

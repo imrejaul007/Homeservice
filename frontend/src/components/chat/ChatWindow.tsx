@@ -30,7 +30,7 @@ export interface ChatWindowProps {
   /** On expand callback */
   onExpand: () => void;
   /** On select room callback */
-  onSelectRoom: (room: ChatRoomType | null) => void;
+  onSelectRoom: (room: ChatRoomType | ChatRoomWithDetails | null) => void;
   /** On back to rooms list callback */
   onBackToRooms: () => void;
   /** On new message callback */
@@ -45,7 +45,21 @@ export interface ChatWindowProps {
   className?: string;
 }
 
-interface ChatRoomWithDetails extends ChatRoomType {
+// Use ChatRoomListItem as base but add missing ChatRoom required fields
+interface ChatRoomWithDetails extends ChatRoomListItem {
+  // Add missing required fields from ChatRoom
+  isMuted: boolean;
+  status: 'active' | 'archived' | 'blocked';
+  createdAt: string;
+  updatedAt: string;
+  bookingDetails?: {
+    _id?: string;
+    id?: string;
+    bookingNumber?: string;
+    status?: string;
+    scheduledDate?: string;
+    serviceName?: string;
+  };
   participantsWithDetails?: Array<{
     userId: {
       _id: string;
@@ -61,6 +75,8 @@ interface ChatRoomWithDetails extends ChatRoomType {
     isPinned?: boolean;
   }>;
   lastMessageDetails?: ChatMessageType;
+  // Explicitly include properties from ChatRoom that may be needed
+  unreadCounts?: Record<string, number>;
 }
 
 // =============================================================================
@@ -116,7 +132,7 @@ export function ChatWindow({
 
     try {
       const response = await chatApi.getChatRooms({ limit: 50 }, signal);
-      const normalizedRooms = response.rooms.map(normalizeChatRoom) as ChatRoomWithDetails[];
+      const normalizedRooms = response.rooms.map(normalizeChatRoom).map(r => r as unknown as ChatRoomWithDetails);
       setChatRooms(normalizedRooms);
 
       // Calculate total unread count
@@ -276,7 +292,7 @@ export function ChatWindow({
   // Select Room
   // =============================================================================
 
-  const handleSelectRoom = useCallback((room: ChatRoomWithDetails) => {
+  const handleSelectRoom = useCallback((room: ChatRoomWithDetails | ChatRoomListItem) => {
     if (typingTimeoutRef.current) {
       clearTimeout(typingTimeoutRef.current);
       typingTimeoutRef.current = null;
@@ -289,9 +305,9 @@ export function ChatWindow({
 
     activeRoomIdRef.current = roomId;
     appliedInitialRoomIdRef.current = roomId;
-    setSelectedRoomState(room);
+    setSelectedRoomState(room as unknown as ChatRoomWithDetails);
     setMessages([]);
-    onSelectRoom(room);
+    onSelectRoom(room as unknown as unknown as ChatRoomWithDetails);
   }, [getRoomId, onSelectRoom]);
 
   const handleBackToRoomsInternal = useCallback(() => {

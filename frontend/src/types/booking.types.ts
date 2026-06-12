@@ -57,7 +57,8 @@ export type BookingStatus =
   | 'completed'
   | 'cancelled'
   | 'no_show'
-  | 'refunded';
+  | 'refunded'
+  | 'rejected';
 
 export type PaymentStatus = 'pending' | 'completed' | 'refunded' | 'failed' | 'processed';
 
@@ -575,6 +576,7 @@ export function formatBookingStatus(status: BookingStatus): string {
     cancelled: 'Cancelled',
     no_show: 'No Show',
     refunded: 'Refunded',
+    rejected: 'Rejected',
   };
   return statusLabels[status] || status;
 }

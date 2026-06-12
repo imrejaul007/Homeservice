@@ -547,7 +547,13 @@ const PackageComparisonPage: React.FC<PackageComparisonPageProps> = ({ initialPa
                   <tr className="bg-nilin-coral/5">
                     <td colSpan={packages.length + 1} className="px-4 py-2 text-sm font-medium text-nilin-charcoal">
                       <Info className="w-4 h-4 inline mr-2" />
-                      Included Items ({pkg => pkg.includedItems.length})
+                      Included Items ({(() => {
+                        const allItems = new Set<string>();
+                        packages.forEach(pkg => {
+                          ((pkg as { includedItems?: Array<{ name: string } | string> }).includedItems || []).forEach(item => allItems.add(typeof item === 'string' ? item : (item as { name: string }).name));
+                        });
+                        return allItems.size;
+                      })()})
                     </td>
                   </tr>
 
@@ -559,21 +565,27 @@ const PackageComparisonPage: React.FC<PackageComparisonPageProps> = ({ initialPa
                         {(() => {
                           const allItems = new Set<string>();
                           packages.forEach(pkg => {
-                            pkg.includedItems.forEach(item => allItems.add(item));
+                            ((pkg as { includedItems?: Array<{ name: string } | string> }).includedItems || []).forEach(item => {
+                              const itemName = typeof item === 'string' ? item : (item as { name: string }).name;
+                              allItems.add(itemName);
+                            });
                           });
 
                           return Array.from(allItems).map(item => (
                             <div key={item} className="grid grid-cols-[160px_repeat(auto-fit,minmax(200px,1fr))] items-center py-2">
                               <span className="text-sm text-nilin-warmGray pl-4">{item}</span>
-                              {packages.map(pkg => (
-                                <div key={pkg._id} className="text-center px-4">
-                                  {pkg.includedItems.includes(item) ? (
-                                    <Check className="w-5 h-5 text-green-500 mx-auto" />
-                                  ) : (
-                                    <X className="w-5 h-5 text-gray-300 mx-auto" />
-                                  )}
-                                </div>
-                              ))}
+                              {packages.map(pkg => {
+                                const pkgItems = (pkg.includedItems || []).map(i => typeof i === 'string' ? i : i.name);
+                                return (
+                                  <div key={pkg._id} className="text-center px-4">
+                                    {pkgItems.includes(item) ? (
+                                      <Check className="w-5 h-5 text-green-500 mx-auto" />
+                                    ) : (
+                                      <X className="w-5 h-5 text-gray-300 mx-auto" />
+                                    )}
+                                  </div>
+                                );
+                              })}
                             </div>
                           ));
                         })()}

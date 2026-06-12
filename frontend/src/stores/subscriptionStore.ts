@@ -43,8 +43,8 @@ export const useSubscriptionStore = create<SubscriptionState>()(
       fetchSubscription: async () => {
         set({ isLoading: true, error: null });
         try {
-          const response = await subscriptionApi.getSubscription();
-          set({ subscription: response.data, isLoading: false });
+          const subscription = await subscriptionApi.getSubscription();
+          set({ subscription, isLoading: false });
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : 'Failed to fetch subscription';
           set({ error: message, isLoading: false });
@@ -95,7 +95,12 @@ export const useSubscriptionStore = create<SubscriptionState>()(
         set({ isLoading: true, error: null });
         try {
           const response = await subscriptionApi.getMembership();
-          set({ membership: response.data, isLoading: false });
+          // getMembership returns { success: boolean; data: Membership }
+          if (response.data) {
+            set({ membership: response.data, isLoading: false });
+          } else {
+            set({ isLoading: false });
+          }
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : 'Failed to fetch membership';
           set({ error: message, isLoading: false });
@@ -105,7 +110,9 @@ export const useSubscriptionStore = create<SubscriptionState>()(
       fetchPlans: async () => {
         try {
           const response = await subscriptionApi.getPlans();
-          set({ availablePlans: response.data });
+          // getPlans returns the plans array directly or wrapped
+          const plans = Array.isArray(response) ? response : (response as { data?: unknown[] }).data || [];
+          set({ availablePlans: plans as SubscriptionPlan[] });
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : 'Failed to fetch plans';
           set({ error: message });
@@ -120,8 +127,8 @@ export const useSubscriptionStore = create<SubscriptionState>()(
           if (!validPlans.includes(plan as PlanType)) {
             throw new Error(`Invalid plan: ${plan}. Must be one of: ${validPlans.join(', ')}`);
           }
-          const response = await subscriptionApi.changePlan(plan as PlanType, { billingCycle });
-          set({ subscription: response.data, isLoading: false });
+          const subscription = await subscriptionApi.changePlan(plan as PlanType, { billingCycle });
+          set({ subscription, isLoading: false });
           return true;
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : 'Failed to change plan';
@@ -133,8 +140,8 @@ export const useSubscriptionStore = create<SubscriptionState>()(
       reactivateSubscription: async () => {
         set({ isLoading: true, error: null });
         try {
-          const response = await subscriptionApi.reactivateSubscription();
-          set({ subscription: response.data, isLoading: false });
+          const subscription = await subscriptionApi.reactivateSubscription();
+          set({ subscription, isLoading: false });
           return true;
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : 'Failed to reactivate subscription';
