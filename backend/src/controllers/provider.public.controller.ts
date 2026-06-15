@@ -8,6 +8,11 @@ import ServiceCategory from '../models/serviceCategory.model';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
 import logger from '../utils/logger';
+import {
+  getViewerKey,
+  shouldSkipTracking,
+  trackProviderProfileView,
+} from '../services/providerAnalyticsTracking.service';
 
 // Helper to escape regex special characters (prevents ReDoS attacks)
 const escapeRegex = (str: string): string => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -51,32 +56,15 @@ export const getProviderById = asyncHandler(async (req: Request, res: Response):
       status: 'active'
     }).lean();
 
-    // Track profile view (non-blocking)
+    // Track profile view (non-blocking, deduplicated unique views)
     void (async () => {
       try {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const profileDoc = await ProviderProfile.findOne({ userId: id }).select('analytics.profileViews').lean();
-        if (!profileDoc) return;
-
-        const views = [...(profileDoc.analytics?.profileViews || [])];
-        const todayEntry = views.find((v: { date: Date }) => {
-          const d = new Date(v.date);
-          d.setHours(0, 0, 0, 0);
-          return d.getTime() === today.getTime();
-        });
-
-        if (todayEntry) {
-          todayEntry.views += 1;
-          todayEntry.uniqueViews += 1;
-        } else {
-          views.push({ date: today, views: 1, uniqueViews: 1 });
+        const viewerKey = getViewerKey(req);
+        const authUserId = (req as Request & { user?: { _id?: mongoose.Types.ObjectId | string } }).user?._id?.toString();
+        if (authUserId === id || shouldSkipTracking(viewerKey, id)) {
+          return;
         }
-
-        await ProviderProfile.updateOne(
-          { userId: id },
-          { $set: { 'analytics.profileViews': views } }
-        );
+        await trackProviderProfileView(id, viewerKey);
       } catch (err) {
         logger.warn('Failed to track profile view', {
           context: 'ProviderPublicController',

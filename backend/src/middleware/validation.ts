@@ -55,8 +55,13 @@ function redactPii(obj: any): any {
 /** Shared metadata — variant fields must be allowed or Joi strips them before pricing */
 const bookingMetadataSchema = Joi.object({
   bookingSource: Joi.string()
-    .valid('search', 'profile', 'recommendation', 'repeat')
-    .default('search'),
+    .valid('organic', 'search', 'profile', 'ad', 'direct', 'repeat', 'recommendation')
+    .optional(),
+  adCampaignId: Joi.string()
+    .pattern(OBJECT_ID_PATTERN)
+    .optional()
+    .messages({ 'string.pattern.base': 'Invalid ad campaign ID format' }),
+  referrer: Joi.string().max(2048).allow('').optional(),
   deviceType: Joi.string()
     .valid('mobile', 'desktop', 'tablet')
     .default('desktop'),

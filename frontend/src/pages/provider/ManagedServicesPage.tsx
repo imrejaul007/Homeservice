@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
+import { useNavigate, useLocation, useSearchParams, useParams } from 'react-router-dom';
 import {
   managedContractApi,
   ManagedContract,
@@ -124,6 +124,7 @@ type TabType = 'overview' | 'details' | 'team' | 'sla' | 'reports';
 const ManagedServicesPage: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
+  const { contractId: routeContractId } = useParams<{ contractId?: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useAuthStore();
 
@@ -133,6 +134,17 @@ const ManagedServicesPage: React.FC = () => {
       navigate('/');
     }
   }, [user, navigate]);
+
+  // Deep-link support: /provider/managed-services/:contractId?tab=sla
+  useEffect(() => {
+    if (!routeContractId) return;
+    setSelectedContractId(routeContractId);
+    setViewMode('detail');
+    const tab = searchParams.get('tab');
+    if (tab && ['overview', 'details', 'team', 'sla', 'reports'].includes(tab)) {
+      setActiveTab(tab as TabType);
+    }
+  }, [routeContractId, searchParams]);
 
   // URL param helpers
   const getInitialTab = (): TabType => {

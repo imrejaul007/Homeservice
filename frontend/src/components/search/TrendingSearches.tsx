@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { TrendingUp, Clock, Loader2, ChevronRight, Sparkles, Flame } from 'lucide-react';
+import { ArrowRight, TrendingUp } from 'lucide-react';
 import { useSearchStore } from '@/stores/searchStore';
 import { cn } from '@/lib/utils';
 
@@ -10,33 +10,37 @@ interface TrendingSearchesProps {
   subtitle?: string;
   limit?: number;
   showViewAll?: boolean;
-  variant?: 'default' | 'hero' | 'minimal';
+  variant?: 'default' | 'hero' | 'minimal' | 'modern';
   onSearch?: (query: string) => void;
 }
 
 const DEFAULT_TRENDING_SEARCHES = [
-  { term: 'Bridal Makeup', category: 'beauty', icon: 'sparkles' },
-  { term: 'Swedish Massage', category: 'spa', icon: 'sparkles' },
-  { term: 'Gel Nails', category: 'nails', icon: 'sparkles' },
-  { term: 'Hair Coloring', category: 'hair', icon: 'sparkles' },
-  { term: 'Deep Tissue Massage', category: 'spa', icon: 'sparkles' },
-  { term: 'Facial Treatment', category: 'skincare', icon: 'sparkles' },
-  { term: 'Haircut & Styling', category: 'hair', icon: 'sparkles' },
-  { term: 'Manicure & Pedicure', category: 'nails', icon: 'sparkles' },
+  { term: 'Bridal Makeup', emoji: '💄' },
+  { term: 'Swedish Massage', emoji: '💆' },
+  { term: 'Gel Nails', emoji: '💅' },
+  { term: 'Hair Coloring', emoji: '🎨' },
+  { term: 'Deep Tissue Massage', emoji: '🧘' },
+  { term: 'Facial Treatment', emoji: '✨' },
+  { term: 'Haircut & Styling', emoji: '✂️' },
+  { term: 'Manicure & Pedicure', emoji: '💅' },
 ];
 
 const TrendingSearches: React.FC<TrendingSearchesProps> = ({
   className,
-  title = 'Trending Searches',
-  subtitle = 'Popular this week',
+  title = 'Trending searches',
   limit = 8,
   showViewAll = false,
-  variant = 'default',
+  variant = 'modern',
   onSearch,
 }) => {
   const navigate = useNavigate();
-  const { recentSearches, addToSearchHistory, setFilters } = useSearchStore();
-  const [isHovered, setIsHovered] = useState<number | null>(null);
+  const { addToSearchHistory, setFilters } = useSearchStore();
+  const [isVisible, setIsVisible] = useState(false);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setIsVisible(true), 100);
+    return () => clearTimeout(timer);
+  }, []);
 
   const handleSearchClick = (term: string) => {
     if (onSearch) {
@@ -48,136 +52,102 @@ const TrendingSearches: React.FC<TrendingSearchesProps> = ({
     }
   };
 
-  const isHeroVariant = variant === 'hero';
-  const isMinimalVariant = variant === 'minimal';
-
-  const containerClasses = cn(
-    'w-full',
-    isHeroVariant && 'bg-white/10 backdrop-blur-sm rounded-2xl p-6 border border-white/10',
-    isMinimalVariant && 'bg-nilin-blush/30 rounded-xl p-4',
-    !isHeroVariant && !isMinimalVariant && 'bg-white rounded-2xl shadow-lg p-6',
-    className
-  );
-
-  const titleColorClass = isHeroVariant ? 'text-white' : 'text-nilin-charcoal';
-  const subtitleColorClass = isHeroVariant ? 'text-white/70' : 'text-nilin-warmGray';
-  const itemHoverClass = isHeroVariant ? 'hover:bg-white/10' : 'hover:bg-nilin-blush/50';
-  const itemTextClass = isHeroVariant ? 'text-white' : 'text-nilin-charcoal';
+  const trendingItems = DEFAULT_TRENDING_SEARCHES.slice(0, limit);
 
   return (
-    <div className={containerClasses}>
-      {/* Header */}
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-3">
-          <div className={cn(
-            'flex items-center justify-center w-10 h-10 rounded-xl',
-            isHeroVariant ? 'bg-nilin-coral/20' : 'bg-nilin-coral/10'
-          )}>
-            <Flame className={cn('w-5 h-5', isHeroVariant ? 'text-white' : 'text-nilin-coral')} />
+    <section className={cn('py-20 px-0 bg-nilin-cream/50', className)}>
+      <div className="max-w-7xl mx-auto px-2">
+        {/* Header with glass effect */}
+        <div className={cn(
+          'mb-10 transition-all duration-700',
+          isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
+        )}>
+          <div className="inline-flex items-center gap-3 px-6 py-3 rounded-full glass-nilin mb-5">
+            <TrendingUp className="w-5 h-5 text-nilin-coral" />
+            <span className="text-sm font-semibold text-nilin-charcoal uppercase tracking-wide">Hot right now</span>
           </div>
-          <div>
-            <h3 className={cn('text-lg font-semibold', titleColorClass)}>{title}</h3>
-            <p className={cn('text-sm', subtitleColorClass)}>{subtitle}</p>
-          </div>
+          <h2 className="text-4xl md:text-5xl font-bold text-nilin-charcoal">
+            {title}
+          </h2>
         </div>
 
-        {showViewAll && (
-          <button
-            onClick={() => navigate('/search?view=trending')}
-            className={cn(
-              'flex items-center gap-1 text-sm font-medium transition-colors',
-              isHeroVariant ? 'text-white/70 hover:text-white' : 'text-nilin-coral hover:text-nilin-rose'
-            )}
-          >
-            View all
-            <ChevronRight className="w-4 h-4" />
-          </button>
-        )}
-      </div>
+        {/* Trending Pills - Larger glassy layout */}
+        <div className="flex flex-wrap gap-4">
+          {trendingItems.map((item, index) => (
+            <button
+              key={`trending-${index}`}
+              onClick={() => handleSearchClick(item.term)}
+              className={cn(
+                'group flex items-center gap-4 pl-2 pr-6 py-3 rounded-2xl',
+                'bg-white/80 backdrop-blur-md',
+                'border border-white/80',
+                'shadow-md hover:shadow-xl',
+                'transition-all duration-300 ease-out',
+                'hover:-translate-y-1 hover:bg-white/95'
+              )}
+              style={{
+                opacity: isVisible ? 1 : 0,
+                transform: isVisible ? 'translateY(0)' : `translateY(20px)`,
+                transition: `opacity 0.5s ease ${index * 60}ms, transform 0.5s ease ${index * 60}ms, background-color 0.3s, box-shadow 0.3s`,
+              }}
+            >
+              {/* Number Badge - Larger glassy circle */}
+              <span className={cn(
+                'w-12 h-12 rounded-full flex items-center justify-center text-base font-bold',
+                'bg-nilin-coral/20 text-nilin-coral',
+                'group-hover:bg-nilin-coral group-hover:text-white',
+                'group-hover:scale-110',
+                'transition-all duration-300 shadow-sm'
+              )}>
+                {index + 1}
+              </span>
 
-      {/* Trending Items Grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-        {DEFAULT_TRENDING_SEARCHES.slice(0, limit).map((item, index) => (
-          <button
-            key={`trending-${index}`}
-            onClick={() => handleSearchClick(item.term)}
-            onMouseEnter={() => setIsHovered(index)}
-            onMouseLeave={() => setIsHovered(null)}
-            className={cn(
-              'group relative flex items-center gap-3 p-3 rounded-xl transition-all duration-300',
-              itemHoverClass,
-              isHovered === index && (isHeroVariant ? 'bg-white/15 scale-[1.02]' : 'bg-nilin-peach/30 scale-[1.02]')
-            )}
-          >
-            {/* Rank Badge */}
-            <div className={cn(
-              'flex items-center justify-center w-8 h-8 rounded-lg text-sm font-bold',
-              isHeroVariant
-                ? 'bg-white/10 text-white/80'
-                : 'bg-nilin-coral/10 text-nilin-coral'
-            )}>
-              {index + 1}
-            </div>
+              {/* Emoji */}
+              <span className="text-2xl group-hover:scale-110 group-hover:rotate-6 transition-transform duration-300">
+                {item.emoji}
+              </span>
 
-            {/* Content */}
-            <div className="flex-1 text-left min-w-0">
-              <span className={cn('block text-sm font-medium truncate', itemTextClass)}>
+              {/* Text - Larger */}
+              <span className="text-base font-medium text-nilin-charcoal group-hover:text-nilin-coral transition-colors">
                 {item.term}
               </span>
-              <span className={cn(
-                'block text-xs capitalize',
-                isHeroVariant ? 'text-white/50' : 'text-nilin-warmGray'
-              )}>
-                {item.category}
-              </span>
-            </div>
 
-            {/* Hover Icon */}
-            <div className={cn(
-              'w-6 h-6 flex items-center justify-center rounded-full transition-all duration-300',
-              isHovered === index
-                ? isHeroVariant ? 'bg-white/20' : 'bg-nilin-coral/20'
-                : 'opacity-0',
-              isHeroVariant ? 'text-white/60' : 'text-nilin-coral'
-            )}>
-              <Sparkles className="w-3 h-3" />
-            </div>
-
-            {/* Glow Effect on Hover */}
-            {isHovered === index && (
-              <div className="absolute inset-0 rounded-xl bg-gradient-to-r from-nilin-coral/10 to-transparent opacity-50" />
-            )}
-          </button>
-        ))}
-      </div>
-
-      {/* Recent Searches (if any) */}
-      {recentSearches.length > 0 && !isMinimalVariant && (
-        <div className="mt-6 pt-4 border-t border-nilin-border/30">
-          <div className="flex items-center gap-2 mb-3">
-            <Clock className={cn('w-4 h-4', subtitleColorClass)} />
-            <span className={cn('text-sm font-medium', subtitleColorClass)}>Your recent searches</span>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {recentSearches.slice(0, 4).map((term, index) => (
-              <button
-                key={`recent-${index}`}
-                onClick={() => handleSearchClick(term)}
-                className={cn(
-                  'flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm transition-colors',
-                  isHeroVariant
-                    ? 'bg-white/10 text-white/80 hover:bg-white/20'
-                    : 'bg-nilin-blush/50 text-nilin-warmGray hover:bg-nilin-coral/10 hover:text-nilin-coral'
-                )}
-              >
-                <Clock className="w-3 h-3" />
-                {term}
-              </button>
-            ))}
-          </div>
+              {/* Arrow on hover */}
+              <ArrowRight className={cn(
+                'w-5 h-5 text-nilin-coral/60',
+                'opacity-0 -translate-x-2 group-hover:opacity-100 group-hover:translate-x-0',
+                'transition-all duration-300'
+              )} />
+            </button>
+          ))}
         </div>
-      )}
-    </div>
+
+        {/* View All Button */}
+        {showViewAll && (
+          <div className={cn(
+            'mt-12 transition-all duration-700 delay-300',
+            isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
+          )}>
+            <button
+              onClick={() => navigate('/search?view=trending')}
+              className={cn(
+                'group flex items-center gap-2 px-8 py-4 rounded-full',
+                'bg-white/80 backdrop-blur-md',
+                'border border-nilin-coral/30',
+                'text-nilin-charcoal font-medium text-base',
+                'hover:bg-nilin-coral hover:text-white hover:border-nilin-coral',
+                'hover:shadow-lg hover:shadow-nilin-coral/20',
+                'hover:-translate-y-0.5',
+                'transition-all duration-300'
+              )}
+            >
+              <span>View all trending</span>
+              <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
+            </button>
+          </div>
+        )}
+      </div>
+    </section>
   );
 };
 

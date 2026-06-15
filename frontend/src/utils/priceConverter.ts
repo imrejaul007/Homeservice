@@ -3,6 +3,7 @@
  * Converts prices between different currencies based on location
  */
 
+import { useCallback, useMemo } from 'react';
 import { useLocationStore } from '../stores/locationStore';
 import type { SupportedCity, UserLocation } from '../types/location.types';
 
@@ -233,23 +234,35 @@ export const usePriceConversion = () => {
   const selectedCity = useLocationStore((s) => s.selectedCity);
   const currentLocation = useLocationStore((s) => s.currentLocation);
 
-  const currency = resolveTargetCurrency(selectedCity, currentLocation);
+  const currency = useMemo(
+    () => resolveTargetCurrency(selectedCity, currentLocation),
+    [selectedCity, currentLocation]
+  );
 
-  const convert = (price: number, fromCurrency: string = 'AED') => {
-    if (typeof price !== 'number' || isNaN(price)) price = 0;
-    return convertPrice(price, fromCurrency, currency);
-  };
+  const convert = useCallback(
+    (price: number, fromCurrency: string = 'AED') => {
+      if (typeof price !== 'number' || isNaN(price)) price = 0;
+      return convertPrice(price, fromCurrency, currency);
+    },
+    [currency]
+  );
 
-  const format = (price: number, currencyOverride?: string) => {
-    if (typeof price !== 'number' || isNaN(price)) price = 0;
-    return formatPrice(price, currencyOverride || currency);
-  };
+  const format = useCallback(
+    (price: number, currencyOverride?: string) => {
+      if (typeof price !== 'number' || isNaN(price)) price = 0;
+      return formatPrice(price, currencyOverride || currency);
+    },
+    [currency]
+  );
 
-  const convertAndFormat = (price: number, fromCurrency: string = 'AED') => {
-    if (typeof price !== 'number' || isNaN(price)) price = 0;
-    const converted = convertPrice(price, fromCurrency, currency);
-    return formatPrice(converted, currency);
-  };
+  const convertAndFormat = useCallback(
+    (price: number, fromCurrency: string = 'AED') => {
+      if (typeof price !== 'number' || isNaN(price)) price = 0;
+      const converted = convertPrice(price, fromCurrency, currency);
+      return formatPrice(converted, currency);
+    },
+    [currency]
+  );
 
   return {
     currency,

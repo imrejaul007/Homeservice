@@ -13,10 +13,12 @@ import {
 } from 'recharts';
 import { Clock, TrendingUp, Loader, DollarSign, Zap } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { analyticsApi } from '../../../services/analyticsApi';
 
 interface PeakHoursRevenueProps {
   providerId?: string;
   timeRange?: '7d' | '30d' | '90d';
+  hidePeriodSelector?: boolean;
 }
 
 interface HourlyData {
@@ -38,35 +40,6 @@ interface PeakStats {
   avgBookingValue: number;
 }
 
-const MOCK_DATA: HourlyData[] = [
-  { hour: 6, hourLabel: '6 AM', revenue: 150, bookings: 2, avgDuration: 60, demand: 'low' },
-  { hour: 7, hourLabel: '7 AM', revenue: 280, bookings: 3, avgDuration: 65, demand: 'low' },
-  { hour: 8, hourLabel: '8 AM', revenue: 520, bookings: 6, avgDuration: 70, demand: 'medium' },
-  { hour: 9, hourLabel: '9 AM', revenue: 890, bookings: 10, avgDuration: 75, demand: 'high' },
-  { hour: 10, hourLabel: '10 AM', revenue: 1250, bookings: 14, avgDuration: 80, demand: 'peak' },
-  { hour: 11, hourLabel: '11 AM', revenue: 1380, bookings: 15, avgDuration: 85, demand: 'peak' },
-  { hour: 12, hourLabel: '12 PM', revenue: 920, bookings: 10, avgDuration: 75, demand: 'high' },
-  { hour: 13, hourLabel: '1 PM', revenue: 750, bookings: 8, avgDuration: 70, demand: 'medium' },
-  { hour: 14, hourLabel: '2 PM', revenue: 980, bookings: 11, avgDuration: 72, demand: 'high' },
-  { hour: 15, hourLabel: '3 PM', revenue: 1150, bookings: 13, avgDuration: 78, demand: 'peak' },
-  { hour: 16, hourLabel: '4 PM', revenue: 1220, bookings: 14, avgDuration: 80, demand: 'peak' },
-  { hour: 17, hourLabel: '5 PM', revenue: 1350, bookings: 15, avgDuration: 82, demand: 'peak' },
-  { hour: 18, hourLabel: '6 PM', revenue: 1080, bookings: 12, avgDuration: 78, demand: 'high' },
-  { hour: 19, hourLabel: '7 PM', revenue: 820, bookings: 9, avgDuration: 70, demand: 'medium' },
-  { hour: 20, hourLabel: '8 PM', revenue: 580, bookings: 6, avgDuration: 65, demand: 'low' },
-  { hour: 21, hourLabel: '9 PM', revenue: 320, bookings: 4, avgDuration: 60, demand: 'low' },
-];
-
-const MOCK_STATS: PeakStats = {
-  peakHour: 17,
-  peakRevenue: 1350,
-  slowHour: 6,
-  potentialRevenue: 12450,
-  totalRevenue: 15680,
-  totalBookings: 175,
-  avgBookingValue: 89.60,
-};
-
 const DEMAND_COLORS = {
   low: '#9CA3AF',
   medium: '#60A5FA',
@@ -77,19 +50,66 @@ const DEMAND_COLORS = {
 export const PeakHoursRevenue: React.FC<PeakHoursRevenueProps> = ({
   providerId,
   timeRange = '30d',
+  hidePeriodSelector = false,
 }) => {
   const [loading, setLoading] = useState(true);
-  const [data, setData] = useState<HourlyData[]>(MOCK_DATA);
-  const [stats, setStats] = useState<PeakStats>(MOCK_STATS);
+  const [data, setData] = useState<HourlyData[]>([]);
+  const [stats, setStats] = useState<PeakStats>({
+    peakHour: 0,
+    peakRevenue: 0,
+    slowHour: 0,
+    potentialRevenue: 0,
+    totalRevenue: 0,
+    totalBookings: 0,
+    avgBookingValue: 0,
+  });
   const [selectedRange, setSelectedRange] = useState(timeRange);
   const [viewMode, setViewMode] = useState<'revenue' | 'bookings'>('revenue');
 
   useEffect(() => {
+    setSelectedRange(timeRange);
+  }, [timeRange]);
+
+  useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
-      await new Promise((resolve) => setTimeout(resolve, 800));
-      setData(MOCK_DATA);
-      setLoading(false);
+      try {
+        const apiData = await analyticsApi.getPeakHoursRevenue(providerId, selectedRange);
+        const hourlyData: HourlyData[] = (apiData.hourlyData || []).map((item) => ({
+          hour: item.hour,
+          hourLabel: new Date(2000, 0, 1, item.hour).toLocaleTimeString('en-US', {
+            hour: 'numeric',
+            hour12: true,
+          }),
+          revenue: item.revenue,
+          bookings: item.bookings,
+          avgDuration: item.avgDuration,
+          demand: item.demand,
+        }));
+        setData(hourlyData.length > 0 ? hourlyData : []);
+        setStats({
+          peakHour: apiData.peakHour ?? 0,
+          peakRevenue: hourlyData.find((h) => h.hour === apiData.peakHour)?.revenue ?? 0,
+          slowHour: apiData.slowHour ?? 0,
+          potentialRevenue: apiData.potentialRevenue ?? 0,
+          totalRevenue: apiData.totalRevenue ?? 0,
+          totalBookings: apiData.totalBookings ?? 0,
+          avgBookingValue: apiData.avgBookingValue ?? 0,
+        });
+      } catch {
+        setData([]);
+        setStats({
+          peakHour: 0,
+          peakRevenue: 0,
+          slowHour: 0,
+          potentialRevenue: 0,
+          totalRevenue: 0,
+          totalBookings: 0,
+          avgBookingValue: 0,
+        });
+      } finally {
+        setLoading(false);
+      }
     };
     fetchData();
   }, [providerId, selectedRange]);
@@ -186,21 +206,23 @@ export const PeakHoursRevenue: React.FC<PeakHoursRevenueProps> = ({
             </button>
           </div>
 
-          <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1">
-            {timeRanges.map((range) => (
-              <button
-                key={range.key}
-                onClick={() => setSelectedRange(range.key as typeof selectedRange)}
-                className={`px-3 py-1 text-sm rounded-md transition-colors ${
-                  selectedRange === range.key
-                    ? 'bg-white text-gray-900 shadow-sm'
-                    : 'text-gray-600 hover:text-gray-900'
-                }`}
-              >
-                {range.label}
-              </button>
-            ))}
-          </div>
+          {!hidePeriodSelector && (
+            <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1">
+              {timeRanges.map((range) => (
+                <button
+                  key={range.key}
+                  onClick={() => setSelectedRange(range.key as typeof selectedRange)}
+                  className={`px-3 py-1 text-sm rounded-md transition-colors ${
+                    selectedRange === range.key
+                      ? 'bg-white text-gray-900 shadow-sm'
+                      : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                >
+                  {range.label}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
@@ -242,8 +264,8 @@ export const PeakHoursRevenue: React.FC<PeakHoursRevenueProps> = ({
           <Loader className="h-8 w-8 text-yellow-600 animate-spin" />
         </div>
       ) : (
-        <div className="h-72">
-          <ResponsiveContainer width="100%" height="100%">
+        <div className="h-72 min-h-[288px] w-full">
+          <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={288}>
             <BarChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" vertical={false} />
               <XAxis

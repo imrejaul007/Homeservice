@@ -1,8 +1,23 @@
 import { Router } from 'express';
 import { featureFlagsService } from '../services/featureFlags.service';
-import { authenticate } from '../middleware/auth.middleware';
+import { authenticate, optionalAuth } from '../middleware/auth.middleware';
 
 const router = Router();
+
+const CLIENT_FLAG_KEYS = [
+  'ai_recommendations',
+  'new_onboarding_flow',
+  'smart_pricing',
+  'loyalty_tiers',
+  'referral_program',
+  'instant_booking',
+  'wallet_enabled',
+  'provider_analytics',
+] as const;
+
+const CLIENT_FLAG_ALIASES: Record<string, string> = {
+  enable_ai_recommendations: 'ai_recommendations',
+};
 
 // Get all flags (admin only)
 router.get('/', authenticate, async (req, res) => {
@@ -17,6 +32,32 @@ router.get('/', authenticate, async (req, res) => {
 router.get('/enabled', async (req, res) => {
   const flags = await featureFlagsService.getEnabledFlags();
   res.json({ flags });
+});
+
+// Client bootstrap — resolved flags for the current user (optional auth)
+router.get('/client', optionalAuth, async (req, res) => {
+  const context = req.user
+    ? {
+        userId: req.user._id?.toString(),
+        role: req.user.role,
+        tier: (req.user as { loyaltySystem?: { tier?: string } }).loyaltySystem?.tier,
+      }
+    : undefined;
+
+  const flags: Record<string, boolean> = {};
+
+  for (const key of CLIENT_FLAG_KEYS) {
+    flags[key] = await featureFlagsService.isEnabled(key, context);
+  }
+
+  for (const [alias, sourceKey] of Object.entries(CLIENT_FLAG_ALIASES)) {
+    flags[alias] = flags[sourceKey] ?? false;
+  }
+
+  return res.json({
+    success: true,
+    data: { flags },
+  });
 });
 
 // ============================================

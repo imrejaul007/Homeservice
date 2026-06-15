@@ -14,7 +14,8 @@ import paymentRoutes from './payment.routes';
 import analyticsRoutes from './analytics.routes';
 import dashboardRoutes from './analytics/dashboard.routes';
 import customerAnalyticsRoutes from './analytics/customer.routes';
-import providerAnalyticsRoutes from './analytics/provider.routes';
+import providerAnalyticsRoutes, { handleProviderDashboard } from './analytics/provider.routes';
+import { authenticate } from '../middleware/auth.middleware';
 import adminAnalyticsRoutes from './analytics/admin.routes';
 import biRoutes from './bi.routes';
 import churnRoutes from './churn.routes';
@@ -191,20 +192,14 @@ router.use('/payments', paymentRoutes);
 // Offer routes
 router.use('/offers', offerRoutes);
 
-// Analytics routes
-router.use('/analytics', analyticsRoutes);
-
-// Analytics Dashboard routes (detailed metrics)
-router.use('/analytics/dashboard', dashboardRoutes);
-
-// Customer Analytics routes
-router.use('/analytics/customer', customerAnalyticsRoutes);
-
-// Provider Analytics routes
+// Analytics routes — explicit dashboard route first (avoids fallthrough to admin-only /provider/:id)
+router.get('/analytics/provider/dashboard', authenticate, handleProviderDashboard);
+// Mount specific paths BEFORE generic /analytics router
 router.use('/analytics/provider', providerAnalyticsRoutes);
-
-// Admin Analytics routes
+router.use('/analytics/customer', customerAnalyticsRoutes);
 router.use('/analytics/admin', adminAnalyticsRoutes);
+router.use('/analytics/dashboard', dashboardRoutes);
+router.use('/analytics', analyticsRoutes);
 
 // Business Intelligence routes
 router.use('/bi', biRoutes);

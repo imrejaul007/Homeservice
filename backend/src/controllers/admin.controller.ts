@@ -1059,7 +1059,7 @@ export const updateServiceStatus = asyncHandler(async (req: Request, res: Respon
     const socketServer = getSocketServer();
     if (socketServer) {
       if (status === 'active') {
-        socketServer.emitServiceApproved(service._id.toString(), providerUserId);
+        socketServer.emitServiceApproved(service._id.toString(), providerUserId, reason);
       } else if (status === 'rejected') {
         socketServer.emitServiceRejected(service._id.toString(), providerUserId, reason || 'Service was rejected');
       }
@@ -3182,7 +3182,7 @@ export const moderateReview = asyncHandler(async (req: Request, res: Response) =
     // Notify provider (reviewee) when review is approved or hidden
     const providerId = (review.revieweeId as any)?._id?.toString();
     if (providerId && (normalizedAction === 'approve' || normalizedAction === 'hide')) {
-      socketServer.emitReviewModerated(providerId, id, normalizedAction, review.rating);
+      socketServer.emitReviewModerated(providerId, id, normalizedAction, review.rating, reason);
     }
 
     // Notify customer (reviewer) when review is rejected

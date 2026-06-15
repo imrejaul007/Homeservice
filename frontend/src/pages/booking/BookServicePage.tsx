@@ -6,6 +6,7 @@ import Footer from '../../components/layout/Footer';
 import BookingFormWizard from '../../components/booking/BookingFormWizard';
 import { useAuthStore } from '../../stores/authStore';
 import type { Service } from '../../types/search';
+import type { BookingAttributionContext } from '../../types/bookingAttribution';
 import { searchApi } from '../../services/searchApi';
 
 const BookServicePage: React.FC = () => {
@@ -190,8 +191,8 @@ const BookServicePage: React.FC = () => {
 
   const resolvedProviderId = resolveProviderId(service);
 
-  // Extract offer/coupon data from navigation state
-  const offerData = location.state as {
+  // Extract offer/coupon and attribution from navigation state
+  const navigationState = location.state as {
     couponCode?: string;
     offerId?: string;
     offerDetails?: {
@@ -202,7 +203,20 @@ const BookServicePage: React.FC = () => {
       maxDiscount?: number;
     };
     filterByOffer?: boolean;
+    source?: BookingAttributionContext['source'];
+    adCampaignId?: string;
+    query?: string;
+    position?: number;
+    referrer?: string;
   } | undefined;
+
+  const attribution: BookingAttributionContext = {
+    source: navigationState?.source ?? (navigationState?.query ? 'search' : 'direct'),
+    adCampaignId: navigationState?.adCampaignId,
+    query: navigationState?.query,
+    position: navigationState?.position,
+    referrer: navigationState?.referrer ?? (typeof document !== 'undefined' ? document.referrer : undefined),
+  };
 
   // Ensure service has required fields for BookingForm
   const serviceWithDefaults = {
@@ -217,11 +231,12 @@ const BookServicePage: React.FC = () => {
       onSuccess={handleBookingSuccess}
       onCancel={handleCancel}
       guestMode={isGuest}
-      preloadedOffer={offerData?.couponCode ? {
-        code: offerData.couponCode,
-        offerId: offerData.offerId,
-        offerDetails: offerData.offerDetails,
+      preloadedOffer={navigationState?.couponCode ? {
+        code: navigationState.couponCode,
+        offerId: navigationState.offerId,
+        offerDetails: navigationState.offerDetails,
       } : undefined}
+      attribution={attribution}
     />
   );
 };

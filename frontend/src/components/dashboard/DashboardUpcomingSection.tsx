@@ -22,10 +22,10 @@ const formatUpcomingDate = (date: Date | string): string => {
 };
 
 const UpcomingCardSkeleton = () => (
-  <div className="min-w-[260px] rounded-2xl border border-nilin-border/40 bg-white p-4 animate-pulse">
-    <div className="h-4 w-3/4 bg-nilin-border/30 rounded mb-2" />
-    <div className="h-3 w-1/2 bg-nilin-border/20 rounded mb-3" />
-    <div className="h-8 w-24 bg-nilin-border/25 rounded" />
+  <div className="min-w-[260px] dash-card p-4 animate-pulse">
+    <div className="h-4 w-3/4 bg-[var(--dash-surface-raised)] rounded mb-2" />
+    <div className="h-3 w-1/2 bg-[var(--dash-surface-raised)] rounded mb-3" />
+    <div className="h-8 w-24 bg-[var(--dash-surface-raised)] rounded" />
   </div>
 );
 
@@ -38,17 +38,17 @@ const DashboardUpcomingSection: React.FC<DashboardUpcomingSectionProps> = ({
   if (!loading && bookings.length === 0) return null;
 
   return (
-    <div className="mb-6 md:mb-8">
+    <div className="mb-[var(--dash-spacing-32)]">
       <div className="flex items-center justify-between mb-3 md:mb-4">
         <div>
-          <h2 className="text-lg md:text-xl font-serif text-nilin-charcoal">Upcoming</h2>
-          <p className="text-xs text-nilin-warmGray mt-0.5">Your next scheduled appointments</p>
+          <h2 className="dash-section-title normal-case font-light tracking-tight">Upcoming</h2>
+          <p className="dash-section-subtitle">Your next scheduled appointments</p>
         </div>
         {!loading && bookings.length > 0 && (
           <button
             type="button"
             onClick={onViewAll}
-            className="text-sm font-medium text-nilin-coral hover:text-nilin-rose flex items-center gap-1 transition-colors px-3 py-1.5 rounded-lg hover:bg-nilin-coral/5"
+            className="dash-btn-ghost flex items-center gap-1 px-3 py-1.5 rounded-[var(--dash-radius-pill)] hover:bg-[var(--dash-surface-raised)]"
           >
             View all <ArrowRight className="w-4 h-4" />
           </button>
@@ -68,22 +68,22 @@ const DashboardUpcomingSection: React.FC<DashboardUpcomingSectionProps> = ({
               key={booking._id}
               type="button"
               onClick={() => onViewBooking(booking._id)}
-              className="min-w-[260px] max-w-[300px] snap-start flex-shrink-0 text-left rounded-2xl border border-nilin-border/40 bg-white p-4 shadow-sm hover:shadow-md hover:border-nilin-coral/30 transition-all group"
+              className="min-w-[260px] max-w-[300px] snap-start flex-shrink-0 text-left dash-card p-4 hover:bg-[var(--dash-surface-raised)] transition-colors group"
             >
               <div className="flex items-start justify-between gap-2 mb-2">
-                <h3 className="font-semibold text-nilin-charcoal text-[15px] line-clamp-1 group-hover:text-nilin-coral transition-colors">
+                <h3 className="font-medium text-[var(--dash-text)] text-[15px] line-clamp-1">
                   {booking.serviceName}
                 </h3>
-                <span className="text-[10px] font-semibold uppercase tracking-wide text-nilin-coral bg-nilin-coral/10 px-2 py-0.5 rounded-full flex-shrink-0">
+                <span className="dash-badge text-[10px] py-0.5 flex-shrink-0">
                   {booking.status === 'confirmed' ? 'Confirmed' : 'Pending'}
                 </span>
               </div>
 
               {booking.serviceCategory && (
-                <p className="text-xs text-nilin-warmGray mb-3">{booking.serviceCategory}</p>
+                <p className="text-[11px] text-[var(--dash-text-muted)] mb-3">{booking.serviceCategory}</p>
               )}
 
-              <div className="flex items-center gap-3 text-xs text-nilin-warmGray mb-3">
+              <div className="flex items-center gap-3 text-[11px] text-[var(--dash-text-muted)] mb-3">
                 <span className="inline-flex items-center gap-1">
                   <Calendar className="w-3.5 h-3.5" />
                   {formatUpcomingDate(booking.scheduledDate)}
@@ -94,16 +94,16 @@ const DashboardUpcomingSection: React.FC<DashboardUpcomingSectionProps> = ({
                 </span>
               </div>
 
-              <div className="flex items-center justify-between gap-2 pt-2 border-t border-nilin-border/30">
+              <div className="flex items-center justify-between gap-2 pt-2 border-t dash-divider">
                 <div className="flex items-center gap-2 min-w-0">
-                  <div className="w-7 h-7 rounded-full bg-nilin-coral/10 flex items-center justify-center flex-shrink-0">
+                  <div className="w-7 h-7 rounded-full bg-[var(--dash-accent-wash)] flex items-center justify-center flex-shrink-0">
                     {booking.providerAvatar ? (
                       <img src={booking.providerAvatar} alt="" className="w-full h-full rounded-full object-cover" />
                     ) : (
-                      <User className="w-3.5 h-3.5 text-nilin-coral" />
+                      <User className="w-3.5 h-3.5 text-[var(--dash-text)]" />
                     )}
                   </div>
-                  <span className="text-xs text-nilin-charcoal truncate">{booking.providerName}</span>
+                  <span className="text-[12px] text-[var(--dash-text)] truncate">{booking.providerName}</span>
                 </div>
                 <PriceDisplay
                   price={booking.totalAmount || 0}

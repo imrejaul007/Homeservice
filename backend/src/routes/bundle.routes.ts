@@ -212,6 +212,224 @@ router.get(
 );
 
 /**
+ * GET /api/bundles/my
+ * Provider's own bundles (authenticated provider only)
+ * Query params: ?page=1&limit=20, ?status=pending|approved|rejected, ?isActive=true|false
+ */
+router.get(
+  '/my',
+  authenticate,
+  requireRole(['provider']),
+  asyncHandler(async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { status, isActive, page = 1, limit = 20 } = req.query as Record<string, string>;
+      const pageNum = Number(page);
+      const limitNum = Number(limit);
+      const skip = (pageNum - 1) * limitNum;
+
+      const query: Record<string, unknown> = {
+        providerId: req.user!._id,
+      };
+
+      if (status) {
+        query.status = status;
+      }
+      if (isActive !== undefined) {
+        query.isActive = isActive === 'true';
+      }
+
+      const [bundles, total] = await Promise.all([
+        Bundle.find(query)
+          .populate('services.serviceId', 'name images duration')
+          .populate('categoryId', 'name')
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(limitNum)
+          .lean(),
+        Bundle.countDocuments(query),
+      ]);
+
+      res.json({
+        success: true,
+        data: bundles,
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total,
+          pages: Math.ceil(total / limitNum),
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  })
+);
+
+/**
+ * GET /api/bundles/featured
+ * Get featured bundles for homepage display
+ */
+router.get(
+  '/featured',
+  asyncHandler(async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const limit = Number(req.query.limit) || 10;
+      const now = new Date();
+
+      const bundles = await Bundle.find({
+        status: 'approved',
+        isActive: true,
+        isFeatured: true,
+        validFrom: { $lte: now },
+        validUntil: { $gte: now },
+      })
+        .populate('services.serviceId', 'name images duration')
+        .populate('categoryId', 'name')
+        .populate('providerId', 'firstName lastName businessName profileImage')
+        .sort({ savingsPercentage: -1, createdAt: -1 })
+        .limit(limit)
+        .lean();
+
+      res.json({
+        success: true,
+        data: bundles,
+      });
+    } catch (error) {
+      next(error);
+    }
+  })
+);
+
+/**
+ * GET /api/bundles/popular
+ * Get popular bundles based on booking count
+ */
+router.get(
+  '/popular',
+  asyncHandler(async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const limit = Number(req.query.limit) || 10;
+      const now = new Date();
+
+      const bundles = await Bundle.find({
+        status: 'approved',
+        isActive: true,
+        validFrom: { $lte: now },
+        validUntil: { $gte: now },
+      })
+        .populate('services.serviceId', 'name images duration')
+        .populate('categoryId', 'name')
+        .populate('providerId', 'firstName lastName businessName profileImage')
+        .sort({ bookingCount: -1, redemptionsUsed: -1 })
+        .limit(limit)
+        .lean();
+
+      res.json({
+        success: true,
+        data: bundles,
+      });
+    } catch (error) {
+      next(error);
+    }
+  })
+);
+
+/**
+ * GET /api/bundles/category/:categoryId
+ * Get bundles by category
+ */
+router.get(
+  '/category/:categoryId',
+  asyncHandler(async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { categoryId } = req.params;
+      const { page = 1, limit = 20 } = req.query as Record<string, string>;
+      const pageNum = Number(page);
+      const limitNum = Number(limit);
+      const skip = (pageNum - 1) * limitNum;
+      const now = new Date();
+
+      const query: Record<string, unknown> = {
+        categoryId: new mongoose.Types.ObjectId(categoryId),
+        status: 'approved',
+        isActive: true,
+        validFrom: { $lte: now },
+        validUntil: { $gte: now },
+      };
+
+      const [bundles, total] = await Promise.all([
+        Bundle.find(query)
+          .populate('services.serviceId', 'name images duration')
+          .populate('categoryId', 'name')
+          .populate('providerId', 'firstName lastName businessName profileImage')
+          .sort({ savingsPercentage: -1, bookingCount: -1 })
+          .skip(skip)
+          .limit(limitNum)
+          .lean(),
+        Bundle.countDocuments(query),
+      ]);
+
+      res.json({
+        success: true,
+        data: bundles,
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total,
+          pages: Math.ceil(total / limitNum),
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  })
+);
+
+/**
+ * GET /api/bundles/slug/:slug
+ * Get bundle by slug (SEO-friendly)
+ */
+router.get(
+  '/slug/:slug',
+  asyncHandler(async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { slug } = req.params;
+      const now = new Date();
+
+      const bundle = await Bundle.findOne({
+        $or: [
+          { slug: slug },
+          { name: { $regex: new RegExp(slug.replace(/-/g, ' '), 'i') } },
+        ],
+        status: 'approved',
+        isActive: true,
+        validFrom: { $lte: now },
+        validUntil: { $gte: now },
+      })
+        .populate('services.serviceId', 'name images description duration')
+        .populate('categoryId', 'name')
+        .populate('providerId', 'firstName lastName businessName profileImage rating')
+        .lean();
+
+      if (!bundle) {
+        res.status(404).json({
+          success: false,
+          message: 'Bundle not found',
+        });
+        return;
+      }
+
+      res.json({
+        success: true,
+        data: bundle,
+      });
+    } catch (error) {
+      next(error);
+    }
+  })
+);
+
+/**
  * GET /api/bundles/:id
  * Get bundle details - public can see approved, provider can see their own
  */
@@ -512,181 +730,6 @@ router.post(
 );
 
 /**
- * GET /api/bundles/my
- * Provider's own bundles (authenticated provider only)
- * Query params: ?page=1&limit=20, ?status=pending|approved|rejected, ?isActive=true|false
- */
-router.get(
-  '/my',
-  authenticate,
-  requireRole(['provider']),
-  asyncHandler(async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    try {
-      const { status, isActive, page = 1, limit = 20 } = req.query as Record<string, string>;
-      const pageNum = Number(page);
-      const limitNum = Number(limit);
-      const skip = (pageNum - 1) * limitNum;
-
-      const query: Record<string, unknown> = {
-        providerId: req.user!._id,
-      };
-
-      // Support both status (admin-style) and isActive (frontend-style) filters
-      if (status) {
-        query.status = status;
-      }
-      if (isActive !== undefined) {
-        query.isActive = isActive === 'true';
-      }
-
-      const [bundles, total] = await Promise.all([
-        Bundle.find(query)
-          .populate('services.serviceId', 'name images duration')
-          .populate('categoryId', 'name')
-          .sort({ createdAt: -1 })
-          .skip(skip)
-          .limit(limitNum)
-          .lean(),
-        Bundle.countDocuments(query),
-      ]);
-
-      res.json({
-        success: true,
-        data: bundles,
-        pagination: {
-          page: pageNum,
-          limit: limitNum,
-          total,
-          pages: Math.ceil(total / limitNum),
-        },
-      });
-    } catch (error) {
-      next(error);
-    }
-  })
-);
-
-/**
- * GET /api/bundles/featured
- * Get featured bundles for homepage display
- */
-router.get(
-  '/featured',
-  asyncHandler(async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    try {
-      const limit = Number(req.query.limit) || 10;
-      const now = new Date();
-
-      const bundles = await Bundle.find({
-        status: 'approved',
-        isActive: true,
-        isFeatured: true,
-        validFrom: { $lte: now },
-        validUntil: { $gte: now },
-      })
-        .populate('services.serviceId', 'name images duration')
-        .populate('categoryId', 'name')
-        .populate('providerId', 'firstName lastName businessName profileImage')
-        .sort({ savingsPercentage: -1, createdAt: -1 })
-        .limit(limit)
-        .lean();
-
-      res.json({
-        success: true,
-        data: bundles,
-      });
-    } catch (error) {
-      next(error);
-    }
-  })
-);
-
-/**
- * GET /api/bundles/popular
- * Get popular bundles based on booking count
- */
-router.get(
-  '/popular',
-  asyncHandler(async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    try {
-      const limit = Number(req.query.limit) || 10;
-      const now = new Date();
-
-      const bundles = await Bundle.find({
-        status: 'approved',
-        isActive: true,
-        validFrom: { $lte: now },
-        validUntil: { $gte: now },
-      })
-        .populate('services.serviceId', 'name images duration')
-        .populate('categoryId', 'name')
-        .populate('providerId', 'firstName lastName businessName profileImage')
-        .sort({ bookingCount: -1, redemptionsUsed: -1 })
-        .limit(limit)
-        .lean();
-
-      res.json({
-        success: true,
-        data: bundles,
-      });
-    } catch (error) {
-      next(error);
-    }
-  })
-);
-
-/**
- * GET /api/bundles/category/:categoryId
- * Get bundles by category
- */
-router.get(
-  '/category/:categoryId',
-  asyncHandler(async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    try {
-      const { categoryId } = req.params;
-      const { page = 1, limit = 20 } = req.query as Record<string, string>;
-      const pageNum = Number(page);
-      const limitNum = Number(limit);
-      const skip = (pageNum - 1) * limitNum;
-      const now = new Date();
-
-      const query: Record<string, unknown> = {
-        categoryId: new mongoose.Types.ObjectId(categoryId),
-        status: 'approved',
-        isActive: true,
-        validFrom: { $lte: now },
-        validUntil: { $gte: now },
-      };
-
-      const [bundles, total] = await Promise.all([
-        Bundle.find(query)
-          .populate('services.serviceId', 'name images duration')
-          .populate('categoryId', 'name')
-          .populate('providerId', 'firstName lastName businessName profileImage')
-          .sort({ savingsPercentage: -1, bookingCount: -1 })
-          .skip(skip)
-          .limit(limitNum)
-          .lean(),
-        Bundle.countDocuments(query),
-      ]);
-
-      res.json({
-        success: true,
-        data: bundles,
-        pagination: {
-          page: pageNum,
-          limit: limitNum,
-          total,
-          pages: Math.ceil(total / limitNum),
-        },
-      });
-    } catch (error) {
-      next(error);
-    }
-  })
-);
-
-/**
  * GET /api/bundles/:id/availability
  * Get available time slots for a bundle
  */
@@ -745,51 +788,6 @@ router.get(
           bundleId: bundle._id.toString(),
           bundleName: bundle.name,
         },
-      });
-    } catch (error) {
-      next(error);
-    }
-  })
-);
-
-/**
- * GET /api/bundles/slug/:slug
- * Get bundle by slug (SEO-friendly)
- */
-router.get(
-  '/slug/:slug',
-  asyncHandler(async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    try {
-      const { slug } = req.params;
-      const now = new Date();
-
-      // Look for bundle with matching slug or fallback to name-based slug
-      const bundle = await Bundle.findOne({
-        $or: [
-          { slug: slug },
-          { name: { $regex: new RegExp(slug.replace(/-/g, ' '), 'i') } },
-        ],
-        status: 'approved',
-        isActive: true,
-        validFrom: { $lte: now },
-        validUntil: { $gte: now },
-      })
-        .populate('services.serviceId', 'name images description duration')
-        .populate('categoryId', 'name')
-        .populate('providerId', 'firstName lastName businessName profileImage rating')
-        .lean();
-
-      if (!bundle) {
-        res.status(404).json({
-          success: false,
-          message: 'Bundle not found',
-        });
-        return;
-      }
-
-      res.json({
-        success: true,
-        data: bundle,
       });
     } catch (error) {
       next(error);

@@ -40,6 +40,7 @@ import {
   getEffectiveBufferMinutes,
 } from './platformSettingsPolicy.service';
 import { OfferService } from './offer.service';
+import { resolveBookingAttribution } from '../utils/bookingAttribution';
 
 // ============================================
 // Slot Locking Constants
@@ -1137,6 +1138,14 @@ export class BookingService {
       data.locationType
     );
 
+    const attribution = await resolveBookingAttribution({
+      customerId: normalizedCustomerId,
+      providerId: data.providerId,
+      metadata: data.metadata,
+      referrer: data.metadata?.referrer,
+      isGuest: isGuestBooking,
+    });
+
     // Create booking object (will be saved within transaction)
     const bookingData: Record<string, unknown> = {
       bookingNumber,
@@ -1181,8 +1190,9 @@ export class BookingService {
         refundPercentage: 100,
         cancellationFee: 0,
       },
+      attribution,
       metadata: {
-        bookingSource: data.metadata?.bookingSource || 'search',
+        bookingSource: attribution.source,
         deviceType: data.metadata?.deviceType || 'desktop',
         sessionId: lockOwnerId,
         idempotencyKey: idempotencyKey, // Always store idempotency key
@@ -2562,7 +2572,7 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
     providerId: string,
     filters?: BookingFiltersDTO,
     pagination?: { page?: number; limit?: number }
-  ): Promise<{ bookings: any[]; pagination: any }> {
+  ): Promise<{ bookings: any[]; stats: any; pagination: any }> {
     const page = filters?.page || pagination?.page || 1;
     // FIX: Enforce maximum pagination limit to prevent excessive queries
     const limit = Math.min(filters?.limit || pagination?.limit || 20, 100);
@@ -2577,7 +2587,12 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
       sort.scheduledTime = sortDirection;
     }
 
-    const query: any = { providerId: new mongoose.Types.ObjectId(providerId), deletedAt: { $exists: false } }; // FIX: Exclude deleted bookings
+    const query: any = {
+      providerId: new mongoose.Types.ObjectId(providerId),
+      deletedAt: { $exists: false },
+      // Hide per-service child rows from package bookings; show parent package booking only
+      'metadata.packageBookingId': { $exists: false },
+    };
 
     if (filters?.status) {
       query.status = filters.status;
@@ -2590,6 +2605,18 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
     if (filters?.search) {
       query.$or = [
         { bookingNumber: { $regex: escapeRegex(filters.search), $options: 'i' } }
+      ];
+    }
+    if (filters?.city) {
+      const cityPattern = new RegExp(`^${escapeRegex(filters.city)}$`, 'i');
+      query.$and = [
+        ...(query.$and || []),
+        {
+          $or: [
+            { 'location.address.city': cityPattern },
+            { 'location.address.state': cityPattern },
+          ],
+        },
       ];
     }
 
@@ -2611,11 +2638,25 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
       location: 1,
       providerResponse: 1,
       statusHistory: 1,
+      metadata: 1,
       createdAt: 1,
       updatedAt: 1,
     };
 
-    const [bookings, total] = await Promise.all([
+    const statsQuery: Record<string, unknown> = {
+      providerId: new mongoose.Types.ObjectId(providerId),
+      deletedAt: { $exists: false },
+      'metadata.packageBookingId': { $exists: false },
+    };
+    if (filters?.city) {
+      const cityPattern = new RegExp(`^${escapeRegex(filters.city)}$`, 'i');
+      statsQuery.$or = [
+        { 'location.address.city': cityPattern },
+        { 'location.address.state': cityPattern },
+      ];
+    }
+
+    const [bookings, total, statusBreakdown] = await Promise.all([
       Booking.find(query, projection)
         .populate('customerId', 'firstName lastName phone')
         .populate('serviceId', 'name category duration images')
@@ -2623,11 +2664,45 @@ eventBus.publish(EVENT_TYPES.BOOKING_CREATED, {
         .skip(skip)
         .limit(limit)
         .lean(),
-      Booking.countDocuments(query)
+      Booking.countDocuments(query),
+      Booking.aggregate([
+        { $match: statsQuery },
+        { $group: { _id: '$status', count: { $sum: 1 } } },
+      ]),
     ]);
 
+    const stats: Record<string, number> = {
+      pending: 0,
+      confirmed: 0,
+      in_progress: 0,
+      completed: 0,
+      cancelled: 0,
+      no_show: 0,
+      total: 0,
+    };
+    statusBreakdown.forEach((row: { _id: string; count: number }) => {
+      if (row._id && row._id in stats) {
+        stats[row._id] = row.count;
+      }
+      stats.total += row.count;
+    });
+
+    const enrichedBookings = bookings.map((booking: any) => {
+      const populatedService = booking.serviceId;
+      const packageName = booking.metadata?.packageName;
+      if ((!populatedService || !populatedService.name) && packageName) {
+        booking.serviceId = {
+          _id: populatedService?._id || booking.serviceId,
+          name: packageName,
+          category: booking.metadata?.packageCategory || 'Package',
+        };
+      }
+      return booking;
+    });
+
     return {
-      bookings,
+      bookings: enrichedBookings,
+      stats,
       pagination: {
         page,
         limit,

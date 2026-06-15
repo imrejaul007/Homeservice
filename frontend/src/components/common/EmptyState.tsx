@@ -2,19 +2,188 @@ import React from 'react';
 import type { ReactNode } from 'react';
 import { cn } from '../../lib/utils';
 import Button from './Button';
+import { Plus } from 'lucide-react';
+
+// NILIN Brand Colors
+const COLORS = {
+  coral: '#E8B4A8',
+  rose: '#D4A89A',
+  blush: '#F5E6E0',
+  peach: '#FAE5E0',
+  charcoal: '#2D2926',
+  warmGray: '#6B635B',
+  lightGray: '#A39E99',
+};
 
 interface EmptyStateProps {
   icon?: ReactNode;
   title: string;
   description?: string;
   action?: {
-    label: string;
+    label: ReactNode;
     onClick: () => void;
     variant?: 'primary' | 'secondary' | 'ghost';
   };
   className?: string;
   compact?: boolean;
+  // New props for enhanced empty states
+  variant?: 'empty' | 'search';
+  showIllustration?: boolean;
 }
+
+// SVG Illustration for "No Services Yet" (empty state)
+const EmptyServicesIllustration: React.FC = () => (
+  <svg
+    width="120"
+    height="120"
+    viewBox="0 0 140 140"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+    aria-hidden="true"
+  >
+    {/* Background circle */}
+    <circle cx="70" cy="70" r="55" fill={COLORS.blush} opacity="0.6" />
+    <circle cx="70" cy="70" r="45" fill={COLORS.peach} opacity="0.5" />
+
+    {/* Main folder/document shape */}
+    <g transform="translate(35, 45)">
+      {/* Folder body */}
+      <path
+        d="M8 8H42C44.2091 8 46 9.79086 46 12V48C46 50.2091 44.2091 52 42 52H8C5.79086 52 4 50.2091 4 48V12C4 9.79086 5.79086 8 8 8Z"
+        fill="white"
+        stroke={COLORS.coral}
+        strokeWidth="2"
+      />
+      {/* Folder tab */}
+      <path
+        d="M8 8C8 5.79086 9.79086 4 12 4H28C30.2091 4 32 5.79086 32 8V12C32 14.2091 30.2091 16 28 16H12C9.79086 16 8 14.2091 8 12V8Z"
+        fill={COLORS.peach}
+        stroke={COLORS.coral}
+        strokeWidth="2"
+      />
+      {/* Document lines */}
+      <line x1="12" y1="24" x2="38" y2="24" stroke={COLORS.rose} strokeWidth="2" strokeLinecap="round" />
+      <line x1="12" y1="32" x2="32" y2="32" stroke={COLORS.rose} strokeWidth="2" strokeLinecap="round" />
+      <line x1="12" y1="40" x2="28" y2="40" stroke={COLORS.rose} strokeWidth="2" strokeLinecap="round" />
+    </g>
+
+    {/* Plus badge */}
+    <g transform="translate(85, 75)">
+      <circle cx="12" cy="12" r="12" fill={COLORS.coral} />
+      <path
+        d="M12 6V18M6 12H18"
+        stroke="white"
+        strokeWidth="2.5"
+        strokeLinecap="round"
+      />
+    </g>
+
+    {/* Decorative sparkles */}
+    <g opacity="0.7">
+      {/* Top sparkle */}
+      <path
+        d="M25 30L27 35L25 40L23 35L25 30Z"
+        fill={COLORS.coral}
+      />
+      {/* Right sparkle */}
+      <path
+        d="M115 50L117 54L115 58L113 54L115 50Z"
+        fill={COLORS.rose}
+      />
+      {/* Bottom sparkle */}
+      <path
+        d="M100 105L102 108L100 111L98 108L100 105Z"
+        fill={COLORS.coral}
+      />
+      {/* Small dots */}
+      <circle cx="30" cy="100" r="3" fill={COLORS.peach} />
+      <circle cx="110" cy="85" r="2" fill={COLORS.rose} />
+    </g>
+
+    {/* Floating elements */}
+    <circle cx="20" cy="55" r="4" fill={COLORS.blush} opacity="0.8" />
+    <circle cx="120" cy="70" r="5" fill={COLORS.peach} opacity="0.6" />
+    <circle cx="25" cy="85" r="3" fill={COLORS.rose} opacity="0.5" />
+  </svg>
+);
+
+// SVG Illustration for "No Search Results" (search state)
+const SearchEmptyIllustration: React.FC = () => (
+  <svg
+    width="120"
+    height="120"
+    viewBox="0 0 140 140"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+    aria-hidden="true"
+  >
+    {/* Background circle */}
+    <circle cx="70" cy="70" r="55" fill={COLORS.blush} opacity="0.6" />
+    <circle cx="70" cy="70" r="45" fill={COLORS.peach} opacity="0.5" />
+
+    {/* Magnifying glass */}
+    <g transform="translate(40, 40)">
+      {/* Glass circle */}
+      <circle
+        cx="28"
+        cy="28"
+        r="22"
+        fill="white"
+        stroke={COLORS.coral}
+        strokeWidth="3"
+      />
+      {/* Glass handle */}
+      <line
+        x1="44"
+        y1="44"
+        x2="58"
+        y2="58"
+        stroke={COLORS.coral}
+        strokeWidth="4"
+        strokeLinecap="round"
+      />
+      {/* Inner reflection */}
+      <path
+        d="M18 20C18 20 22 16 28 16"
+        stroke={COLORS.rose}
+        strokeWidth="2"
+        strokeLinecap="round"
+        opacity="0.6"
+      />
+    </g>
+
+    {/* X mark inside magnifying glass */}
+    <g transform="translate(58, 58)" opacity="0.5">
+      <line x1="0" y1="0" x2="12" y2="12" stroke={COLORS.rose} strokeWidth="2.5" strokeLinecap="round" />
+      <line x1="12" y1="0" x2="0" y2="12" stroke={COLORS.rose} strokeWidth="2.5" strokeLinecap="round" />
+    </g>
+
+    {/* Decorative elements */}
+    <g opacity="0.7">
+      {/* Top right dots */}
+      <circle cx="100" cy="35" r="3" fill={COLORS.coral} />
+      <circle cx="108" cy="42" r="2" fill={COLORS.rose} />
+      <circle cx="95" cy="45" r="2" fill={COLORS.peach} />
+
+      {/* Bottom left dots */}
+      <circle cx="35" cy="105" r="3" fill={COLORS.rose} />
+      <circle cx="28" cy="98" r="2" fill={COLORS.coral} />
+      <circle cx="42" cy="100" r="2" fill={COLORS.blush} />
+
+      {/* Floating dots */}
+      <circle cx="115" cy="85" r="4" fill={COLORS.peach} opacity="0.6" />
+      <circle cx="22" cy="70" r="3" fill={COLORS.blush} opacity="0.8" />
+    </g>
+
+    {/* Question mark sparkle */}
+    <g transform="translate(95, 85)">
+      <path
+        d="M8 0L10 5L8 10L6 5L8 0Z"
+        fill={COLORS.coral}
+      />
+    </g>
+  </svg>
+);
 
 export const EmptyState: React.FC<EmptyStateProps> = ({
   icon,
@@ -23,17 +192,32 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
   action,
   className,
   compact = false,
+  variant = 'empty',
+  showIllustration = false,
 }) => {
   return (
     <div
       className={cn(
-        'flex flex-col items-center justify-center text-center',
+        'flex flex-col items-center justify-center text-center animate-fade-in',
         compact ? 'py-8 px-4' : 'py-12 px-6',
         className
       )}
+      role="status"
+      aria-live="polite"
     >
-      {/* Icon */}
-      {icon && (
+      {/* Custom SVG Illustration */}
+      {showIllustration && !icon && (
+        <div className={cn('mb-6', compact && 'mb-4')}>
+          {variant === 'empty' ? (
+            <EmptyServicesIllustration />
+          ) : (
+            <SearchEmptyIllustration />
+          )}
+        </div>
+      )}
+
+      {/* Icon (legacy support) */}
+      {icon && !showIllustration && (
         <div
           className={cn(
             'mb-4 p-4 rounded-full bg-gradient-to-br from-nilin-blush to-nilin-peach',
@@ -49,8 +233,8 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
       {/* Title */}
       <h3
         className={cn(
-          'font-semibold text-nilin-charcoal mb-2',
-          compact ? 'text-base' : 'text-lg'
+          'font-serif text-nilin-charcoal mb-2',
+          compact ? 'text-base' : 'text-xl'
         )}
       >
         {title}
@@ -60,7 +244,7 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
       {description && (
         <p
           className={cn(
-            'text-nilin-warmGray max-w-sm mb-4',
+            'text-nilin-warmGray max-w-sm mb-6',
             compact ? 'text-sm' : 'text-base'
           )}
         >
@@ -81,6 +265,45 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
     </div>
   );
 };
+
+// Pre-built empty state for provider services
+export const NoServicesEmpty: React.FC<{ onCreateService: () => void }> = ({
+  onCreateService,
+}) => (
+  <EmptyState
+    showIllustration
+    variant="empty"
+    title="No services yet"
+    description="Start by creating your first service offering and grow your business."
+    action={{
+      label: (
+        <span className="inline-flex items-center gap-2">
+          <Plus className="w-4 h-4" aria-hidden="true" />
+          Create Your First Service
+        </span>
+      ),
+      onClick: onCreateService,
+      variant: 'primary',
+    }}
+  />
+);
+
+// Pre-built empty state for search results in provider services
+export const NoServicesSearchEmpty: React.FC<{ onClearFilters: () => void }> = ({
+  onClearFilters,
+}) => (
+  <EmptyState
+    showIllustration
+    variant="search"
+    title="No services found"
+    description="Try adjusting your search terms or filters to find what you're looking for."
+    action={{
+      label: 'Clear Filters',
+      onClick: onClearFilters,
+      variant: 'secondary',
+    }}
+  />
+);
 
 // Pre-built empty states for common scenarios
 

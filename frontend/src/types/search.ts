@@ -21,6 +21,7 @@ export interface Service {
   _id: string;
   providerId: string;
   name: string;
+  title?: string; // Alias for name
   category: string;
   subcategory?: string;
   description: string;
@@ -37,6 +38,7 @@ export interface Service {
     label: string;
   }>;
   images: string[];
+  image?: string; // First image (backward compatibility)
   tags: string[];
   location: {
     address: {
@@ -58,6 +60,7 @@ export interface Service {
       searchCount?: number;
     };
   };
+  reviewCount?: number; // Alias for rating.count
   isActive: boolean;
   isFeatured?: boolean;
   isPopular?: boolean;
@@ -73,6 +76,7 @@ export interface Service {
     rating?: number;
     location?: string;
     isVerified?: boolean;
+    businessName?: string;
     businessInfo?: {
       businessName: string;
       description: string;
@@ -152,7 +156,7 @@ export interface SearchProvider {
   profilePhoto?: string;
   tier?: 'elite' | 'premium' | 'standard';
   isVerified?: boolean;
-  location?: { city: string; state: string } | null;
+  location?: { city: string; state: string; coordinates?: [number, number] } | null;
   rating: number;
   reviewCount: number;
   startingPrice?: number | null;
@@ -160,6 +164,7 @@ export interface SearchProvider {
   servicesCount: number;
   specializations?: string[];
   completionRate?: number;
+  distance?: number;
 }
 
 export interface ProviderSearchResponse {
@@ -183,7 +188,6 @@ export interface ProviderSearchResponse {
 export interface SavedSearch {
   id: string;
   query: string;
-  viewMode: 'services' | 'providers';
   filters: {
     category?: string;
     subcategory?: string;
@@ -192,5 +196,5 @@ export interface SavedSearch {
     minRating?: number;
     sortBy?: string;
   };
-  createdAt: string;
+  createdAt: number;
 }

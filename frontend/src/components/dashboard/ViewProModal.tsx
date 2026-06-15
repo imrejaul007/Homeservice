@@ -7,7 +7,6 @@ import {
   MapPin,
   X,
   Users,
-  Loader2,
   AlertCircle,
   ChevronRight,
   Award,
@@ -17,11 +16,7 @@ import {
   SlidersHorizontal,
   Clock,
   CheckCircle2,
-  Heart,
-  Share2,
-  Phone,
-  MessageCircle,
-  Verified
+  Heart
 } from 'lucide-react';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { cn } from '../../lib/utils';
@@ -50,7 +45,10 @@ const ProStartingPrice: React.FC<{
 }) => {
   const { convert, format, currency } = usePriceConversion();
   return (
-    <div className={align === 'right' ? 'text-right' : align === 'left' ? 'text-left' : undefined}>
+    <div className={cn(
+      align === 'right' && 'text-right',
+      align === 'left' && 'text-left'
+    )}>
       <span className={className}>{format(convert(amount, sourceCurrency), currency)}</span>
       {showSuffix && <span className={suffixClassName}>starting</span>}
     </div>
@@ -163,6 +161,13 @@ const ProCardSkeleton: React.FC = () => (
     </div>
   </div>
 );
+
+// =============================================================================
+// CONSTANTS
+// =============================================================================
+
+const SKELETON_COUNT = 4;
+const HEADER_HEIGHT = 280; // px offset for scroll area calculation
 
 // =============================================================================
 // RECENT PRO CARD COMPONENT - Larger, more prominent for "Book Again"
@@ -288,13 +293,13 @@ const RecentProCard: React.FC<RecentProCardProps> = ({ pro, onBook, onViewProfil
             <div className="flex items-center gap-3 text-xs">
               {pro.completedJobs > 0 && (
                 <span className="flex items-center gap-1.5 bg-white/70 backdrop-blur-sm px-2.5 py-1 rounded-lg">
-                  <CheckCircle2 className={cn('w-3.5 h-3.5', `text-${tierConfig.accentColor}-500`)} />
+                  <CheckCircle2 className={cn('w-3.5 h-3.5', tier === 'elite' ? 'text-amber-500' : tier === 'premium' ? 'text-violet-500' : 'text-slate-500')} />
                   <span className="text-nilin-charcoal font-medium">{pro.completedJobs} jobs</span>
                 </span>
               )}
               {pro.distance !== undefined && (
                 <span className="flex items-center gap-1.5 bg-white/70 backdrop-blur-sm px-2.5 py-1 rounded-lg">
-                  <MapPin className={cn('w-3.5 h-3.5', `text-${tierConfig.accentColor}-500`)} />
+                  <MapPin className={cn('w-3.5 h-3.5', tier === 'elite' ? 'text-amber-500' : tier === 'premium' ? 'text-violet-500' : 'text-slate-500')} />
                   <span className="text-nilin-charcoal font-medium">
                     {pro.distance < 1 ? '<1' : pro.distance.toFixed(1)} km
                   </span>
@@ -338,7 +343,8 @@ const RecentProCard: React.FC<RecentProCardProps> = ({ pro, onBook, onViewProfil
                 'flex-1 flex items-center justify-center gap-2 px-4 py-2.5',
                 'bg-white border border-nilin-border/30',
                 'rounded-xl font-semibold text-sm text-nilin-charcoal',
-                'hover:bg-nilin-blush/30 transition-all duration-200',
+                'hover:bg-nilin-blush/30 focus:outline-none focus:ring-2 focus:ring-nilin-coral/50 focus:ring-offset-2',
+                'transition-all duration-200',
                 'group/btn'
               )}
             >
@@ -355,7 +361,8 @@ const RecentProCard: React.FC<RecentProCardProps> = ({ pro, onBook, onViewProfil
                     ? 'bg-gradient-to-r from-violet-500 to-purple-500 hover:from-violet-600 hover:to-purple-600'
                     : 'bg-gradient-to-r from-nilin-coral to-nilin-rose hover:from-nilin-rose hover:to-nilin-coral',
                 'rounded-xl font-semibold text-sm text-white',
-                'shadow-lg hover:shadow-xl transition-all duration-200',
+                'shadow-lg hover:shadow-xl focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-nilin-coral/50',
+                'transition-all duration-200',
                 'transform hover:scale-[1.02] active:scale-[0.98]'
               )}
             >
@@ -387,9 +394,12 @@ const ProCard: React.FC<ProCardProps> = ({ pro, onBook, onViewProfile, isCompact
   const initials = getInitials(pro.firstName, pro.lastName, pro.businessName);
   const avatarColor = getAvatarColor(displayName);
 
-  // Get lowest price from services
+  // Get lowest price from services - use consistent helper like RecentProCard
+  const getNumericPrice = (price: number | { amount: number; currency?: string; type?: string }): number => {
+    return typeof price === 'number' ? price : price.amount;
+  };
   const validPrices = pro.services
-    ?.map(s => typeof s.price === 'number' ? s.price : s.price?.amount)
+    ?.map(s => getNumericPrice(s.price))
     .filter(p => typeof p === 'number' && Number.isFinite(p) && p >= 0) || [];
   const lowestPrice = validPrices.length > 0 ? Math.min(...validPrices) : null;
 
@@ -585,13 +595,13 @@ const ProCard: React.FC<ProCardProps> = ({ pro, onBook, onViewProfile, isCompact
             <div className="flex items-center gap-2 text-[10px]">
               {pro.completedJobs > 0 && (
                 <span className="flex items-center gap-1 bg-white/70 px-1.5 py-0.5 rounded-md">
-                  <CheckCircle2 className={cn('w-3 h-3', `text-${tierConfig.accentColor}-500`)} />
+                  <CheckCircle2 className={cn('w-3 h-3', tier === 'elite' ? 'text-amber-500' : tier === 'premium' ? 'text-violet-500' : 'text-slate-500')} />
                   <span className="font-medium">{pro.completedJobs} jobs</span>
                 </span>
               )}
               {pro.distance !== undefined && (
                 <span className="flex items-center gap-1 bg-white/70 px-1.5 py-0.5 rounded-md">
-                  <MapPin className={cn('w-3 h-3', `text-${tierConfig.accentColor}-500`)} />
+                  <MapPin className={cn('w-3 h-3', tier === 'elite' ? 'text-amber-500' : tier === 'premium' ? 'text-violet-500' : 'text-slate-500')} />
                   <span className="font-medium">{pro.distance < 1 ? '<1' : pro.distance.toFixed(1)} km</span>
                 </span>
               )}
@@ -749,7 +759,6 @@ const ModalOverlay = React.forwardRef<HTMLDivElement, { className?: string }>(
         'fixed inset-0 z-50',
         'bg-nilin-charcoal/50',
         'backdrop-blur-md',
-        '-webkit-backdrop-blur-md',
         'data-[state=closed]:animate-fade-out',
         'data-[state=open]:animate-fade-in',
         className
@@ -795,7 +804,9 @@ const ViewProModal: React.FC<ViewProModalProps> = ({
       filtered = filtered.filter(pro =>
         pro.services?.some(s =>
           s.name?.toLowerCase().includes(selectedCategory) ||
-          s.category?.toLowerCase().includes(selectedCategory)
+          s.category?.toLowerCase().includes(selectedCategory) ||
+          s.name?.toLowerCase().split(' ').some(word => word === selectedCategory) ||
+          s.category?.toLowerCase().split(' ').some(word => word === selectedCategory)
         )
       );
     }
@@ -837,7 +848,6 @@ const ViewProModal: React.FC<ViewProModalProps> = ({
           };
         }
       } catch (locError) {
-        console.warn('Could not get user location for distance calculation:', locError);
         // Continue without location - distance won't be shown
       }
 
@@ -852,11 +862,10 @@ const ViewProModal: React.FC<ViewProModalProps> = ({
       if (err instanceof Error && err.name === 'AbortError') {
         return;
       }
-      console.error('Error fetching recommended pros:', err);
       if (err instanceof CustomerDashboardApiError && err.statusCode === 401) {
         setError('Your session expired. Please sign in again to view professionals.');
       } else if (err instanceof CustomerDashboardApiError && err.statusCode === 404) {
-        setError('No professionals found matching your criteria. Try adjusting your search.');
+        setError('No professionals are available in your area yet. Try again later.');
       } else {
         setError(err instanceof Error ? err.message : 'Failed to load professionals');
       }
@@ -922,7 +931,7 @@ const ViewProModal: React.FC<ViewProModalProps> = ({
           className={cn(
             'fixed left-[50%] top-[50%] z-50 translate-x-[-50%] translate-y-[-50%]',
             'bg-white',
-            'border border-[#E8E4E0]',
+            'border border-nilin-border',
             'rounded-3xl',
             'shadow-2xl shadow-nilin-charcoal/20',
             'w-full',
@@ -962,12 +971,12 @@ const ViewProModal: React.FC<ViewProModalProps> = ({
                 <UserCircle className="w-7 h-7 text-white" />
               </div>
               <div>
-                <DialogPrimitive.Title id='view-pro-modal-title' className="text-2xl font-bold text-nilin-charcoal font-serif">
+                <DialogPrimitive.Title id='view-pro-modal-title' className="text-2xl font-bold text-nilin-charcoal">
                   Find Your Professional
                 </DialogPrimitive.Title>
                 <DialogPrimitive.Description className="text-sm text-nilin-warmGray mt-0.5 flex items-center gap-2">
                   <span>Discover verified experts tailored for you</span>
-                  <Verified className="w-4 h-4 text-emerald-500" />
+                  <BadgeCheck className="w-4 h-4 text-emerald-500" />
                 </DialogPrimitive.Description>
               </div>
             </div>
@@ -1002,7 +1011,7 @@ const ViewProModal: React.FC<ViewProModalProps> = ({
             </div>
 
             {/* Category filters */}
-            <div className="mt-4 flex items-center gap-2 overflow-x-auto pb-1 -mx-1 px-1 scrollbar-hide">
+            <div className="mt-4 flex items-center gap-2 overflow-x-auto pb-1 -mx-1 px-1 [-webkit-scrollbar:hidden] [scrollbar-width:none]">
               {CATEGORIES.map((category) => {
                 const Icon = category.icon;
                 const isActive = selectedCategory === category.id;
@@ -1043,11 +1052,11 @@ const ViewProModal: React.FC<ViewProModalProps> = ({
           </div>
 
           {/* Body content */}
-          <div className="px-6 py-5 overflow-y-auto max-h-[calc(90vh-280px)]">
+          <div className="px-6 py-5 overflow-y-auto" style={{ maxHeight: `calc(90vh - ${HEADER_HEIGHT}px)` }}>
             {/* Loading state */}
             {loading && (
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                {[1, 2, 3, 4].map((i) => (
+                {Array.from({ length: SKELETON_COUNT }, (_, i) => (
                   <ProCardSkeleton key={i} />
                 ))}
               </div>

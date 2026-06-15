@@ -2,6 +2,23 @@ import React, { useEffect } from 'react';
 import { Navigate, useLocation, useSearchParams } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
 
+// NILIN-themed loading spinner
+const NilinLoader = () => (
+  <div className="flex items-center justify-center min-h-screen" style={{ backgroundColor: '#FDFBF9' }}>
+    <div
+      className="animate-spin rounded-full"
+      style={{
+        width: 32,
+        height: 32,
+        borderWidth: 3,
+        borderStyle: 'solid',
+        borderColor: '#F5E6E0',
+        borderTopColor: '#E8B4A8'
+      }}
+    />
+  </div>
+);
+
 interface ProtectedRouteProps {
   children: React.ReactNode;
   requireAuth?: boolean;
@@ -19,18 +36,16 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
   allowedRoles,
   requireActiveAccount = true,
   redirectTo = '/login',
-  fallback = <div className="flex items-center justify-center min-h-screen">
-    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-  </div>
+  fallback = <NilinLoader />
 }) => {
-  const { 
-    user, 
-    isAuthenticated, 
-    isLoading, 
-    isInitialized, 
-    initialize 
+  const {
+    user,
+    isAuthenticated,
+    isLoading,
+    isInitialized,
+    initialize
   } = useAuthStore();
-  
+
   const location = useLocation();
 
   useEffect(() => {
@@ -138,9 +153,7 @@ export const ProviderRoute: React.FC<Omit<ProtectedRouteProps, 'allowedRoles'> &
   // Show loading while auth is initializing
   if (!isInitialized || isLoading) {
     return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-      </div>
+      <NilinLoader />
     );
   }
 
@@ -213,9 +226,7 @@ export const PublicRoute: React.FC<{
   // Show loading while initializing
   if (!isInitialized) {
     return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-      </div>
+      <NilinLoader />
     );
   }
 

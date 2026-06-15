@@ -15,13 +15,20 @@ import {
   Settings,
   Bell,
   Plus,
-  Sparkles,
   TrendingUp,
   CreditCard,
   MessageCircle,
   MessageSquare,
   Flame,
   Award,
+  Gift,
+  Sparkles,
+  Scissors,
+  Palette,
+  Sparkle,
+  Leaf,
+  Heart,
+  Hand,
 } from 'lucide-react';
 import NavigationHeader from '../components/layout/NavigationHeader';
 import Footer from '../components/layout/Footer';
@@ -125,50 +132,50 @@ const mapBookingToSummary = (booking: Booking): BookingSummary => {
 };
 
 // ============================================
-// STATUS CONFIGURATION
+// STATUS CONFIGURATION - Seed Design System
 // ============================================
 
 const statusConfig: Record<BookingStatus, { color: string; bgColor: string; label: string }> = {
-  pending: { color: 'text-amber-600', bgColor: 'bg-amber-50', label: 'Pending' },
-  confirmed: { color: 'text-blue-600', bgColor: 'bg-blue-50', label: 'Confirmed' },
-  in_progress: { color: 'text-purple-600', bgColor: 'bg-purple-50', label: 'In Progress' },
-  completed: { color: 'text-green-600', bgColor: 'bg-green-50', label: 'Completed' },
-  cancelled: { color: 'text-red-600', bgColor: 'bg-red-50', label: 'Cancelled' },
-  no_show: { color: 'text-gray-600', bgColor: 'bg-gray-50', label: 'No Show' },
-  refunded: { color: 'text-teal-600', bgColor: 'bg-teal-50', label: 'Refunded' },
-  rejected: { color: 'text-red-600', bgColor: 'bg-red-50', label: 'Rejected' },
+  pending: { color: 'text-[#1c3a13]', bgColor: 'bg-[#d3fa99]/30', label: 'Pending' },
+  confirmed: { color: 'text-[#1c3a13]', bgColor: 'bg-[#eeeee9]', label: 'Confirmed' },
+  in_progress: { color: 'text-[#1c3a13]', bgColor: 'bg-[#c4c7c4]/30', label: 'In Progress' },
+  completed: { color: 'text-[#1c3a13]', bgColor: 'bg-[#d3fa99]/30', label: 'Completed' },
+  cancelled: { color: 'text-[#1c3a13]', bgColor: 'bg-[#eeeee9]', label: 'Cancelled' },
+  no_show: { color: 'text-[#1c3a13]', bgColor: 'bg-[#eeeee9]', label: 'No Show' },
+  refunded: { color: 'text-[#1c3a13]', bgColor: 'bg-[#eeeee9]', label: 'Refunded' },
+  rejected: { color: 'text-[#1c3a13]', bgColor: 'bg-[#eeeee9]', label: 'Rejected' },
 };
 
 // ============================================
-// SKELETON COMPONENTS
+// SKELETON COMPONENTS - Seed Design
 // ============================================
 
 const StatCardSkeleton = () => (
-  <div className="rounded-2xl border border-nilin-border/40 bg-white p-5 animate-pulse">
+  <div className="rounded-2xl border border-[#1c3a13]/10 bg-[#fcfcf7] p-5 animate-pulse">
     <div className="flex items-start justify-between gap-3">
       <div className="flex-1 space-y-2">
-        <div className="h-4 w-24 bg-nilin-border/40 rounded" />
-        <div className="h-9 w-14 bg-nilin-border/50 rounded" />
-        <div className="h-3 w-32 bg-nilin-border/30 rounded" />
+        <div className="h-3 w-20 bg-[#eeeee9] rounded" />
+        <div className="h-8 w-14 bg-[#eeeee9] rounded" />
+        <div className="h-2 w-28 bg-[#eeeee9] rounded" />
       </div>
-      <div className="w-11 h-11 rounded-xl bg-nilin-coral/20 flex-shrink-0" />
+      <div className="w-10 h-10 rounded-full bg-[#d3fa99]/30 flex-shrink-0" />
     </div>
   </div>
 );
 
 const BookingRowSkeleton = () => (
-  <tr className="border-b border-nilin-border/30">
-    <td className="py-4 px-4"><div className="h-4 w-20 bg-nilin-border/30 rounded" /></td>
-    <td className="py-4 px-4"><div className="h-4 w-32 bg-nilin-border/30 rounded" /></td>
-    <td className="py-4 px-4"><div className="h-4 w-24 bg-nilin-border/30 rounded" /></td>
-    <td className="py-4 px-4"><div className="h-4 w-16 bg-nilin-border/30 rounded" /></td>
-    <td className="py-4 px-4"><div className="h-6 w-20 bg-nilin-border/30 rounded-full" /></td>
-    <td className="py-4 px-4"><div className="h-8 w-16 bg-nilin-border/30 rounded" /></td>
+  <tr className="border-b border-[#1c3a13]/5">
+    <td className="py-4 px-4"><div className="h-4 w-20 bg-[#eeeee9] rounded" /></td>
+    <td className="py-4 px-4"><div className="h-4 w-32 bg-[#eeeee9] rounded" /></td>
+    <td className="py-4 px-4"><div className="h-4 w-24 bg-[#eeeee9] rounded" /></td>
+    <td className="py-4 px-4"><div className="h-4 w-16 bg-[#eeeee9] rounded" /></td>
+    <td className="py-4 px-4"><div className="h-6 w-20 bg-[#eeeee9] rounded-full" /></td>
+    <td className="py-4 px-4"><div className="h-8 w-16 bg-[#eeeee9] rounded" /></td>
   </tr>
 );
 
 // ============================================
-// STAT CARD COMPONENT
+// STAT CARD COMPONENT - Seed Design
 // ============================================
 
 interface StatCardProps {
@@ -195,21 +202,23 @@ const StatCard: React.FC<StatCardProps> = ({
     tabIndex={onClick ? 0 : undefined}
     onClick={onClick}
     onKeyDown={onClick ? (e) => { if (e.key === 'Enter' || e.key === ' ') onClick(); } : undefined}
-    className={`relative overflow-hidden rounded-2xl border border-nilin-border/40 bg-white p-5 shadow-sm hover:shadow-md transition-all duration-300 group ${onClick ? 'cursor-pointer hover:-translate-y-0.5 hover:border-nilin-coral/30' : ''}`}
+    className={`relative overflow-hidden rounded-2xl border border-[#1c3a13]/10 bg-[#fcfcf7] p-5 transition-all duration-300 group ${onClick ? 'cursor-pointer hover:-translate-y-0.5 hover:border-[#1c3a13]/30' : ''}`}
   >
-    <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-bl from-nilin-blush/40 to-transparent rounded-bl-full opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
+    {/* Lime Sprout accent dot */}
+    <div className="absolute top-3 right-3 w-2 h-2 rounded-full bg-[#d3fa99]" />
+
     <div className="relative flex items-start justify-between gap-3">
       <div className="min-w-0">
-        <p className="text-sm font-medium text-nilin-warmGray mb-1">{title}</p>
-        <div className="text-3xl font-bold text-nilin-charcoal tracking-tight">{value}</div>
-        {subtitle && <p className="text-xs text-nilin-warmGray/80 mt-1.5 line-clamp-2">{subtitle}</p>}
+        <p className="text-[11px] font-medium uppercase tracking-[0.1em] text-[#6b6b6b] mb-2">{title}</p>
+        <div className="text-3xl font-light text-[#1c3a13] tracking-tight">{value}</div>
+        {subtitle && <p className="text-[11px] text-[#6b6b6b]/80 mt-2 line-clamp-2">{subtitle}</p>}
       </div>
-      <div className={`w-11 h-11 rounded-xl ${color} flex items-center justify-center flex-shrink-0 shadow-sm group-hover:scale-105 transition-transform`}>
-        <Icon className="w-5 h-5 text-white" />
+      <div className={`w-10 h-10 rounded-full ${color} flex items-center justify-center flex-shrink-0 group-hover:scale-105 transition-transform`}>
+        <Icon className="w-5 h-5 text-[#1c3a13]" />
       </div>
     </div>
     {trend && (
-      <div className={`relative mt-3 flex items-center gap-1 text-xs font-medium ${trend.positive ? 'text-green-600' : 'text-red-600'}`}>
+      <div className={`relative mt-3 flex items-center gap-1 text-[11px] font-medium ${trend.positive ? 'text-[#1c3a13]' : 'text-[#b3b3b3]'}`}>
         <TrendingUp className={`w-3 h-3 ${!trend.positive && 'rotate-180'}`} />
         {Math.abs(trend.value)}%
       </div>
@@ -218,7 +227,7 @@ const StatCard: React.FC<StatCardProps> = ({
 );
 
 // ============================================
-// NAVIGATION CARD COMPONENT
+// NAVIGATION CARD COMPONENT - Seed Design
 // ============================================
 
 interface NavCardProps {
@@ -243,22 +252,22 @@ const NavCard: React.FC<NavCardProps> = ({ title, description, icon: Icon, href,
     <button
       type="button"
       onClick={handleClick}
-      className="text-left w-full flex items-center gap-3.5 rounded-2xl border border-nilin-border/40 bg-white p-4 shadow-sm hover:shadow-md hover:border-nilin-coral/25 transition-all duration-300 group hover:-translate-y-0.5 min-h-[88px]"
+      className="text-left w-full flex items-center gap-3.5 rounded-2xl border border-[#1c3a13]/10 bg-[#fcfcf7] p-4 hover:border-[#1c3a13]/30 transition-all duration-300 group hover:-translate-y-0.5 min-h-[88px]"
     >
-      <div className={`w-11 h-11 rounded-xl ${color} flex items-center justify-center flex-shrink-0 shadow-sm group-hover:scale-105 transition-transform`}>
-        <Icon className="w-5 h-5 text-white" />
+      <div className={`w-10 h-10 rounded-full ${color} flex items-center justify-center flex-shrink-0 group-hover:scale-105 transition-transform`}>
+        <Icon className="w-5 h-5 text-[#fcfcf7]" />
       </div>
       <div className="flex-1 min-w-0">
-        <h3 className="font-semibold text-nilin-charcoal text-sm leading-tight">{title}</h3>
-        <p className="text-xs text-nilin-warmGray mt-0.5 line-clamp-2">{description}</p>
+        <h3 className="font-medium text-[#1c3a13] text-sm leading-tight">{title}</h3>
+        <p className="text-xs text-[#6b6b6b] mt-0.5 line-clamp-2">{description}</p>
       </div>
-      <ArrowRight className="w-4 h-4 text-nilin-coral/60 flex-shrink-0 group-hover:text-nilin-coral group-hover:translate-x-0.5 transition-all" />
+      <ArrowRight className="w-4 h-4 text-[#1c3a13]/40 flex-shrink-0 group-hover:text-[#1c3a13] group-hover:translate-x-0.5 transition-all" />
     </button>
   );
 };
 
 // ============================================
-// MOBILE BOOKING CARD
+// MOBILE BOOKING CARD - Seed Design
 // ============================================
 
 interface BookingMobileCardProps {
@@ -282,29 +291,29 @@ const BookingMobileCard: React.FC<BookingMobileCardProps> = ({
     <button
       type="button"
       onClick={() => onView(booking._id)}
-      className="w-full text-left p-4 border-b border-nilin-border/20 last:border-0 hover:bg-nilin-blush/20 transition-colors"
+      className="w-full text-left p-4 border-b border-[#1c3a13]/5 last:border-0 hover:bg-[#eeeee9]/50 transition-colors"
     >
       <div className="flex items-start justify-between gap-3 mb-2.5">
         <div className="min-w-0">
-          <p className="font-semibold text-nilin-charcoal text-[15px]">{booking.serviceName}</p>
-          <p className="text-xs text-nilin-warmGray mt-0.5">
+          <p className="font-medium text-[#1c3a13] text-[15px]">{booking.serviceName}</p>
+          <p className="text-xs text-[#6b6b6b] mt-0.5">
             #{booking.bookingNumber?.slice(-6) || 'N/A'} · {formattedDate} · {booking.scheduledTime}
           </p>
         </div>
-        <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold flex-shrink-0 ${status.bgColor} ${status.color}`}>
+        <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-medium flex-shrink-0 ${status.bgColor} ${status.color}`}>
           {status.label}
         </span>
       </div>
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2 min-w-0">
-          <div className="w-8 h-8 rounded-full bg-nilin-coral/10 flex items-center justify-center flex-shrink-0">
+          <div className="w-8 h-8 rounded-full bg-[#d3fa99]/30 flex items-center justify-center flex-shrink-0">
             {booking.providerAvatar ? (
               <img src={booking.providerAvatar} alt="" className="w-full h-full rounded-full object-cover" />
             ) : (
-              <User className="w-3.5 h-3.5 text-nilin-coral" />
+              <User className="w-3.5 h-3.5 text-[#1c3a13]" />
             )}
           </div>
-          <span className="text-sm text-nilin-charcoal truncate">{booking.providerName}</span>
+          <span className="text-sm text-[#1c3a13] truncate">{booking.providerName}</span>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
           {booking.canReview && onWriteReview && (
@@ -314,7 +323,7 @@ const BookingMobileCard: React.FC<BookingMobileCardProps> = ({
                 e.stopPropagation();
                 onWriteReview(booking._id);
               }}
-              className="px-2.5 py-1 text-xs font-medium bg-amber-100 text-amber-700 rounded-full hover:bg-amber-200"
+              className="px-2.5 py-1 text-xs font-medium bg-[#d3fa99] text-[#1c3a13] rounded-full hover:bg-[#d3fa99]/80"
             >
               Review
             </button>
@@ -332,7 +341,7 @@ const BookingMobileCard: React.FC<BookingMobileCardProps> = ({
 };
 
 // ============================================
-// BOOKING ROW COMPONENT
+// BOOKING ROW COMPONENT - Seed Design
 // ============================================
 
 interface BookingRowProps {
@@ -363,39 +372,39 @@ const BookingRow: React.FC<BookingRowProps> = ({ booking, onView, onWriteReview 
 
   return (
     <tr
-      className="border-b border-nilin-border/20 last:border-0 hover:bg-nilin-blush/20 transition-colors cursor-pointer"
+      className="border-b border-[#1c3a13]/5 last:border-0 hover:bg-[#eeeee9]/50 transition-colors cursor-pointer"
       onClick={() => onView(booking._id)}
       onKeyDown={handleRowKeyDown}
       tabIndex={0}
       role="button"
     >
       <td className="py-4 px-5">
-        <div className="font-mono text-sm font-semibold text-nilin-coral">#{booking.bookingNumber?.slice(-6) || 'N/A'}</div>
+        <div className="font-mono text-sm font-medium text-[#1c3a13]">#{booking.bookingNumber?.slice(-6) || 'N/A'}</div>
       </td>
       <td className="py-4 px-5">
-        <div className="font-semibold text-nilin-charcoal text-[15px]">{booking.serviceName}</div>
+        <div className="font-medium text-[#1c3a13] text-[15px]">{booking.serviceName}</div>
         {booking.serviceCategory && (
-          <div className="text-xs text-nilin-warmGray mt-0.5">{booking.serviceCategory}</div>
+          <div className="text-xs text-[#6b6b6b] mt-0.5">{booking.serviceCategory}</div>
         )}
       </td>
       <td className="py-4 px-5">
-        <div className="text-sm font-medium text-nilin-charcoal">{formattedDate}</div>
-        <div className="text-xs text-nilin-warmGray mt-0.5">{booking.scheduledTime}</div>
+        <div className="text-sm font-medium text-[#1c3a13]">{formattedDate}</div>
+        <div className="text-xs text-[#6b6b6b] mt-0.5">{booking.scheduledTime}</div>
       </td>
       <td className="py-4 px-5">
         <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-full bg-nilin-coral/15 ring-2 ring-white flex items-center justify-center flex-shrink-0">
+          <div className="w-8 h-8 rounded-full bg-[#d3fa99]/30 ring-2 ring-[#fcfcf7] flex items-center justify-center flex-shrink-0">
             {booking.providerAvatar ? (
               <img src={booking.providerAvatar} alt="" className="w-full h-full rounded-full object-cover" />
             ) : (
-              <User className="w-4 h-4 text-nilin-coral" />
+              <User className="w-4 h-4 text-[#1c3a13]" />
             )}
           </div>
-          <span className="text-sm font-medium text-nilin-charcoal">{booking.providerName}</span>
+          <span className="text-sm font-medium text-[#1c3a13]">{booking.providerName}</span>
         </div>
       </td>
       <td className="py-4 px-5">
-        <span className={`inline-flex items-center px-3 py-1.5 rounded-full text-xs font-semibold ${status.bgColor} ${status.color}`}>
+        <span className={`inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium ${status.bgColor} ${status.color}`}>
           {status.label}
         </span>
       </td>
@@ -404,7 +413,7 @@ const BookingRow: React.FC<BookingRowProps> = ({ booking, onView, onWriteReview 
           {booking.canReview && onWriteReview && (
             <button
               onClick={handleWriteReviewClick}
-              className="px-3 py-1.5 text-xs font-medium bg-amber-100 text-amber-700 rounded-full hover:bg-amber-200 transition-colors flex items-center gap-1"
+              className="px-3 py-1.5 text-xs font-medium bg-[#d3fa99] text-[#1c3a13] rounded-full hover:bg-[#d3fa99]/80 transition-colors flex items-center gap-1"
             >
               <Star className="w-3 h-3" />
               Review
@@ -418,7 +427,7 @@ const BookingRow: React.FC<BookingRowProps> = ({ booking, onView, onWriteReview 
               className="text-base justify-end"
             />
             {booking.duration ? (
-              <div className="text-xs text-nilin-warmGray flex items-center justify-end gap-1 mt-0.5">
+              <div className="text-xs text-[#6b6b6b] flex items-center justify-end gap-1 mt-0.5">
                 <Clock className="w-3 h-3" />
                 {booking.duration} min
               </div>
@@ -615,21 +624,21 @@ const CustomerDashboard: React.FC = () => {
     }
   };
 
-  // Navigation cards configuration
+  // Navigation cards configuration - Seed Design
   const navCards = [
     {
       title: 'View Packages',
       description: 'Explore curated service bundles',
       icon: Package,
       onClick: () => navigate('/packages'),
-      color: 'bg-gradient-to-br from-purple-500 to-purple-600',
+      color: 'bg-[#1c3a13]',
     },
     {
       title: 'Find Professionals',
       description: 'Browse verified service providers',
       icon: Users,
       onClick: () => setShowViewProModal(true),
-      color: 'bg-gradient-to-br from-blue-500 to-blue-600',
+      color: 'bg-[#1c3a13]',
     },
     {
       title: 'Write Review',
@@ -638,21 +647,21 @@ const CustomerDashboard: React.FC = () => {
         : 'Available after a completed booking',
       icon: Star,
       onClick: handleWriteReviewClick,
-      color: 'bg-gradient-to-br from-amber-500 to-orange-500',
+      color: 'bg-[#1c3a13]',
     },
     {
       title: 'Book Service',
       description: 'Quick booking for any service',
       icon: Plus,
       href: '/customer/book-services',
-      color: 'bg-gradient-to-br from-nilin-coral to-nilin-rose',
+      color: 'bg-[#1c3a13]',
     },
     {
       title: 'My Bookings',
       description: 'View & manage appointments',
       icon: Calendar,
       href: '/customer/bookings',
-      color: 'bg-gradient-to-br from-teal-500 to-teal-600',
+      color: 'bg-[#1c3a13]',
     },
   ];
 
@@ -677,64 +686,64 @@ const CustomerDashboard: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-nilin-blush/30 via-nilin-cream to-nilin-cream flex flex-col">
+    <div className="min-h-screen bg-[#fcfcf7] flex flex-col">
       <NavigationHeader />
 
       <main className="flex-1 w-full">
-        {/* Hero welcome strip — overflow visible so profile dropdown isn't clipped */}
-        <div className="relative bg-gradient-to-r from-[#2a2826] via-nilin-charcoal to-[#252321] border-b border-white/5">
-          <div className="absolute inset-0 overflow-hidden pointer-events-none">
-            <div className="absolute -top-16 right-0 w-72 h-72 rounded-full bg-nilin-coral/25 blur-3xl" />
-            <div className="absolute bottom-0 left-1/3 w-48 h-48 rounded-full bg-nilin-rose/20 blur-3xl" />
-          </div>
+        {/* Seed Hero Section - Forest Canopy dark header */}
+        <div className="relative bg-[#1c3a13] border-b border-[#1c3a13]">
+          {/* Subtle lime accent */}
+          <div className="absolute top-0 left-0 right-0 h-1 bg-[#d3fa99]" />
+
           <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 md:py-12">
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-6">
               <div className="flex-1 min-w-0">
-                <p className="text-xs uppercase tracking-[0.2em] text-nilin-coral mb-2 font-semibold">
+                <p className="text-[11px] uppercase tracking-[0.192em] text-[#d3fa99] mb-2 font-medium">
                   Your account
                 </p>
-                <h1 className="text-2xl md:text-4xl font-serif font-light leading-tight text-white">
+                <h1 className="text-2xl md:text-3xl font-light leading-tight text-[#fcfcf7] tracking-tight">
                   Welcome back,{' '}
-                  <span className="font-medium text-nilin-coral">{getDisplayName(user)}</span>{' '}
-                  <Sparkles className="inline w-6 h-6 text-amber-400 align-[-3px]" aria-hidden />
+                  <span className="font-medium text-[#d3fa99]">{getDisplayName(user)}</span>
                 </h1>
-                <p className="text-base text-white/80 mt-2 max-w-xl leading-relaxed">
+                <p className="text-[15px] text-[#fcfcf7]/80 mt-2 max-w-xl leading-relaxed">
                   Track bookings, book new services, and manage your wallet — all in one place.
                 </p>
               </div>
 
               <div className="flex items-center gap-3 flex-shrink-0 relative z-50">
+                {/* Pill-shaped Book CTA */}
                 <button
                   type="button"
                   onClick={() => navigate('/customer/book-services')}
-                  className="hidden sm:inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-nilin-coral to-nilin-rose text-white text-sm font-semibold shadow-sm hover:shadow-md transition-all"
+                  className="hidden sm:inline-flex items-center gap-2 px-5 py-2.5 rounded-[9999px] bg-[#d3fa99] text-[#1c3a13] text-[13px] font-medium tracking-tight hover:bg-[#d3fa99]/90 transition-colors"
                 >
                   <Plus className="w-4 h-4" />
                   Book a service
                 </button>
 
+                {/* Profile Dropdown */}
                 <div className="relative">
                   <button
                     type="button"
                     onClick={() => setShowProfileDropdown(!showProfileDropdown)}
-                    className="flex items-center gap-3 bg-white/10 hover:bg-white/15 backdrop-blur-sm rounded-2xl pl-1.5 pr-3 py-1.5 border border-white/15 transition-colors"
+                    className="flex items-center gap-3 bg-[#1c3a13] hover:bg-[#1c3a13]/80 border border-[#fcfcf7]/20 rounded-[9999px] pl-1.5 pr-4 py-1.5 transition-colors"
                     aria-expanded={showProfileDropdown}
                     aria-haspopup="menu"
                   >
-                    <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-nilin-coral to-nilin-rose flex items-center justify-center ring-2 ring-white/20">
+                    <div className="w-9 h-9 rounded-full bg-[#d3fa99] flex items-center justify-center">
                       {user?.avatar ? (
-                        <img src={user.avatar} alt="" className="w-full h-full rounded-xl object-cover" />
+                        <img src={user.avatar} alt="" className="w-full h-full rounded-full object-cover" />
                       ) : (
-                        <span className="text-white font-semibold text-sm">
+                        <span className="text-[#1c3a13] font-medium text-sm">
                           {(getFullDisplayName(user).charAt(0) || 'U').toUpperCase()}
                         </span>
                       )}
                     </div>
                     <div className="hidden sm:block text-left min-w-0">
-                      <div className="font-medium text-white text-sm truncate max-w-[160px]">{getFullDisplayName(user)}</div>
-                      <div className="text-xs text-white/75 capitalize">{user?.role || 'Customer'}</div>
+                      <div className="font-medium text-[#fcfcf7] text-[13px] truncate max-w-[160px]">{getFullDisplayName(user)}</div>
+                      <div className="text-[11px] text-[#fcfcf7]/60 capitalize">{user?.role || 'Customer'}</div>
                     </div>
-                    <ChevronDown className={`w-4 h-4 text-white/70 transition-transform ${showProfileDropdown ? 'rotate-180' : ''}`} />
+                    <ChevronDown className={`w-4 h-4 text-[#fcfcf7]/70 transition-transform ${showProfileDropdown ? 'rotate-180' : ''}`} />
                   </button>
 
                   {showProfileDropdown && (
@@ -746,47 +755,47 @@ const CustomerDashboard: React.FC = () => {
                       />
                       <div
                         role="menu"
-                        className="absolute right-0 top-[calc(100%+8px)] w-64 bg-white rounded-2xl shadow-2xl ring-1 ring-black/10 z-50 overflow-hidden"
+                        className="absolute right-0 top-[calc(100%+8px)] w-64 bg-[#fcfcf7] rounded-2xl border border-[#1c3a13]/10 z-50 overflow-hidden"
                       >
-                        <div className="p-4 border-b border-nilin-border/30 bg-nilin-muted/30">
-                          <div className="font-medium text-nilin-charcoal truncate">{getFullDisplayName(user)}</div>
-                          <div className="text-sm text-nilin-warmGray truncate">{user?.email}</div>
+                        <div className="p-4 border-b border-[#1c3a13]/10">
+                          <div className="font-medium text-[#1c3a13] truncate">{getFullDisplayName(user)}</div>
+                          <div className="text-[13px] text-[#6b6b6b] truncate">{user?.email}</div>
                         </div>
                         <div className="py-1.5">
                           <button
                             type="button"
                             role="menuitem"
                             onClick={() => { navigate('/customer/profile'); setShowProfileDropdown(false); }}
-                            className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm text-nilin-charcoal hover:bg-nilin-muted transition-colors"
+                            className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-[14px] text-[#1c3a13] hover:bg-[#eeeee9] transition-colors"
                           >
-                            <User className="w-4 h-4 text-nilin-warmGray" />
+                            <User className="w-4 h-4 text-[#6b6b6b]" />
                             My Profile
                           </button>
                           <button
                             type="button"
                             role="menuitem"
                             onClick={() => { navigate('/customer/bookings'); setShowProfileDropdown(false); }}
-                            className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm text-nilin-charcoal hover:bg-nilin-muted transition-colors"
+                            className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-[14px] text-[#1c3a13] hover:bg-[#eeeee9] transition-colors"
                           >
-                            <Calendar className="w-4 h-4 text-nilin-warmGray" />
+                            <Calendar className="w-4 h-4 text-[#6b6b6b]" />
                             My Bookings
                           </button>
                           <button
                             type="button"
                             role="menuitem"
                             onClick={() => { navigate('/customer/wallet'); setShowProfileDropdown(false); }}
-                            className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm text-nilin-charcoal hover:bg-nilin-muted transition-colors"
+                            className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-[14px] text-[#1c3a13] hover:bg-[#eeeee9] transition-colors"
                           >
-                            <CreditCard className="w-4 h-4 text-nilin-warmGray" />
+                            <CreditCard className="w-4 h-4 text-[#6b6b6b]" />
                             Wallet
                           </button>
                         </div>
-                        <div className="border-t border-nilin-border/30 py-1.5">
+                        <div className="border-t border-[#1c3a13]/10 py-1.5">
                           <button
                             type="button"
                             role="menuitem"
                             onClick={handleLogout}
-                            className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm text-red-600 hover:bg-red-50 transition-colors"
+                            className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-[14px] text-[#1c3a13] hover:bg-[#eeeee9] transition-colors"
                           >
                             <LogOut className="w-4 h-4" />
                             Sign Out
@@ -803,39 +812,68 @@ const CustomerDashboard: React.FC = () => {
 
         <CustomerHubNav />
 
+        {/* Service Category Menu - Seed Design */}
+        <div className="bg-[#fcfcf7] border-b border-[#1c3a13]/5">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="flex gap-1 overflow-x-auto py-3 scrollbar-hide" style={{ scrollbarWidth: 'none' }}>
+              {[
+                { icon: Scissors, label: 'Hair', color: 'bg-purple-500' },
+                { icon: Palette, label: 'Makeup', color: 'bg-pink-500' },
+                { icon: Sparkle, label: 'Nails', color: 'bg-rose-500' },
+                { icon: Leaf, label: 'Skin & Aesthetics', color: 'bg-green-500' },
+                { icon: Heart, label: 'Massage & Body', color: 'bg-teal-500' },
+                { icon: Hand, label: 'Personal Care', color: 'bg-cyan-500' },
+              ].map((cat) => (
+                <button
+                  key={cat.label}
+                  type="button"
+                  onClick={() => {
+                    const slug = cat.label.toLowerCase().replace(/ & /g, '-').replace(/ /g, '-');
+                    navigate(`/category/${slug}`);
+                  }}
+                  className="flex-shrink-0 flex items-center gap-2 px-4 py-2 rounded-full border border-[#1c3a13]/10 bg-white hover:bg-[#eeeee9] text-[#1c3a13] text-[13px] font-medium transition-colors"
+                >
+                  <cat.icon className="w-4 h-4" />
+                  <span>{cat.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
         {/* Main Content */}
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 md:py-8">
           {/* Error State */}
           {error && (
-            <div className="mb-6 p-4 bg-red-50/80 border border-red-200/80 rounded-2xl text-red-700 flex items-center gap-3">
-              <div className="w-9 h-9 rounded-xl bg-red-100 flex items-center justify-center flex-shrink-0">
-                <span className="text-red-600 font-bold">!</span>
+            <div className="mb-6 p-4 bg-[#eeeee9] border border-[#1c3a13]/10 rounded-2xl text-[#1c3a13] flex items-center gap-3">
+              <div className="w-9 h-9 rounded-full bg-[#d3fa99] flex items-center justify-center flex-shrink-0">
+                <span className="text-[#1c3a13] font-bold">!</span>
               </div>
               <div className="min-w-0 flex-1">
                 <div className="font-medium text-sm">Couldn&apos;t load dashboard</div>
-                <div className="text-xs text-red-600/80 mt-0.5">{error}</div>
+                <div className="text-[13px] text-[#6b6b6b] mt-0.5">{error}</div>
               </div>
               <button
                 type="button"
                 onClick={fetchDashboardData}
-                className="flex-shrink-0 px-4 py-2 bg-red-600 text-white text-sm rounded-xl hover:bg-red-700 transition-colors"
+                className="flex-shrink-0 px-4 py-2 bg-[#1c3a13] text-[#fcfcf7] text-sm rounded-[9999px] hover:bg-[#1c3a13]/90 transition-colors"
               >
                 Retry
               </button>
             </div>
           )}
 
-          {/* Mobile primary CTA */}
+          {/* Mobile primary CTA - Pill button */}
           <button
             type="button"
             onClick={() => navigate('/customer/book-services')}
-            className="sm:hidden w-full mb-6 inline-flex items-center justify-center gap-2 px-4 py-3 rounded-2xl bg-gradient-to-r from-nilin-coral to-nilin-rose text-white text-sm font-semibold shadow-md"
+            className="sm:hidden w-full mb-6 inline-flex items-center justify-center gap-2 px-4 py-3 rounded-[9999px] bg-[#1c3a13] text-[#fcfcf7] text-[13px] font-medium"
           >
             <Plus className="w-4 h-4" />
             Book a service
           </button>
 
-          {/* Stats Row */}
+          {/* Stats Row - Seed Design */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4 mb-6 md:mb-8">
             {isLoading ? (
               <>
@@ -850,7 +888,7 @@ const CustomerDashboard: React.FC = () => {
                   title="Active Bookings"
                   value={activeBookings}
                   icon={Clock}
-                  color="bg-gradient-to-br from-amber-500 to-orange-500"
+                  color="bg-[#d3fa99]"
                   subtitle="Pending, confirmed & in progress"
                   onClick={() => navigate('/customer/bookings?status=active')}
                 />
@@ -858,7 +896,7 @@ const CustomerDashboard: React.FC = () => {
                   title="Completed"
                   value={stats?.completedBookings || 0}
                   icon={CheckCircle}
-                  color="bg-gradient-to-br from-green-500 to-emerald-500"
+                  color="bg-[#eeeee9]"
                   subtitle="Total completed bookings"
                   onClick={() => navigate('/customer/bookings?status=completed')}
                 />
@@ -866,7 +904,7 @@ const CustomerDashboard: React.FC = () => {
                   title="Pending Review"
                   value={stats?.pendingReviews ?? 0}
                   icon={Star}
-                  color="bg-gradient-to-br from-amber-500 to-orange-500"
+                  color="bg-[#d3fa99]"
                   subtitle="Completed bookings awaiting your review"
                   onClick={handlePendingReviewStatClick}
                 />
@@ -874,10 +912,10 @@ const CustomerDashboard: React.FC = () => {
                   title="Reviews Written"
                   value={stats?.reviewsWritten ?? 0}
                   icon={Star}
-                  color="bg-gradient-to-br from-purple-500 to-pink-500"
+                  color="bg-[#eeeee9]"
                   subtitle={
                     stats?.averageRating
-                      ? `Avg. rating given: ${stats.averageRating.toFixed(1)}`
+                      ? `Avg. rating: ${stats.averageRating.toFixed(1)}`
                       : 'Reviews you have submitted'
                   }
                   onClick={() => navigate('/customer/reviews')}
@@ -886,12 +924,12 @@ const CustomerDashboard: React.FC = () => {
             )}
           </div>
 
-          {/* Navigation Cards */}
+          {/* Navigation Cards - Seed Design */}
           <div className="mb-6 md:mb-8">
             <div className="flex items-end justify-between mb-3 md:mb-4">
               <div>
-                <h2 className="text-lg md:text-xl font-serif text-nilin-charcoal">Get started</h2>
-                <p className="text-xs text-nilin-warmGray mt-0.5">Shortcuts to common tasks</p>
+                <h2 className="text-lg md:text-xl font-light text-[#1c3a13] tracking-tight">Get started</h2>
+                <p className="text-[13px] text-[#6b6b6b] mt-0.5">Shortcuts to common tasks</p>
               </div>
             </div>
             <div className="flex gap-3 overflow-x-auto pb-1 -mx-1 px-1 snap-x snap-mandatory scrollbar-hide lg:grid lg:grid-cols-5 lg:overflow-visible lg:pb-0">
@@ -900,6 +938,55 @@ const CustomerDashboard: React.FC = () => {
                   <NavCard {...card} />
                 </div>
               ))}
+            </div>
+          </div>
+
+          {/* Special Offers Section */}
+          <div className="mb-6 md:mb-8">
+            <div className="flex items-end justify-between mb-3 md:mb-4">
+              <div>
+                <h2 className="text-lg md:text-xl font-light text-[#1c3a13] tracking-tight">Special Offers</h2>
+                <p className="text-[13px] text-[#6b6b6b] mt-0.5">Exclusive deals for you</p>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* First Booking Discount */}
+              <button
+                type="button"
+                onClick={() => navigate('/search')}
+                className="flex items-center gap-4 p-5 rounded-2xl border border-[#1c3a13]/10 bg-[#d3fa99]/20 hover:bg-[#d3fa99]/30 transition-colors text-left"
+              >
+                <div className="w-12 h-12 rounded-xl bg-[#1c3a13] flex items-center justify-center flex-shrink-0">
+                  <Gift className="w-6 h-6 text-[#d3fa99]" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <span className="inline-block px-2 py-0.5 bg-[#d3fa99] text-[#1c3a13] text-[10px] font-medium rounded-full mb-1">
+                    New User
+                  </span>
+                  <h3 className="font-medium text-[#1c3a13] text-[15px]">First Booking Discount</h3>
+                  <p className="text-[12px] text-[#6b6b6b] mt-0.5">Get 20% off your first booking</p>
+                </div>
+                <ArrowRight className="w-5 h-5 text-[#1c3a13]/40 flex-shrink-0" />
+              </button>
+
+              {/* Refer a Friend */}
+              <button
+                type="button"
+                onClick={() => navigate('/customer/referrals')}
+                className="flex items-center gap-4 p-5 rounded-2xl border border-[#1c3a13]/10 bg-[#fcfcf7] hover:bg-[#eeeee9] transition-colors text-left"
+              >
+                <div className="w-12 h-12 rounded-xl bg-[#1c3a13] flex items-center justify-center flex-shrink-0">
+                  <Users className="w-6 h-6 text-[#d3fa99]" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <span className="inline-block px-2 py-0.5 bg-[#eeeee9] text-[#1c3a13] text-[10px] font-medium rounded-full mb-1">
+                    Referral
+                  </span>
+                  <h3 className="font-medium text-[#1c3a13] text-[15px]">Refer a Friend</h3>
+                  <p className="text-[12px] text-[#6b6b6b] mt-0.5">Earn 50 AED credit for each referral</p>
+                </div>
+                <ArrowRight className="w-5 h-5 text-[#1c3a13]/40 flex-shrink-0" />
+              </button>
             </div>
           </div>
 
@@ -918,32 +1005,32 @@ const CustomerDashboard: React.FC = () => {
 
           {/* Main Content Grid */}
           <div className="grid lg:grid-cols-3 gap-6 lg:gap-8">
-            {/* Recent Bookings Table */}
+            {/* Recent Bookings Table - Seed Design */}
             <div className="lg:col-span-2">
               <div className="flex items-center justify-between mb-3 md:mb-4">
                 <div>
-                  <h2 className="text-lg md:text-xl font-serif text-nilin-charcoal">Recent Bookings</h2>
+                  <h2 className="text-lg md:text-xl font-light text-[#1c3a13] tracking-tight">Recent Bookings</h2>
                   {!isLoading && recentBookings.length > 0 && (
-                    <p className="text-xs text-nilin-warmGray mt-0.5">{recentBookings.length} most recent</p>
+                    <p className="text-[13px] text-[#6b6b6b] mt-0.5">{recentBookings.length} most recent</p>
                   )}
                 </div>
                 <button
                   type="button"
                   onClick={() => navigate('/customer/bookings')}
-                  className="text-sm font-medium text-nilin-coral hover:text-nilin-rose flex items-center gap-1 transition-colors px-3 py-1.5 rounded-lg hover:bg-nilin-coral/5"
+                  className="text-[13px] font-medium text-[#1c3a13] flex items-center gap-1 transition-colors px-3 py-1.5 rounded-[9999px] hover:bg-[#eeeee9]"
                 >
                   View all <ArrowRight className="w-4 h-4" />
                 </button>
               </div>
 
-              <div className="rounded-2xl overflow-hidden border border-nilin-border/40 bg-white shadow-sm">
+              <div className="rounded-2xl overflow-hidden border border-[#1c3a13]/10 bg-[#fcfcf7]">
                 {isLoading ? (
                   <>
-                    <div className="md:hidden divide-y divide-nilin-border/30">
+                    <div className="md:hidden divide-y divide-[#1c3a13]/5">
                       {[1, 2, 3].map((i) => (
                         <div key={i} className="p-4 animate-pulse space-y-2">
-                          <div className="h-4 w-3/4 bg-nilin-border/30 rounded" />
-                          <div className="h-3 w-1/2 bg-nilin-border/20 rounded" />
+                          <div className="h-4 w-3/4 bg-[#eeeee9] rounded" />
+                          <div className="h-3 w-1/2 bg-[#eeeee9] rounded" />
                         </div>
                       ))}
                     </div>
@@ -957,7 +1044,7 @@ const CustomerDashboard: React.FC = () => {
                   </>
                 ) : recentBookings.length > 0 ? (
                   <>
-                    <div className="md:hidden divide-y divide-nilin-border/30">
+                    <div className="md:hidden divide-y divide-[#1c3a13]/5">
                       {recentBookings.map((booking) => (
                         <BookingMobileCard
                           key={booking._id}
@@ -973,13 +1060,13 @@ const CustomerDashboard: React.FC = () => {
                     <div className="overflow-x-auto hidden md:block">
                     <table className="w-full">
                       <thead>
-                        <tr className="border-b border-nilin-border/30 bg-nilin-muted/40">
-                          <th className="py-3.5 px-5 text-left text-[11px] font-semibold text-nilin-warmGray uppercase tracking-wider">Booking</th>
-                          <th className="py-3.5 px-5 text-left text-[11px] font-semibold text-nilin-warmGray uppercase tracking-wider">Service</th>
-                          <th className="py-3.5 px-5 text-left text-[11px] font-semibold text-nilin-warmGray uppercase tracking-wider">Date & Time</th>
-                          <th className="py-3.5 px-5 text-left text-[11px] font-semibold text-nilin-warmGray uppercase tracking-wider">Provider</th>
-                          <th className="py-3.5 px-5 text-left text-[11px] font-semibold text-nilin-warmGray uppercase tracking-wider">Status</th>
-                          <th className="py-3.5 px-5 text-right text-[11px] font-semibold text-nilin-warmGray uppercase tracking-wider">Amount</th>
+                        <tr className="border-b border-[#1c3a13]/5 bg-[#eeeee9]/50">
+                          <th className="py-3.5 px-5 text-left text-[11px] font-medium text-[#6b6b6b] uppercase tracking-[0.1em]">Booking</th>
+                          <th className="py-3.5 px-5 text-left text-[11px] font-medium text-[#6b6b6b] uppercase tracking-[0.1em]">Service</th>
+                          <th className="py-3.5 px-5 text-left text-[11px] font-medium text-[#6b6b6b] uppercase tracking-[0.1em]">Date & Time</th>
+                          <th className="py-3.5 px-5 text-left text-[11px] font-medium text-[#6b6b6b] uppercase tracking-[0.1em]">Provider</th>
+                          <th className="py-3.5 px-5 text-left text-[11px] font-medium text-[#6b6b6b] uppercase tracking-[0.1em]">Status</th>
+                          <th className="py-3.5 px-5 text-right text-[11px] font-medium text-[#6b6b6b] uppercase tracking-[0.1em]">Amount</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1000,15 +1087,15 @@ const CustomerDashboard: React.FC = () => {
                   </>
                 ) : (
                   <div className="p-10 md:p-12 text-center">
-                    <div className="w-14 h-14 rounded-2xl bg-nilin-coral/10 flex items-center justify-center mx-auto mb-4">
-                      <Calendar className="w-7 h-7 text-nilin-coral" />
+                    <div className="w-14 h-14 rounded-2xl bg-[#d3fa99]/30 flex items-center justify-center mx-auto mb-4">
+                      <Calendar className="w-7 h-7 text-[#1c3a13]" />
                     </div>
-                    <h3 className="text-base font-semibold text-nilin-charcoal mb-1.5">No bookings yet</h3>
-                    <p className="text-sm text-nilin-warmGray mb-5 max-w-xs mx-auto">Book your first service to see your appointments here.</p>
+                    <h3 className="text-base font-medium text-[#1c3a13] mb-1.5">No bookings yet</h3>
+                    <p className="text-[14px] text-[#6b6b6b] mb-5 max-w-xs mx-auto">Book your first service to see your appointments here.</p>
                     <button
                       type="button"
                       onClick={() => navigate('/customer/book-services')}
-                      className="px-5 py-2.5 bg-gradient-to-r from-nilin-coral to-nilin-rose text-white rounded-xl text-sm font-medium shadow-md hover:shadow-lg transition-all"
+                      className="px-5 py-2.5 bg-[#1c3a13] text-[#fcfcf7] rounded-[9999px] text-[14px] font-medium hover:bg-[#1c3a13]/90 transition-colors"
                     >
                       Browse Services
                     </button>
@@ -1017,21 +1104,21 @@ const CustomerDashboard: React.FC = () => {
               </div>
             </div>
 
-            {/* Sidebar */}
+            {/* Sidebar - Seed Design */}
             <div className="space-y-4 lg:space-y-5">
               {/* Messages Preview Section */}
-              <div className="rounded-2xl border border-nilin-border/40 bg-white p-5 shadow-sm">
+              <div className="rounded-2xl border border-[#1c3a13]/10 bg-[#fcfcf7] p-5">
                 <div className="flex items-center justify-between mb-4">
                   <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-nilin-coral to-nilin-rose flex items-center justify-center">
-                      <MessageSquare className="w-4 h-4 text-white" />
+                    <div className="w-8 h-8 rounded-full bg-[#1c3a13] flex items-center justify-center">
+                      <MessageSquare className="w-4 h-4 text-[#fcfcf7]" />
                     </div>
-                    <h3 className="font-semibold text-nilin-charcoal text-sm">Messages</h3>
+                    <h3 className="font-medium text-[#1c3a13] text-[14px]">Messages</h3>
                   </div>
                   <button
                     type="button"
                     onClick={() => navigate('/customer/messages')}
-                    className="text-xs font-medium text-nilin-coral hover:text-nilin-rose flex items-center gap-1 transition-colors"
+                    className="text-[11px] font-medium text-[#1c3a13] flex items-center gap-1 transition-colors px-3 py-1 rounded-[9999px] hover:bg-[#eeeee9]"
                   >
                     View all
                     <ArrowRight className="w-3 h-3" />
@@ -1042,10 +1129,10 @@ const CustomerDashboard: React.FC = () => {
                   <div className="space-y-3">
                     {[1, 2].map((i) => (
                       <div key={i} className="flex items-center gap-3 animate-pulse">
-                        <div className="w-10 h-10 rounded-full bg-nilin-border/30" />
+                        <div className="w-10 h-10 rounded-full bg-[#eeeee9]" />
                         <div className="flex-1 space-y-1.5">
-                          <div className="h-4 w-24 bg-nilin-border/30 rounded" />
-                          <div className="h-3 w-32 bg-nilin-border/20 rounded" />
+                          <div className="h-4 w-24 bg-[#eeeee9] rounded" />
+                          <div className="h-3 w-32 bg-[#eeeee9] rounded" />
                         </div>
                       </div>
                     ))}
@@ -1080,13 +1167,13 @@ const CustomerDashboard: React.FC = () => {
                           onClick={() => navigate('/customer/messages', { state: { roomId: room._id } })}
                           className={`w-full flex items-center gap-3 p-2.5 rounded-xl transition-colors text-left group ${
                             hasUnread
-                              ? 'bg-nilin-coral/5 hover:bg-nilin-coral/10'
-                              : 'hover:bg-nilin-muted/50'
+                              ? 'bg-[#d3fa99]/10 hover:bg-[#d3fa99]/20'
+                              : 'hover:bg-[#eeeee9]/50'
                           }`}
                         >
-                          {/* Avatar */}
+                          {/* Avatar with lime accent */}
                           <div className="relative flex-shrink-0">
-                            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-nilin-blush to-nilin-peach flex items-center justify-center text-nilin-coral font-semibold text-sm shadow-sm">
+                            <div className="w-10 h-10 rounded-full bg-[#eeeee9] flex items-center justify-center text-[#1c3a13] font-medium text-sm">
                               {otherParticipant?.userId?.avatar ? (
                                 <img
                                   src={otherParticipant.userId.avatar}
@@ -1098,7 +1185,7 @@ const CustomerDashboard: React.FC = () => {
                               )}
                             </div>
                             {hasUnread && (
-                              <span className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-nilin-coral text-white text-[10px] font-bold rounded-full flex items-center justify-center">
+                              <span className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-[#1c3a13] text-[#fcfcf7] text-[10px] font-medium rounded-full flex items-center justify-center">
                                 {room.unreadCount && room.unreadCount > 9 ? '9+' : room.unreadCount}
                               </span>
                             )}
@@ -1107,18 +1194,18 @@ const CustomerDashboard: React.FC = () => {
                           {/* Content */}
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center justify-between gap-2">
-                              <span className={`text-sm font-medium truncate ${hasUnread ? 'text-nilin-charcoal' : 'text-nilin-warmGray'}`}>
+                              <span className={`text-[13px] font-medium truncate ${hasUnread ? 'text-[#1c3a13]' : 'text-[#6b6b6b]'}`}>
                                 {participantName}
                               </span>
                               {room.updatedAt && (
-                                <span className="text-[10px] text-nilin-warmGray/70 flex-shrink-0">
+                                <span className="text-[10px] text-[#6b6b6b]/70 flex-shrink-0">
                                   {formatRelativeTime(new Date(room.updatedAt))}
                                 </span>
                               )}
                             </div>
                             {messagePreview && (
-                              <p className={`text-xs truncate mt-0.5 ${
-                                hasUnread ? 'text-nilin-charcoal font-medium' : 'text-nilin-warmGray/70'
+                              <p className={`text-[11px] truncate mt-0.5 ${
+                                hasUnread ? 'text-[#1c3a13] font-medium' : 'text-[#6b6b6b]/70'
                               }`}>
                                 {messagePreview}
                               </p>
@@ -1130,14 +1217,14 @@ const CustomerDashboard: React.FC = () => {
                   </div>
                 ) : (
                   <div className="text-center py-6">
-                    <div className="w-12 h-12 rounded-full bg-nilin-muted/50 flex items-center justify-center mx-auto mb-3">
-                      <MessageCircle className="w-6 h-6 text-nilin-warmGray/50" />
+                    <div className="w-12 h-12 rounded-full bg-[#eeeee9] flex items-center justify-center mx-auto mb-3">
+                      <MessageCircle className="w-6 h-6 text-[#6b6b6b]/50" />
                     </div>
-                    <p className="text-sm text-nilin-warmGray">No messages yet</p>
+                    <p className="text-[14px] text-[#6b6b6b]">No messages yet</p>
                     <button
                       type="button"
                       onClick={() => navigate('/customer/messages/new')}
-                      className="mt-3 text-xs font-medium text-nilin-coral hover:text-nilin-rose transition-colors"
+                      className="mt-3 text-[12px] font-medium text-[#1c3a13] transition-colors"
                     >
                       Start a conversation
                     </button>
@@ -1145,44 +1232,44 @@ const CustomerDashboard: React.FC = () => {
                 )}
               </div>
 
-              {/* Account snapshot — replaces duplicate profile card */}
-              <div className="rounded-2xl border border-nilin-border/40 bg-white p-5 shadow-sm">
-                <h3 className="font-semibold text-nilin-charcoal mb-4 text-sm uppercase tracking-wide">Account snapshot</h3>
+              {/* Account snapshot — Seed Design */}
+              <div className="rounded-2xl border border-[#1c3a13]/10 bg-[#fcfcf7] p-5">
+                <h3 className="font-medium text-[#1c3a13] mb-4 text-[12px] uppercase tracking-[0.1em]">Account snapshot</h3>
                 <div className="grid grid-cols-2 gap-3">
-                  <div className="rounded-xl bg-nilin-muted/50 p-3.5 text-center border border-nilin-border/20">
-                    <div className="text-xl font-bold text-nilin-charcoal">{stats?.totalBookings || 0}</div>
-                    <div className="text-[11px] text-nilin-warmGray mt-0.5">Total bookings</div>
+                  <div className="rounded-xl bg-[#eeeee9] p-3.5 text-center border border-[#1c3a13]/5">
+                    <div className="text-xl font-light text-[#1c3a13]">{stats?.totalBookings || 0}</div>
+                    <div className="text-[11px] text-[#6b6b6b] mt-0.5">Total bookings</div>
                   </div>
-                  <div className="rounded-xl bg-nilin-muted/50 p-3.5 text-center border border-nilin-border/20">
-                    <div className="text-xl font-bold text-nilin-charcoal">{stats?.cancelledBookings || 0}</div>
-                    <div className="text-[11px] text-nilin-warmGray mt-0.5">Cancelled</div>
+                  <div className="rounded-xl bg-[#eeeee9] p-3.5 text-center border border-[#1c3a13]/5">
+                    <div className="text-xl font-light text-[#1c3a13]">{stats?.cancelledBookings || 0}</div>
+                    <div className="text-[11px] text-[#6b6b6b] mt-0.5">Cancelled</div>
                   </div>
                   <button
                     type="button"
                     onClick={() => navigate('/customer/wallet')}
-                    className="rounded-xl bg-amber-50/80 p-3.5 text-center border border-amber-200/50 hover:bg-amber-50 transition-colors"
+                    className="rounded-xl bg-[#d3fa99]/30 p-3.5 text-center border border-[#d3fa99]/50 hover:bg-[#d3fa99]/50 transition-colors"
                   >
-                    <div className="flex items-center justify-center gap-1 text-xl font-bold text-nilin-charcoal">
-                      <Award className="w-4 h-4 text-amber-600" />
+                    <div className="flex items-center justify-center gap-1 text-xl font-light text-[#1c3a13]">
+                      <Award className="w-4 h-4 text-[#1c3a13]" />
                       {loyaltyPoints?.points ?? 0}
                     </div>
-                    <div className="text-[11px] text-nilin-warmGray mt-0.5 capitalize">
+                    <div className="text-[11px] text-[#6b6b6b] mt-0.5 capitalize">
                       {(loyaltyPoints?.tier || 'bronze')} tier
                     </div>
                   </button>
                   <button
                     type="button"
                     onClick={() => navigate('/customer/wallet')}
-                    className="rounded-xl bg-orange-50/80 p-3.5 text-center border border-orange-200/50 hover:bg-orange-50 transition-colors"
+                    className="rounded-xl bg-[#eeeee9] p-3.5 text-center border border-[#1c3a13]/5 hover:bg-[#eeeee9]/80 transition-colors"
                   >
-                    <div className="flex items-center justify-center gap-1 text-xl font-bold text-nilin-charcoal">
-                      <Flame className="w-4 h-4 text-orange-500" />
+                    <div className="flex items-center justify-center gap-1 text-xl font-light text-[#1c3a13]">
+                      <Flame className="w-4 h-4 text-[#1c3a13]" />
                       {currentStreak?.currentStreak ?? 0}
                     </div>
-                    <div className="text-[11px] text-nilin-warmGray mt-0.5">
+                    <div className="text-[11px] text-[#6b6b6b] mt-0.5">
                       Day streak
                       {(currentStreak?.longestStreak ?? 0) > 0 && (
-                        <span className="block text-[10px] text-nilin-warmGray/70">
+                        <span className="block text-[10px] text-[#6b6b6b]/70">
                           Best: {currentStreak?.longestStreak}
                         </span>
                       )}
@@ -1192,51 +1279,51 @@ const CustomerDashboard: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => navigate('/customer/profile')}
-                  className="w-full mt-4 py-2.5 text-sm border border-nilin-border/60 text-nilin-charcoal rounded-xl font-medium hover:bg-nilin-muted/60 transition-colors"
+                  className="w-full mt-4 py-2.5 text-[13px] border border-[#1c3a13]/10 text-[#1c3a13] rounded-[9999px] font-medium hover:bg-[#eeeee9] transition-colors"
                 >
                   Edit profile
                 </button>
               </div>
 
-              {/* Shortcuts */}
-              <div className="rounded-2xl border border-nilin-border/40 bg-white p-5 shadow-sm">
-                <h3 className="font-semibold text-nilin-charcoal mb-3 text-sm uppercase tracking-wide">Shortcuts</h3>
+              {/* Shortcuts - Seed Design */}
+              <div className="rounded-2xl border border-[#1c3a13]/10 bg-[#fcfcf7] p-5">
+                <h3 className="font-medium text-[#1c3a13] mb-3 text-[12px] uppercase tracking-[0.1em]">Shortcuts</h3>
                 <div className="space-y-1">
                   {quickActions.map((action) => (
                     <button
                       key={action.label}
                       type="button"
                       onClick={action.onClick}
-                      className="w-full flex items-center gap-3 p-2.5 rounded-xl hover:bg-nilin-muted/70 transition-colors text-left group"
+                      className="w-full flex items-center gap-3 p-2.5 rounded-xl hover:bg-[#eeeee9] transition-colors text-left group"
                     >
-                      <div className="w-9 h-9 rounded-lg bg-nilin-coral/10 flex items-center justify-center group-hover:bg-nilin-coral/15 transition-colors">
-                        <action.icon className="w-4 h-4 text-nilin-coral" />
+                      <div className="w-9 h-9 rounded-full bg-[#d3fa99]/30 flex items-center justify-center group-hover:bg-[#d3fa99]/50 transition-colors">
+                        <action.icon className="w-4 h-4 text-[#1c3a13]" />
                       </div>
-                      <span className="text-sm text-nilin-charcoal font-medium flex-1">{action.label}</span>
-                      <ArrowRight className="w-3.5 h-3.5 text-nilin-warmGray/50 group-hover:text-nilin-coral group-hover:translate-x-0.5 transition-all" />
+                      <span className="text-[13px] text-[#1c3a13] font-medium flex-1">{action.label}</span>
+                      <ArrowRight className="w-3.5 h-3.5 text-[#6b6b6b]/50 group-hover:text-[#1c3a13] group-hover:translate-x-0.5 transition-all" />
                     </button>
                   ))}
                 </div>
               </div>
 
-              {/* Help Card */}
-              <div className="rounded-2xl border border-nilin-coral/20 bg-gradient-to-br from-nilin-coral/8 to-nilin-rose/5 p-5">
+              {/* Help Card - Lime Sprout accent */}
+              <div className="rounded-2xl border border-[#1c3a13]/10 bg-[#d3fa99]/20 p-5">
                 <div className="flex items-center gap-3 mb-3">
-                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-nilin-coral to-nilin-rose flex items-center justify-center shadow-sm">
-                    <Bell className="w-5 h-5 text-white" />
+                  <div className="w-10 h-10 rounded-full bg-[#1c3a13] flex items-center justify-center">
+                    <Bell className="w-5 h-5 text-[#fcfcf7]" />
                   </div>
                   <div>
-                    <div className="font-semibold text-nilin-charcoal text-sm">Need help?</div>
-                    <div className="text-xs text-nilin-warmGray">Support is available 24/7</div>
+                    <div className="font-medium text-[#1c3a13] text-[14px]">Need help?</div>
+                    <div className="text-[11px] text-[#6b6b6b]">Support is available 24/7</div>
                   </div>
                 </div>
-                <p className="text-xs text-nilin-warmGray mb-4 leading-relaxed">
+                <p className="text-[12px] text-[#6b6b6b] mb-4 leading-relaxed">
                   Questions about bookings, payments, or your account? Our team is ready to assist.
                 </p>
                 <button
                   type="button"
                   onClick={() => navigate('/customer/support')}
-                  className="w-full py-2.5 bg-nilin-charcoal text-white text-sm rounded-xl font-medium hover:bg-nilin-charcoal/90 transition-colors"
+                  className="w-full py-2.5 bg-[#1c3a13] text-[#fcfcf7] text-[13px] rounded-[9999px] font-medium hover:bg-[#1c3a13]/90 transition-colors"
                 >
                   Contact support
                 </button>

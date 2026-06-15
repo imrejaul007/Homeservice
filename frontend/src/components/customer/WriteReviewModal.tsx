@@ -10,13 +10,12 @@ import {
   Loader2,
   AlertCircle,
   CheckCircle,
-  Camera,
-  Clock,
   Calendar,
   User,
+  Sparkles,
 } from 'lucide-react';
 import { Modal } from '../common/Modal';
-import { reviewsApi, type Review } from '../../services/reviewsApi';
+import { reviewsApi } from '../../services/reviewsApi';
 import { bookingApi } from '../../services/bookingApi';
 import { toast } from 'react-hot-toast';
 
@@ -54,37 +53,83 @@ const StarRating: React.FC<StarRatingProps> = ({
 
   const sizes = {
     sm: 'w-5 h-5',
-    md: 'w-7 h-7',
-    lg: 'w-8 h-8',
+    md: 'w-8 h-8',
+    lg: 'w-12 h-12',
   };
 
   const ratingLabels = ['', 'Poor', 'Fair', 'Good', 'Very Good', 'Excellent'];
 
+  // Brand-consistent gradient colors for stars
+  const getStarColor = (star: number, isFilled: boolean) => {
+    if (!isFilled) return 'text-nilin-border';
+    if (star === 5) return 'text-nilin-coral'; // Brand highlight for 5 stars
+    if (star >= 4) return 'text-amber-500';   // Gold for 4 stars
+    return 'text-amber-400';                   // Light gold for 1-3 stars
+  };
+
+  // Glow effect for selected/highlighted stars
+  const getStarGlow = (star: number, isFilled: boolean, isHovered: boolean) => {
+    if (!isFilled) return '';
+    if (star === 5) return 'drop-shadow-[0_0_8px_rgba(239,107,102,0.5)]'; // Coral glow for 5
+    if (star >= 4) return 'drop-shadow-[0_0_6px_rgba(245,158,11,0.4)]';   // Amber glow for 4+
+    return 'drop-shadow-[0_0_4px_rgba(251,191,36,0.3)]';                   // Light glow for 1-3
+  };
+
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-center gap-1" role="radiogroup" aria-label="Rating" aria-describedby="rating-description">
-        {[1, 2, 3, 4, 5].map((star) => (
-          <button
-            key={star}
-            type="button"
-            onClick={() => onChange(star)}
-            onMouseEnter={() => setHoverValue(star)}
-            onMouseLeave={() => setHoverValue(0)}
-            onFocus={() => setHoverValue(star)}
-            className="transition-transform hover:scale-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral rounded p-0.5"
-            aria-label={`${star} star${star !== 1 ? 's' : ''} - ${ratingLabels[star]}`}
-          >
-            <Star
-              className={`${sizes[size]} ${
-                (hoverValue || value) >= star
-                  ? 'fill-amber-400 text-amber-400'
-                  : 'fill-gray-200 text-gray-200'
-              } transition-colors`}
-            />
-          </button>
-        ))}
+    <div className="flex flex-col gap-4">
+      {/* Premium star row with animated background */}
+      <div className="relative px-4 py-6 bg-gradient-to-b from-nilin-cream/30 to-transparent rounded-2xl">
+        <div className="flex items-center justify-center gap-1" role="radiogroup" aria-label="Rating" aria-describedby="rating-description">
+          {[1, 2, 3, 4, 5].map((star) => {
+            const isFilled = (hoverValue || value) >= star;
+            const isHovered = hoverValue > 0 && hoverValue === star;
+            const isSelected = value >= star;
+
+            return (
+              <button
+                key={star}
+                type="button"
+                onClick={() => onChange(star)}
+                onMouseEnter={() => setHoverValue(star)}
+                onMouseLeave={() => setHoverValue(0)}
+                onFocus={() => setHoverValue(star)}
+                className={`
+                  relative transition-all duration-300 ease-out rounded-xl p-1.5
+                  ${isHovered ? 'scale-110' : 'hover:scale-105'}
+                  ${isSelected && !isHovered ? 'scale-105' : ''}
+                  focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2
+                `}
+                aria-label={`${star} star${star !== 1 ? 's' : ''} - ${ratingLabels[star]}`}
+              >
+                {/* Subtle background pulse for selected stars */}
+                {isSelected && !isHovered && (
+                  <span className="absolute inset-0 bg-nilin-coral/10 rounded-xl animate-pulse" />
+                )}
+
+                <Star
+                  className={`
+                    ${sizes[size]}
+                    ${isFilled ? 'fill-current' : 'fill-none'}
+                    ${getStarColor(star, isFilled)}
+                    ${getStarGlow(star, isFilled, isHovered)}
+                    transition-all duration-300 ease-out
+                  `}
+                  strokeWidth={1.5}
+                />
+              </button>
+            );
+          })}
+        </div>
       </div>
-      <span id="rating-description" className="text-sm text-nilin-warmGray">
+
+      {/* Rating label with smooth transition */}
+      <span
+        id="rating-description"
+        className={`
+          text-center text-base font-medium transition-all duration-300
+          ${value > 0 ? 'text-nilin-charcoal' : 'text-nilin-warmGray'}
+        `}
+      >
         {value > 0 ? ratingLabels[value] : 'Tap a star to rate'}
       </span>
     </div>
@@ -108,40 +153,52 @@ const BookingCard: React.FC<BookingCardProps> = ({ booking, selected, onSelect }
   return (
     <button
       onClick={onSelect}
-      className={`w-full text-left p-4 rounded-xl border-2 transition-all ${
-        selected
-          ? 'border-nilin-coral bg-nilin-coral/5'
-          : 'border-gray-200 hover:border-nilin-coral/50 hover:bg-gray-50'
-      }`}
+      className={`
+        w-full text-left p-4 rounded-2xl border-2 transition-all duration-200
+        ${selected
+          ? 'border-nilin-coral bg-gradient-to-r from-nilin-coral/8 to-nilin-rose/5 shadow-sm shadow-nilin-coral/10'
+          : 'border-gray-100 hover:border-nilin-coral/40 hover:bg-gray-50/80 hover:shadow-sm'
+        }
+      `}
     >
       <div className="flex items-start gap-4">
-        <div className="w-12 h-12 rounded-full bg-nilin-coral/10 flex items-center justify-center flex-shrink-0">
-          {booking.providerAvatar ? (
-            <img
-              src={booking.providerAvatar}
-              alt=""
-              className="w-full h-full rounded-full object-cover"
-            />
-          ) : (
-            <User className="w-6 h-6 text-nilin-coral" />
+        <div className="relative">
+          <div className={`w-12 h-12 rounded-full flex items-center justify-center flex-shrink-0 transition-all ${
+            selected
+              ? 'bg-gradient-to-br from-nilin-coral to-nilin-rose ring-2 ring-white shadow-md'
+              : 'bg-nilin-coral/10'
+          }`}>
+            {booking.providerAvatar ? (
+              <img
+                src={booking.providerAvatar}
+                alt=""
+                className="w-full h-full rounded-full object-cover"
+              />
+            ) : (
+              <User className={`w-6 h-6 ${selected ? 'text-white' : 'text-nilin-coral'}`} />
+            )}
+          </div>
+          {selected && (
+            <div className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-nilin-coral flex items-center justify-center ring-2 ring-white">
+              <CheckCircle className="w-3 h-3 text-white" />
+            </div>
           )}
         </div>
         <div className="flex-1 min-w-0">
           <h4 className="font-semibold text-nilin-charcoal truncate">{booking.serviceName}</h4>
           <p className="text-sm text-nilin-warmGray">with {booking.providerName}</p>
           <div className="flex items-center gap-3 mt-2 text-xs text-nilin-warmGray">
-            <span className="flex items-center gap-1">
+            <span className="flex items-center gap-1.5">
               <Calendar className="w-3 h-3" />
               {completedDate}
             </span>
-            <span className="font-mono text-nilin-coral">#{booking.bookingNumber.slice(-6)}</span>
+            <span className={`font-mono px-2 py-0.5 rounded-full text-xs ${
+              selected ? 'bg-nilin-coral/15 text-nilin-coral' : 'bg-gray-100 text-nilin-warmGray'
+            }`}>
+              #{booking.bookingNumber.slice(-6)}
+            </span>
           </div>
         </div>
-        {selected && (
-          <div className="w-6 h-6 rounded-full bg-nilin-coral flex items-center justify-center flex-shrink-0">
-            <CheckCircle className="w-4 h-4 text-white" />
-          </div>
-        )}
       </div>
     </button>
   );
@@ -262,7 +319,6 @@ export const WriteReviewModal: React.FC<WriteReviewModalProps> = ({
         }
       }
     } catch (err) {
-      console.error('Failed to fetch completed bookings:', err);
       setError('Failed to load completed bookings. Please try again.');
     } finally {
       setIsLoadingBookings(false);
@@ -320,7 +376,6 @@ export const WriteReviewModal: React.FC<WriteReviewModalProps> = ({
         onOpenChange(false);
       }
     } catch (err: unknown) {
-      console.error('Failed to submit review:', err);
       const errMsg = err instanceof Error ? err.message : 'Failed to submit review. Please try again.';
       setError(errMsg);
       toast.error(errMsg);
@@ -335,17 +390,19 @@ export const WriteReviewModal: React.FC<WriteReviewModalProps> = ({
     <Modal
       open={open}
       onOpenChange={onOpenChange}
-      className="max-w-lg w-full max-h-[90vh] overflow-hidden flex flex-col"
+      className="max-w-lg w-full max-h-[90vh] overflow-hidden flex flex-col glass-nilin-strong rounded-nilin-lg"
     >
       {/* Focus trap container */}
       <div ref={modalRef}>
-      {/* Header */}
-      <div className="flex items-center justify-between p-6 border-b border-nilin-border">
+      {/* Premium Header with gradient accent */}
+      <div className="flex items-center justify-between p-5 border-b border-nilin-border bg-gradient-to-r from-nilin-cream/70 via-nilin-cream/40 to-transparent relative">
+        {/* Top accent line */}
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-24 h-1 bg-gradient-to-r from-nilin-coral via-nilin-rose to-transparent rounded-b-full opacity-60" />
         <div className="flex items-center gap-3">
           {step === 'write' && (
             <button
               onClick={handleBackToSelect}
-              className="p-2 -ml-2 rounded-lg hover:bg-nilin-muted transition-colors"
+              className="p-2 -ml-2 rounded-full hover:bg-nilin-muted transition-colors"
             >
               <X className="w-5 h-5 text-nilin-warmGray" />
             </button>
@@ -363,7 +420,7 @@ export const WriteReviewModal: React.FC<WriteReviewModalProps> = ({
         </div>
         <button
           onClick={() => onOpenChange(false)}
-          className="p-2 rounded-lg hover:bg-nilin-muted transition-colors"
+          className="p-2 rounded-full hover:bg-nilin-muted transition-colors"
         >
           <X className="w-5 h-5 text-nilin-warmGray" />
         </button>
@@ -374,8 +431,8 @@ export const WriteReviewModal: React.FC<WriteReviewModalProps> = ({
         {/* Step 1: Select Booking */}
         {step === 'select' && (
           <div className="space-y-4">
-            <p className="text-sm text-nilin-warmGray mb-4">
-              Select a completed service to review:
+            <p className="text-sm text-nilin-warmGray mb-5 leading-relaxed">
+              Select a completed service to share your experience:
             </p>
 
             {isLoadingBookings ? (
@@ -383,26 +440,31 @@ export const WriteReviewModal: React.FC<WriteReviewModalProps> = ({
                 <Loader2 className="w-8 h-8 text-nilin-coral animate-spin" />
               </div>
             ) : error ? (
-              <div className="text-center py-8">
-                <AlertCircle className="w-12 h-12 text-red-400 mx-auto mb-4" />
-                <p className="text-nilin-warmGray mb-4">{error}</p>
+              <div className="text-center py-12">
+                <div className="w-16 h-16 rounded-full bg-red-50 flex items-center justify-center mx-auto mb-4">
+                  <AlertCircle className="w-8 h-8 text-red-400" />
+                </div>
+                <p className="text-nilin-charcoal mb-4 font-medium">{error}</p>
                 <button
                   onClick={fetchCompletedBookings}
-                  className="px-4 py-2 bg-nilin-coral text-white rounded-lg hover:bg-nilin-rose transition-colors"
+                  className="px-5 py-2.5 bg-gradient-to-r from-nilin-coral to-nilin-rose text-white rounded-xl font-medium hover:shadow-lg hover:shadow-nilin-coral/20 transition-all"
                 >
                   Try Again
                 </button>
               </div>
             ) : completedBookings.length === 0 ? (
-              <div className="text-center py-12">
-                <div className="w-16 h-16 rounded-full bg-nilin-coral/10 flex items-center justify-center mx-auto mb-4">
-                  <Star className="w-8 h-8 text-nilin-coral" />
+              <div className="text-center py-16 px-4">
+                <div className="relative w-20 h-20 mx-auto mb-6">
+                  <div className="absolute inset-0 rounded-full bg-gradient-to-br from-nilin-coral/20 to-nilin-rose/20 animate-pulse" />
+                  <div className="relative w-full h-full rounded-full bg-gradient-to-br from-nilin-coral/10 to-nilin-rose/10 flex items-center justify-center border border-nilin-coral/20">
+                    <Sparkles className="w-9 h-9 text-nilin-coral" />
+                  </div>
                 </div>
-                <h3 className="text-lg font-semibold text-nilin-charcoal mb-2">
-                  Nothing to Review Yet
+                <h3 className="text-xl font-serif text-nilin-charcoal mb-2">
+                  All Caught Up
                 </h3>
-                <p className="text-sm text-nilin-warmGray mb-4">
-                  Complete a service first — then you can share your experience here.
+                <p className="text-sm text-nilin-warmGray mb-8 max-w-[260px] mx-auto leading-relaxed">
+                  Complete a service to unlock the ability to share your experience.
                 </p>
                 <button
                   type="button"
@@ -410,7 +472,7 @@ export const WriteReviewModal: React.FC<WriteReviewModalProps> = ({
                     onOpenChange(false);
                     navigate('/customer/book-services');
                   }}
-                  className="px-5 py-2.5 bg-gradient-to-r from-nilin-coral to-nilin-rose text-white rounded-xl font-medium"
+                  className="px-6 py-3 bg-gradient-to-r from-nilin-coral to-nilin-rose text-white rounded-full font-medium shadow-lg shadow-nilin-coral/25 hover:shadow-xl hover:shadow-nilin-coral/30 transition-all hover:-translate-y-0.5"
                 >
                   Book a Service
                 </button>
@@ -433,112 +495,156 @@ export const WriteReviewModal: React.FC<WriteReviewModalProps> = ({
         {/* Step 2: Write Review */}
         {step === 'write' && selectedBooking && (
           <div className="space-y-6">
-            {/* Selected Service Info */}
-            <div className="flex items-center gap-4 p-4 bg-nilin-muted/50 rounded-xl">
-              <div className="w-12 h-12 rounded-full bg-nilin-coral/10 flex items-center justify-center">
-                {selectedBooking.providerAvatar ? (
-                  <img
-                    src={selectedBooking.providerAvatar}
-                    alt=""
-                    className="w-full h-full rounded-full object-cover"
-                  />
-                ) : (
-                  <User className="w-6 h-6 text-nilin-coral" />
-                )}
+            {/* Selected Service Info - Premium Card */}
+            <div className="flex items-center gap-4 p-5 bg-gradient-to-br from-nilin-coral/8 via-nilin-rose/5 to-nilin-cream/30 rounded-2xl border border-nilin-coral/15 shadow-sm">
+              {/* Avatar with gradient ring */}
+              <div className="relative">
+                <div className="w-16 h-16 rounded-full bg-gradient-to-br from-nilin-coral/20 to-nilin-rose/20 flex items-center justify-center ring-4 ring-white shadow-lg">
+                  {selectedBooking.providerAvatar ? (
+                    <img
+                      src={selectedBooking.providerAvatar}
+                      alt=""
+                      className="w-full h-full rounded-full object-cover"
+                    />
+                  ) : (
+                    <User className="w-7 h-7 text-nilin-coral" />
+                  )}
+                </div>
+                {/* Online/status indicator */}
+                <span className="absolute bottom-1 right-1 w-4 h-4 bg-green-400 rounded-full ring-2 ring-white" title="Available" />
               </div>
-              <div className="flex-1">
-                <h4 className="font-semibold text-nilin-charcoal">
+
+              <div className="flex-1 min-w-0">
+                <h4 className="font-bold text-nilin-charcoal text-lg leading-tight">
                   {selectedBooking.serviceName}
                 </h4>
-                <p className="text-sm text-nilin-warmGray">
+                <p className="text-sm text-nilin-warmGray mt-0.5">
                   with {selectedBooking.providerName}
                 </p>
               </div>
+
+              {/* Premium badge */}
+              <div className="px-3.5 py-1.5 bg-gradient-to-r from-nilin-coral/15 to-nilin-rose/10 rounded-full border border-nilin-coral/20">
+                <span className="text-xs font-semibold bg-gradient-to-r from-nilin-coral to-nilin-rose bg-clip-text text-transparent">Ready to review</span>
+              </div>
             </div>
 
-            {/* Rating */}
-            <div className="space-y-3">
-              <label className="block text-sm font-medium text-nilin-charcoal">
-                Your Rating <span className="text-red-500">*</span>
-              </label>
+            {/* Rating Section - Premium */}
+            <div className="space-y-4 p-5 bg-gradient-to-b from-nilin-cream/40 to-transparent rounded-2xl border border-nilin-border/50">
+              <div className="flex items-center justify-between">
+                <label className="block text-sm font-semibold text-nilin-charcoal">
+                  Your Rating <span className="text-red-500">*</span>
+                </label>
+                {rating > 0 && (
+                  <span className="text-xs text-nilin-coral font-medium flex items-center gap-1">
+                    <Star className="w-3.5 h-3.5 fill-current" />
+                    {rating}/5
+                  </span>
+                )}
+              </div>
               <StarRating value={rating} onChange={setRating} size="lg" />
-              {rating === 0 && (
-                <p className="text-xs text-nilin-warmGray">Tap a star to rate</p>
-              )}
             </div>
 
             {/* Title */}
             <div className="space-y-2">
-              <label className="block text-sm font-medium text-nilin-charcoal">
-                Review Title <span className="text-gray-400 font-normal">(optional)</span>
-              </label>
-              <input
-                type="text"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                placeholder="Summarize your experience..."
-                maxLength={100}
-                className="w-full px-4 py-3 rounded-xl border border-nilin-border focus:border-nilin-coral focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-colors"
-              />
-              <p className="text-xs text-nilin-warmGray text-right">{title.length}/100</p>
+              <div className="flex items-center justify-between">
+                <label className="block text-sm font-semibold text-nilin-charcoal">
+                  Review Title <span className="text-nilin-warmGray font-normal">(optional)</span>
+                </label>
+                <span className="text-xs text-nilin-warmGray">{title.length}/100</span>
+              </div>
+              <div className="relative">
+                <input
+                  type="text"
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  placeholder="Summarize your experience..."
+                  maxLength={100}
+                  className="w-full px-4 py-3.5 rounded-2xl border border-nilin-border bg-nilin-cream/20 focus:bg-white
+                    focus:border-nilin-coral focus:ring-4 focus:ring-nilin-coral/10 outline-none transition-all
+                    placeholder:text-nilin-warmGray/50 font-medium shadow-sm"
+                />
+              </div>
             </div>
 
             {/* Comment */}
             <div className="space-y-2">
-              <label className="block text-sm font-medium text-nilin-charcoal">
-                Your Review <span className="text-red-500">*</span>
-              </label>
-              <textarea
-                value={comment}
-                onChange={(e) => setComment(e.target.value)}
-                placeholder="Share your experience with this service. What did you like? What could be improved?"
-                rows={5}
-                maxLength={1000}
-                className={`w-full px-4 py-3 rounded-xl border resize-none focus:ring-2 focus:ring-nilin-coral/20 outline-none transition-colors ${
-                  comment.trim().length > 0 && comment.trim().length < 10
-                    ? 'border-amber-400 bg-amber-50'
-                    : 'border-nilin-border focus:border-nilin-coral'
-                }`}
-              />
+              <div className="flex items-center justify-between">
+                <label className="block text-sm font-semibold text-nilin-charcoal">
+                  Your Review <span className="text-red-500">*</span>
+                </label>
+                <span className={`text-xs ${comment.length >= 900 ? 'text-amber-600 font-semibold' : 'text-nilin-warmGray'}`}>
+                  {comment.length}/1000
+                </span>
+              </div>
+              <div className="relative">
+                <textarea
+                  value={comment}
+                  onChange={(e) => setComment(e.target.value)}
+                  placeholder="Share your experience with this service. What did you like? What could be improved?"
+                  rows={5}
+                  maxLength={1000}
+                  className={`
+                    w-full px-4 py-3.5 rounded-2xl border resize-none
+                    outline-none transition-all placeholder:text-nilin-warmGray/50 font-medium shadow-sm
+                    ${comment.trim().length > 0 && comment.trim().length < 10
+                      ? 'border-amber-400 bg-amber-50/50 focus:border-amber-400 focus:ring-4 focus:ring-amber-400/10'
+                      : 'border-nilin-border bg-nilin-cream/20 focus:bg-white focus:border-nilin-coral focus:ring-4 focus:ring-nilin-coral/10'
+                    }
+                  `}
+                />
+                {/* Character progress bar */}
+                <div className="absolute bottom-3 right-3 left-3 h-1 bg-nilin-border/30 rounded-full overflow-hidden">
+                  <div
+                    className={`
+                      h-full rounded-full transition-all duration-300
+                      ${comment.length >= 900 ? 'bg-amber-500' : comment.length >= 500 ? 'bg-nilin-coral/60' : 'bg-nilin-coral/40'}
+                    `}
+                    style={{ width: `${Math.min((comment.length / 1000) * 100, 100)}%` }}
+                  />
+                </div>
+              </div>
               <div className="flex items-center justify-between">
                 {comment.trim().length > 0 && comment.trim().length < 10 ? (
-                  <p className="text-xs text-amber-600">
-                    At least 10 characters required ({10 - comment.trim().length} more)
+                  <p className="text-xs text-amber-600 flex items-center gap-1.5 font-medium">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                    {10 - comment.trim().length} more characters needed
                   </p>
                 ) : (
-                  <span />
+                  <span className="text-xs text-nilin-warmGray/60">Be specific and detailed</span>
                 )}
-                <p className={`text-xs ${comment.length >= 900 ? 'text-amber-600' : 'text-nilin-warmGray'}`}>
-                  {comment.length}/1000
-                </p>
               </div>
             </div>
 
             {/* Error */}
             {error && (
-              <div className="p-4 bg-red-50 border border-red-200 rounded-xl flex items-center gap-3">
-                <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0" />
-                <p className="text-sm text-red-700">{error}</p>
+              <div className="p-4 bg-gradient-to-r from-red-50 to-red-50/50 border border-red-200 rounded-2xl flex items-center gap-3 shadow-sm">
+                <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
+                  <AlertCircle className="w-5 h-5 text-red-600" />
+                </div>
+                <p className="text-sm text-red-700 font-medium">{error}</p>
               </div>
             )}
 
-            {/* Note */}
-            <div className="p-4 bg-nilin-muted/50 rounded-xl">
-              <p className="text-xs text-nilin-warmGray">
-                <strong>Note:</strong> Your review will be submitted for admin approval and will appear on the provider's profile once approved. Reviews can be edited within 30 days of submission.
+            {/* Note - Premium styling */}
+            <div className="p-4 bg-gradient-to-r from-amber-50/80 via-amber-50/50 to-transparent rounded-2xl border border-amber-200/50 shadow-sm">
+              <p className="text-xs text-nilin-warmGray leading-relaxed">
+                <span className="font-semibold text-amber-700">Note:</span> Your review will be submitted for admin approval and will appear on the provider's profile once approved. Reviews can be edited within 30 days of submission.
               </p>
             </div>
           </div>
         )}
       </div>
 
-      {/* Footer */}
+      {/* Premium Footer with gradient accent */}
       {step === 'write' && (
-        <div className="p-6 border-t border-nilin-border">
+        <div className="p-5 border-t border-nilin-border bg-gradient-to-r from-transparent via-nilin-cream/40 to-transparent relative">
+          {/* Bottom accent line */}
+          <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-32 h-1 bg-gradient-to-r from-transparent via-nilin-rose/60 to-transparent rounded-t-full" />
           <div className="flex gap-3">
             <button
               onClick={handleBackToSelect}
-              className="flex-1 py-3 rounded-xl border border-nilin-border text-nilin-charcoal font-medium hover:bg-nilin-muted transition-colors"
+              className="flex-1 py-3.5 rounded-2xl border border-nilin-border/60 text-nilin-charcoal font-medium hover:bg-nilin-muted hover:border-nilin-border transition-all"
               disabled={isSubmitting}
             >
               Back
@@ -546,21 +652,23 @@ export const WriteReviewModal: React.FC<WriteReviewModalProps> = ({
             <button
               onClick={handleSubmit}
               disabled={!isComplete || isSubmitting}
-              className={`flex-1 py-3 rounded-xl font-medium flex items-center justify-center gap-2 transition-all ${
-                isComplete && !isSubmitting
-                  ? 'bg-gradient-to-r from-nilin-coral to-nilin-rose text-white hover:shadow-nilin-warm'
-                  : 'bg-gray-200 text-gray-500 cursor-not-allowed'
-              }`}
+              className={`
+                flex-1 py-3.5 rounded-2xl font-medium flex items-center justify-center gap-2 transition-all
+                ${isComplete && !isSubmitting
+                  ? 'bg-gradient-to-r from-nilin-coral to-nilin-rose text-white shadow-lg shadow-nilin-coral/25 hover:shadow-xl hover:shadow-nilin-coral/35 hover:-translate-y-0.5 active:translate-y-0'
+                  : 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                }
+              `}
             >
               {isSubmitting ? (
                 <>
                   <Loader2 className="w-5 h-5 animate-spin" />
-                  Submitting...
+                  <span>Submitting...</span>
                 </>
               ) : (
                 <>
                   <Star className="w-5 h-5" />
-                  Submit Review
+                  <span>Submit Review</span>
                 </>
               )}
             </button>

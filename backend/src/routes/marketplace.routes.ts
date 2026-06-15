@@ -1153,9 +1153,9 @@ router.get('/analytics/revenue', authenticate, requireRole('admin'), asyncHandle
  * @desc    Get analytics for specific provider
  * @access  Admin or Provider (own)
  */
-router.get('/analytics/provider/:providerId', authenticate, asyncHandler(async (req: Request, res: Response) => {
+router.get('/analytics/provider/:providerId([0-9a-fA-F]{24})', authenticate, asyncHandler(async (req: Request, res: Response) => {
   const { providerId } = req.params;
-  const user = req as any;
+  const user = req.user as any;
 
   // Check authorization
   if (user.role !== 'admin' && user._id.toString() !== providerId) {

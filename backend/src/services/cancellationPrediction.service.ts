@@ -834,6 +834,11 @@ export interface PreventionRecommendation {
   targetBookings: string[];
   message: string;
   estimatedImpact: number; // Percentage reduction in cancellations
+  confidence: number;
+}
+
+function clampConfidence(value: number): number {
+  return Math.min(99, Math.max(55, Math.round(value)));
 }
 
 export const getCancellationPreventionRecommendations = async (
@@ -844,12 +849,14 @@ export const getCancellationPreventionRecommendations = async (
 
   // High cancellation rate recommendations
   if (stats.cancellationRate > 15) {
+    const rateBoost = Math.min(20, (stats.cancellationRate - 15) * 1.5);
     recommendations.push({
       type: 'reminder',
       priority: 'high',
       targetBookings: stats.highRiskBookings.map(b => b.bookingId),
       message: 'Send reminder SMS 24 hours before appointment',
-      estimatedImpact: 15
+      estimatedImpact: 15,
+      confidence: clampConfidence(74 + rateBoost),
     });
 
     recommendations.push({
@@ -857,7 +864,8 @@ export const getCancellationPreventionRecommendations = async (
       priority: 'high',
       targetBookings: stats.highRiskBookings.map(b => b.bookingId),
       message: 'Request booking confirmation 2 hours before service time',
-      estimatedImpact: 20
+      estimatedImpact: 20,
+      confidence: clampConfidence(76 + rateBoost),
     });
   }
 
@@ -874,7 +882,8 @@ export const getCancellationPreventionRecommendations = async (
       priority: 'medium',
       targetBookings: [],
       message: 'Require prepayment or deposit for bookings within 48 hours',
-      estimatedImpact: 25
+      estimatedImpact: 25,
+      confidence: clampConfidence(70 + shortNoticeReasons.length * 4),
     });
   }
 
@@ -884,7 +893,8 @@ export const getCancellationPreventionRecommendations = async (
     priority: 'medium',
     targetBookings: [],
     message: 'Follow up with new customers after their first service to reduce future cancellations',
-    estimatedImpact: 10
+    estimatedImpact: 10,
+    confidence: clampConfidence(62 + Math.min(stats.totalBookings, 15)),
   });
 
   // Sort by priority and impact

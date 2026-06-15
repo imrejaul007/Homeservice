@@ -108,7 +108,7 @@ export class ProviderServicesPage extends BasePage {
 
 export class ProviderSchedulePage extends BasePage {
   constructor(page: Page) {
-    super(page, '/provider/schedule');
+    super(page, '/provider/calendar');
   }
 
   readonly weeklyCalendar = this.getByTestId('weekly-calendar');

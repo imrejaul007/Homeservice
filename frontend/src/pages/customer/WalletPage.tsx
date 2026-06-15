@@ -37,19 +37,27 @@ const WalletPage: React.FC = () => {
   const [referrerReward, setReferrerReward] = useState<number>(500);
 
   const transactions = useMemo<RecentTransaction[]>(() =>
-    wallet.transactions.slice(0, 5).map((t) => ({
-      id: t.id,
-      type: t.type,
-      amount: t.amount,
-      description: t.reason,
-      createdAt: t.createdAt,
-      icon: t.reason.toLowerCase().includes('bonus') || t.reason.toLowerCase().includes('refund')
-        ? 'gift'
-        : t.type === 'credit'
-          ? 'trending'
-          : 'card',
-    })),
+    (wallet.transactions ?? []).slice(0, 5).map((tx) => {
+      const reason = (tx.reason || '').toLowerCase();
+      const icon: RecentTransaction['icon'] =
+        reason.includes('bonus') || reason.includes('refund') || reason.includes('cashback')
+          ? 'gift'
+          : tx.type === 'credit'
+            ? 'trending'
+            : 'card';
+      return {
+        id: tx.id,
+        type: tx.type,
+        amount: tx.amount,
+        description: tx.reason || 'Transaction',
+        createdAt: tx.createdAt,
+        icon,
+      };
+    }),
   [wallet.transactions]);
+
+  // Wallet currency (defaults to AED if not provided) for consistent formatting
+  const walletCurrency = wallet.currency || 'AED';
 
   const fetchLoyaltyStatus = useCallback(async () => {
     setLoyaltyLoading(true);
@@ -62,7 +70,7 @@ const WalletPage: React.FC = () => {
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to load loyalty status';
       setLoyaltyError(errorMessage);
-      toast.error('Failed to load loyalty status');
+      // Surface inline only — the loyalty card already shows a retry UI.
     } finally {
       setLoyaltyLoading(false);
     }
@@ -109,21 +117,33 @@ const WalletPage: React.FC = () => {
   const formatTransactionTime = (dateStr: string): string => {
     try {
       const date = new Date(dateStr);
+      if (isNaN(date.getTime())) return t('wallet.tx_unknown_date');
+
       const now = new Date();
-      const diffMs = now.getTime() - date.getTime();
-      const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+      // Use calendar-day comparison (ignore time-of-day) to avoid midnight drift
+      const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+      const diffDays = Math.max(
+        0,
+        Math.round((startOfDay(now).getTime() - startOfDay(date).getTime()) / (1000 * 60 * 60 * 24))
+      );
+
+      const timeOfDay = date.toLocaleTimeString(undefined, {
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true,
+      });
 
       if (diffDays === 0) {
-        return `Today, ${date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}`;
+        return `Today, ${timeOfDay}`;
       } else if (diffDays === 1) {
-        return `Yesterday, ${date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}`;
-      } else if (diffDays < 7) {
+        return `Yesterday, ${timeOfDay}`;
+      } else if (diffDays <= 7) {
         return `${diffDays} days ago`;
       } else {
-        return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
       }
     } catch {
-      return 'Unknown';
+      return t('wallet.tx_unknown_date');
     }
   };
 
@@ -135,6 +155,8 @@ const WalletPage: React.FC = () => {
         return <CreditCard className="w-5 h-5 text-red-600" />;
       case 'gift':
         return <Gift className="w-5 h-5 text-amber-600" />;
+      default:
+        return <CreditCard className="w-5 h-5 text-nilin-warmGray" />;
     }
   };
 
@@ -191,8 +213,15 @@ const WalletPage: React.FC = () => {
             <div className="col-span-2 space-y-6">
               {/* Wallet Card */}
               <div className="bg-white rounded-2xl shadow-nilin overflow-hidden">
-                <div className="p-6 border-b border-gray-100">
+                <div className="p-6 border-b border-gray-100 flex items-center justify-between">
                   <h2 className="text-lg font-semibold text-nilin-charcoal">{t('wallet.balance_overview')}</h2>
+                  <button
+                    onClick={() => setShowAddMoney(true)}
+                    className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-nilin-coral to-nilin-rose text-white text-sm font-semibold rounded-xl hover:opacity-90 transition-opacity shadow-nilin-warm"
+                  >
+                    <Plus className="w-4 h-4" />
+                    {t('wallet.add_money')}
+                  </button>
                 </div>
                 <div className="p-6">
                   <WalletBalance
@@ -210,13 +239,13 @@ const WalletPage: React.FC = () => {
                   <h2 className="text-lg font-semibold text-nilin-charcoal">{t('wallet.quick_actions')}</h2>
                 </div>
                 <div className="p-6">
-                  <div className="grid grid-cols-4 gap-4">
+                  <div className="grid grid-cols-4 gap-3">
                     <button
                       onClick={() => setShowAddMoney(true)}
                       aria-label={t('payment.add_funds')}
-                      className="group bg-nilin-blush/30 hover:bg-nilin-blush/50 rounded-xl p-4 text-center transition-all"
+                      className="group flex flex-col items-center gap-3 p-4 rounded-xl bg-nilin-blush/30 hover:bg-nilin-blush/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral/40 transition-all"
                     >
-                      <div className="w-12 h-12 mx-auto rounded-full bg-nilin-coral flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
+                      <div className="w-12 h-12 rounded-2xl bg-nilin-coral flex items-center justify-center group-hover:scale-110 transition-transform">
                         <Plus className="w-6 h-6 text-white" />
                       </div>
                       <span className="text-sm font-medium text-nilin-charcoal">{t('wallet.add_money')}</span>
@@ -224,9 +253,9 @@ const WalletPage: React.FC = () => {
 
                     <Link
                       to="/customer/payment-methods"
-                      className="group bg-green-50/50 hover:bg-green-100/50 rounded-xl p-4 text-center transition-all"
+                      className="group flex flex-col items-center gap-3 p-4 rounded-xl bg-nilin-blush/30 hover:bg-nilin-blush/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral/40 transition-all"
                     >
-                      <div className="w-12 h-12 mx-auto rounded-full bg-green-500 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
+                      <div className="w-12 h-12 rounded-2xl bg-nilin-rose flex items-center justify-center group-hover:scale-110 transition-transform">
                         <CreditCard className="w-6 h-6 text-white" />
                       </div>
                       <span className="text-sm font-medium text-nilin-charcoal">{t('wallet.payment_methods')}</span>
@@ -234,9 +263,9 @@ const WalletPage: React.FC = () => {
 
                     <Link
                       to="/customer/transactions"
-                      className="group bg-purple-50/50 hover:bg-purple-100/50 rounded-xl p-4 text-center transition-all"
+                      className="group flex flex-col items-center gap-3 p-4 rounded-xl bg-nilin-blush/30 hover:bg-nilin-blush/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral/40 transition-all"
                     >
-                      <div className="w-12 h-12 mx-auto rounded-full bg-purple-500 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
+                      <div className="w-12 h-12 rounded-2xl bg-nilin-charcoal flex items-center justify-center group-hover:scale-110 transition-transform">
                         <History className="w-6 h-6 text-white" />
                       </div>
                       <span className="text-sm font-medium text-nilin-charcoal">{t('wallet.transactions')}</span>
@@ -244,9 +273,9 @@ const WalletPage: React.FC = () => {
 
                     <Link
                       to="/customer/rewards"
-                      className="group bg-amber-50/50 hover:bg-amber-100/50 rounded-xl p-4 text-center transition-all"
+                      className="group flex flex-col items-center gap-3 p-4 rounded-xl bg-nilin-blush/30 hover:bg-nilin-blush/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral/40 transition-all"
                     >
-                      <div className="w-12 h-12 mx-auto rounded-full bg-amber-500 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
+                      <div className="w-12 h-12 rounded-2xl bg-nilin-warning flex items-center justify-center group-hover:scale-110 transition-transform">
                         <Gift className="w-6 h-6 text-white" />
                       </div>
                       <span className="text-sm font-medium text-nilin-charcoal">{t('wallet.rewards')}</span>
@@ -259,51 +288,61 @@ const WalletPage: React.FC = () => {
               <div className="bg-white rounded-2xl shadow-nilin overflow-hidden">
                 <div className="p-6 border-b border-gray-100 flex items-center justify-between">
                   <h2 className="text-lg font-semibold text-nilin-charcoal">{t('wallet.recent_activity')}</h2>
-                  <Link to="/customer/transactions" className="text-sm text-nilin-coral hover:underline flex items-center gap-1">
+                  <Link
+                    to="/customer/transactions"
+                    className="text-sm text-nilin-coral hover:underline flex items-center gap-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral/40 rounded-md px-1"
+                  >
                     {t('wallet.view_all')} <ChevronRight className="w-4 h-4" />
                   </Link>
                 </div>
                 <div className="p-6">
                   {walletLoading ? (
-                    <div className="flex items-center justify-center py-8" role="status" aria-live="polite">
+                    <div className="flex flex-col items-center justify-center py-10 gap-3" role="status" aria-live="polite">
                       <Loader2 className="w-6 h-6 text-nilin-coral animate-spin" />
+                      <p className="text-xs text-nilin-warmGray">{t('common.loading') || 'Loading…'}</p>
                     </div>
                   ) : walletError ? (
-                    <div className="text-center py-4">
-                      <p className="text-sm text-red-500 mb-2">{walletError}</p>
+                    <div className="text-center py-6">
+                      <AlertCircle className="w-8 h-8 text-nilin-error mx-auto mb-2" />
+                      <p className="text-sm text-nilin-charcoal mb-2">{walletError}</p>
                       <button
                         onClick={() => refresh()}
-                        className="text-sm text-nilin-coral hover:underline"
+                        className="text-sm text-nilin-coral hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral/40 rounded-md px-2 py-1"
                       >
                         {t('common.retry')}
                       </button>
                     </div>
                   ) : transactions.length === 0 ? (
-                    <div className="text-center py-8">
-                      <p className="text-sm text-nilin-warmGray">{t('wallet.no_transactions')}</p>
-                      <p className="text-xs text-nilin-warmGray mt-1">{t('wallet.no_transactions_hint')}</p>
+                    <div className="flex flex-col items-center justify-center py-10 text-center">
+                      <div className="w-16 h-16 rounded-full bg-nilin-blush/50 flex items-center justify-center mb-4">
+                        <History className="w-7 h-7 text-nilin-coral" />
+                      </div>
+                      <p className="text-sm font-medium text-nilin-charcoal mb-1">{t('wallet.no_transactions')}</p>
+                      <p className="text-xs text-nilin-warmGray max-w-[260px]">{t('wallet.no_transactions_hint')}</p>
                     </div>
                   ) : (
-                    <div className="space-y-4">
+                    <ul className="divide-y divide-gray-50 -my-2">
                       {transactions.map((transaction) => (
-                        <div key={transaction.id} className="flex items-center justify-between py-3 border-b border-gray-50 last:border-0">
-                          <div className="flex items-center gap-3">
-                            <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
+                        <li key={transaction.id} className="flex items-center justify-between gap-3 py-3">
+                          <div className="flex items-center gap-3 min-w-0 flex-1">
+                            <div className={`flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center ${
                               transaction.type === 'credit' ? 'bg-green-100' : 'bg-red-100'
                             }`}>
                               {getTransactionIcon(transaction.icon)}
                             </div>
-                            <div>
-                              <p className="font-medium text-nilin-charcoal">{transaction.description}</p>
+                            <div className="min-w-0">
+                              <p className="font-medium text-nilin-charcoal truncate">{transaction.description}</p>
                               <p className="text-xs text-nilin-warmGray">{formatTransactionTime(transaction.createdAt)}</p>
                             </div>
                           </div>
-                          <span className={`font-semibold ${transaction.type === 'credit' ? 'text-green-600' : 'text-red-600'}`}>
-                            {transaction.type === 'credit' ? '+' : '-'}{formatCurrency(transaction.amount, 'AED')}
+                          <span className={`flex-shrink-0 font-semibold tabular-nums ${
+                            transaction.type === 'credit' ? 'text-nilin-success' : 'text-nilin-error'
+                          }`}>
+                            {transaction.type === 'credit' ? '+' : '−'}{formatCurrency(transaction.amount, walletCurrency)}
                           </span>
-                        </div>
+                        </li>
                       ))}
-                    </div>
+                    </ul>
                   )}
                 </div>
               </div>
@@ -345,52 +384,55 @@ const WalletPage: React.FC = () => {
                   </div>
                 </div>
                 {loyaltyLoading ? (
-                  <div className="flex items-center justify-center py-6">
+                  <div className="flex items-center justify-center py-6" role="status" aria-live="polite">
                     <Loader2 className="w-6 h-6 text-nilin-coral animate-spin" />
                   </div>
                 ) : loyaltyError ? (
                   <div className="text-center py-4">
-                    <AlertCircle className="w-5 h-5 text-red-500 mx-auto mb-2" />
-                    <p className="text-xs text-red-500">{loyaltyError}</p>
+                    <AlertCircle className="w-5 h-5 text-nilin-error mx-auto mb-2" />
+                    <p className="text-xs text-nilin-warmGray mb-2">{loyaltyError}</p>
                     <button
                       onClick={fetchLoyaltyStatus}
-                      className="text-xs text-nilin-coral hover:underline mt-1"
+                      className="text-xs text-nilin-coral hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral/40 rounded-md px-2 py-1"
                     >
                       {t('wallet.try_again')}
                     </button>
                   </div>
                 ) : loyaltyStatus ? (
                   <>
-                    <div className="flex items-center justify-between mb-4">
-                      <div>
-                        <p className="text-3xl font-bold text-nilin-charcoal">
-                          {loyaltyStatus.coins?.toLocaleString() || 0}
-                        </p>
-                        <p className="text-xs text-nilin-warmGray">{t('wallet.points_available')}</p>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-sm font-medium text-amber-500 capitalize">
-                          {t('wallet.member', { tier: loyaltyStatus.tier || 'Bronze' })}
-                        </p>
-                        {loyaltyStatus.nextTier && (
-                          <p className="text-xs text-nilin-warmGray">
+                    <div className="flex items-baseline justify-between mb-1">
+                      <p className="text-3xl font-bold text-nilin-charcoal tabular-nums">
+                        {(loyaltyStatus.coins ?? 0).toLocaleString()}
+                      </p>
+                      <p className="text-sm font-semibold text-amber-500 capitalize">
+                        {loyaltyStatus.tier
+                          ? t('wallet.member', { tier: loyaltyStatus.tier })
+                          : t('wallet.member', { tier: 'bronze' })}
+                      </p>
+                    </div>
+                    <p className="text-xs text-nilin-warmGray mb-4">{t('wallet.points_available')}</p>
+                    {loyaltyStatus.nextTier && (
+                      <div className="mb-3">
+                        <div className="flex items-center justify-between text-xs text-nilin-warmGray mb-1.5">
+                          <span>
                             {t('wallet.points_to_tier', {
-                              points: loyaltyStatus.pointsToNextTier?.toLocaleString() || '0',
+                              points: (loyaltyStatus.pointsToNextTier ?? 0).toLocaleString(),
                               tier: loyaltyStatus.nextTier,
                             })}
-                          </p>
-                        )}
+                          </span>
+                          <span className="tabular-nums">{Math.min(loyaltyStatus.progressToNext ?? 0, 100)}%</span>
+                        </div>
+                        <div className="h-2 bg-nilin-blush rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-gradient-to-r from-amber-400 to-amber-500 rounded-full transition-all duration-500"
+                            style={{ width: `${Math.min(loyaltyStatus.progressToNext ?? 0, 100)}%` }}
+                          />
+                        </div>
                       </div>
-                    </div>
-                    <div className="h-2 bg-nilin-blush rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-gradient-to-r from-amber-400 to-amber-500 rounded-full transition-all duration-500"
-                        style={{ width: `${Math.min(loyaltyStatus.progressToNext || 0, 100)}%` }}
-                      />
-                    </div>
+                    )}
                     <Link
                       to="/customer/rewards"
-                      className="block mt-4 text-center text-sm text-nilin-coral font-medium hover:underline"
+                      className="block mt-4 text-center text-sm text-nilin-coral font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral/40 rounded-md py-1"
                     >
                       {t('wallet.view_rewards_details')}
                     </Link>
@@ -402,15 +444,11 @@ const WalletPage: React.FC = () => {
                 )}
               </div>
 
-              {/* Cashback */}
-              <div className="bg-white rounded-2xl p-6 shadow-nilin">
-                <CashbackTracking compact onRedeemSuccess={handleCashbackRedeem} />
-              </div>
+              {/* Cashback — compact component renders its own card; no extra wrapper shadow */}
+              <CashbackTracking compact onRedeemSuccess={handleCashbackRedeem} />
 
-              {/* Auto Top-up */}
-              <div className="bg-white rounded-2xl p-6 shadow-nilin">
-                <AutoTopup compact onConfigChange={refresh} />
-              </div>
+              {/* Auto Top-up — compact component renders its own card; no extra wrapper shadow */}
+              <AutoTopup compact onConfigChange={refresh} />
 
               {/* Help Card */}
               <div className="bg-white rounded-2xl p-6 shadow-nilin">
@@ -438,61 +476,62 @@ const WalletPage: React.FC = () => {
           <div className="grid grid-cols-2 gap-3">
             <button
               onClick={() => setShowAddMoney(true)}
-              className="bg-white rounded-xl p-4 flex flex-col items-center gap-2 shadow-sm hover:shadow-md transition-shadow"
+              aria-label={t('payment.add_funds')}
+              className="bg-white rounded-2xl p-4 flex flex-col items-center gap-2 shadow-nilin-sm hover:shadow-nilin transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral/40"
             >
-              <div className="w-12 h-12 rounded-full bg-blue-100 flex items-center justify-center">
-                <Plus className="w-6 h-6 text-blue-600" />
+              <div className="w-12 h-12 rounded-2xl bg-nilin-coral flex items-center justify-center">
+                <Plus className="w-6 h-6 text-white" />
               </div>
-              <span className="text-sm font-medium">{t('wallet.add_money')}</span>
+              <span className="text-sm font-medium text-nilin-charcoal">{t('wallet.add_money')}</span>
             </button>
 
             <Link
               to="/customer/payment-methods"
-              className="bg-white rounded-xl p-4 flex flex-col items-center gap-2 shadow-sm hover:shadow-md transition-shadow"
+              className="bg-white rounded-2xl p-4 flex flex-col items-center gap-2 shadow-nilin-sm hover:shadow-nilin transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral/40"
             >
-              <div className="w-12 h-12 rounded-full bg-green-100 flex items-center justify-center">
-                <CreditCard className="w-6 h-6 text-green-600" />
+              <div className="w-12 h-12 rounded-2xl bg-nilin-rose flex items-center justify-center">
+                <CreditCard className="w-6 h-6 text-white" />
               </div>
-              <span className="text-sm font-medium">{t('wallet.payment_methods')}</span>
+              <span className="text-sm font-medium text-nilin-charcoal">{t('wallet.payment_methods')}</span>
             </Link>
 
             <Link
               to="/customer/transactions"
-              className="bg-white rounded-xl p-4 flex flex-col items-center gap-2 shadow-sm hover:shadow-md transition-shadow"
+              className="bg-white rounded-2xl p-4 flex flex-col items-center gap-2 shadow-nilin-sm hover:shadow-nilin transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral/40"
             >
-              <div className="w-12 h-12 rounded-full bg-purple-100 flex items-center justify-center">
-                <History className="w-6 h-6 text-purple-600" />
+              <div className="w-12 h-12 rounded-2xl bg-nilin-charcoal flex items-center justify-center">
+                <History className="w-6 h-6 text-white" />
               </div>
-              <span className="text-sm font-medium">{t('wallet.transaction_history')}</span>
+              <span className="text-sm font-medium text-nilin-charcoal">{t('wallet.transaction_history')}</span>
             </Link>
 
             <Link
               to="/customer/rewards"
-              className="bg-white rounded-xl p-4 flex flex-col items-center gap-2 shadow-sm hover:shadow-md transition-shadow"
+              className="bg-white rounded-2xl p-4 flex flex-col items-center gap-2 shadow-nilin-sm hover:shadow-nilin transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral/40"
             >
-              <div className="w-12 h-12 rounded-full bg-yellow-100 flex items-center justify-center">
-                <Gift className="w-6 h-6 text-yellow-600" />
+              <div className="w-12 h-12 rounded-2xl bg-nilin-warning flex items-center justify-center">
+                <Gift className="w-6 h-6 text-white" />
               </div>
-              <span className="text-sm font-medium">{t('wallet.rewards_offers')}</span>
+              <span className="text-sm font-medium text-nilin-charcoal">{t('wallet.rewards_offers')}</span>
             </Link>
           </div>
         </div>
 
         {/* Promotions Banner */}
         <div className="p-4">
-          <div className="bg-gradient-to-r from-nilin-coral to-nilin-rose rounded-2xl p-4 text-white">
+          <div className="bg-gradient-to-br from-nilin-coral to-nilin-rose rounded-2xl p-4 text-white shadow-nilin-warm">
             <div className="flex items-center gap-3 mb-3">
               <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center">
                 <Users className="w-5 h-5" />
               </div>
               <div>
                 <h3 className="font-bold">{t('wallet.invite_earn')}</h3>
-                <p className="text-white/80 text-sm">{t('wallet.earn_coins_per_friend', { coins: referrerReward.toLocaleString() })}</p>
+                <p className="text-white/85 text-sm">{t('wallet.earn_coins_per_friend', { coins: referrerReward.toLocaleString() })}</p>
               </div>
             </div>
             <Link
               to="/customer/profile?tab=referral"
-              className="block w-full py-2 bg-white text-nilin-coral text-center font-semibold rounded-lg text-sm"
+              className="block w-full py-2.5 bg-white text-nilin-coral text-center font-semibold rounded-xl text-sm hover:bg-white/95 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
             >
               {t('wallet.invite_friends')}
             </Link>
@@ -501,33 +540,47 @@ const WalletPage: React.FC = () => {
 
         {/* Mobile: Recent Activity */}
         <div className="p-4">
-          <div className="bg-white rounded-2xl shadow-sm overflow-hidden">
+          <div className="bg-white rounded-2xl shadow-nilin-sm overflow-hidden">
             <div className="p-4 border-b border-gray-100 flex items-center justify-between">
               <h2 className="font-semibold text-nilin-charcoal">{t('wallet.recent_activity')}</h2>
-              <Link to="/customer/transactions" className="text-sm text-nilin-coral hover:underline flex items-center gap-1">
+              <Link
+                to="/customer/transactions"
+                className="text-sm text-nilin-coral hover:underline flex items-center gap-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral/40 rounded-md px-1"
+              >
                 {t('wallet.view_all')} <ChevronRight className="w-4 h-4" />
               </Link>
             </div>
             <div className="p-4">
               {walletLoading ? (
-                <div className="flex items-center justify-center py-6" role="status" aria-live="polite">
-                  <Loader2 className="w-6 h-6 text-nilin-coral animate-spin" />
+                <div className="flex items-center justify-center py-6 gap-2" role="status" aria-live="polite">
+                  <Loader2 className="w-5 h-5 text-nilin-coral animate-spin" />
+                  <span className="text-xs text-nilin-warmGray">{t('common.loading') || 'Loading…'}</span>
                 </div>
               ) : walletError ? (
                 <div className="text-center py-4">
-                  <p className="text-sm text-red-500 mb-2">{walletError}</p>
-                  <button onClick={() => refresh()} className="text-sm text-nilin-coral hover:underline">
+                  <AlertCircle className="w-6 h-6 text-nilin-error mx-auto mb-2" />
+                  <p className="text-sm text-nilin-charcoal mb-2">{walletError}</p>
+                  <button
+                    onClick={() => refresh()}
+                    className="text-sm text-nilin-coral hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral/40 rounded-md px-2 py-1"
+                  >
                     {t('common.retry')}
                   </button>
                 </div>
               ) : transactions.length === 0 ? (
-                <p className="text-sm text-nilin-warmGray text-center py-4">{t('wallet.no_transactions')}</p>
+                <div className="flex flex-col items-center justify-center py-8 text-center">
+                  <div className="w-14 h-14 rounded-full bg-nilin-blush/50 flex items-center justify-center mb-3">
+                    <History className="w-6 h-6 text-nilin-coral" />
+                  </div>
+                  <p className="text-sm font-medium text-nilin-charcoal mb-1">{t('wallet.no_transactions')}</p>
+                  <p className="text-xs text-nilin-warmGray max-w-[220px]">{t('wallet.no_transactions_hint')}</p>
+                </div>
               ) : (
-                <div className="space-y-3">
-                  {transactions.slice(0, 5).map((transaction) => (
-                    <div key={transaction.id} className="flex items-center justify-between py-2 border-b border-gray-50 last:border-0">
-                      <div className="flex items-center gap-3">
-                        <div className={`w-9 h-9 rounded-full flex items-center justify-center ${
+                <ul className="divide-y divide-gray-50 -my-1">
+                  {transactions.map((transaction) => (
+                    <li key={transaction.id} className="flex items-center justify-between gap-3 py-2.5">
+                      <div className="flex items-center gap-3 min-w-0 flex-1">
+                        <div className={`flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center ${
                           transaction.type === 'credit' ? 'bg-green-100' : 'bg-red-100'
                         }`}>
                           {getTransactionIcon(transaction.icon)}
@@ -537,12 +590,14 @@ const WalletPage: React.FC = () => {
                           <p className="text-xs text-nilin-warmGray">{formatTransactionTime(transaction.createdAt)}</p>
                         </div>
                       </div>
-                      <span className={`text-sm font-semibold ${transaction.type === 'credit' ? 'text-green-600' : 'text-red-600'}`}>
-                        {transaction.type === 'credit' ? '+' : '-'}{formatCurrency(transaction.amount, 'AED')}
+                      <span className={`flex-shrink-0 text-sm font-semibold tabular-nums ${
+                        transaction.type === 'credit' ? 'text-nilin-success' : 'text-nilin-error'
+                      }`}>
+                        {transaction.type === 'credit' ? '+' : '−'}{formatCurrency(transaction.amount, walletCurrency)}
                       </span>
-                    </div>
+                    </li>
                   ))}
-                </div>
+                </ul>
               )}
             </div>
           </div>
@@ -550,7 +605,7 @@ const WalletPage: React.FC = () => {
 
         {/* Mobile: Loyalty Points */}
         <div className="p-4">
-          <div className="bg-white rounded-2xl p-4 shadow-sm">
+          <div className="bg-white rounded-2xl p-4 shadow-nilin-sm">
             <div className="flex items-center gap-3 mb-3">
               <div className="w-10 h-10 rounded-xl bg-nilin-blush flex items-center justify-center">
                 <Sparkles className="w-5 h-5 text-nilin-coral" />
@@ -561,12 +616,21 @@ const WalletPage: React.FC = () => {
               </div>
             </div>
             {loyaltyLoading ? (
-              <Loader2 className="w-5 h-5 text-nilin-coral animate-spin mx-auto" />
+              <div className="flex items-center justify-center py-3" role="status" aria-live="polite">
+                <Loader2 className="w-5 h-5 text-nilin-coral animate-spin" />
+              </div>
             ) : loyaltyStatus ? (
               <>
-                <p className="text-2xl font-bold text-nilin-charcoal">{loyaltyStatus.coins?.toLocaleString() || 0}</p>
-                <p className="text-xs text-amber-500 capitalize">{t('wallet.member', { tier: loyaltyStatus.tier || 'Bronze' })}</p>
-                <Link to="/customer/rewards" className="block mt-3 text-sm text-nilin-coral font-medium hover:underline">
+                <p className="text-2xl font-bold text-nilin-charcoal tabular-nums">
+                  {(loyaltyStatus.coins ?? 0).toLocaleString()}
+                </p>
+                <p className="text-xs text-amber-500 capitalize">
+                  {t('wallet.member', { tier: loyaltyStatus.tier || 'bronze' })}
+                </p>
+                <Link
+                  to="/customer/rewards"
+                  className="block mt-3 text-sm text-nilin-coral font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral/40 rounded-md py-1"
+                >
                   {t('wallet.view_rewards_details')}
                 </Link>
               </>
@@ -576,26 +640,25 @@ const WalletPage: React.FC = () => {
           </div>
         </div>
 
-        {/* Mobile: Cashback */}
-        <div className="p-4">
-          <div className="bg-white rounded-2xl p-4 shadow-sm">
-            <CashbackTracking compact onRedeemSuccess={handleCashbackRedeem} />
-          </div>
+        {/* Mobile: Cashback — compact component renders its own card */}
+        <div className="px-4">
+          <CashbackTracking compact onRedeemSuccess={handleCashbackRedeem} />
         </div>
 
-        {/* Mobile: Auto Top-up */}
-        <div className="p-4">
-          <div className="bg-white rounded-2xl p-4 shadow-sm">
-            <AutoTopup compact onConfigChange={refresh} />
-          </div>
+        {/* Mobile: Auto Top-up — compact component renders its own card */}
+        <div className="px-4">
+          <AutoTopup compact onConfigChange={refresh} />
         </div>
 
         {/* Mobile: Help */}
         <div className="p-4 pb-8">
-          <div className="bg-white rounded-2xl p-4 shadow-sm">
+          <div className="bg-white rounded-2xl p-4 shadow-nilin-sm">
             <h3 className="font-semibold text-nilin-charcoal mb-2">{t('wallet.need_help')}</h3>
             <p className="text-sm text-nilin-warmGray mb-3">{t('wallet.need_help_desc')}</p>
-            <Link to="/help" className="text-sm text-nilin-coral font-medium hover:underline">
+            <Link
+              to="/help"
+              className="text-sm text-nilin-coral font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral/40 rounded-md py-1"
+            >
               {t('wallet.contact_support')}
             </Link>
           </div>

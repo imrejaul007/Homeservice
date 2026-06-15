@@ -1,4 +1,6 @@
 import { api } from './api';
+import type { TrendResult } from './providerApi';
+import type { ProviderInsightsAnalytics } from './providerApi';
 
 // ============================================
 // Churn Prediction Types
@@ -577,6 +579,81 @@ export interface ExecutiveDashboardData {
 }
 
 // ============================================
+// Provider Unified Dashboard Types
+// ============================================
+
+export type ProviderDashboardRevenueMode = 'net' | 'gross';
+export type ProviderDashboardPeriod = '7d' | '30d' | '90d';
+
+export interface ProviderDashboardDataQuality {
+  trackingSince: string | null;
+  level: 'full' | 'bookings_only';
+}
+
+export interface ProviderExperimentResult {
+  experimentId: string;
+  variant: string;
+  exposures: number;
+  bookings: number;
+  revenue: number;
+  conversionRate: number;
+}
+
+export interface ProviderDashboardOverview {
+  totalViews: number;
+  totalViewsAllTime?: number;
+  viewsTrend: TrendResult;
+  profileViews: number;
+  profileViewsTrend: TrendResult;
+  bookingRequests: number;
+  bookingRequestsTrend: TrendResult;
+  conversionRate: number;
+  conversionRateTrend: TrendResult;
+  conversionRateConfirmed?: number;
+  confirmedBookingRate?: number;
+  confirmedRateTrend?: TrendResult;
+  confirmedBookings?: number;
+}
+
+export interface ProviderDashboardResponse {
+  period: ProviderDashboardPeriod;
+  revenue: ProviderDashboardRevenueMode;
+  city?: string | null;
+  overview: ProviderDashboardOverview;
+  earnings: ProviderInsightsAnalytics['earnings'] & {
+    grossEarnings?: { thisMonth: number; lastMonth: number };
+  };
+  bookings: ProviderInsightsAnalytics['bookings'] & {
+    confirmed?: number;
+  };
+  ratings: ProviderInsightsAnalytics['ratings'];
+  topServices: ProviderInsightsAnalytics['topServices'];
+  weeklyData: ProviderInsightsAnalytics['weeklyData'];
+  timeSeries: ProviderInsightsAnalytics['timeSeries'];
+  timeSeriesPrevious?: ProviderInsightsAnalytics['timeSeriesPrevious'];
+  funnel: ProviderConversionFunnel | null;
+  cancellationSnapshot?: Record<string, unknown> | null;
+  responseTime: ProviderResponseTimeMetrics | null;
+  ltv: ProviderCustomerLtv | null;
+  geographic: ProviderGeographicDemand | null;
+  forecast: ProviderRevenueForecast | null;
+  bookingSources: ProviderBookingSourceAttribution | null;
+  anomalyAlerts: ProviderAnomalyAlert[];
+  serviceFunnel: ServiceAnalyticsMetrics[];
+  experiments: ProviderExperimentResult[];
+  dataQuality: ProviderDashboardDataQuality;
+  meta?: {
+    metricDefinitions?: Record<string, { label: string; description: string; formula?: string }>;
+    generatedAt?: string;
+  };
+}
+
+export interface GetProviderDashboardOptions {
+  revenue?: ProviderDashboardRevenueMode;
+  city?: string;
+}
+
+// ============================================
 // Analytics API Service
 // ============================================
 
@@ -711,27 +788,159 @@ export const analyticsApi = {
     return response.data;
   },
 
-  // Provider Travel Metrics
-  getProviderTravelMetrics: async (providerId: string): Promise<ProviderTravelMetrics> => {
-    const response = await api.get(`/analytics/provider/${providerId}/travel`);
+  // Provider Travel Metrics (auth-scoped; providerId optional for admin override)
+  getProviderTravelMetrics: async (
+    _providerId?: string,
+    period: string = '30d'
+  ): Promise<ProviderTravelMetrics> => {
+    const response = await api.get('/analytics/provider/travel', {
+      params: { period },
+    });
     return response.data.data;
   },
 
-  // Service Profitability
-  getServiceProfitability: async (providerId: string): Promise<ServiceProfitabilityData> => {
-    const response = await api.get(`/analytics/provider/${providerId}/profitability`);
+  // Service Profitability (auth-scoped)
+  getServiceProfitability: async (
+    _providerId?: string,
+    period: string = '90d'
+  ): Promise<ServiceProfitabilityData> => {
+    const response = await api.get('/analytics/provider/profitability', {
+      params: { period },
+    });
+    return mapServiceProfitabilityResponse(response.data.data);
+  },
+
+  // Competitive Position (auth-scoped)
+  getCompetitivePosition: async (_providerId?: string): Promise<CompetitivePositionData> => {
+    const response = await api.get('/analytics/provider/competitive-position');
+    return mapCompetitivePositionResponse(response.data.data);
+  },
+
+  // ROAS Metrics (auth-scoped)
+  getROASMetrics: async (
+    _providerId?: string,
+    period: string = '30d'
+  ): Promise<ROASMetricsData> => {
+    const response = await api.get('/analytics/provider/roas', {
+      params: { period },
+    });
     return response.data.data;
   },
 
-  // Competitive Position
-  getCompetitivePosition: async (providerId: string): Promise<CompetitivePositionData> => {
-    const response = await api.get(`/analytics/provider/${providerId}/competitive`);
+  // Repeat Customer Rate (auth-scoped)
+  getRepeatCustomerRate: async (
+    _providerId?: string,
+    period: string = '90d'
+  ): Promise<RepeatCustomerMetricsData> => {
+    const response = await api.get('/analytics/provider/repeat-customers', {
+      params: { period },
+    });
     return response.data.data;
   },
 
-  // ROAS Metrics
-  getROASMetrics: async (providerId: string): Promise<ROASMetricsData> => {
-    const response = await api.get(`/analytics/provider/${providerId}/roas`);
+  // Peak Hours Revenue (auth-scoped)
+  getPeakHoursRevenue: async (
+    _providerId?: string,
+    period: string = '30d'
+  ): Promise<PeakHoursMetricsData> => {
+    const response = await api.get('/analytics/provider/peak-hours', {
+      params: { period },
+    });
+    return response.data.data;
+  },
+
+  getProviderConversionFunnel: async (
+    period: string = '30d',
+  ): Promise<ProviderConversionFunnel> => {
+    const response = await api.get('/analytics/provider/conversion-funnel', {
+      params: { period },
+    });
+    return response.data.data;
+  },
+
+  getProviderResponseTime: async (
+    period: string = '30d',
+  ): Promise<ProviderResponseTimeMetrics> => {
+    const response = await api.get('/analytics/provider/response-time', {
+      params: { period },
+    });
+    return response.data.data;
+  },
+
+  getProviderCustomerLtv: async (
+    period: string = '30d',
+  ): Promise<ProviderCustomerLtv> => {
+    const response = await api.get('/analytics/provider/customer-ltv', {
+      params: { period },
+    });
+    return response.data.data;
+  },
+
+  getProviderGeographicDemand: async (
+    period: string = '30d',
+  ): Promise<ProviderGeographicDemand> => {
+    const response = await api.get('/analytics/provider/geographic-demand', {
+      params: { period },
+    });
+    return response.data.data;
+  },
+
+  getProviderRevenueForecast: async (
+    period: string = '30d',
+  ): Promise<ProviderRevenueForecast> => {
+    const response = await api.get('/analytics/provider/revenue-forecast', {
+      params: { period },
+    });
+    return response.data.data;
+  },
+
+  getProviderBookingSourceAttribution: async (
+    period: string = '30d',
+  ): Promise<ProviderBookingSourceAttribution> => {
+    const response = await api.get('/analytics/provider/booking-source-attribution', {
+      params: { period },
+    });
+    return response.data.data;
+  },
+
+  getProviderAnomalyAlerts: async (
+    period: string = '30d',
+  ): Promise<ProviderAnomalyAlert[]> => {
+    const response = await api.get('/analytics/provider/anomaly-alerts', {
+      params: { period },
+    });
+    return response.data.data;
+  },
+
+  getProviderDashboard: async (
+    period: ProviderDashboardPeriod = '30d',
+    options: GetProviderDashboardOptions = {},
+  ): Promise<ProviderDashboardResponse> => {
+    const response = await api.get('/analytics/provider/dashboard', {
+      params: {
+        period,
+        revenue: options.revenue ?? 'net',
+        ...(options.city ? { city: options.city } : {}),
+      },
+      timeout: 90000,
+    });
+    return response.data.data;
+  },
+
+  getProviderServicesAnalytics: async (
+    period: string = '30d',
+    limit: number = 5,
+  ): Promise<ServiceAnalyticsMetrics[]> => {
+    const endDate = new Date();
+    const days = period === '7d' ? 7 : period === '90d' ? 90 : 30;
+    const startDate = new Date(endDate.getTime() - days * 24 * 60 * 60 * 1000);
+    const response = await api.get('/analytics/provider/services', {
+      params: {
+        startDate: startDate.toISOString(),
+        endDate: endDate.toISOString(),
+        limit,
+      },
+    });
     return response.data.data;
   },
 
@@ -755,6 +964,18 @@ export const analyticsApi = {
 // ============================================
 // Provider Travel Metrics Types
 // ============================================
+
+export interface ConversionFunnelStage {
+  id: string;
+  label: string;
+  count: number;
+  rateFromPrevious: number | null;
+}
+
+export interface ProviderConversionFunnel {
+  stages: ConversionFunnelStage[];
+  overallConversionRate: number;
+}
 
 export interface TravelData {
   date: string;
@@ -874,6 +1095,213 @@ export interface CompetitivePositionData {
   stats: PositionStats;
 }
 
+/** Backend GET /analytics/provider/competitive-position payload */
+interface CompetitivePositionApiPayload {
+  providerId?: string;
+  overallRank?: number;
+  totalProviders?: number;
+  percentile?: number;
+  metrics?: Array<{
+    metric: string;
+    rank: number;
+    percentile: number;
+    change?: number;
+  }>;
+  comparison?: {
+    rating?: number;
+    avgRating?: number;
+    top10Rating?: number;
+    responseTime?: number;
+    avgResponseTime?: number;
+    completionRate?: number;
+    avgCompletionRate?: number;
+  };
+  suggestions?: SuggestionData[];
+  reviews?: number;
+  marketShare?: number;
+  trend?: number;
+}
+
+/** Backend GET /analytics/provider/profitability payload */
+interface ServiceProfitabilityApiPayload {
+  services?: Array<{
+    serviceId: string;
+    serviceName: string;
+    categoryName?: string;
+    totalRevenue?: number;
+    totalBookings?: number;
+    avgRevenue?: number;
+  }>;
+  totalRevenue?: number;
+  totalBookings?: number;
+  topPerformingService?: string;
+  lowestPerformingService?: string;
+}
+
+const ESTIMATED_COST_RATIO = 0.3;
+
+function mapCompetitivePositionResponse(
+  raw: CompetitivePositionApiPayload | CompetitivePositionData | null | undefined
+): CompetitivePositionData {
+  if (!raw) {
+    return {
+      rankingData: [],
+      comparisonData: [],
+      radarData: [],
+      suggestions: [],
+      stats: {
+        overallRank: 0,
+        totalProviders: 0,
+        percentile: 0,
+        trend: 0,
+        marketShare: 0,
+        rating: 0,
+        reviews: 0,
+      },
+    };
+  }
+
+  // Check if it's already transformed data (has rankingData)
+  if ('rankingData' in raw) {
+    return raw as CompetitivePositionData;
+  }
+
+  // It's the API payload form - cast to access its properties
+  const apiPayload = raw as CompetitivePositionApiPayload;
+
+  const totalProviders = apiPayload.totalProviders ?? 0;
+  const comparison = apiPayload.comparison ?? {};
+  const rating = comparison.rating ?? 0;
+  const avgRating = comparison.avgRating ?? 0;
+  const top10Rating = comparison.top10Rating ?? 5;
+  const completionRate = comparison.completionRate ?? 0;
+  const avgCompletionRate = comparison.avgCompletionRate ?? 0;
+  const volumePercentile =
+    apiPayload.metrics?.find((m) => m.metric === 'Volume')?.percentile ?? apiPayload.percentile ?? 0;
+
+  const rankingData: RankingData[] = (apiPayload.metrics ?? []).map((m) => ({
+    metric: m.metric,
+    yourRank: m.rank,
+    totalProviders,
+    percentile: m.percentile,
+    change: m.change ?? 0,
+  }));
+
+  const comparisonData: ComparisonData[] = [
+    {
+      category: 'Rating',
+      you: rating,
+      average: avgRating,
+      top10: top10Rating,
+      top1: 5,
+    },
+    {
+      category: 'Completion %',
+      you: completionRate,
+      average: avgCompletionRate,
+      top10: 100,
+      top1: 100,
+    },
+  ];
+
+  const radarData: RadarData[] = [
+    { metric: 'Rating', value: Math.min(100, Math.round((rating / 5) * 100)), max: 100 },
+    { metric: 'Volume', value: Math.min(100, volumePercentile), max: 100 },
+    { metric: 'Completion', value: Math.min(100, completionRate), max: 100 },
+    {
+      metric: 'Response',
+      value: comparison.avgResponseTime
+        ? Math.min(100, Math.round(100 - comparison.avgResponseTime))
+        : 50,
+      max: 100,
+    },
+    { metric: 'Quality', value: Math.min(100, Math.round((rating / 5) * 100)), max: 100 },
+  ];
+
+  return {
+    rankingData,
+    comparisonData,
+    radarData,
+    suggestions: apiPayload.suggestions ?? [],
+    stats: {
+      overallRank: apiPayload.overallRank ?? 0,
+      totalProviders,
+      percentile: apiPayload.percentile ?? 0,
+      trend: apiPayload.trend ?? 0,
+      marketShare: apiPayload.marketShare ?? 0,
+      rating,
+      reviews: apiPayload.reviews ?? 0,
+    },
+  };
+}
+
+function mapServiceProfitabilityResponse(
+  raw: ServiceProfitabilityApiPayload | ServiceProfitabilityData | null | undefined
+): ServiceProfitabilityData {
+  if (!raw) {
+    return { services: [], stats: emptyProfitabilityStats() };
+  }
+
+  // Check if it's already transformed data (has stats with profit info)
+  if ('stats' in raw && raw.stats && 'revenue' in (raw.stats as object)) {
+    return raw as ServiceProfitabilityData;
+  }
+
+  // It's the API payload form - cast to access its properties
+  const apiPayload = raw as ServiceProfitabilityApiPayload;
+
+  const services: ServiceData[] = (apiPayload.services ?? []).map((s) => {
+    const revenue = s.totalRevenue ?? 0;
+    const costs = Math.round(revenue * ESTIMATED_COST_RATIO);
+    const profit = revenue - costs;
+    const margin = revenue > 0 ? Math.round((profit / revenue) * 100) : 0;
+
+    return {
+      serviceId: s.serviceId,
+      serviceName: s.serviceName,
+      revenue,
+      costs,
+      profit,
+      margin,
+      bookings: s.totalBookings ?? 0,
+      avgPrice: s.avgRevenue ?? 0,
+      trend: 0,
+      category: s.categoryName ?? 'Unknown',
+    };
+  });
+
+  const totalRevenue = apiPayload.totalRevenue ?? services.reduce((sum, s) => sum + s.revenue, 0);
+  const totalCosts = services.reduce((sum, s) => sum + s.costs, 0);
+  const totalProfit = totalRevenue - totalCosts;
+  const averageMargin = totalRevenue > 0 ? Math.round((totalProfit / totalRevenue) * 100) : 0;
+
+  return {
+    services,
+    stats: {
+      totalRevenue,
+      totalCosts,
+      totalProfit,
+      averageMargin,
+      topPerformer: apiPayload.topPerformingService ?? services[0]?.serviceName ?? 'N/A',
+      worstPerformer:
+        apiPayload.lowestPerformingService ?? services[services.length - 1]?.serviceName ?? 'N/A',
+      potentialSavings: 0,
+    },
+  };
+}
+
+function emptyProfitabilityStats(): ProfitabilityStats {
+  return {
+    totalRevenue: 0,
+    totalCosts: 0,
+    totalProfit: 0,
+    averageMargin: 0,
+    topPerformer: 'N/A',
+    worstPerformer: 'N/A',
+    potentialSavings: 0,
+  };
+}
+
 // ============================================
 // ROAS Types
 // ============================================
@@ -913,6 +1341,166 @@ export interface ROASMetricsData {
   roasData: ROASData[];
   stats: ROASStats;
   campaigns: CampaignData[];
+}
+
+export interface PeakHoursMetricsData {
+  providerId: string;
+  hourlyData: Array<{
+    hour: number;
+    revenue: number;
+    bookings: number;
+    avgDuration: number;
+    demand: 'low' | 'medium' | 'high' | 'peak';
+  }>;
+  peakHour: number;
+  slowHour: number;
+  totalRevenue: number;
+  totalBookings: number;
+  avgBookingValue: number;
+  potentialRevenue: number;
+}
+
+export interface RepeatCustomerTrendPoint {
+  month: string;
+  newCustomers: number;
+  repeatCustomers: number;
+  repeatRate: number;
+}
+
+export interface RepeatCustomerMetricsData {
+  providerId: string;
+  repeatRate: number;
+  totalCustomers: number;
+  repeatCustomers: number;
+  newCustomers: number;
+  avgTimeToRepeat?: number;
+  trend?: number;
+  trendData?: RepeatCustomerTrendPoint[];
+  monthlyTrend?: RepeatCustomerTrendPoint[];
+  cohortData: Array<{
+    cohort: string;
+    month1: number;
+    month2: number;
+    month3: number;
+    month6: number;
+  }>;
+  retentionFactors?: Array<{
+    factor: string;
+    impact: number;
+  }>;
+}
+
+export interface ProviderResponseTimeMetrics {
+  providerId: string;
+  period: string;
+  avgResponseTimeMinutes: number;
+  medianResponseTimeMinutes: number;
+  p95ResponseTimeMinutes: number;
+  sampleSize: number;
+  targetMinutes: number;
+  compliant: boolean;
+  profileAvgResponseTimeMinutes: number;
+  trend: 'improving' | 'stable' | 'declining';
+}
+
+export interface ProviderCustomerLtv {
+  providerId: string;
+  period: string;
+  totalCustomers: number;
+  avgRevenuePerCustomer: number;
+  totalLTV: number;
+  avgBookingsPerCustomer: number;
+  topCustomers: Array<{
+    customerId: string;
+    totalSpent: number;
+    bookingCount: number;
+  }>;
+}
+
+export interface ProviderGeographicDemand {
+  providerId: string;
+  period: string;
+  locations: Array<{
+    city: string;
+    emirate: string;
+    bookings: number;
+    revenue: number;
+    avgBookingValue: number;
+    share: number;
+  }>;
+  totalBookings: number;
+  totalRevenue: number;
+}
+
+export interface ProviderRevenueForecast {
+  providerId: string;
+  period: string;
+  historicalDaily: Array<{ date: string; revenue: number }>;
+  forecast7d: Array<{
+    date: string;
+    predicted: number;
+    lowerBound: number;
+    upperBound: number;
+  }>;
+  forecast30d: Array<{
+    date: string;
+    predicted: number;
+    lowerBound: number;
+    upperBound: number;
+  }>;
+  projectedRevenue7d: number;
+  projectedRevenue30d: number;
+  trend: 'increasing' | 'stable' | 'decreasing';
+}
+
+export type BookingAttributionSource =
+  | 'organic'
+  | 'search'
+  | 'profile'
+  | 'ad'
+  | 'direct'
+  | 'repeat';
+
+export interface ProviderBookingSourceAttribution {
+  providerId: string;
+  period: string;
+  startDate: string;
+  endDate: string;
+  totalBookings: number;
+  totalCompletedBookings: number;
+  totalRevenue: number;
+  bySource: Array<{
+    source: BookingAttributionSource;
+    bookings: number;
+    completedBookings: number;
+    revenue: number;
+  }>;
+}
+
+export interface ProviderAnomalyAlert {
+  id: string;
+  severity: 'info' | 'warning' | 'critical';
+  title: string;
+  message: string;
+  metric?: string;
+  detectedAt: string;
+}
+
+export interface ServiceAnalyticsMetrics {
+  serviceId: string;
+  serviceName: string;
+  category: string;
+  totalBookings: number;
+  totalRevenue: number;
+  averageBookingValue: number;
+  completedBookings: number;
+  cancelledBookings: number;
+  completionRate: number;
+  cancellationRate: number;
+  views: number;
+  clicks: number;
+  conversionRate: number;
+  popularityScore: number;
 }
 
 // ============================================

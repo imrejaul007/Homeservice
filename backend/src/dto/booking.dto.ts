@@ -30,8 +30,18 @@ export interface AddOnDTO {
   description?: string;
 }
 
+export type BookingAttributionSourceDTO =
+  | 'organic'
+  | 'search'
+  | 'profile'
+  | 'ad'
+  | 'direct'
+  | 'repeat';
+
 export interface BookingMetadataDTO {
-  bookingSource?: string;
+  bookingSource?: BookingAttributionSourceDTO | 'recommendation';
+  adCampaignId?: string;
+  referrer?: string;
   deviceType?: string;
   sessionId?: string;
   idempotencyKey?: string;
@@ -98,6 +108,8 @@ export interface BookingFiltersDTO {
   category?: string;
   /** Completed bookings without a customer review */
   reviewable?: boolean;
+  /** Filter by service location city/emirate */
+  city?: string;
 }
 
 export interface PaginationDTO {

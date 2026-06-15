@@ -43,6 +43,7 @@ const sizeStyles = {
   md: 'max-w-md',
   lg: 'max-w-lg',
   xl: 'max-w-xl',
+  '2xl': 'max-w-3xl',
 } as const;
 
 // =============================================================================
@@ -55,7 +56,7 @@ const ModalOverlay = React.forwardRef<HTMLDivElement, { className?: string; chil
       ref={forwardedRef}
       className={cn(
         // Glass backdrop with blur
-        'fixed inset-0 z-50',
+        'fixed inset-0 z-[100]',
         'bg-nilin-charcoal/40',
         'backdrop-blur-sm',
         '-webkit-backdrop-blur-sm',
@@ -85,12 +86,13 @@ const ModalContent = React.forwardRef<HTMLDivElement, ModalContentProps>(
   ({ children, className, size = 'md' }, forwardedRef) => (
     <DialogPrimitive.Content
       ref={forwardedRef}
+      aria-modal="true"
       className={cn(
         // Positioning
-        'fixed left-[50%] top-[50%] z-50 translate-x-[-50%] translate-y-[-50%]',
+        'fixed left-[50%] top-[50%] z-[100] translate-x-[-50%] translate-y-[-50%]',
         // Glass effect background
         'bg-white',
-        'border border-[#E8E4E0]',
+        'border border-nilin-border',
         // NILIN rounded corners
         'rounded-nilin-lg',
         // Warm shadow - NILIN signature
@@ -103,6 +105,8 @@ const ModalContent = React.forwardRef<HTMLDivElement, ModalContentProps>(
         'overflow-hidden',
         // Focus outline
         'focus:outline-none',
+        // Focus-within ring
+        'focus-within:ring-2 focus-within:ring-nilin-coral/20',
         // Scale animation on open/close
         'data-[state=closed]:animate-modal-scale-out',
         'data-[state=open]:animate-modal-scale-in',
@@ -162,7 +166,7 @@ interface ModalDescriptionProps {
 
 const ModalDescription: React.FC<ModalDescriptionProps> = ({ children, className }) => (
   <DialogPrimitive.Description
-    className={cn('mt-1 text-sm text-nilin-warmGray', className)}
+    className={cn('mt-1 text-sm text-nilin-charcoal/70', className)}
   >
     {children}
   </DialogPrimitive.Description>
@@ -178,7 +182,7 @@ interface ModalBodyProps {
 }
 
 const ModalBody: React.FC<ModalBodyProps> = ({ children, className }) => (
-  <div className={cn('px-6 pb-4 overflow-y-auto max-h-[60vh]', className)}>
+  <div className={cn('px-6 pb-4 overflow-y-auto max-h-[60vh] scroll-smooth', className)}>
     {children}
   </div>
 );
@@ -195,7 +199,7 @@ interface ModalFooterProps {
 const ModalFooter: React.FC<ModalFooterProps> = ({ children, className }) => (
   <div
     className={cn(
-      'px-6 py-4 border-t border-[#E8E4E0]',
+      'px-6 py-4 border-t border-nilin-border',
       'flex items-center justify-end gap-3',
       'bg-nilin-cream/50',
       className
@@ -222,12 +226,14 @@ const ModalClose: React.FC<{ className?: string }> = ({ className }) => (
       'flex items-center justify-center',
       // Disable default button styles
       'rounded-full',
+      // Focus visible styles
+      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2',
       // Custom className
       className
     )}
     aria-label="Close modal"
   >
-    <X className="h-4 w-4" />
+    <X className="h-4 w-4" aria-hidden="true" />
   </DialogPrimitive.Close>
 );
 

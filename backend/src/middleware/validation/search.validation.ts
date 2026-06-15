@@ -46,7 +46,8 @@ const searchQuerySchema = Joi.object({
     'distance',
     'newest'
   ).default('popularity'),
-  page: Joi.number().integer().min(1).max(100).default(1),
+  // Note: page max(20) ensures page * limit <= 1000 (Meilisearch's max results)
+  page: Joi.number().integer().min(1).max(20).default(1),
   limit: Joi.number().integer().min(1).max(50).default(20),
   providerId: Joi.string().pattern(/^[0-9a-fA-F]{24}$/).optional(),
   tier: Joi.string().valid('elite', 'premium', 'standard').optional(),

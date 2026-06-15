@@ -5,12 +5,14 @@ import Footer from '../components/layout/Footer';
 import ServiceCard from '../components/customer/ServiceCard';
 import type { Service } from '../components/customer/ServiceCard';
 import ProviderCard from '../components/service/ProviderCard';
+import LazyMapView from '../components/search/LazyMapView';
+import ComparisonBar from '../components/search/ComparisonBar';
 import axios from 'axios';
 import { searchApi, SearchApiError } from '../services/searchApi';
 import type { SearchProvider, SavedSearch } from '../types/search';
 import {
   SlidersHorizontal, X, ChevronLeft, ChevronRight, Search, Star,
-  LayoutGrid, User, Bookmark, BookmarkCheck, AlertCircle, RefreshCw,
+  LayoutGrid, User, Bookmark, BookmarkCheck, AlertCircle, RefreshCw, Map as MapIcon,
 } from 'lucide-react';
 import { useCategories } from '../hooks/useCategories';
 import { PageErrorBoundary } from '../components/common/PageErrorBoundary';
@@ -61,6 +63,7 @@ const SearchPage: React.FC = () => {
   const [retryCount, setRetryCount] = useState(0);
   const [filterSheetPrice, setFilterSheetPrice] = useState<[number, number]>([0, 10000]);
   const [filterSheetRating, setFilterSheetRating] = useState(0);
+  const [isMapCollapsed, setIsMapCollapsed] = useState(false);
 
   const { categories: apiCategories } = useCategories();
 
@@ -71,6 +74,8 @@ const SearchPage: React.FC = () => {
   const providerParam = searchParams.get('provider') || '';
   const viewMode = (searchParams.get('view') === 'providers' || !!providerParam)
     ? 'providers' as const
+    : searchParams.get('view') === 'map'
+    ? 'map' as const
     : 'services' as const;
   const sortBy = searchParams.get('sortBy') || 'popularity';
   const minRating = Number(searchParams.get('minRating') || '0');
@@ -165,7 +170,9 @@ const SearchPage: React.FC = () => {
           ...(advancedFilters.city && { city: advancedFilters.city }),
         };
 
-        if (viewMode === 'services') {
+        if (viewMode === 'services' || viewMode === 'map') {
+          // FIX: Map view needs service results (with location) to render markers,
+          // so it shares the services fetch path — not the providers path.
           const response = await searchApi.searchServices(
             { ...commonParams, providerId: providerParam || undefined },
             abortController.signal
@@ -246,8 +253,12 @@ const SearchPage: React.FC = () => {
     }
   };
 
-  const handleViewModeChange = (mode: 'services' | 'providers') => {
-    updateParams({ view: mode === 'providers' ? 'providers' : null });
+  const handleViewModeChange = (mode: 'services' | 'providers' | 'map') => {
+    // Reset map collapse when switching view modes
+    if (mode !== 'map') {
+      setIsMapCollapsed(false);
+    }
+    updateParams({ view: mode === 'services' ? null : mode });
   };
 
   const handleSortChange = (value: string) => {
@@ -258,7 +269,6 @@ const SearchPage: React.FC = () => {
     const currentSearch: SavedSearch = {
       id: Date.now().toString(),
       query,
-      viewMode,
       filters: {
         category: categoryParam || undefined,
         subcategory: subcategoryParam || undefined,
@@ -267,12 +277,11 @@ const SearchPage: React.FC = () => {
         minRating: effectiveMinRating > 0 ? effectiveMinRating : undefined,
         sortBy: sortBy !== 'popularity' ? sortBy : undefined,
       },
-      createdAt: new Date().toISOString(),
+      createdAt: Date.now(),
     };
 
     const exists = savedSearches.some(
       s => s.query === query &&
-        s.viewMode === viewMode &&
         s.filters.category === currentSearch.filters.category &&
         s.filters.subcategory === currentSearch.filters.subcategory
     );
@@ -293,7 +302,7 @@ const SearchPage: React.FC = () => {
       q: saved.query || null,
       category: saved.filters.category || null,
       subcategory: saved.filters.subcategory || null,
-      view: saved.viewMode === 'providers' ? 'providers' : null,
+      view: null, // Reset to default view mode
       sortBy: saved.filters.sortBy || null,
       minRating: saved.filters.minRating ? String(saved.filters.minRating) : null,
       minPrice: saved.filters.minPrice ? String(saved.filters.minPrice) : null,
@@ -413,10 +422,11 @@ const SearchPage: React.FC = () => {
                 <button
                   key={cat.value}
                   onClick={() => handleCategorySelect(cat.value)}
+                  aria-pressed={categoryParam === cat.value}
                   className={`px-4 py-2 rounded-full border text-sm font-medium whitespace-nowrap flex-shrink-0 transition-all ${
                     categoryParam === cat.value
                       ? 'bg-nilin-primary border-nilin-primary text-white'
-                      : 'bg-white border-gray-200 text-gray-700 hover:border-nilin-primary/50'
+                      : 'bg-white border-gray-200 text-gray-700 hover:border-nilin-primary/50 hover:bg-nilin-blush/30'
                   }`}
                 >
                   {cat.label}
@@ -428,14 +438,32 @@ const SearchPage: React.FC = () => {
           {/* Controls Row */}
           <div className="flex items-center justify-between mb-5 gap-3 flex-wrap">
             <div className="flex items-center gap-2 flex-wrap">
+              {/* Inline Search Input - allows modifying search without navigation */}
+              {query && (
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-nilin-warmGray" />
+                  <input
+                    type="text"
+                    value={query}
+                    onChange={(e) => updateParams({ q: e.target.value || null })}
+                    placeholder="Search..."
+                    className="pl-9 pr-4 py-2 w-48 md:w-64 text-sm bg-white border border-nilin-border rounded-nilin
+                      focus:outline-none focus:ring-2 focus:ring-nilin-primary/20 focus:border-nilin-primary
+                      placeholder:text-nilin-lightGray"
+                    aria-label="Search query"
+                  />
+                </div>
+              )}
+
               {/* View Toggle */}
-              <div className="flex items-center bg-gray-100 rounded-lg p-1">
+              <div className="flex items-center bg-nilin-muted rounded-nilin p-1">
                 <button
                   onClick={() => handleViewModeChange('services')}
+                  aria-pressed={viewMode === 'services'}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
                     viewMode === 'services'
                       ? 'bg-white text-nilin-primary shadow-sm'
-                      : 'text-gray-600 hover:text-gray-900'
+                      : 'text-nilin-warmGray hover:text-nilin-charcoal'
                   }`}
                 >
                   <LayoutGrid className="w-4 h-4" />
@@ -443,14 +471,27 @@ const SearchPage: React.FC = () => {
                 </button>
                 <button
                   onClick={() => handleViewModeChange('providers')}
+                  aria-pressed={viewMode === 'providers'}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
                     viewMode === 'providers'
                       ? 'bg-white text-nilin-primary shadow-sm'
-                      : 'text-gray-600 hover:text-gray-900'
+                      : 'text-nilin-warmGray hover:text-nilin-charcoal'
                   }`}
                 >
                   <User className="w-4 h-4" />
                   Providers
+                </button>
+                <button
+                  onClick={() => handleViewModeChange('map')}
+                  aria-pressed={viewMode === 'map'}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
+                    viewMode === 'map'
+                      ? 'bg-white text-nilin-primary shadow-sm'
+                      : 'text-nilin-warmGray hover:text-nilin-charcoal'
+                  }`}
+                >
+                  <MapIcon className="w-4 h-4" />
+                  Map
                 </button>
               </div>
 
@@ -560,46 +601,66 @@ const SearchPage: React.FC = () => {
 
           {/* Results */}
           {loading ? (
+            // FIX: Use pagination.limit instead of hardcoded 6 to match actual results
             <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-              {[1, 2, 3, 4, 5, 6].map((n) => (
+              {Array.from({ length: pagination.limit }).map((_, n) => (
                 <CardSkeleton key={n} />
               ))}
             </div>
           ) : !error && hasResults ? (
             <>
-              {viewMode === 'services' ? (
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                  {services.map((service) => (
-                    <ServiceCard
+              {viewMode === 'map' ? (
+                // Map view - shows services as markers on OpenStreetMap
+                <LazyMapView
+                  services={services}
+                  onViewDetails={(service) => navigate(`/services/${service._id}`)}
+                  onBookNow={handleBookNow}
+                  isMobileCollapsed={isMapCollapsed}
+                  onToggleCollapse={() => setIsMapCollapsed(!isMapCollapsed)}
+                />
+              ) : viewMode === 'services' ? (
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-4 md:gap-6">
+                  {services.map((service, index) => (
+                    <div
                       key={service._id}
-                      service={service}
-                      variant="default"
-                      onBookNow={handleBookNow}
-                      showBookNow={true}
-                    />
+                      className="animate-fade-in-up opacity-0"
+                      style={{ animationDelay: `${index * 50}ms` }}
+                    >
+                      <ServiceCard
+                        service={service}
+                        variant="default"
+                        onBookNow={handleBookNow}
+                        showBookNow={true}
+                      />
+                    </div>
                   ))}
                 </div>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {providers.map((provider) => (
-                    <ProviderCard
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6">
+                  {providers.map((provider, index) => (
+                    <div
                       key={provider._id}
-                      provider={{
-                        id: provider._id,
-                        firstName: provider.firstName,
-                        lastName: provider.lastName,
-                        businessName: provider.businessName,
-                        profilePhoto: provider.profilePhoto,
-                        tier: provider.tier,
-                        rating: provider.rating,
-                        reviewCount: provider.reviewCount,
-                        isVerified: provider.isVerified,
-                        startingPrice: provider.startingPrice ?? undefined,
-                        maxPrice: provider.maxPrice ?? undefined,
-                      }}
-                      onClick={() => navigate(`/provider/${provider._id}`)}
-                      onViewProfile={() => navigate(`/provider/${provider._id}`)}
-                    />
+                      className="animate-fade-in-up opacity-0"
+                      style={{ animationDelay: `${index * 50}ms` }}
+                    >
+                      <ProviderCard
+                        provider={{
+                          id: provider._id,
+                          firstName: provider.firstName,
+                          lastName: provider.lastName,
+                          businessName: provider.businessName,
+                          profilePhoto: provider.profilePhoto,
+                          tier: provider.tier,
+                          rating: provider.rating,
+                          reviewCount: provider.reviewCount,
+                          isVerified: provider.isVerified,
+                          startingPrice: provider.startingPrice ?? undefined,
+                          maxPrice: provider.maxPrice ?? undefined,
+                        }}
+                        onClick={() => navigate(`/provider/${provider._id}`)}
+                        onViewProfile={() => navigate(`/provider/${provider._id}`)}
+                      />
+                    </div>
                   ))}
                 </div>
               )}
@@ -609,9 +670,10 @@ const SearchPage: React.FC = () => {
                   <button
                     onClick={() => handlePageChange(page - 1)}
                     disabled={page === 1}
-                    className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                    aria-label="Previous page"
+                    className="p-2 rounded-nilin border border-nilin-border hover:bg-nilin-blush/30 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
                   >
-                    <ChevronLeft className="w-5 h-5 text-gray-600" />
+                    <ChevronLeft className="w-5 h-5 text-nilin-warmGray" />
                   </button>
                   {getPageNumbers().map((pageNum, idx) => (
                     pageNum === '...' ? (
@@ -620,10 +682,11 @@ const SearchPage: React.FC = () => {
                       <button
                         key={pageNum}
                         onClick={() => handlePageChange(pageNum as number)}
-                        className={`min-w-[40px] h-10 rounded-lg text-sm font-medium transition-all ${
+                        aria-current={page === pageNum ? 'page' : undefined}
+                        className={`min-w-[40px] h-10 rounded-nilin text-sm font-medium transition-all ${
                           page === pageNum
-                            ? 'bg-nilin-primary text-white'
-                            : 'border border-gray-200 text-gray-700 hover:bg-gray-50'
+                            ? 'bg-nilin-primary text-white shadow-sm'
+                            : 'border border-nilin-border text-nilin-charcoal hover:bg-nilin-blush/30'
                         }`}
                       >
                         {pageNum}
@@ -633,9 +696,10 @@ const SearchPage: React.FC = () => {
                   <button
                     onClick={() => handlePageChange(page + 1)}
                     disabled={page === pagination.pages}
-                    className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                    aria-label="Next page"
+                    className="p-2 rounded-nilin border border-nilin-border hover:bg-nilin-blush/30 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
                   >
-                    <ChevronRight className="w-5 h-5 text-gray-600" />
+                    <ChevronRight className="w-5 h-5 text-nilin-warmGray" />
                   </button>
                 </div>
               )}
@@ -646,10 +710,12 @@ const SearchPage: React.FC = () => {
                 <Search className="h-10 w-10 text-nilin-coral" />
               </div>
               <h3 className="text-xl font-bold text-nilin-charcoal mb-2">
-                {viewMode === 'services' ? 'No services found' : 'No providers found'}
+                {query
+                  ? `No results for "${query}"`
+                  : viewMode === 'services' ? 'No services found' : 'No providers found'}
               </h3>
               <p className="text-nilin-warmGray mb-6 text-sm">
-                Try adjusting your search or browse categories above.
+                {query ? 'Try adjusting your search terms or filters.' : 'Try adjusting your filters or browse categories above.'}
               </p>
               {hasActiveFilters() && (
                 <button
@@ -760,6 +826,9 @@ const SearchPage: React.FC = () => {
           maxPriceLimit={maxPriceLimit}
         />
       </PageErrorBoundary>
+
+      {/* Floating comparison bar - appears when 2+ services selected */}
+      <ComparisonBar />
 
       <Footer />
     </div>

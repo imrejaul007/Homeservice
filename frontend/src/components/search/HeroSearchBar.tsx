@@ -35,7 +35,8 @@ const HeroSearchBar: React.FC<HeroSearchBarProps> = ({
   const [query, setQuery] = useState('');
   const [showLocationDropdown, setShowLocationDropdown] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [isFocused, setIsFocused] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(-1);
   const [locationQuery, setLocationQuery] = useState('');
 
@@ -111,8 +112,14 @@ const HeroSearchBar: React.FC<HeroSearchBarProps> = ({
     if (query.trim()) {
       addToSearchHistory(query.trim());
       setFilters({ q: query.trim(), page: 1 });
-      navigate(`/search?q=${encodeURIComponent(query.trim())}`);
-      setShowSuggestions(false);
+      setIsSearching(true);
+
+      // Simulate search delay for animation
+      setTimeout(() => {
+        navigate(`/search?q=${encodeURIComponent(query.trim())}`);
+        setShowSuggestions(false);
+        setIsSearching(false);
+      }, 600);
     }
   }, [query, navigate, setFilters, addToSearchHistory]);
 
@@ -160,14 +167,19 @@ const HeroSearchBar: React.FC<HeroSearchBarProps> = ({
 
   return (
     <div className={cn('relative w-full', className)}>
-      {/* Main Search Bar Container */}
+      {/* Main Search Bar Container - Reference Design: Outer shadow + inset shadow */}
       <div
         className={cn(
           'relative flex items-center transition-all duration-300',
-          isExpanded && 'ring-2 ring-nilin-coral/40',
+          // Reference design: Outer container with soft shadow
           isMinimal
             ? 'bg-white rounded-nilin shadow-nilin border border-nilin-border/30'
-            : 'bg-white rounded-2xl shadow-2xl border border-nilin-border/20'
+            : 'bg-white rounded-nilin-lg border border-nilin-border/20',
+          // Outer shadow effect (like reference design)
+          !isMinimal && 'shadow-[9px_9px_16px_rgba(189,189,189,0.6),-9px_-9px_16px_rgba(255,255,255,0.5)]',
+          isMinimal && 'shadow-nilin',
+          // Focus ring
+          isFocused && 'ring-2 ring-nilin-coral/40'
         )}
       >
         {/* Location Selector */}
@@ -224,63 +236,121 @@ const HeroSearchBar: React.FC<HeroSearchBarProps> = ({
           )}
         </div>
 
-        {/* Search Input */}
-        <div className="flex-1 relative">
-          <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-nilin-warmGray" />
-          <input
-            ref={inputRef}
-            type="text"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={handleKeyDown}
-            onFocus={() => {
-              setIsExpanded(true);
-              if (query.length >= 2 || recentSearches.length > 0) {
-                setShowSuggestions(true);
-              }
-            }}
-            onBlur={() => setIsExpanded(false)}
-            placeholder={placeholder}
-            className={cn(
-              'w-full border-none outline-none bg-transparent text-nilin-charcoal placeholder:text-nilin-warmGray',
-              isMinimal ? 'pl-11 pr-4 py-3 text-sm' : 'pl-12 pr-4 py-4 text-base'
-            )}
-          />
-          {query && (
-            <button
-              onClick={clearQuery}
-              className="absolute right-4 top-1/2 -translate-y-1/2 p-1 rounded-full transition-colors text-nilin-warmGray hover:text-nilin-charcoal hover:bg-nilin-blush/50"
-            >
-              <X className="w-4 h-4" />
-            </button>
+        {/* Search Input - Reference Design: Inset shadow effect */}
+        <div
+          className={cn(
+            'flex-1 relative',
+            // Reference design: Inset shadow effect
+            !isMinimal && 'mx-2',
+            isMinimal && 'flex-1'
           )}
+        >
+          {/* Reference Design: Inner shadow container */}
+          <div
+            className={cn(
+              'relative flex items-center h-full',
+              !isMinimal && 'rounded-nilin',
+              !isMinimal && 'shadow-[inset_10px_10px_15px_-10px_#c3c3c3,inset_-10px_-10px_15px_-10px_#ffffff]',
+              !isMinimal && 'bg-nilin-cream/50'
+            )}
+          >
+            {/* Reference Design: Morphing Search Icon (Magnifying Glass → Dot → Spinner) */}
+            <div
+              className={cn(
+                'relative flex items-center justify-center w-10 h-10 flex-shrink-0',
+                isSearching && 'animate-spin'
+              )}
+            >
+              {/* Circle part of magnifying glass */}
+              <div
+                className={cn(
+                  'absolute w-[18px] h-[18px] rounded-full border-[3px] transition-all duration-500 ease-out',
+                  'top-1/2 left-2 -translate-y-1/2',
+                  // Default: coral border (magnifying glass lens)
+                  'border-nilin-coral bg-transparent',
+                  // Focused: fills with coral, border expands (becomes dot)
+                  isFocused && '!w-[14px] !h-[14px] !bg-nilin-coral !border-[10px] !border-nilin-blush !left-2.5',
+                  // Searching: spinner effect
+                  isSearching && '!w-[18px] !h-[18px] !border-nilin-coral !bg-transparent animate-pulse'
+                )}
+              />
+              {/* Handle part of magnifying glass */}
+              <div
+                className={cn(
+                  'absolute w-[4px] h-[14px] rounded-[4px] transition-all duration-500 ease-out',
+                  'top-1/2 left-[26px]',
+                  '-translate-y-[calc(50%-4px)] rotate-45 origin-top-left',
+                  // Default: coral handle
+                  'bg-nilin-coral',
+                  // Focused: shrinks and fades (handle disappears)
+                  isFocused && '!w-[4px] !h-[4px] !bg-nilin-blush !opacity-0',
+                  // Searching: spinner effect
+                  isSearching && '!w-[4px] !h-[14px] !bg-nilin-coral !opacity-100'
+                )}
+              />
+            </div>
+
+            <input
+              ref={inputRef}
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={handleKeyDown}
+              onFocus={() => {
+                setIsFocused(true);
+                if (query.length >= 2 || recentSearches.length > 0) {
+                  setShowSuggestions(true);
+                }
+              }}
+              onBlur={() => setIsFocused(false)}
+              placeholder={placeholder}
+              className={cn(
+                'w-full border-none outline-none bg-transparent text-nilin-charcoal placeholder:text-nilin-warmGray',
+                isMinimal ? 'pl-2 pr-4 py-3 text-sm' : 'pl-2 pr-4 py-4 text-base'
+              )}
+            />
+            {query && !isSearching && (
+              <button
+                onClick={clearQuery}
+                className="absolute right-4 top-1/2 -translate-y-1/2 p-1 rounded-full transition-colors text-nilin-warmGray hover:text-nilin-charcoal hover:bg-nilin-blush/50"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
         </div>
 
-        {/* Search Button */}
+        {/* Search Button - Reference Design: Highlighted coral */}
         <button
           onClick={handleSearch}
+          disabled={isSearching}
           className={cn(
             'flex items-center justify-center transition-all',
             isMinimal
               ? 'm-1.5 px-5 py-2 bg-nilin-coral text-white rounded-lg font-medium text-sm hover:bg-nilin-rose'
-              : 'm-1.5 px-8 py-3 bg-nilin-coral text-white rounded-xl font-semibold hover:bg-nilin-rose shadow-lg'
+              : 'm-1.5 px-8 py-3 bg-nilin-coral text-white rounded-nilin font-semibold hover:bg-nilin-rose shadow-lg',
+            isSearching && 'opacity-70 cursor-wait'
           )}
         >
-          Search
+          {isSearching ? (
+            <Loader2 className="w-5 h-5 animate-spin" />
+          ) : (
+            'Search'
+          )}
         </button>
       </div>
 
-      {/* Suggestions Dropdown */}
+      {/* Suggestions Dropdown - Reference Design: Clean white card */}
       {showSuggestions && (
         <div
           ref={suggestionsRef}
           role="listbox"
           aria-expanded={showSuggestions}
           className={cn(
-            'absolute top-full left-0 right-0 z-50 overflow-hidden shadow-2xl',
+            'absolute top-full left-0 right-0 z-50 overflow-hidden',
             isMinimal
-              ? 'mt-1 bg-white rounded-nilin border border-nilin-border'
-              : 'mt-2 bg-white rounded-2xl border border-nilin-border/20'
+              ? 'mt-1 bg-white rounded-nilin border border-nilin-border shadow-nilin'
+              : 'mt-2 bg-white rounded-nilin-lg border border-nilin-border/20 shadow-[9px_9px_16px_rgba(189,189,189,0.3),-9px_-9px_16px_rgba(255,255,255,0.5)]'
           )}
         >
           {/* Loading State */}
@@ -379,8 +449,8 @@ const HeroSearchBar: React.FC<HeroSearchBarProps> = ({
             </div>
           )}
 
-          {/* Footer with quick links */}
-          <div className="border-t border-nilin-border/50 p-3 bg-nilin-blush/20">
+          {/* Footer with quick links - Reference Design: Subtle section */}
+          <div className="border-t border-nilin-border/30 p-3 bg-nilin-cream/50">
             <div className="flex items-center justify-between text-xs">
               <span className="text-nilin-warmGray">Quick access:</span>
               <div className="flex gap-2">
@@ -391,7 +461,7 @@ const HeroSearchBar: React.FC<HeroSearchBarProps> = ({
                       setFilters({ category: cat, page: 1 });
                       navigate(`/search?category=${cat.toLowerCase()}`);
                     }}
-                    className="px-2.5 py-1 bg-white rounded-full text-nilin-charcoal hover:bg-nilin-coral hover:text-white transition-colors shadow-sm"
+                    className="px-2.5 py-1 bg-white rounded-full text-nilin-charcoal hover:bg-nilin-coral hover:text-white transition-colors shadow-sm border border-nilin-border/20"
                   >
                     {cat}
                   </button>

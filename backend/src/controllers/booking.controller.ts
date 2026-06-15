@@ -97,7 +97,11 @@ export const bookingInputSchema = Joi.object({
     'string.max': 'Coupon code cannot exceed 50 characters',
   }),
   metadata: Joi.object({
-    bookingSource: Joi.string().max(100).allow('').optional(),
+    bookingSource: Joi.string()
+      .valid('organic', 'search', 'profile', 'ad', 'direct', 'repeat', 'recommendation')
+      .optional(),
+    adCampaignId: Joi.string().pattern(OBJECT_ID_PATTERN).optional(),
+    referrer: Joi.string().max(2048).allow('').optional(),
     deviceType: Joi.string().max(50).allow('').optional(),
     sessionId: Joi.string().max(255).allow('').optional(),
     variantDuration: Joi.number().integer().min(15).max(480),
@@ -168,6 +172,7 @@ const bookingFiltersSchema = Joi.object({
   sortOrder: Joi.string().valid('asc', 'desc').default('desc'),
   search: Joi.string().min(1).max(200),
   reviewable: Joi.boolean(),
+  city: Joi.string().min(1).max(100),
 }).options({ stripUnknown: true });
 
 const acceptBookingSchema = Joi.object({
@@ -461,6 +466,10 @@ export const createBooking = asyncHandler(async (req: Request, res: Response) =>
     professionalPreference:
       value.professionalPreference ?? value.genderPreference ?? 'no_preference',
     tenantId: (req as any).tenantId,
+    metadata: {
+      ...value.metadata,
+      referrer: value.metadata?.referrer || req.get('referer') || undefined,
+    },
   };
 
   const userId = (req.user as IUser)?._id ?? (req.user as { id?: unknown })?.id;

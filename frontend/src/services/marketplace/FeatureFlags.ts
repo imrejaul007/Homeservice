@@ -126,13 +126,24 @@ class FeatureFlagsService {
   }
 
   // Load flags from server
-  async loadFromServer(): Promise<void> {
+  async loadFromServer(userId?: string): Promise<void> {
     try {
-      // In production, fetch from remote config API
-      // const response = await fetch('/api/config/flags');
-      // const data = await response.json();
-      // this.flags = { ...this.defaultFlags, ...data.flags };
-      // this.config = { ...this.defaultConfig, ...data.config };
+      const { api } = await import('../api');
+      const response = await api.get('/feature-flags/client', {
+        params: userId ? { userId } : undefined,
+      });
+      const serverFlags = response.data?.data?.flags as Record<string, boolean> | undefined;
+
+      if (serverFlags) {
+        Object.entries(serverFlags).forEach(([key, enabled]) => {
+          this.flags[key] = {
+            key,
+            enabled: Boolean(enabled),
+            rolloutPercentage: 100,
+          };
+        });
+      }
+
       this.notifyListeners();
     } catch (error) {
       console.error('[FeatureFlags] Failed to load from server:', error);
@@ -165,8 +176,8 @@ class FeatureFlagsService {
   }
 
   // Force refresh flags
-  async refresh(): Promise<void> {
-    await this.loadFromServer();
+  async refresh(userId?: string): Promise<void> {
+    await this.loadFromServer(userId);
   }
 }
 

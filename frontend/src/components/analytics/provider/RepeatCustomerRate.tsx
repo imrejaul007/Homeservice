@@ -13,20 +13,18 @@ import {
   ReferenceLine,
   Cell,
 } from 'recharts';
-import { Users, Repeat, Loader, TrendingUp, Clock, Target } from 'lucide-react';
+import { Repeat, Loader, TrendingUp, Target } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { analyticsApi, type RepeatCustomerTrendPoint } from '../../../services/analyticsApi';
+import { EmptyState } from '../../common/EmptyState';
 
 interface RepeatCustomerRateProps {
   providerId?: string;
   timeRange?: '30d' | '90d' | '1y';
+  hidePeriodSelector?: boolean;
 }
 
-interface TrendData {
-  month: string;
-  newCustomers: number;
-  repeatCustomers: number;
-  repeatRate: number;
-}
+type TrendData = RepeatCustomerTrendPoint;
 
 interface CohortData {
   cohort: string;
@@ -54,64 +52,102 @@ interface RepeatStats {
   topRetentionCategory: string;
 }
 
-const MOCK_TREND_DATA: TrendData[] = [
-  { month: 'Jan', newCustomers: 45, repeatCustomers: 12, repeatRate: 21 },
-  { month: 'Feb', newCustomers: 52, repeatCustomers: 15, repeatRate: 22 },
-  { month: 'Mar', newCustomers: 48, repeatCustomers: 18, repeatRate: 27 },
-  { month: 'Apr', newCustomers: 61, repeatCustomers: 22, repeatRate: 27 },
-  { month: 'May', newCustomers: 58, repeatCustomers: 25, repeatRate: 30 },
-  { month: 'Jun', newCustomers: 72, repeatCustomers: 32, repeatRate: 31 },
-];
-
-const MOCK_COHORT_DATA: CohortData[] = [
-  { cohort: 'Jan 2024', month1: 100, month2: 68, month3: 52, month6: 38, retention: 38 },
-  { cohort: 'Feb 2024', month1: 100, month2: 72, month3: 58, month6: 42, retention: 42 },
-  { cohort: 'Mar 2024', month1: 100, month2: 75, month3: 62, month6: 48, retention: 48 },
-  { cohort: 'Apr 2024', month1: 100, month2: 78, month3: 65, month6: 0, retention: 65 },
-  { cohort: 'May 2024', month1: 100, month2: 82, month3: 0, month6: 0, retention: 82 },
-  { cohort: 'Jun 2024', month1: 100, month2: 0, month3: 0, month6: 0, retention: 100 },
-];
-
-const MOCK_FACTOR_DATA: FactorData[] = [
-  { factor: 'Service Quality', impact: 85, description: 'High impact on retention' },
-  { factor: 'Response Time', impact: 72, description: 'Fast responses win loyalty' },
-  { factor: 'Pricing', impact: 58, description: 'Competitive pricing matters' },
-  { factor: 'Communication', impact: 65, description: 'Clear communication builds trust' },
-  { factor: 'Availability', impact: 45, description: 'Flexible scheduling helps' },
-];
-
-const MOCK_STATS: RepeatStats = {
-  repeatRate: 31,
-  totalCustomers: 336,
-  repeatCustomers: 104,
-  newCustomers: 232,
-  avgTimeToRepeat: 18,
-  targetRate: 35,
-  trend: 8.5,
-  topRetentionCategory: 'Deep Cleaning',
-};
-
 const RETENTION_COLORS = ['#2563EB', '#3B82F6', '#60A5FA', '#93C5FD', '#BFDBFE'];
+
+function formatTrend(value: number): string {
+  if (value === 0) return '0%';
+  return value > 0 ? `+${value}%` : `${value}%`;
+}
 
 export const RepeatCustomerRate: React.FC<RepeatCustomerRateProps> = ({
   providerId,
   timeRange = '90d',
+  hidePeriodSelector = false,
 }) => {
   const [loading, setLoading] = useState(true);
-  const [trendData, setTrendData] = useState<TrendData[]>(MOCK_TREND_DATA);
-  const [cohortData, setCohortData] = useState<CohortData[]>(MOCK_COHORT_DATA);
-  const [factorData] = useState<FactorData[]>(MOCK_FACTOR_DATA);
-  const [stats, setStats] = useState<RepeatStats>(MOCK_STATS);
+  const [trendData, setTrendData] = useState<TrendData[]>([]);
+  const [cohortData, setCohortData] = useState<CohortData[]>([]);
+  const [factorData, setFactorData] = useState<FactorData[]>([]);
+  const [stats, setStats] = useState<RepeatStats>({
+    repeatRate: 0,
+    totalCustomers: 0,
+    repeatCustomers: 0,
+    newCustomers: 0,
+    avgTimeToRepeat: 0,
+    targetRate: 35,
+    trend: 0,
+    topRetentionCategory: '—',
+  });
   const [selectedRange, setSelectedRange] = useState(timeRange);
   const [viewMode, setViewMode] = useState<'trend' | 'cohort'>('trend');
 
   useEffect(() => {
+    setSelectedRange(timeRange);
+  }, [timeRange]);
+
+  useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
-      await new Promise((resolve) => setTimeout(resolve, 800));
-      setTrendData(MOCK_TREND_DATA);
-      setCohortData(MOCK_COHORT_DATA);
-      setLoading(false);
+      try {
+        const apiData = await analyticsApi.getRepeatCustomerRate(providerId, selectedRange);
+        const monthlyTrend: TrendData[] =
+          apiData.trendData?.length
+            ? apiData.trendData
+            : apiData.monthlyTrend?.length
+              ? apiData.monthlyTrend
+              : [];
+
+        const firstRate = monthlyTrend[0]?.repeatRate ?? 0;
+        const lastRate = monthlyTrend[monthlyTrend.length - 1]?.repeatRate ?? 0;
+        const computedTrend =
+          apiData.trend ??
+          (firstRate > 0 ? Math.round(((lastRate - firstRate) / firstRate) * 100) : 0);
+
+        setStats({
+          repeatRate: apiData.repeatRate ?? 0,
+          totalCustomers: apiData.totalCustomers ?? 0,
+          repeatCustomers: apiData.repeatCustomers ?? 0,
+          newCustomers: apiData.newCustomers ?? 0,
+          avgTimeToRepeat: apiData.avgTimeToRepeat ?? 0,
+          targetRate: 35,
+          trend: computedTrend,
+          topRetentionCategory: '—',
+        });
+        setCohortData(
+          (apiData.cohortData || []).map((c) => ({
+            cohort: c.cohort,
+            month1: c.month1,
+            month2: c.month2,
+            month3: c.month3,
+            month6: c.month6,
+            retention: c.month6 || c.month3 || c.month2 || c.month1,
+          }))
+        );
+        setFactorData(
+          (apiData.retentionFactors || []).map((f) => ({
+            factor: f.factor,
+            impact: f.impact,
+            description: '',
+          })),
+        );
+        setTrendData(monthlyTrend);
+      } catch {
+        setTrendData([]);
+        setCohortData([]);
+        setFactorData([]);
+        setStats({
+          repeatRate: 0,
+          totalCustomers: 0,
+          repeatCustomers: 0,
+          newCustomers: 0,
+          avgTimeToRepeat: 0,
+          targetRate: 35,
+          trend: 0,
+          topRetentionCategory: '—',
+        });
+      } finally {
+        setLoading(false);
+      }
     };
     fetchData();
   }, [providerId, selectedRange]);
@@ -168,24 +204,27 @@ export const RepeatCustomerRate: React.FC<RepeatCustomerRateProps> = ({
     { key: '1y', label: '1 Year' },
   ];
 
+  const hasCustomers = stats.totalCustomers > 0;
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
-      className="bg-white rounded-xl shadow-sm border border-gray-200 p-6"
+      className="glass-nilin rounded-nilin-lg p-6 hover-lift"
     >
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+          <h3 className="text-lg font-serif text-nilin-charcoal flex items-center gap-2">
             <Repeat className="h-5 w-5 text-blue-600" />
             Repeat Customer Rate
           </h3>
-          <p className="text-sm text-gray-500 mt-1">
+          <p className="text-sm text-nilin-warmGray mt-1">
             Track customer loyalty and retention
           </p>
         </div>
 
+        {hasCustomers && (
         <div className="flex items-center gap-3">
           {/* View Toggle */}
           <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1">
@@ -211,21 +250,36 @@ export const RepeatCustomerRate: React.FC<RepeatCustomerRateProps> = ({
             </button>
           </div>
 
-          {/* Time Range Selector */}
-          <select
-            value={selectedRange}
-            onChange={(e) => setSelectedRange(e.target.value as typeof selectedRange)}
-            className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-          >
-            {timeRanges.map((range) => (
-              <option key={range.key} value={range.key}>
-                {range.label}
-              </option>
-            ))}
-          </select>
+          {!hidePeriodSelector && (
+            <select
+              value={selectedRange}
+              onChange={(e) => setSelectedRange(e.target.value as typeof selectedRange)}
+              className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            >
+              {timeRanges.map((range) => (
+                <option key={range.key} value={range.key}>
+                  {range.label}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
+        )}
       </div>
 
+      {loading ? (
+        <div className="h-72 flex items-center justify-center">
+          <Loader className="h-8 w-8 text-blue-600 animate-spin" />
+        </div>
+      ) : !hasCustomers ? (
+        <EmptyState
+          icon={<Repeat className="w-8 h-8" />}
+          title="No repeat customers yet"
+          description="Focus on service quality — repeat clients spend more on average. Complete bookings to start tracking retention."
+          compact
+        />
+      ) : (
+        <>
       {/* Stats Cards */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
         <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg p-4 border border-blue-100">
@@ -250,7 +304,13 @@ export const RepeatCustomerRate: React.FC<RepeatCustomerRateProps> = ({
 
         <div className="bg-gray-50 rounded-lg p-4">
           <p className="text-sm text-gray-500 mb-1">Trend</p>
-          <p className="text-2xl font-bold text-green-600">+{stats.trend}%</p>
+          <p
+            className={`text-2xl font-bold ${
+              stats.trend >= 0 ? 'text-green-600' : 'text-red-600'
+            }`}
+          >
+            {formatTrend(stats.trend)}
+          </p>
         </div>
       </div>
 
@@ -273,11 +333,14 @@ export const RepeatCustomerRate: React.FC<RepeatCustomerRateProps> = ({
         </div>
       </div>
 
-      {loading ? (
-        <div className="h-72 flex items-center justify-center">
-          <Loader className="h-8 w-8 text-blue-600 animate-spin" />
-        </div>
-      ) : viewMode === 'trend' ? (
+      {viewMode === 'trend' ? (
+        trendData.length === 0 ? (
+          <EmptyState
+            title="Trend data building"
+            description="More booking history is needed to show repeat customer trends over time."
+            compact
+          />
+        ) : (
         <>
           {/* Trend Chart */}
           <div className="h-72">
@@ -351,6 +414,13 @@ export const RepeatCustomerRate: React.FC<RepeatCustomerRateProps> = ({
             </div>
           </div>
         </>
+        )
+      ) : cohortData.length === 0 ? (
+        <EmptyState
+          title="No cohort data yet"
+          description="Cohort retention appears after customers have been active for multiple months."
+          compact
+        />
       ) : (
         <>
           {/* Cohort Analysis */}
@@ -409,9 +479,9 @@ export const RepeatCustomerRate: React.FC<RepeatCustomerRateProps> = ({
         </>
       )}
 
-      {/* Retention Factors */}
-      <div className="mt-6 pt-6 border-t border-gray-200">
-        <h4 className="text-sm font-medium text-gray-900 mb-4 flex items-center gap-2">
+      {factorData.length > 0 && (
+      <div className="mt-6 pt-6 border-t border-nilin-border">
+        <h4 className="text-sm font-medium text-nilin-charcoal mb-4 flex items-center gap-2">
           <TrendingUp className="h-4 w-4 text-gray-400" />
           Key Retention Factors
         </h4>
@@ -430,33 +500,41 @@ export const RepeatCustomerRate: React.FC<RepeatCustomerRateProps> = ({
           ))}
         </div>
       </div>
+      )}
 
       {/* Insights */}
-      <div className="mt-6 pt-6 border-t border-gray-200">
-        <h4 className="text-sm font-medium text-gray-900 mb-3">Insights</h4>
+      <div className="mt-6 pt-6 border-t border-nilin-border">
+        <h4 className="text-sm font-medium text-nilin-charcoal mb-3">Insights</h4>
         <div className="space-y-2">
+          {stats.trend !== 0 && (
+            <div className="flex items-start gap-2 text-sm">
+              <div className="w-2 h-2 rounded-full bg-blue-600 mt-1.5" />
+              <p className="text-nilin-warmGray">
+                Your repeat rate changed by{' '}
+                <span className="font-medium text-nilin-charcoal">{formatTrend(stats.trend)}</span>{' '}
+                over the period.
+              </p>
+            </div>
+          )}
           <div className="flex items-start gap-2 text-sm">
-            <div className="w-2 h-2 rounded-full bg-blue-600 mt-1.5" />
-            <p className="text-gray-600">
-              Your repeat rate has increased by{' '}
-              <span className="font-medium text-gray-900">+{stats.trend}%</span> over the period.
+            <div className="w-2 h-2 rounded-full bg-purple-600 mt-1.5" />
+            <p className="text-nilin-warmGray">
+              Average time to repeat purchase:{' '}
+              <span className="font-medium text-nilin-charcoal">{stats.avgTimeToRepeat} days</span>.
             </p>
           </div>
           <div className="flex items-start gap-2 text-sm">
             <div className="w-2 h-2 rounded-full bg-green-600 mt-1.5" />
-            <p className="text-gray-600">
-              <span className="font-medium text-gray-900">{stats.topRetentionCategory}</span> has the highest retention rate.
-            </p>
-          </div>
-          <div className="flex items-start gap-2 text-sm">
-            <div className="w-2 h-2 rounded-full bg-purple-600 mt-1.5" />
-            <p className="text-gray-600">
-              Average time to repeat purchase:{' '}
-              <span className="font-medium text-gray-900">{stats.avgTimeToRepeat} days</span>.
+            <p className="text-nilin-warmGray">
+              <span className="font-medium text-nilin-charcoal">{stats.repeatCustomers}</span> of{' '}
+              <span className="font-medium text-nilin-charcoal">{stats.totalCustomers}</span> customers
+              booked more than once.
             </p>
           </div>
         </div>
       </div>
+        </>
+      )}
     </motion.div>
   );
 };

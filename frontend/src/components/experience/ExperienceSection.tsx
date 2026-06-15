@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowRight, Loader2, AlertCircle, Sparkles, PenLine } from 'lucide-react';
+import { ArrowRight, AlertCircle, Sparkles, PenLine } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { experienceApi } from '../../services/experienceApi';
 import type { Experience } from '../../types/experience';
-import ExperienceCard from './ExperienceCard';
 import ExperienceSubmissionForm from './ExperienceSubmissionForm';
+import ExperienceDraggableStack from './ExperienceDraggableStack';
 import useWriteExperience from '../../hooks/useWriteExperience';
 
 interface ExperienceSectionProps {
@@ -14,34 +14,28 @@ interface ExperienceSectionProps {
   subtitle?: string;
 }
 
-interface SkeletonCardProps {
-  isLarge?: boolean;
-}
-
-const SkeletonCard: React.FC<SkeletonCardProps> = ({ isLarge = false }) => {
-  return (
-    <div
-      className={`
-        bg-white rounded-nilin overflow-hidden animate-pulse
-        ${isLarge ? 'col-span-2 row-span-2' : ''}
-      `}
-    >
-      <div className={`bg-gray-200 ${isLarge ? 'h-[400px]' : 'h-48'}`} />
-      <div className="p-4 space-y-3">
-        <div className="h-4 bg-gray-200 rounded w-3/4" />
-        <div className="h-3 bg-gray-200 rounded w-full" />
-        <div className="h-3 bg-gray-200 rounded w-2/3" />
-        <div className="flex items-center justify-between pt-2">
-          <div className="h-6 w-6 bg-gray-200 rounded-full" />
-          <div className="h-3 bg-gray-200 rounded w-16" />
-        </div>
+const DraggableSkeleton: React.FC = () => (
+  <div className="relative mx-auto w-full min-h-[640px] sm:min-h-[720px] rounded-[2rem] overflow-hidden">
+    {[1, 2, 3, 4, 5].map((i) => (
+      <div
+        key={i}
+        className="absolute w-[260px] sm:w-[300px] rounded-2xl bg-white/60 animate-pulse p-4 shadow-lg"
+        style={{
+          top: `${(i % 3) * 28 + 8}%`,
+          left: `${(i * 17) % 70 + 5}%`,
+          transform: `rotate(${(i % 2 === 0 ? -1 : 1) * (4 + i)}deg)`,
+        }}
+      >
+        <div className="h-52 bg-gray-200/80 rounded-xl mb-4" />
+        <div className="h-4 bg-gray-200/80 rounded w-3/4 mb-2" />
+        <div className="h-3 bg-gray-200/80 rounded w-full" />
       </div>
-    </div>
-  );
-};
+    ))}
+  </div>
+);
 
 const ExperienceSection: React.FC<ExperienceSectionProps> = ({
-  limit = 4,
+  limit = 10,
   showViewAll = true,
   title = 'The NILIN Experience',
   subtitle = 'Crafted for perfection',
@@ -61,7 +55,6 @@ const ExperienceSection: React.FC<ExperienceSectionProps> = ({
       setIsLoading(true);
       setError(null);
 
-      // Try to fetch featured experiences first, fall back to regular experiences
       let response;
       try {
         response = await experienceApi.getFeaturedExperiences();
@@ -69,8 +62,7 @@ const ExperienceSection: React.FC<ExperienceSectionProps> = ({
           throw new Error('No featured experiences');
         }
       } catch {
-        // Fall back to regular experiences
-        response = await experienceApi.getExperiences({ limit: 6 });
+        response = await experienceApi.getExperiences({ limit: Math.max(limit, 10) });
       }
 
       if (response.success && response.data.experiences) {
@@ -84,43 +76,31 @@ const ExperienceSection: React.FC<ExperienceSectionProps> = ({
     }
   };
 
-  const handleViewAll = () => {
-    navigate('/experiences');
-  };
+  const sectionClass =
+    'py-16 px-2 sm:px-3 lg:px-4 bg-gradient-to-br from-nilin-blush via-nilin-peach to-nilin-cream animate-nilin-in';
 
-  // Loading state
   if (isLoading) {
     return (
-      <section className="py-16 px-4 bg-gradient-to-br from-nilin-blush via-nilin-peach to-nilin-cream animate-nilin-in">
-        <div className="max-w-7xl mx-auto">
-          {/* Header Skeleton */}
-          <div className="text-center mb-12">
+      <section className={sectionClass}>
+        <div className="max-w-[100rem] mx-auto">
+          <div className="text-center mb-10">
             <div className="h-8 bg-white/50 rounded-lg w-64 mx-auto mb-3 animate-pulse" />
-            <div className="h-4 bg-white/50 rounded w-40 mx-auto animate-pulse" />
+            <div className="h-4 bg-white/50 rounded w-48 mx-auto animate-pulse" />
           </div>
-
-          {/* Grid Skeleton */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <SkeletonCard isLarge />
-            <SkeletonCard />
-            <SkeletonCard />
-            <SkeletonCard />
-          </div>
+          <DraggableSkeleton />
         </div>
       </section>
     );
   }
 
-  // Error state
   if (error) {
     return (
-      <section className="py-16 px-4 bg-gradient-to-br from-nilin-blush via-nilin-peach to-nilin-cream animate-nilin-in">
+      <section className={sectionClass}>
         <div className="max-w-7xl mx-auto">
           <div className="text-center mb-12">
             <h2 className="text-3xl font-serif text-nilin-charcoal mb-3">{title}</h2>
             <p className="text-nilin-warmGray">{subtitle}</p>
           </div>
-
           <div className="bg-white/80 backdrop-blur-sm rounded-nilin p-8 text-center">
             <AlertCircle className="w-12 h-12 text-nilin-coral mx-auto mb-4" />
             <p className="text-nilin-warmGray">{error}</p>
@@ -136,16 +116,14 @@ const ExperienceSection: React.FC<ExperienceSectionProps> = ({
     );
   }
 
-  // Empty state
   if (experiences.length === 0) {
     return (
-      <section className="py-16 px-4 bg-gradient-to-br from-nilin-blush via-nilin-peach to-nilin-cream animate-nilin-in">
+      <section className={sectionClass}>
         <div className="max-w-7xl mx-auto">
           <div className="text-center mb-12">
             <h2 className="text-3xl font-serif text-nilin-charcoal mb-3">{title}</h2>
             <p className="text-nilin-warmGray">{subtitle}</p>
           </div>
-
           <div className="bg-white/80 backdrop-blur-sm rounded-nilin p-8 text-center">
             <Sparkles className="w-12 h-12 text-nilin-coral mx-auto mb-4" />
             <p className="text-nilin-charcoal font-medium mb-2">No experiences yet</p>
@@ -158,7 +136,7 @@ const ExperienceSection: React.FC<ExperienceSectionProps> = ({
             </button>
             <button
               onClick={() => openWriteExperience()}
-              className="mt-3 ml-0 block mx-auto px-6 py-2 glass-nilin rounded-nilin text-nilin-charcoal font-medium hover-lift transition-all"
+              className="mt-3 block mx-auto px-6 py-2 glass-nilin rounded-nilin text-nilin-charcoal font-medium hover-lift transition-all"
             >
               Write Your Experience
             </button>
@@ -176,48 +154,28 @@ const ExperienceSection: React.FC<ExperienceSectionProps> = ({
   }
 
   return (
-    <section className="py-16 px-4 bg-gradient-to-br from-nilin-blush via-nilin-peach to-nilin-cream animate-nilin-in">
-      <div className="max-w-7xl mx-auto">
+    <section className={sectionClass}>
+      <div className="max-w-[100rem] mx-auto">
         {/* Header */}
-        <div className="text-center mb-12 animate-nilin-in">
-          <div className="inline-flex items-center gap-2 px-4 py-2 glass-nilin rounded-full mb-4">
+        <div className="text-center mb-8 sm:mb-10 animate-nilin-in px-1">
+          <div className="inline-flex items-center gap-2 px-4 py-2 bg-white/70 backdrop-blur-sm rounded-full mb-4 border border-white/80 shadow-sm">
             <Sparkles className="w-4 h-4 text-nilin-coral" />
-            <span className="text-sm text-nilin-charcoal">Discover</span>
+            <span className="text-sm font-semibold text-nilin-charcoal">Discover</span>
           </div>
-          <h2 className="text-3xl md:text-4xl font-serif text-nilin-charcoal mb-3">{title}</h2>
-          <p className="text-nilin-warmGray text-lg">{subtitle}</p>
+          <h2 className="text-4xl md:text-5xl font-serif text-nilin-charcoal mb-3">{title}</h2>
+          <p className="text-lg md:text-xl text-nilin-charcoal/75 max-w-2xl mx-auto">{subtitle}</p>
         </div>
 
-        {/* Grid Layout: 2x2 by default */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 animate-nilin-in" style={{ animationDelay: '0.1s' }}>
-          {/* Top-Left: Large Featured Card (spans 2 columns, 2 rows) */}
-          {experiences[0] && (
-            <div className="col-span-2 row-span-2">
-              <ExperienceCard experience={experiences[0]} isFeatured />
-            </div>
-          )}
-
-          {/* Top-Right: Standard Card */}
-          {experiences[1] && (
-            <ExperienceCard experience={experiences[1]} />
-          )}
-
-          {/* Bottom-Left: Standard Card */}
-          {experiences[2] && (
-            <ExperienceCard experience={experiences[2]} />
-          )}
-
-          {/* Bottom-Right: Standard Card */}
-          {experiences[3] && (
-            <ExperienceCard experience={experiences[3]} />
-          )}
+        {/* Draggable card canvas */}
+        <div className="animate-nilin-in" style={{ animationDelay: '0.1s' }}>
+          <ExperienceDraggableStack experiences={experiences} subtitle={subtitle} />
         </div>
 
-        {/* View All + Write Experience */}
+        {/* Actions */}
         {showViewAll && (
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4 mt-10 animate-nilin-in" style={{ animationDelay: '0.2s' }}>
             <button
-              onClick={handleViewAll}
+              onClick={() => navigate('/experiences')}
               className="inline-flex items-center gap-2 px-8 py-4 glass-nilin rounded-nilin text-nilin-charcoal font-medium hover-lift transition-all"
             >
               View All Experiences
@@ -234,7 +192,7 @@ const ExperienceSection: React.FC<ExperienceSectionProps> = ({
         )}
 
         {/* Feature Highlights */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-8">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-8 px-1">
           {[
             { icon: '✨', title: 'Premium Products' },
             { icon: '🎯', title: 'Expert Stylists' },

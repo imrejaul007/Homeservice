@@ -31,7 +31,7 @@ const ProviderBookingsPage: React.FC = () => {
             </button>
 
             <h1 className="text-3xl font-serif text-nilin-charcoal mb-2">Service Requests</h1>
-            <p className="text-nilin-warmGray font-sans">
+            <p className="text-base text-nilin-warmGray font-sans">
               Review, accept, and manage incoming bookings from your customers
             </p>
           </div>

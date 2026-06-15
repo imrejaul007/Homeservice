@@ -173,9 +173,16 @@ export interface IBooking extends Document {
     usedAt?: Date;
   };
 
+  // Booking source attribution
+  attribution?: {
+    source: 'organic' | 'search' | 'profile' | 'ad' | 'direct' | 'repeat';
+    adCampaignId?: mongoose.Types.ObjectId;
+    referrer?: string;
+  };
+
   // Metadata & Analytics
   metadata: {
-    bookingSource: 'search' | 'profile' | 'recommendation' | 'repeat';
+    bookingSource: 'organic' | 'search' | 'profile' | 'ad' | 'direct' | 'repeat' | 'recommendation';
     deviceType: 'mobile' | 'desktop' | 'tablet';
     userAgent?: string;
     sessionId?: string;
@@ -594,12 +601,26 @@ const bookingSchema = new Schema<IBooking>(
       }
     },
 
+    attribution: {
+      source: {
+        type: String,
+        enum: ['organic', 'search', 'profile', 'ad', 'direct', 'repeat'],
+        default: 'organic',
+      },
+      adCampaignId: {
+        type: Schema.Types.ObjectId,
+        ref: 'ProviderAd',
+        index: true,
+      },
+      referrer: { type: String, maxlength: 2048 },
+    },
+
     // Metadata & Analytics
     metadata: {
       bookingSource: {
         type: String,
-        enum: ['search', 'profile', 'recommendation', 'repeat'],
-        default: 'search'
+        enum: ['organic', 'search', 'profile', 'ad', 'direct', 'repeat', 'recommendation'],
+        default: 'organic',
       },
       deviceType: {
         type: String,
@@ -716,6 +737,10 @@ bookingSchema.index({ customerId: 1, status: 1, createdAt: -1 });
 // Provider revenue: get revenue data for provider analytics
 // Supports queries like: calculate total revenue for provider X this month
 bookingSchema.index({ providerId: 1, 'pricing.totalAmount': 1, status: 1 });
+
+// Attribution analytics
+bookingSchema.index({ providerId: 1, 'attribution.source': 1, completedAt: -1 });
+bookingSchema.index({ providerId: 1, 'attribution.adCampaignId': 1, completedAt: -1 });
 
 // ===================================
 // AVAILABILITY QUERY INDEXES (GAP AUDIT FIX)

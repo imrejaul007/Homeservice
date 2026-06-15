@@ -55,8 +55,8 @@ const EmailVerification: React.FC = () => {
         return (
           <>
             <div className="flex justify-center">
-              <div className="rounded-full bg-blue-100 p-3">
-                <Loader className="h-8 w-8 text-blue-600 animate-spin" />
+              <div className="rounded-full p-3" style={{ backgroundColor: '#F5E6E0' }}>
+                <Loader className="h-8 w-8 animate-spin" style={{ color: '#E8B4A8' }} />
               </div>
             </div>
             <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">

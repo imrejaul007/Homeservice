@@ -239,6 +239,10 @@ import PaymentMethodSelector from './ui/PaymentMethodSelector';
 import BookingSummaryCard from './ui/BookingSummaryCard';
 import { TrustBadge } from './ui/TrustBadge';
 import { usePriceConversion } from '../../utils/priceConverter';
+import {
+  buildBookingAttributionMetadata,
+  type BookingAttributionContext,
+} from '../../types/bookingAttribution';
 
 interface BookingFormWizardProps {
   service: Service;
@@ -258,6 +262,7 @@ interface BookingFormWizardProps {
       maxDiscount?: number;
     };
   };
+  attribution?: BookingAttributionContext;
 }
 
 interface FormData {
@@ -338,7 +343,8 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
   onSuccess,
   onCancel,
   guestMode = false,
-  preloadedOffer
+  preloadedOffer,
+  attribution,
 }) => {
   const navigate = useNavigate();
   const { convert, format, currency } = usePriceConversion();
@@ -1096,7 +1102,7 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
           locationType: formData.locationType === 'at_home' ? 'at_home' : 'hotel',
           selectedDuration: selectedVariantMeta?.variantDuration ?? formData.selectedDuration,
           metadata: {
-            bookingSource: 'search',
+            ...buildBookingAttributionMetadata(attribution, 'direct'),
             deviceType: 'desktop',
             sessionId: guestSessionId,
             idempotencyKey: guestIdempotencyKey,
@@ -1197,7 +1203,7 @@ const BookingFormWizard: React.FC<BookingFormWizardProps> = ({
         metadata: {
           idempotencyKey: bookingIdempotencyKey,
           sessionId: getOrCreateBookingSessionId(),
-          bookingSource: 'search',
+          ...buildBookingAttributionMetadata(attribution, 'direct'),
           deviceType: 'desktop',
           ...(selectedVariantMeta && {
             variantDuration: selectedVariantMeta.variantDuration,

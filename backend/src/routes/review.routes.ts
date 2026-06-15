@@ -118,6 +118,12 @@ router.post('/:reviewId/reply',
         return res.status(403).json({ success: false, message: 'Not authorized to reply to this review' });
       }
 
+      // Check if review is in a state that allows replies (approved or pending only)
+      // Rejected reviews should not allow provider replies
+      if (review.moderationStatus === 'rejected') {
+        return res.status(400).json({ success: false, message: 'Cannot reply to a rejected review' });
+      }
+
       // Check if already replied
       if (review.response) {
         return res.status(400).json({ success: false, message: 'Already replied to this review' });

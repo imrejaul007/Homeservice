@@ -233,7 +233,7 @@ const FAQArticle: React.FC<FAQArticleProps> = ({
                 const text = headingMatch[2];
                 const id = text.toLowerCase().replace(/\s+/g, '-');
 
-                const HeadingTag = `h${level}` as keyof JSX.IntrinsicElements;
+                const HeadingTag = `h${level}` as 'h1' | 'h2' | 'h3';
                 return (
                   <HeadingTag
                     key={index}

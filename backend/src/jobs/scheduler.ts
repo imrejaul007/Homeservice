@@ -634,6 +634,57 @@ export function initializeScheduledJobs(): void {
   scheduledTasks.push(platformBackupTask);
   logger.info(`Platform backup scheduled: daily at 2 AM (cron: 0 2 * * *, tz: ${CRON_TIMEZONE})`);
 
+  const providerMetricsRollupTask = cron.schedule(
+    '15 2 * * *',
+    async () => {
+      await withLock('lock:scheduler:provider_metrics_rollup', 'ProviderMetricsRollupJob', async () => {
+        const { runNightlyProviderMetricsRollup } = await import('../services/providerMetricsRollup.service');
+        await runNightlyProviderMetricsRollup();
+
+        const { runNightlyProviderFunnelRollup } = await import('../services/providerFunnelRollup.service');
+        await runNightlyProviderFunnelRollup();
+
+        const { runNightlyServiceMetricsRollup } = await import('../services/serviceMetricsRollup.service');
+        await runNightlyServiceMetricsRollup();
+      });
+    },
+    { timezone: CRON_TIMEZONE }
+  );
+  scheduledTasks.push(providerMetricsRollupTask);
+  logger.info(
+    `Provider metrics, funnel, and service rollups scheduled: daily at 2:15 AM (cron: 15 2 * * *, tz: ${CRON_TIMEZONE})`,
+  );
+
+  const providerAnalyticsValidationTask = cron.schedule(
+    '0 3 * * 0',
+    async () => {
+      await withLock('lock:scheduler:provider_analytics_validation', 'ProviderAnalyticsValidationJob', async () => {
+        const { runProviderAnalyticsValidationJob } = await import('./providerAnalyticsValidation.job');
+        await runProviderAnalyticsValidationJob();
+      });
+    },
+    { timezone: CRON_TIMEZONE },
+  );
+  scheduledTasks.push(providerAnalyticsValidationTask);
+  logger.info(
+    `Provider analytics validation scheduled: weekly Sunday 3 AM (cron: 0 3 * * 0, tz: ${CRON_TIMEZONE})`,
+  );
+
+  const providerAnalyticsEmailTask = cron.schedule(
+    '0 8 * * 1',
+    async () => {
+      await withLock('lock:scheduler:provider_analytics_email', 'ProviderAnalyticsEmailJob', async () => {
+        const { runProviderAnalyticsEmailJob } = await import('./providerAnalyticsEmail.job');
+        await runProviderAnalyticsEmailJob();
+      });
+    },
+    { timezone: CRON_TIMEZONE },
+  );
+  scheduledTasks.push(providerAnalyticsEmailTask);
+  logger.info(
+    `Provider analytics email reports scheduled: weekly Monday 8 AM (cron: 0 8 * * 1, tz: ${CRON_TIMEZONE})`,
+  );
+
   // Run stale booking check immediately on startup (after a short delay to let server initialize)
   setTimeout(async () => {
     try {

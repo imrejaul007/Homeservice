@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   Plus,
   Edit3,
@@ -18,7 +18,22 @@ import {
   AlertCircle,
   CheckCircle,
   XCircle,
-  Loader2
+  Loader2,
+  Copy,
+  Keyboard,
+  ArrowUp,
+  ArrowDown,
+  Download,
+  ChevronDown,
+  FileJson,
+  FileSpreadsheet,
+  CheckSquare,
+  Square,
+  X,
+  Power,
+  Trash,
+  RotateCcw,
+  Archive
 } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
 import authService from '../../services/AuthService';
@@ -26,6 +41,9 @@ import { useToastActions } from '../common/Toast';
 import { socketService } from '../../services/socket';
 import { AddServiceModal } from './AddServiceModal';
 import { EditServiceModal } from './EditServiceModal';
+import { SkeletonCard, SkeletonServiceList } from './SkeletonCard';
+import { SkeletonStatCard, SkeletonStatGrid, SkeletonPerformanceCard } from './SkeletonStatCard';
+import { EmptyState, NoServicesEmpty, NoServicesSearchEmpty } from '../common/EmptyState';
 
 // Confirmation Modal Component
 interface ConfirmModalProps {
@@ -155,8 +173,13 @@ interface Service {
   status: 'draft' | 'active' | 'inactive' | 'pending_review' | 'rejected';
   isActive: boolean;
   isFeatured: boolean;
+  durationOptions?: Array<{ duration: number; price: number; label: string }>;
+  addOns?: Array<{ name: string; price: number; description?: string }>;
   createdAt: string;
   updatedAt: string;
+  isDeleted?: boolean;
+  deletedAt?: string;
+  deletedBy?: string;
 }
 
 interface ServiceStats {
@@ -265,6 +288,16 @@ const ServiceManagement: React.FC = () => {
   // Category Filter
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
 
+  // Rating Filter
+  const [ratingFilter, setRatingFilter] = useState<string>('any');
+
+  // Price Range Filter
+  const [minPrice, setMinPrice] = useState<string>('');
+  const [maxPrice, setMaxPrice] = useState<string>('');
+
+  // Featured Filter
+  const [featuredOnly, setFeaturedOnly] = useState<boolean>(false);
+
   // Stats
   const [serviceStats, setServiceStats] = useState<ServiceStats>({
     total: 0,
@@ -310,6 +343,7 @@ const ServiceManagement: React.FC = () => {
   // Edit Service Modal State
   const [showEditServiceModal, setShowEditServiceModal] = useState(false);
   const [editingServiceId, setEditingServiceId] = useState<string | null>(null);
+  const [isCloningService, setIsCloningService] = useState(false);
 
   // Analytics Modal State
   const [showAnalyticsModal, setShowAnalyticsModal] = useState(false);
@@ -328,14 +362,70 @@ const ServiceManagement: React.FC = () => {
   const [isToggling, setIsToggling] = useState(false);
   const [togglingServiceId, setTogglingServiceId] = useState<string | null>(null);
 
+  // Status Toggle Confirmation Modal State
+  const [showStatusModal, setShowStatusModal] = useState(false);
+  const [statusModalService, setStatusModalService] = useState<{ id: string; name: string; currentStatus: string } | null>(null);
+
+  // Keyboard Navigation State
+  const [focusedRowIndex, setFocusedRowIndex] = useState<number>(-1);
+  const [showShortcutsHelp, setShowShortcutsHelp] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const serviceRefs = useRef<(HTMLDivElement | null)[]>([]);
+
+  // Export State
+  const [showExportDropdown, setShowExportDropdown] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+
+  // Bulk Selection State
+  const [selectedServices, setSelectedServices] = useState<Set<string>>(new Set());
+  const [showBulkDeleteModal, setShowBulkDeleteModal] = useState(false);
+  const [isBulkOperating, setIsBulkOperating] = useState(false);
+
+  // Trash View State
+  const [isViewingTrash, setIsViewingTrash] = useState(false);
+  const [deletedServices, setDeletedServices] = useState<Service[]>([]);
+  const [deletedServicesLoading, setDeletedServicesLoading] = useState(false);
+  const [deletedServicesError, setDeletedServicesError] = useState<string | null>(null);
+  const [deletedPagination, setDeletedPagination] = useState({
+    page: 1,
+    limit: 20,
+    total: 0,
+    pages: 0,
+    hasNext: false
+  });
+
+  // Restore Modal State
+  const [showRestoreModal, setShowRestoreModal] = useState(false);
+  const [restoringServiceId, setRestoringServiceId] = useState<string | null>(null);
+  const [restoringServiceName, setRestoringServiceName] = useState<string>('');
+  const [isRestoring, setIsRestoring] = useState(false);
+
+  // Permanent Delete Modal State
+  const [showPermanentDeleteModal, setShowPermanentDeleteModal] = useState(false);
+  const [permanentDeletingServiceId, setPermanentDeletingServiceId] = useState<string | null>(null);
+  const [permanentDeletingServiceName, setPermanentDeletingServiceName] = useState<string>('');
+  const [isPermanentDeleting, setIsPermanentDeleting] = useState(false);
+
   useEffect(() => {
     setPage(1);
-  }, [statusFilter, sortBy, sortOrder, startDate, endDate, categoryFilter, searchTerm]);
+    // Clear selection when filters change
+    setSelectedServices(new Set());
+  }, [statusFilter, sortBy, sortOrder, startDate, endDate, categoryFilter, searchTerm, ratingFilter, minPrice, maxPrice, featuredOnly]);
 
   const fetchServices = useCallback(
     async (pageNum: number, append: boolean) => {
       if (!isProvider) {
         return;
+      }
+
+      // Validate date range
+      if (startDate && endDate) {
+        const start = new Date(startDate);
+        const end = new Date(endDate);
+        if (start > end) {
+          toast.error('Invalid date range', 'Start date must be before end date');
+          return;
+        }
       }
 
       try {
@@ -358,6 +448,10 @@ const ServiceManagement: React.FC = () => {
         if (endDate) queryParams.append('endDate', endDate);
         if (categoryFilter !== 'all') queryParams.append('category', categoryFilter);
         if (searchTerm) queryParams.append('search', searchTerm);
+        if (ratingFilter !== 'any') queryParams.append('minRating', ratingFilter);
+        if (minPrice) queryParams.append('minPrice', minPrice);
+        if (maxPrice) queryParams.append('maxPrice', maxPrice);
+        if (featuredOnly) queryParams.append('featured', 'true');
 
         const data = await authService.get<{
           success: boolean;
@@ -392,6 +486,10 @@ const ServiceManagement: React.FC = () => {
       endDate,
       categoryFilter,
       searchTerm,
+      ratingFilter,
+      minPrice,
+      maxPrice,
+      featuredOnly,
     ]
   );
 
@@ -486,9 +584,9 @@ const ServiceManagement: React.FC = () => {
   useEffect(() => {
     if (!isProvider) return;
 
-    const unsubServiceApproved = socketService.onServiceApproved(() => {
+    const unsubServiceApproved = socketService.onServiceApproved((data) => {
       if (isMountedRef.current) {
-        toast.success('Service Approved', 'Your service has been approved and is now active.');
+        toast.success('Service Approved', data.reason || 'Your service has been approved and is now active.');
         void fetchServicesRef.current(1, false);
         void fetchOverviewStatsRef.current();
       }
@@ -507,6 +605,132 @@ const ServiceManagement: React.FC = () => {
       unsubServiceRejected();
     };
   }, [isProvider]);
+
+  // Keyboard shortcuts handler
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ignore shortcuts when typing in inputs/modals
+      const target = e.target as HTMLElement;
+      const isInputField = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT';
+      const isContentEditable = target.isContentEditable;
+      const isModalOpen = showAddServiceModal || showEditServiceModal || showDeleteModal || showAnalyticsModal || showShortcutsHelp;
+
+      // If user is typing in an input field, only allow Escape to clear/close
+      if (isInputField || isContentEditable) {
+        if (e.key === 'Escape') {
+          // Only clear search if focus is on search input
+          if (target === searchInputRef.current) {
+            setSearchTerm('');
+            target.blur();
+          }
+          // Close any open modal
+          if (showAddServiceModal) setShowAddServiceModal(false);
+          if (showEditServiceModal) {
+            setShowEditServiceModal(false);
+            setEditingServiceId(null);
+          }
+          if (showDeleteModal) {
+            setShowDeleteModal(false);
+            setDeletingServiceId(null);
+          }
+          if (showAnalyticsModal) closeAnalyticsModal();
+          if (showShortcutsHelp) setShowShortcutsHelp(false);
+        }
+        return;
+      }
+
+      // If a modal is open (not an input), only allow Escape
+      if (isModalOpen && e.key !== 'Escape') {
+        return;
+      }
+
+      // Close shortcuts help with Escape
+      if (showShortcutsHelp && e.key === 'Escape') {
+        setShowShortcutsHelp(false);
+        return;
+      }
+
+      // Don't handle shortcuts if modal is open
+      if (isModalOpen) return;
+
+      switch (e.key) {
+        case '/':
+          e.preventDefault();
+          searchInputRef.current?.focus();
+          break;
+
+        case 'Escape':
+          e.preventDefault();
+          // Clear search
+          setSearchTerm('');
+          setFocusedRowIndex(-1);
+          break;
+
+        case 'n':
+        case 'N':
+          e.preventDefault();
+          setShowAddServiceModal(true);
+          break;
+
+        case '?':
+          e.preventDefault();
+          setShowShortcutsHelp(true);
+          break;
+
+        case 'ArrowUp':
+          e.preventDefault();
+          if (services.length > 0) {
+            const newIndex = focusedRowIndex <= 0 ? services.length - 1 : focusedRowIndex - 1;
+            setFocusedRowIndex(newIndex);
+            serviceRefs.current[newIndex]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }
+          break;
+
+        case 'ArrowDown':
+          e.preventDefault();
+          if (services.length > 0) {
+            const newIndex = focusedRowIndex >= services.length - 1 ? 0 : focusedRowIndex + 1;
+            setFocusedRowIndex(newIndex);
+            serviceRefs.current[newIndex]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }
+          break;
+
+        case 'Enter':
+          e.preventDefault();
+          if (focusedRowIndex >= 0 && focusedRowIndex < services.length) {
+            const service = services[focusedRowIndex];
+            setEditingServiceId(service._id);
+            setShowEditServiceModal(true);
+          }
+          break;
+
+        case 'e':
+        case 'E':
+          if (focusedRowIndex >= 0 && focusedRowIndex < services.length) {
+            e.preventDefault();
+            const service = services[focusedRowIndex];
+            setEditingServiceId(service._id);
+            setShowEditServiceModal(true);
+          }
+          break;
+
+        case 'Delete':
+        case 'Backspace':
+          if (focusedRowIndex >= 0 && focusedRowIndex < services.length) {
+            // Prevent backspace from navigating back
+            if (e.key === 'Backspace') {
+              e.preventDefault();
+            }
+            const service = services[focusedRowIndex];
+            handleDeleteClick(service._id, service.name);
+          }
+          break;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [services, focusedRowIndex, showAddServiceModal, showEditServiceModal, showDeleteModal, showAnalyticsModal, showShortcutsHelp]);
 
   const openAnalyticsModal = async (service: Service) => {
     setAnalyticsService(service);
@@ -608,12 +832,46 @@ const ServiceManagement: React.FC = () => {
       );
 
       if (data.success) {
-        toast.success('Service deleted', data.message || 'The service was permanently removed.');
+        const deletedServiceId = deletingServiceId;
+        const deletedServiceName = deletingServiceName;
+
+        // Close modal immediately
+        setShowDeleteModal(false);
+        setDeletingServiceId(null);
+        setDeletingServiceName('');
+
+        // Refresh the list
         setPage(1);
         if (isMountedRef.current) {
           void fetchServicesRef.current(1, false);
           void fetchOverviewStatsRef.current();
         }
+
+        // Show undo toast with restore action
+        toast.undo(
+          'Service deleted',
+          async () => {
+            try {
+              const restoreData = await authService.patch<{ success: boolean; message?: string }>(
+                `/provider/services/${deletedServiceId}/restore`,
+                {}
+              );
+              if (restoreData.success) {
+                toast.success('Service restored', 'The service has been restored.');
+                setPage(1);
+                if (isMountedRef.current) {
+                  void fetchServicesRef.current(1, false);
+                  void fetchOverviewStatsRef.current();
+                }
+              }
+            } catch (err) {
+              console.error('Error restoring service:', err);
+              toast.error('Restore failed', err instanceof Error ? err.message : 'Failed to restore service');
+            }
+          },
+          data.message || `"${deletedServiceName}" can be restored within 8 seconds`,
+          8000
+        );
       } else {
         throw new Error('Failed to delete service');
       }
@@ -625,9 +883,11 @@ const ServiceManagement: React.FC = () => {
       );
     } finally {
       setIsDeleting(false);
-      setShowDeleteModal(false);
-      setDeletingServiceId(null);
-      setDeletingServiceName('');
+      if (showDeleteModal) {
+        setShowDeleteModal(false);
+        setDeletingServiceId(null);
+        setDeletingServiceName('');
+      }
     }
   };
 
@@ -638,40 +898,399 @@ const ServiceManagement: React.FC = () => {
     setIsDeleting(false);
   };
 
+  // Clone service handler
+  const handleCloneService = async (service: Service) => {
+    setIsCloningService(true);
+    try {
+      const data = await authService.post<{ success: boolean }>(`/provider/services/${service._id}/clone`, {});
+
+      if (data.success) {
+        toast.success('Service cloned', 'Cloned service created as draft. You can edit it now.');
+        void fetchServicesRef.current(1, false);
+        void fetchOverviewStatsRef.current();
+      }
+    } catch (err) {
+      console.error('Error cloning service:', err);
+      toast.error('Clone failed', err instanceof Error ? err.message : 'Failed to clone service');
+    } finally {
+      setIsCloningService(false);
+    }
+  };
+
+  // Fetch deleted services (trash)
+  const fetchDeletedServices = useCallback(async (pageNum: number = 1) => {
+    if (!isProvider) return;
+
+    try {
+      setDeletedServicesLoading(true);
+      setDeletedServicesError(null);
+
+      const queryParams = new URLSearchParams({
+        page: String(pageNum),
+        limit: '20',
+      });
+
+      const data = await authService.get<{
+        success: boolean;
+        data: { services: Service[]; pagination: typeof deletedPagination };
+      }>(`/provider/services/trash?${queryParams}`);
+
+      if (data.success) {
+        setDeletedServices(data.data.services);
+        setDeletedPagination(data.data.pagination);
+      }
+    } catch (err) {
+      console.error('Error fetching deleted services:', err);
+      setDeletedServicesError(err instanceof Error ? err.message : 'Failed to load trash');
+      toast.error('Failed to load trash', err instanceof Error ? err.message : 'An error occurred');
+    } finally {
+      setDeletedServicesLoading(false);
+    }
+  }, [isProvider]);
+
+  // Switch between services list and trash view
+  const switchToTrashView = () => {
+    setIsViewingTrash(true);
+    void fetchDeletedServices(1);
+  };
+
+  const switchToServicesView = () => {
+    setIsViewingTrash(false);
+    setPage(1);
+    void fetchServicesRef.current(1, false);
+  };
+
+  // Restore handlers
+  const handleRestoreClick = (serviceId: string, serviceName: string) => {
+    setRestoringServiceId(serviceId);
+    setRestoringServiceName(serviceName);
+    setShowRestoreModal(true);
+  };
+
+  const confirmRestore = async () => {
+    if (!restoringServiceId) return;
+
+    setIsRestoring(true);
+    try {
+      const data = await authService.patch<{ success: boolean; message?: string }>(
+        `/provider/services/${restoringServiceId}/restore`,
+        {}
+      );
+
+      if (data.success) {
+        toast.success('Service restored', data.message || 'The service has been restored successfully.');
+        setShowRestoreModal(false);
+        setRestoringServiceId(null);
+        setRestoringServiceName('');
+
+        // Refresh trash list and overview stats
+        void fetchDeletedServices(1);
+        void fetchOverviewStatsRef.current();
+      } else {
+        throw new Error('Failed to restore service');
+      }
+    } catch (err) {
+      console.error('Error restoring service:', err);
+      toast.error('Restore failed', err instanceof Error ? err.message : 'Failed to restore service');
+    } finally {
+      setIsRestoring(false);
+    }
+  };
+
+  const cancelRestore = () => {
+    setShowRestoreModal(false);
+    setRestoringServiceId(null);
+    setRestoringServiceName('');
+    setIsRestoring(false);
+  };
+
+  // Permanent delete handlers
+  const handlePermanentDeleteClick = (serviceId: string, serviceName: string) => {
+    setPermanentDeletingServiceId(serviceId);
+    setPermanentDeletingServiceName(serviceName);
+    setShowPermanentDeleteModal(true);
+  };
+
+  const confirmPermanentDelete = async () => {
+    if (!permanentDeletingServiceId) return;
+
+    setIsPermanentDeleting(true);
+    try {
+      const data = await authService.delete<{ success: boolean; message?: string }>(
+        `/provider/services/${permanentDeletingServiceId}/permanent`
+      );
+
+      if (data.success) {
+        toast.success('Service permanently deleted', data.message || 'The service has been permanently removed.');
+        setShowPermanentDeleteModal(false);
+        setPermanentDeletingServiceId(null);
+        setPermanentDeletingServiceName('');
+
+        // Refresh trash list
+        void fetchDeletedServices(1);
+      } else {
+        throw new Error('Failed to permanently delete service');
+      }
+    } catch (err) {
+      console.error('Error permanently deleting service:', err);
+      toast.error('Permanent delete failed', err instanceof Error ? err.message : 'Failed to permanently delete service');
+    } finally {
+      setIsPermanentDeleting(false);
+    }
+  };
+
+  const cancelPermanentDelete = () => {
+    setShowPermanentDeleteModal(false);
+    setPermanentDeletingServiceId(null);
+    setPermanentDeletingServiceName('');
+    setIsPermanentDeleting(false);
+  };
+
+  // Bulk selection handlers
+  const toggleServiceSelection = (serviceId: string) => {
+    setSelectedServices((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(serviceId)) {
+        newSet.delete(serviceId);
+      } else {
+        newSet.add(serviceId);
+      }
+      return newSet;
+    });
+  };
+
+  const toggleAllSelection = () => {
+    if (selectedServices.size === services.length) {
+      setSelectedServices(new Set());
+    } else {
+      setSelectedServices(new Set(services.map((s) => s._id)));
+    }
+  };
+
+  const clearSelection = () => {
+    setSelectedServices(new Set());
+  };
+
+  // Bulk activate services
+  const bulkActivate = async () => {
+    if (selectedServices.size === 0) return;
+
+    setIsBulkOperating(true);
+    const serviceIds = Array.from(selectedServices);
+    let successCount = 0;
+    let failCount = 0;
+
+    try {
+      for (const serviceId of serviceIds) {
+        const service = services.find((s) => s._id === serviceId);
+        if (service && canToggleService(service.status)) {
+          try {
+            await authService.patch(`/provider/services/${serviceId}/status`, { status: 'active' });
+            successCount++;
+          } catch {
+            failCount++;
+          }
+        }
+      }
+
+      if (successCount > 0) {
+        toast.success('Services activated', `${successCount} service(s) activated successfully.`);
+      }
+      if (failCount > 0) {
+        toast.error('Some services failed', `${failCount} service(s) could not be activated.`);
+      }
+
+      clearSelection();
+      if (isMountedRef.current) {
+        void fetchServicesRef.current(1, false);
+        void fetchOverviewStatsRef.current();
+      }
+    } finally {
+      setIsBulkOperating(false);
+    }
+  };
+
+  // Bulk deactivate services
+  const bulkDeactivate = async () => {
+    if (selectedServices.size === 0) return;
+
+    setIsBulkOperating(true);
+    const serviceIds = Array.from(selectedServices);
+    let successCount = 0;
+    let failCount = 0;
+
+    try {
+      for (const serviceId of serviceIds) {
+        const service = services.find((s) => s._id === serviceId);
+        if (service && canToggleService(service.status)) {
+          try {
+            await authService.patch(`/provider/services/${serviceId}/status`, { status: 'inactive' });
+            successCount++;
+          } catch {
+            failCount++;
+          }
+        }
+      }
+
+      if (successCount > 0) {
+        toast.success('Services deactivated', `${successCount} service(s) deactivated successfully.`);
+      }
+      if (failCount > 0) {
+        toast.error('Some services failed', `${failCount} service(s) could not be deactivated.`);
+      }
+
+      clearSelection();
+      if (isMountedRef.current) {
+        void fetchServicesRef.current(1, false);
+        void fetchOverviewStatsRef.current();
+      }
+    } finally {
+      setIsBulkOperating(false);
+    }
+  };
+
+  // Bulk delete services
+  const confirmBulkDelete = async () => {
+    if (selectedServices.size === 0) return;
+
+    setIsBulkOperating(true);
+    const serviceIds = Array.from(selectedServices);
+    let successCount = 0;
+    let failCount = 0;
+
+    try {
+      for (const serviceId of serviceIds) {
+        try {
+          await authService.delete(`/provider/services/${serviceId}`);
+          successCount++;
+        } catch {
+          failCount++;
+        }
+      }
+
+      if (successCount > 0) {
+        toast.success('Services deleted', `${successCount} service(s) deleted successfully.`);
+      }
+      if (failCount > 0) {
+        toast.error('Some services failed', `${failCount} service(s) could not be deleted.`);
+      }
+
+      clearSelection();
+      setShowBulkDeleteModal(false);
+      if (isMountedRef.current) {
+        void fetchServicesRef.current(1, false);
+        void fetchOverviewStatsRef.current();
+      }
+    } finally {
+      setIsBulkOperating(false);
+    }
+  };
+
+  // Export services to CSV
+  const exportToCSV = () => {
+    setIsExporting(true);
+    setShowExportDropdown(false);
+
+    const headers = ['Name', 'Category', 'Status', 'Price', 'Duration (min)', 'Views', 'Clicks', 'Rating', 'Created Date'];
+    const rows = services.map((service) => [
+      service.name,
+      service.category,
+      service.status,
+      `${service.price.currency || 'AED'} ${service.price.amount}`,
+      service.duration,
+      service.searchMetadata.searchCount,
+      service.searchMetadata.clickCount,
+      service.rating.count > 0 ? service.rating.average.toFixed(1) : 'N/A',
+      new Date(service.createdAt).toLocaleDateString(),
+    ]);
+
+    const csvContent = [
+      headers.join(','),
+      ...rows.map((row) =>
+        row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(',')
+      ),
+    ].join('\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `services-export-${new Date().toISOString().split('T')[0]}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    toast.success('Export complete', `Exported ${services.length} services to CSV`);
+    setIsExporting(false);
+  };
+
+  // Export services to JSON
+  const exportToJSON = () => {
+    setIsExporting(true);
+    setShowExportDropdown(false);
+
+    const exportData = services.map((service) => ({
+      name: service.name,
+      category: service.category,
+      status: service.status,
+      price: `${service.price.currency || 'AED'} ${service.price.amount}`,
+      duration: service.duration,
+      views: service.searchMetadata.searchCount,
+      clicks: service.searchMetadata.clickCount,
+      rating: service.rating.count > 0 ? service.rating.average.toFixed(1) : null,
+      createdDate: new Date(service.createdAt).toLocaleDateString(),
+    }));
+
+    const jsonContent = JSON.stringify(exportData, null, 2);
+    const blob = new Blob([jsonContent], { type: 'application/json;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `services-export-${new Date().toISOString().split('T')[0]}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    toast.success('Export complete', `Exported ${services.length} services to JSON`);
+    setIsExporting(false);
+  };
+
   const getStatusBadge = (status: string) => {
     switch (status) {
       case 'pending_review':
         return (
-          <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-amber-50 text-amber-800 border border-amber-100">
-            <Clock className="w-3 h-3 mr-1" />
+          <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-nilin-warning/20 text-nilin-charcoal border border-nilin-warning/30">
+            <Clock className="w-3 h-3 mr-1" aria-hidden="true" />
             Pending Review
           </span>
         );
       case 'active':
         return (
           <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-green-50 text-green-800 border border-green-100">
-            <CheckCircle className="w-3 h-3 mr-1" />
+            <CheckCircle className="w-3 h-3 mr-1" aria-hidden="true" />
             Active
           </span>
         );
       case 'draft':
         return (
           <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-nilin-muted text-nilin-warmGray border border-nilin-border">
-            <Edit3 className="w-3 h-3 mr-1" />
+            <Edit3 className="w-3 h-3 mr-1" aria-hidden="true" />
             Draft
           </span>
         );
       case 'inactive':
         return (
           <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-red-50 text-red-700 border border-red-100">
-            <AlertCircle className="w-3 h-3 mr-1" />
+            <AlertCircle className="w-3 h-3 mr-1" aria-hidden="true" />
             Inactive
           </span>
         );
       case 'rejected':
         return (
           <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-red-50 text-red-800 border border-red-200">
-            <XCircle className="w-3 h-3 mr-1" />
+            <XCircle className="w-3 h-3 mr-1" aria-hidden="true" />
             Rejected
           </span>
         );
@@ -690,101 +1309,112 @@ const ServiceManagement: React.FC = () => {
     );
   }
 
-  const overviewSkeleton = (
-    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-      {[...Array(4)].map((_, i) => (
-        <div key={i} className="glass-nilin rounded-nilin-lg p-5 animate-pulse">
-          <div className="h-4 bg-nilin-muted rounded w-2/3 mb-3" />
-          <div className="h-8 bg-nilin-muted rounded w-1/2" />
-        </div>
-      ))}
-    </div>
-  );
-
   return (
     <div className="space-y-8 font-sans">
-      {/* Overview stats */}
+      {/* Booking Stats - Primary Section */}
       <section>
-        <h2 className="text-lg font-serif text-nilin-charcoal mb-4">Booking overview</h2>
+        <div className="flex items-center gap-3 mb-4">
+          <h2 className="text-xl font-serif text-nilin-charcoal">Booking Overview</h2>
+          <span className="px-2 py-0.5 text-xs bg-nilin-coral/10 text-nilin-coral rounded-full font-medium">Live</span>
+        </div>
         {overviewLoading ? (
-          overviewSkeleton
+          <SkeletonStatGrid columns={4} />
         ) : (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <StatCard
-            label="New Bookings"
-            value={bookingStats.newBookings}
-            hint="Last 7 days"
-            icon={Calendar}
-            iconClass="bg-nilin-blush text-nilin-coral"
-          />
-          <StatCard
-            label="Pending Requests"
-            value={bookingStats.pendingRequests}
-            hint="Awaiting response"
-            icon={Clock}
-            iconClass="bg-amber-50 text-amber-700"
-          />
-          <StatCard
-            label="Today's Schedule"
-            value={bookingStats.todaySchedule}
-            hint="Appointments"
-            icon={Users}
-            iconClass="bg-nilin-muted text-nilin-rose"
-          />
-          <StatCard
-            label="Completed"
-            value={bookingStats.completedThisMonth}
-            hint="This month"
-            icon={CheckCircle}
-            iconClass="bg-green-50 text-green-700"
-          />
+          <div className="stagger-item" style={{ animationDelay: '0.1s' }}>
+            <StatCard
+              label="New Bookings"
+              value={bookingStats.newBookings}
+              hint="Last 7 days"
+              icon={Calendar}
+              iconClass="bg-nilin-blush text-nilin-coral"
+            />
+          </div>
+          <div className="stagger-item" style={{ animationDelay: '0.15s' }}>
+            <StatCard
+              label="Pending Requests"
+              value={bookingStats.pendingRequests}
+              hint="Awaiting response"
+              icon={Clock}
+              iconClass="bg-nilin-warning/20 text-nilin-charcoal"
+            />
+          </div>
+          <div className="stagger-item" style={{ animationDelay: '0.2s' }}>
+            <StatCard
+              label="Today's Schedule"
+              value={bookingStats.todaySchedule}
+              hint="Appointments"
+              icon={Users}
+              iconClass="bg-nilin-muted text-nilin-rose"
+            />
+          </div>
+          <div className="stagger-item" style={{ animationDelay: '0.25s' }}>
+            <StatCard
+              label="Completed"
+              value={bookingStats.completedThisMonth}
+              hint="This month"
+              icon={CheckCircle}
+              iconClass="bg-green-50 text-green-700"
+            />
+          </div>
         </div>
         )}
       </section>
 
+      {/* Service Stats - Secondary Section */}
       <section>
-        <h2 className="text-lg font-serif text-nilin-charcoal mb-4">Service performance</h2>
+        <h2 className="text-xl font-serif text-nilin-charcoal mb-4">Service Performance</h2>
         {overviewLoading ? (
           <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
-            {[...Array(5)].map((_, i) => (
-              <div key={i} className="glass-nilin rounded-nilin-lg p-5 animate-pulse h-24" />
-            ))}
+            <SkeletonPerformanceCard count={5} />
           </div>
         ) : (
         <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
-          <StatCard
-            label="Total Services"
-            value={serviceStats.total}
-            icon={Calendar}
-            iconClass="bg-nilin-blush text-nilin-coral"
-          />
-          <StatCard
-            label="Active Services"
-            value={serviceStats.active}
-            icon={CheckCircle}
-            iconClass="bg-green-50 text-green-700"
-          />
-          <StatCard
-            label="Search Impressions"
-            value={performanceStats.totalViews.toLocaleString()}
-            hint="All-time · times shown in search"
-            icon={Eye}
-            iconClass="bg-nilin-muted text-nilin-rose"
-          />
-          <StatCard
-            label="Click-through Rate"
-            value={`${performanceStats.conversionRate.toFixed(1)}%`}
-            hint="All-time · detail views ÷ impressions"
-            icon={TrendingUp}
-            iconClass="bg-nilin-peach text-nilin-charcoal"
-          />
-          <StatCard
-            label="Booking Rate"
-            value={`${performanceStats.bookingRate.toFixed(1)}%`}
-            hint="All-time · completed bookings ÷ detail views"
-            icon={Users}
-            iconClass="bg-green-50 text-green-700"
-          />
+          <div className="glass-nilin rounded-nilin-lg p-5 border border-nilin-border/50 hover-lift group stagger-item" style={{ animationDelay: '0.3s' }}>
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 rounded-xl bg-nilin-blush/60 flex items-center justify-center group-hover:bg-nilin-blush transition-colors">
+                <Calendar className="w-5 h-5 text-nilin-coral" />
+              </div>
+            </div>
+            <p className="text-3xl font-serif text-nilin-charcoal tracking-tight">{serviceStats.total}</p>
+            <p className="text-sm text-nilin-warmGray mt-1">Total Services</p>
+          </div>
+          <div className="glass-nilin rounded-nilin-lg p-5 border border-nilin-border/50 hover-lift group stagger-item" style={{ animationDelay: '0.35s' }}>
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 rounded-xl bg-green-50/70 flex items-center justify-center group-hover:bg-green-100 transition-colors">
+                <CheckCircle className="w-5 h-5 text-green-600" />
+              </div>
+            </div>
+            <p className="text-3xl font-serif text-nilin-charcoal tracking-tight">{serviceStats.active}</p>
+            <p className="text-sm text-nilin-warmGray mt-1">Active</p>
+          </div>
+          <div className="glass-nilin rounded-nilin-lg p-5 border border-nilin-border/50 hover-lift group stagger-item" style={{ animationDelay: '0.4s' }}>
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 rounded-xl bg-nilin-blush/60 flex items-center justify-center group-hover:bg-nilin-blush transition-colors">
+                <Eye className="w-5 h-5 text-nilin-coral" />
+              </div>
+            </div>
+            <p className="text-3xl font-serif text-nilin-charcoal tracking-tight">{performanceStats.totalViews.toLocaleString()}</p>
+            <p className="text-sm text-nilin-warmGray mt-1">Impressions</p>
+          </div>
+          <div className="glass-nilin rounded-nilin-lg p-5 border border-nilin-border/50 hover-lift group stagger-item" style={{ animationDelay: '0.45s' }}>
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 rounded-xl bg-nilin-peach/50 flex items-center justify-center group-hover:bg-nilin-peach transition-colors">
+                <TrendingUp className="w-5 h-5 text-nilin-charcoal" />
+              </div>
+            </div>
+            <p className="text-3xl font-serif text-nilin-charcoal tracking-tight">{performanceStats.conversionRate.toFixed(1)}%</p>
+            <p className="text-sm text-nilin-warmGray mt-1">CTR</p>
+          </div>
+          <div className="glass-nilin rounded-nilin-lg p-5 border border-nilin-border/50 hover-lift group stagger-item" style={{ animationDelay: '0.5s' }}>
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 rounded-xl bg-green-50/70 flex items-center justify-center group-hover:bg-green-100 transition-colors">
+                <Users className="w-5 h-5 text-green-600" />
+              </div>
+            </div>
+            <p className="text-3xl font-serif text-nilin-charcoal tracking-tight">{performanceStats.bookingRate.toFixed(1)}%</p>
+            <p className="text-sm text-nilin-warmGray mt-1">Booking Rate</p>
+          </div>
         </div>
         )}
       </section>
@@ -793,33 +1423,132 @@ const ServiceManagement: React.FC = () => {
       <div className="glass-nilin rounded-nilin-lg border border-nilin-border/60 overflow-hidden shadow-sm">
         <div className="px-6 py-5 border-b border-nilin-border bg-gradient-to-r from-nilin-blush/40 to-nilin-peach/30">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-            <div>
-              <h2 className="text-xl font-serif text-nilin-charcoal">Manage Services</h2>
-              <p className="text-sm text-nilin-warmGray mt-0.5">Create, edit, and manage your service offerings</p>
+            <div className="flex items-center gap-4">
+              <div>
+                <h2 className="text-xl font-serif text-nilin-charcoal">Manage Services</h2>
+                <p className="text-sm text-nilin-warmGray mt-0.5">Create, edit, and manage your service offerings</p>
+              </div>
+              {/* Tab Buttons */}
+              <div className="flex items-center gap-1 bg-white/60 rounded-nilin p-1 border border-nilin-border/50">
+                <button
+                  type="button"
+                  onClick={switchToServicesView}
+                  className={`px-4 py-2 rounded-nilin text-sm font-medium transition-all ${
+                    !isViewingTrash
+                      ? 'bg-nilin-coral text-white shadow-sm'
+                      : 'text-nilin-warmGray hover:text-nilin-charcoal hover:bg-nilin-muted/50'
+                  }`}
+                >
+                  <span className="flex items-center gap-2">
+                    <Archive className="w-4 h-4" />
+                    Services
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={switchToTrashView}
+                  className={`px-4 py-2 rounded-nilin text-sm font-medium transition-all ${
+                    isViewingTrash
+                      ? 'bg-nilin-coral text-white shadow-sm'
+                      : 'text-nilin-warmGray hover:text-nilin-charcoal hover:bg-nilin-muted/50'
+                  }`}
+                >
+                  <span className="flex items-center gap-2">
+                    <Trash className="w-4 h-4" />
+                    Trash
+                  </span>
+                </button>
+              </div>
             </div>
-            <button
-              type="button"
-              onClick={() => setShowAddServiceModal(true)}
-              className="btn-nilin inline-flex items-center justify-center gap-2 shrink-0"
-            >
-              <Plus className="w-4 h-4" />
-              Add New Service
-            </button>
+            <div className="flex items-center gap-2">
+              {!isViewingTrash && (
+                <button
+                  type="button"
+                  onClick={() => setShowShortcutsHelp(true)}
+                  className="p-2 text-nilin-warmGray hover:text-nilin-charcoal hover:bg-white/50 rounded-lg transition-colors"
+                  title="Keyboard shortcuts (?)"
+                  aria-label="Show keyboard shortcuts"
+                >
+                  <Keyboard className="w-4 h-4" />
+                </button>
+              )}
+
+              {/* Export Dropdown */}
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setShowExportDropdown(!showExportDropdown)}
+                  disabled={services.length === 0 || isExporting}
+                  className="p-2 text-nilin-warmGray hover:text-nilin-charcoal hover:bg-white/50 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Export services"
+                  aria-label="Export services"
+                >
+                  {isExporting ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Download className="w-4 h-4" />
+                  )}
+                  <ChevronDown className="w-3 h-3 inline-block ml-0.5" />
+                </button>
+
+                {showExportDropdown && (
+                  <>
+                    <div
+                      className="fixed inset-0 z-10"
+                      onClick={() => setShowExportDropdown(false)}
+                    />
+                    <div className="absolute right-0 mt-2 w-48 bg-white rounded-lg shadow-lg border border-nilin-border z-20 py-1">
+                      <button
+                        type="button"
+                        onClick={exportToCSV}
+                        className="w-full px-4 py-2.5 text-left text-sm text-nilin-charcoal hover:bg-nilin-muted flex items-center gap-2 transition-colors"
+                      >
+                        <FileSpreadsheet className="w-4 h-4 text-green-600" />
+                        Export as CSV
+                      </button>
+                      <button
+                        type="button"
+                        onClick={exportToJSON}
+                        className="w-full px-4 py-2.5 text-left text-sm text-nilin-charcoal hover:bg-nilin-muted flex items-center gap-2 transition-colors"
+                      >
+                        <FileJson className="w-4 h-4 text-blue-600" />
+                        Export as JSON
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {!isViewingTrash && (
+                <button
+                  type="button"
+                  onClick={() => setShowAddServiceModal(true)}
+                  className="btn-nilin inline-flex items-center justify-center gap-2 shrink-0 hover:scale-105 active:scale-95 transition-transform"
+                >
+                  <Plus className="w-4 h-4" aria-hidden="true" />
+                  Add New Service
+                </button>
+              )}
+            </div>
           </div>
         </div>
 
-        {/* Filters */}
-        <div className="px-6 py-5 border-b border-nilin-border bg-white/40">
-          <div className="flex items-center gap-2 mb-4 text-nilin-warmGray">
-            <Filter className="w-4 h-4" />
-            <span className="text-sm font-medium">Filter & sort</span>
+        {/* Filters - Hidden when viewing trash */}
+        {!isViewingTrash && (
+          <div className="px-6 py-5 border-b border-nilin-border bg-nilin-cream/50">
+          <div className="flex items-center gap-2 mb-4">
+            <div className="w-8 h-8 rounded-lg bg-nilin-blush/50 flex items-center justify-center">
+              <Filter className="w-4 h-4 text-nilin-coral" />
+            </div>
+            <span className="text-sm font-medium text-nilin-charcoal">Filter & sort</span>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
             <div className="sm:col-span-2 xl:col-span-1">
-              <label className="block text-xs font-medium text-nilin-warmGray mb-1.5">Search</label>
+              <label className="block text-xs font-medium text-nilin-warmGray mb-1.5">Search <span className="text-nilin-lightGray font-normal">(press / to focus)</span></label>
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-nilin-warmGray w-4 h-4 pointer-events-none" />
                 <input
+                  ref={searchInputRef}
                   type="text"
                   placeholder="Search services..."
                   value={searchTerm}
@@ -876,50 +1605,268 @@ const ServiceManagement: React.FC = () => {
                 <option value="createdAt-asc">Oldest First</option>
                 <option value="price-asc">Price: Low to High</option>
                 <option value="price-desc">Price: High to Low</option>
+                <option value="rating-desc">Rating: High to Low</option>
+                <option value="rating-asc">Rating: Low to High</option>
                 <option value="name-asc">Name: A-Z</option>
                 <option value="views-desc">Most Views</option>
                 <option value="popularity-desc">Most Popular</option>
               </select>
             </div>
 
+            <div>
+              <label className="block text-xs font-medium text-nilin-warmGray mb-1.5">Rating</label>
+              <select value={ratingFilter} onChange={(e) => setRatingFilter(e.target.value)} className={selectClass}>
+                <option value="any">Any Rating</option>
+                <option value="4">4+ Stars</option>
+                <option value="3">3+ Stars</option>
+                <option value="2">2+ Stars</option>
+                <option value="1">1+ Star</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-nilin-warmGray mb-1.5">Price Range (AED)</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  placeholder="Min"
+                  value={minPrice}
+                  onChange={(e) => setMinPrice(e.target.value)}
+                  className={`${inputClass} text-sm`}
+                  min="0"
+                />
+                <span className="text-sm text-nilin-warmGray shrink-0">to</span>
+                <input
+                  type="number"
+                  placeholder="Max"
+                  value={maxPrice}
+                  onChange={(e) => setMaxPrice(e.target.value)}
+                  className={`${inputClass} text-sm`}
+                  min="0"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-nilin-warmGray mb-1.5">Featured</label>
+              <button
+                type="button"
+                onClick={() => setFeaturedOnly(!featuredOnly)}
+                className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-nilin border transition-colors ${
+                  featuredOnly
+                    ? 'bg-nilin-warning/20 border-nilin-warning/30 text-nilin-charcoal'
+                    : 'bg-white border-nilin-border text-nilin-warmGray hover:border-nilin-coral/30'
+                }`}
+              >
+                <Star className={`w-4 h-4 ${featuredOnly ? 'fill-nilin-warning text-nilin-warning' : ''}`} />
+                <span className="text-sm font-medium">{featuredOnly ? 'Featured Only' : 'Any'}</span>
+              </button>
+            </div>
+
             <div className="sm:col-span-2 xl:col-span-2">
               <label className="block text-xs font-medium text-nilin-warmGray mb-1.5">Service created between</label>
               <div className="flex items-center gap-2">
                 <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className={inputClass} />
-                <span className="text-nilin-warmGray shrink-0">to</span>
+                <span className="text-sm text-nilin-warmGray shrink-0">to</span>
                 <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className={inputClass} />
               </div>
             </div>
           </div>
 
-          {(searchTerm || startDate || endDate || categoryFilter !== 'all' || statusFilter !== 'all') && (
-            <button
-              type="button"
-              onClick={() => {
-                setSearchTerm('');
-                setStartDate('');
-                setEndDate('');
-                setCategoryFilter('all');
-                setStatusFilter('all');
-                setSortBy('createdAt');
-                setSortOrder('desc');
-                setPage(1);
-              }}
-              className="mt-4 text-sm text-nilin-coral hover:text-nilin-rose font-medium transition-colors"
-            >
-              Clear all filters
-            </button>
-          )}
+          {/* Active Filter Chips */}
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            {searchTerm && (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm bg-nilin-coral/10 text-nilin-rose border border-nilin-coral/20">
+                <Search className="w-3.5 h-3.5" />
+                <span className="max-w-[150px] truncate">{searchTerm}</span>
+                <button
+                  type="button"
+                  onClick={() => setSearchTerm('')}
+                  className="p-0.5 rounded-full hover:bg-nilin-coral/20 transition-colors"
+                  aria-label="Clear search filter"
+                >
+                  <XCircle className="w-3.5 h-3.5" />
+                </button>
+              </span>
+            )}
+            {categoryFilter !== 'all' && (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm bg-nilin-coral/10 text-nilin-rose border border-nilin-coral/20">
+                <span>Category: {categoryFilter}</span>
+                <button
+                  type="button"
+                  onClick={() => setCategoryFilter('all')}
+                  className="p-0.5 rounded-full hover:bg-nilin-coral/20 transition-colors"
+                  aria-label="Clear category filter"
+                >
+                  <XCircle className="w-3.5 h-3.5" />
+                </button>
+              </span>
+            )}
+            {statusFilter !== 'all' && (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm bg-nilin-coral/10 text-nilin-rose border border-nilin-coral/20">
+                <span>Status: {statusFilter}</span>
+                <button
+                  type="button"
+                  onClick={() => setStatusFilter('all')}
+                  className="p-0.5 rounded-full hover:bg-nilin-coral/20 transition-colors"
+                  aria-label="Clear status filter"
+                >
+                  <XCircle className="w-3.5 h-3.5" />
+                </button>
+              </span>
+            )}
+            {(startDate || endDate) && (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm bg-nilin-coral/10 text-nilin-rose border border-nilin-coral/20">
+                <Calendar className="w-3.5 h-3.5" />
+                <span>
+                  {startDate && endDate
+                    ? `${startDate} to ${endDate}`
+                    : startDate
+                      ? `From ${startDate}`
+                      : `Until ${endDate}`}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStartDate('');
+                    setEndDate('');
+                  }}
+                  className="p-0.5 rounded-full hover:bg-nilin-coral/20 transition-colors"
+                  aria-label="Clear date filter"
+                >
+                  <XCircle className="w-3.5 h-3.5" />
+                </button>
+              </span>
+            )}
+            {ratingFilter !== 'any' && (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm bg-nilin-coral/10 text-nilin-rose border border-nilin-coral/20">
+                <Star className="w-3.5 h-3.5" />
+                <span>{ratingFilter}+ Stars</span>
+                <button
+                  type="button"
+                  onClick={() => setRatingFilter('any')}
+                  className="p-0.5 rounded-full hover:bg-nilin-coral/20 transition-colors"
+                  aria-label="Clear rating filter"
+                >
+                  <XCircle className="w-3.5 h-3.5" />
+                </button>
+              </span>
+            )}
+            {(minPrice || maxPrice) && (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm bg-nilin-coral/10 text-nilin-rose border border-nilin-coral/20">
+                <DollarSign className="w-3.5 h-3.5" />
+                <span>
+                  {minPrice && maxPrice
+                    ? `AED ${minPrice} - ${maxPrice}`
+                    : minPrice
+                      ? `Min: AED ${minPrice}`
+                      : `Max: AED ${maxPrice}`}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMinPrice('');
+                    setMaxPrice('');
+                  }}
+                  className="p-0.5 rounded-full hover:bg-nilin-coral/20 transition-colors"
+                  aria-label="Clear price filter"
+                >
+                  <XCircle className="w-3.5 h-3.5" />
+                </button>
+              </span>
+            )}
+            {featuredOnly && (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm bg-nilin-warning/20 text-nilin-charcoal border border-nilin-warning/30">
+                <Star className="w-3.5 h-3.5 fill-nilin-warning text-nilin-warning" />
+                <span>Featured Only</span>
+                <button
+                  type="button"
+                  onClick={() => setFeaturedOnly(false)}
+                  className="p-0.5 rounded-full hover:bg-nilin-warning/30 transition-colors"
+                  aria-label="Clear featured filter"
+                >
+                  <XCircle className="w-3.5 h-3.5" />
+                </button>
+              </span>
+            )}
+            {(searchTerm || startDate || endDate || categoryFilter !== 'all' || statusFilter !== 'all' || ratingFilter !== 'any' || minPrice || maxPrice || featuredOnly) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchTerm('');
+                  setStartDate('');
+                  setEndDate('');
+                  setCategoryFilter('all');
+                  setStatusFilter('all');
+                  setRatingFilter('any');
+                  setMinPrice('');
+                  setMaxPrice('');
+                  setFeaturedOnly(false);
+                  setSortBy('createdAt');
+                  setSortOrder('desc');
+                  setPage(1);
+                }}
+                className="text-sm text-nilin-warmGray hover:text-nilin-charcoal font-medium transition-colors underline underline-offset-2"
+              >
+                Clear all
+              </button>
+            )}
+          </div>
         </div>
+        )}
+
+        {/* Bulk Action Bar - Hidden when viewing trash */}
+        {selectedServices.size > 0 && (
+          <div className="px-6 py-3 bg-nilin-coral/10 border-b border-nilin-coral/20 flex items-center justify-between gap-4 flex-wrap">
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={clearSelection}
+                className="p-1.5 hover:bg-nilin-coral/20 rounded-lg transition-colors"
+                aria-label="Clear selection"
+              >
+                <X className="w-4 h-4 text-nilin-coral" />
+              </button>
+              <span className="text-sm font-medium text-nilin-charcoal">
+                {selectedServices.size} service{selectedServices.size !== 1 ? 's' : ''} selected
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={bulkActivate}
+                disabled={isBulkOperating}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+              >
+                <Power className="w-3.5 h-3.5" />
+                Activate
+              </button>
+              <button
+                type="button"
+                onClick={bulkDeactivate}
+                disabled={isBulkOperating}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+              >
+                <ToggleLeft className="w-3.5 h-3.5" />
+                Deactivate
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowBulkDeleteModal(true)}
+                disabled={isBulkOperating}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                Delete
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Services List */}
         <div className="p-6">
           {listLoading && services.length === 0 ? (
-            <div className="space-y-4">
-              {[...Array(3)].map((_, i) => (
-                <div key={i} className="h-24 bg-nilin-muted/60 rounded-nilin animate-pulse" />
-              ))}
-            </div>
+            <SkeletonServiceList count={3} />
           ) : error ? (
             <div className="py-12 text-center">
               <AlertCircle className="w-10 h-10 text-red-500 mx-auto mb-3" />
@@ -929,57 +1876,117 @@ const ServiceManagement: React.FC = () => {
               </button>
             </div>
           ) : services.length === 0 && !listLoading ? (
-            <div className="py-16 text-center">
-              <div className="w-20 h-20 bg-nilin-blush/50 rounded-full flex items-center justify-center mx-auto mb-4">
-                <Calendar className="h-10 w-10 text-nilin-coral" />
-              </div>
-              <h3 className="text-xl font-serif text-nilin-charcoal mb-2">
-                {searchTerm ? 'No services found' : 'No services yet'}
-              </h3>
-              <p className="text-nilin-warmGray mb-6 max-w-sm mx-auto">
-                {searchTerm
-                  ? 'Try adjusting your search terms or filters'
-                  : 'Start by creating your first service offering and grow your business'}
-              </p>
-              {!searchTerm && (
-                <button type="button" onClick={() => setShowAddServiceModal(true)} className="btn-nilin inline-flex items-center gap-2">
-                  <Plus className="w-5 h-5" />
-                  Create Your First Service
-                </button>
-              )}
-            </div>
+            searchTerm ? (
+              <NoServicesSearchEmpty onClearFilters={() => {
+                setSearchTerm('');
+                setStartDate('');
+                setEndDate('');
+                setCategoryFilter('all');
+                setStatusFilter('all');
+                setSortBy('createdAt');
+                setSortOrder('desc');
+                setPage(1);
+              }} />
+            ) : (
+              <NoServicesEmpty onCreateService={() => setShowAddServiceModal(true)} />
+            )
           ) : (
             <div className="space-y-4">
               {pagination.total > 0 && (
-                <p className="text-sm text-nilin-warmGray font-sans">
-                  Showing {services.length} of {pagination.total} services
-                </p>
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={toggleAllSelection}
+                    className={`p-1 rounded transition-colors ${
+                      selectedServices.size === services.length && services.length > 0
+                        ? 'text-nilin-coral'
+                        : 'text-nilin-lightGray hover:text-nilin-coral'
+                    }`}
+                    aria-label={selectedServices.size === services.length ? 'Deselect all' : 'Select all'}
+                  >
+                    {selectedServices.size === services.length && services.length > 0 ? (
+                      <CheckSquare className="w-5 h-5" />
+                    ) : (
+                      <Square className="w-5 h-5" />
+                    )}
+                  </button>
+                  <p className="text-sm text-nilin-warmGray font-sans">
+                    Showing {services.length} of {pagination.total} services
+                    {selectedServices.size > 0 && ` (${selectedServices.size} selected)`}
+                  </p>
+                </div>
               )}
-              {services.map((service) => (
+              {services.map((service, index) => (
                 <article
                   key={service._id}
-                  className="card-nilin hover-lift p-5 rounded-nilin-lg bg-white/80 border border-nilin-border"
+                  ref={(el: HTMLDivElement | null) => { serviceRefs.current[index] = el; }}
+                  className={`card-nilin hover-lift p-6 rounded-nilin-lg bg-white/90 border transition-all duration-200 hover:shadow-lg hover:border-nilin-coral/30 stagger-item ${
+                    focusedRowIndex === index
+                      ? 'border-nilin-coral shadow-lg ring-2 ring-nilin-coral/20'
+                      : 'border-nilin-border'
+                  } ${selectedServices.has(service._id) ? 'ring-2 ring-nilin-coral bg-nilin-coral/5' : ''}`}
+                  style={{ animationDelay: `${index * 0.05}s` }}
                 >
-                  <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+                  <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-5">
+                    {/* Checkbox for bulk selection */}
+                    <div className="flex items-start pt-1">
+                      <button
+                        type="button"
+                        onClick={() => toggleServiceSelection(service._id)}
+                        className={`p-1 rounded transition-colors ${
+                          selectedServices.has(service._id)
+                            ? 'text-nilin-coral'
+                            : 'text-nilin-lightGray hover:text-nilin-coral'
+                        }`}
+                        aria-label={selectedServices.has(service._id) ? `Deselect ${service.name}` : `Select ${service.name}`}
+                      >
+                        {selectedServices.has(service._id) ? (
+                          <CheckSquare className="w-5 h-5" />
+                        ) : (
+                          <Square className="w-5 h-5" />
+                        )}
+                      </button>
+                    </div>
+
+                    {/* Service Thumbnail */}
+                    <div className="flex-shrink-0">
+                      {service.images && service.images.length > 0 ? (
+                        <img
+                          src={service.images[0]}
+                          alt={service.name}
+                          className="w-20 h-20 rounded-xl object-cover border border-nilin-border/50"
+                        />
+                      ) : (
+                        <div className="w-20 h-20 rounded-xl bg-gradient-to-br from-nilin-blush to-nilin-peach flex items-center justify-center border border-nilin-border/50">
+                          <span className="text-2xl font-serif text-nilin-coral/50">
+                            {service.name.charAt(0).toUpperCase()}
+                          </span>
+                        </div>
+                      )}
+                    </div>
                     <div className="flex-1 min-w-0">
-                      <div className="flex flex-wrap items-center gap-2 mb-3">
-                        <h3 className="text-xl font-serif text-nilin-charcoal">{service.name}</h3>
+                      <div className="flex flex-wrap items-center gap-3 mb-4">
+                        <h3 className="text-xl font-serif text-nilin-charcoal tracking-tight truncate" title={service.name}>{service.name}</h3>
                         {getStatusBadge(service.status)}
                         {service.isFeatured && (
-                          <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-amber-50 text-amber-800 border border-amber-100">
-                            <Star className="w-3 h-3 mr-1 fill-amber-400 text-amber-400" />
+                          <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-nilin-warning/20 text-nilin-charcoal border border-nilin-warning/30">
+                            <Star className="w-3 h-3 mr-1 fill-nilin-warning text-nilin-warning" aria-hidden="true" />
                             Featured
                           </span>
                         )}
                       </div>
 
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3">
-                        <div className="flex items-center gap-2 text-sm text-nilin-warmGray">
-                          <Calendar className="w-4 h-4 text-nilin-coral shrink-0" />
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-4">
+                        <div className="flex items-center gap-2.5 text-sm text-nilin-warmGray">
+                          <div className="w-8 h-8 rounded-lg bg-nilin-blush/40 flex items-center justify-center">
+                            <Calendar className="w-4 h-4 text-nilin-coral" />
+                          </div>
                           <span className="truncate">{service.category}</span>
                         </div>
-                        <div className="flex items-center gap-2 text-sm font-medium text-nilin-charcoal">
-                          <DollarSign className="w-4 h-4 text-nilin-coral shrink-0" />
+                        <div className="flex items-center gap-2.5 text-sm font-medium text-nilin-charcoal">
+                          <div className="w-8 h-8 rounded-lg bg-nilin-blush/40 flex items-center justify-center">
+                            <DollarSign className="w-4 h-4 text-nilin-coral" />
+                          </div>
                           <span>
                             {service.price.currency || 'AED'} {service.price.amount}
                             {service.price.type !== 'fixed' && (
@@ -987,12 +1994,16 @@ const ServiceManagement: React.FC = () => {
                             )}
                           </span>
                         </div>
-                        <div className="flex items-center gap-2 text-sm text-nilin-warmGray">
-                          <Clock className="w-4 h-4 shrink-0" />
+                        <div className="flex items-center gap-2.5 text-sm text-nilin-warmGray">
+                          <div className="w-8 h-8 rounded-lg bg-nilin-muted/50 flex items-center justify-center">
+                            <Clock className="w-4 h-4" />
+                          </div>
                           <span>{service.duration} min</span>
                         </div>
-                        <div className="flex items-center gap-2 text-sm text-nilin-warmGray">
-                          <MapPin className="w-4 h-4 shrink-0" />
+                        <div className="flex items-center gap-2.5 text-sm text-nilin-warmGray">
+                          <div className="w-8 h-8 rounded-lg bg-nilin-muted/50 flex items-center justify-center">
+                            <MapPin className="w-4 h-4 shrink-0" />
+                          </div>
                           <span className="truncate">
                             {service.location?.address?.city || '—'}
                             {service.location?.address?.state ? `, ${service.location.address.state}` : ''}
@@ -1000,78 +2011,134 @@ const ServiceManagement: React.FC = () => {
                         </div>
                       </div>
 
-                      <div className="flex flex-wrap gap-4 text-xs text-nilin-lightGray">
-                        <span className="flex items-center gap-1">
-                          <Eye className="w-3.5 h-3.5" />
-                          {service.searchMetadata.searchCount} impressions
+                      <div className="flex flex-wrap items-center gap-4">
+                        <span className="inline-flex items-center gap-1.5 text-xs font-medium text-nilin-charcoal/70">
+                          <Eye className="w-3.5 h-3.5 text-nilin-warmGray" />
+                          <span className="font-semibold text-nilin-charcoal">{service.searchMetadata.searchCount.toLocaleString()}</span> impressions
                         </span>
-                        <span className="flex items-center gap-1">
-                          <Users className="w-3.5 h-3.5" />
-                          {service.searchMetadata.clickCount} detail views
+                        <span className="inline-flex items-center gap-1.5 text-xs font-medium text-nilin-charcoal/70">
+                          <Users className="w-3.5 h-3.5 text-nilin-warmGray" />
+                          <span className="font-semibold text-nilin-charcoal">{service.searchMetadata.clickCount.toLocaleString()}</span> views
                         </span>
-                        <span className="flex items-center gap-1">
-                          <Star className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />
-                          {service.rating.count > 0
-                            ? `${service.rating.average.toFixed(1)} (${service.rating.count})`
-                            : 'No reviews yet'}
+                        {service.rating.count > 0 && (
+                          <span className="inline-flex items-center gap-1.5 text-xs font-medium text-nilin-charcoal/70">
+                            <Star className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />
+                            <span className="font-semibold text-nilin-charcoal">{service.rating.average.toFixed(1)}</span>
+                            <span className="text-nilin-lightGray">({service.rating.count})</span>
+                          </span>
+                        )}
+                        <span className="text-xs text-nilin-lightGray ml-auto">
+                          Updated {new Date(service.updatedAt).toLocaleDateString()}
                         </span>
-                        <span>Updated {new Date(service.updatedAt).toLocaleDateString()}</span>
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-1 lg:flex-col lg:items-end shrink-0">
-                      <button
-                        type="button"
-                        onClick={() => openAnalyticsModal(service)}
-                        className="p-2.5 text-nilin-rose hover:bg-nilin-blush rounded-nilin transition-colors"
-                        title="View analytics"
-                      >
-                        <TrendingUp className="w-5 h-5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => toggleServiceStatus(service._id, service.status)}
-                        disabled={!canToggleService(service.status) || (isToggling && togglingServiceId === service._id)}
-                        className={`p-2.5 rounded-nilin transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-                          service.status === 'active'
-                            ? 'text-green-700 hover:bg-green-50'
-                            : canToggleService(service.status)
-                              ? 'text-nilin-lightGray hover:bg-nilin-muted'
-                              : 'text-nilin-lightGray/50 cursor-not-allowed'
-                        }`}
-                        title={
-                          canToggleService(service.status)
-                            ? service.status === 'active'
-                              ? 'Deactivate service'
-                              : 'Activate service'
-                            : 'Awaiting admin approval'
-                        }
-                      >
-                        {service.status === 'active' ? (
-                          <ToggleRight className="w-5 h-5" />
-                        ) : (
-                          <ToggleLeft className="w-5 h-5" />
-                        )}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEditingServiceId(service._id);
-                          setShowEditServiceModal(true);
-                        }}
-                        className="p-2.5 text-nilin-warmGray hover:text-nilin-coral hover:bg-nilin-blush rounded-nilin transition-colors"
-                        title="Edit service"
-                      >
-                        <Edit3 className="w-5 h-5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteClick(service._id, service.name)}
-                        className="p-2.5 text-nilin-warmGray hover:text-red-600 hover:bg-red-50 rounded-nilin transition-colors"
-                        title="Delete service"
-                      >
-                        <Trash2 className="w-5 h-5" />
-                      </button>
+                    {/* Action buttons - Grouped with visual separator */}
+                    <div className="flex items-center lg:flex-col gap-1 shrink-0 bg-nilin-muted/30 p-2 rounded-xl border border-nilin-border/50">
+                      {/* Analytics */}
+                      <div className="relative group/analytics">
+                        <button
+                          type="button"
+                          onClick={() => openAnalyticsModal(service)}
+                          className="p-2.5 text-nilin-warmGray hover:text-nilin-rose hover:bg-white rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
+                          aria-label={`View analytics for ${service.name}`}
+                        >
+                          <TrendingUp className="w-4 h-4" aria-hidden="true" />
+                        </button>
+                        <span className="absolute -top-8 left-1/2 -translate-x-1/2 px-2 py-1 text-xs bg-nilin-charcoal text-white rounded opacity-0 group-hover/analytics:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-10">
+                          Analytics
+                        </span>
+                      </div>
+
+                      {/* Clone */}
+                      <div className="relative group/clone">
+                        <button
+                          type="button"
+                          onClick={() => handleCloneService(service)}
+                          disabled={isCloningService}
+                          className="p-2.5 text-nilin-warmGray hover:text-nilin-coral hover:bg-white rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2 disabled:opacity-50"
+                          aria-label={`Clone ${service.name}`}
+                        >
+                          <Copy className="w-4 h-4" aria-hidden="true" />
+                        </button>
+                        <span className="absolute -top-8 left-1/2 -translate-x-1/2 px-2 py-1 text-xs bg-nilin-charcoal text-white rounded opacity-0 group-hover/clone:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-10">
+                          Clone
+                        </span>
+                      </div>
+
+                      {/* Divider */}
+                      <div className="w-full h-px bg-nilin-border/50 my-1" />
+
+                      {/* Toggle */}
+                      <div className="relative group/toggle">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setStatusModalService({ id: service._id, name: service.name, currentStatus: service.status });
+                            setShowStatusModal(true);
+                          }}
+                          disabled={!canToggleService(service.status) || (isToggling && togglingServiceId === service._id)}
+                          className={`p-2.5 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2 ${
+                            service.status === 'active'
+                              ? 'text-green-600 hover:bg-green-50'
+                              : canToggleService(service.status)
+                                ? 'text-nilin-lightGray hover:bg-white'
+                                : 'text-nilin-lightGray/50 cursor-not-allowed'
+                          }`}
+                          aria-label={
+                            canToggleService(service.status)
+                              ? service.status === 'active'
+                                ? `Deactivate ${service.name}`
+                                : `Activate ${service.name}`
+                              : `${service.name} awaiting admin approval`
+                          }
+                        >
+                          {service.status === 'active' ? (
+                            <ToggleRight className="w-5 h-5" aria-hidden="true" />
+                          ) : (
+                            <ToggleLeft className="w-5 h-5" aria-hidden="true" />
+                          )}
+                        </button>
+                        <span className="absolute -top-8 left-1/2 -translate-x-1/2 px-2 py-1 text-xs bg-nilin-charcoal text-white rounded opacity-0 group-hover/toggle:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-10">
+                          {service.status === 'active' ? 'Deactivate' : 'Activate'}
+                        </span>
+                      </div>
+
+                      {/* Edit */}
+                      <div className="relative group/edit">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingServiceId(service._id);
+                            setShowEditServiceModal(true);
+                          }}
+                          className="p-2.5 text-nilin-warmGray hover:text-nilin-coral hover:bg-white rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
+                          aria-label={`Edit ${service.name}`}
+                        >
+                          <Edit3 className="w-4 h-4" aria-hidden="true" />
+                        </button>
+                        <span className="absolute -top-8 left-1/2 -translate-x-1/2 px-2 py-1 text-xs bg-nilin-charcoal text-white rounded opacity-0 group-hover/edit:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-10">
+                          Edit
+                        </span>
+                      </div>
+
+                      {/* Divider */}
+                      <div className="w-full h-px bg-nilin-border/50 my-1" />
+
+                      {/* Delete */}
+                      <div className="relative group/delete">
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteClick(service._id, service.name)}
+                          className="p-2.5 text-nilin-lightGray hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2"
+                          aria-label={`Delete ${service.name}`}
+                        >
+                          <Trash2 className="w-4 h-4" aria-hidden="true" />
+                        </button>
+                        <span className="absolute -top-8 left-1/2 -translate-x-1/2 px-2 py-1 text-xs bg-red-600 text-white rounded opacity-0 group-hover/delete:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-10">
+                          Delete
+                        </span>
+                      </div>
                     </div>
                   </div>
                 </article>
@@ -1095,6 +2162,163 @@ const ServiceManagement: React.FC = () => {
             </div>
           )}
         </div>
+
+        {/* Trash View */}
+        {isViewingTrash && (
+          <div className="p-6">
+            {deletedServicesLoading ? (
+              <SkeletonServiceList count={3} />
+            ) : deletedServicesError ? (
+              <div className="py-12 text-center">
+                <AlertCircle className="w-10 h-10 text-red-500 mx-auto mb-3" />
+                <p className="text-nilin-warmGray mb-4">{deletedServicesError}</p>
+                <button type="button" onClick={() => fetchDeletedServices(1)} className="btn-nilin">
+                  Try Again
+                </button>
+              </div>
+            ) : deletedServices.length === 0 ? (
+              <div className="py-16 text-center">
+                <div className="w-20 h-20 rounded-full bg-nilin-muted/50 flex items-center justify-center mx-auto mb-4">
+                  <Trash className="w-10 h-10 text-nilin-lightGray" />
+                </div>
+                <h3 className="text-lg font-serif text-nilin-charcoal mb-2">Trash is empty</h3>
+                <p className="text-sm text-nilin-warmGray">Deleted services will appear here</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {deletedPagination.total > 0 && (
+                  <p className="text-sm text-nilin-warmGray font-sans">
+                    Showing {deletedServices.length} of {deletedPagination.total} deleted services
+                  </p>
+                )}
+                {deletedServices.map((service, index) => (
+                  <article
+                    key={service._id}
+                    className="card-nilin hover-lift p-6 rounded-nilin-lg bg-white/90 border border-nilin-border transition-all duration-200 hover:shadow-lg hover:border-nilin-coral/30 stagger-item opacity-75"
+                    style={{ animationDelay: `${index * 0.05}s` }}
+                  >
+                    <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-5">
+                      {/* Service Thumbnail */}
+                      <div className="flex-shrink-0">
+                        {service.images && service.images.length > 0 ? (
+                          <img
+                            src={service.images[0]}
+                            alt={service.name}
+                            className="w-20 h-20 rounded-xl object-cover border border-nilin-border/50 grayscale"
+                          />
+                        ) : (
+                          <div className="w-20 h-20 rounded-xl bg-gradient-to-br from-nilin-blush to-nilin-peach flex items-center justify-center border border-nilin-border/50 grayscale">
+                            <span className="text-2xl font-serif text-nilin-coral/50">
+                              {service.name.charAt(0).toUpperCase()}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Service Info */}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex flex-wrap items-center gap-3 mb-4">
+                          <h3 className="text-xl font-serif text-nilin-charcoal tracking-tight truncate" title={service.name}>{service.name}</h3>
+                          <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-red-50 text-red-700 border border-red-100">
+                            <Trash2 className="w-3 h-3 mr-1" aria-hidden="true" />
+                            Deleted
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-4">
+                          <div className="flex items-center gap-2.5 text-sm text-nilin-warmGray">
+                            <div className="w-8 h-8 rounded-lg bg-nilin-blush/40 flex items-center justify-center">
+                              <Calendar className="w-4 h-4 text-nilin-coral" />
+                            </div>
+                            <span className="truncate">{service.category}</span>
+                          </div>
+                          <div className="flex items-center gap-2.5 text-sm text-nilin-warmGray">
+                            <div className="w-8 h-8 rounded-lg bg-nilin-blush/40 flex items-center justify-center">
+                              <DollarSign className="w-4 h-4 text-nilin-coral" />
+                            </div>
+                            <span>{service.price.currency || 'AED'} {service.price.amount}</span>
+                          </div>
+                          <div className="flex items-center gap-2.5 text-sm text-nilin-warmGray">
+                            <div className="w-8 h-8 rounded-lg bg-nilin-muted/50 flex items-center justify-center">
+                              <Clock className="w-4 h-4" />
+                            </div>
+                            <span>Deleted {service.deletedAt ? new Date(service.deletedAt).toLocaleDateString() : 'Unknown'}</span>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-4">
+                          <span className="text-xs text-nilin-lightGray">
+                            Created {new Date(service.createdAt).toLocaleDateString()}
+                          </span>
+                          <span className="text-xs text-nilin-lightGray">
+                            Deleted {service.deletedAt ? new Date(service.deletedAt).toLocaleDateString() : 'Unknown'}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Action buttons */}
+                      <div className="flex items-center lg:flex-col gap-1 shrink-0 bg-nilin-muted/30 p-2 rounded-xl border border-nilin-border/50">
+                        {/* Restore */}
+                        <div className="relative group/restore">
+                          <button
+                            type="button"
+                            onClick={() => handleRestoreClick(service._id, service.name)}
+                            disabled={isRestoring && restoringServiceId === service._id}
+                            className="p-2.5 text-nilin-warmGray hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-green-500 focus-visible:ring-offset-2 disabled:opacity-50"
+                            aria-label={`Restore ${service.name}`}
+                          >
+                            {isRestoring && restoringServiceId === service._id ? (
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <RotateCcw className="w-4 h-4" aria-hidden="true" />
+                            )}
+                          </button>
+                          <span className="absolute -top-8 left-1/2 -translate-x-1/2 px-2 py-1 text-xs bg-green-600 text-white rounded opacity-0 group-hover/restore:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-10">
+                            Restore
+                          </span>
+                        </div>
+
+                        {/* Divider */}
+                        <div className="w-full h-px bg-nilin-border/50 my-1" />
+
+                        {/* Permanent Delete */}
+                        <div className="relative group/permdelete">
+                          <button
+                            type="button"
+                            onClick={() => handlePermanentDeleteClick(service._id, service.name)}
+                            disabled={isPermanentDeleting && permanentDeletingServiceId === service._id}
+                            className="p-2.5 text-nilin-lightGray hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2 disabled:opacity-50"
+                            aria-label={`Permanently delete ${service.name}`}
+                          >
+                            {isPermanentDeleting && permanentDeletingServiceId === service._id ? (
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <Trash2 className="w-4 h-4" aria-hidden="true" />
+                            )}
+                          </button>
+                          <span className="absolute -top-8 left-1/2 -translate-x-1/2 px-2 py-1 text-xs bg-red-600 text-white rounded opacity-0 group-hover/permdelete:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-10">
+                            Permanent Delete
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </article>
+                ))}
+                {deletedPagination.hasNext && (
+                  <div className="flex justify-center pt-4">
+                    <button
+                      type="button"
+                      onClick={() => fetchDeletedServices(deletedPagination.page + 1)}
+                      className="px-6 py-2 rounded-nilin border border-nilin-border text-nilin-charcoal hover:bg-nilin-muted transition-colors font-medium"
+                    >
+                      Load more
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Add Service Modal */}
@@ -1151,15 +2375,24 @@ const ServiceManagement: React.FC = () => {
               )}
 
               {analyticsError && !analyticsLoading && (
-                <div className="rounded-nilin bg-red-50 border border-red-100 p-4 text-sm text-red-700">
-                  {analyticsError}
+                <div className="space-y-3">
+                  <div className="rounded-nilin bg-red-50 border border-red-100 p-4 text-sm text-red-700">
+                    {analyticsError}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => openAnalyticsModal(analyticsService!)}
+                    className="btn-nilin w-full"
+                  >
+                    Try Again
+                  </button>
                 </div>
               )}
 
               {analyticsData && !analyticsLoading && (
                 <>
                   <div className="grid grid-cols-2 gap-4">
-                    <div className="bg-pink-50 rounded-xl p-4 text-center border border-pink-100">
+                    <div className="bg-nilin-blush/50 rounded-xl p-4 text-center border border-nilin-border">
                       <div className="text-3xl font-bold text-nilin-rose">
                         {analyticsData.totalViews.toLocaleString()}
                       </div>
@@ -1171,7 +2404,7 @@ const ServiceManagement: React.FC = () => {
                       </div>
                       <div className="text-sm text-nilin-warmGray mt-1">Clicks</div>
                     </div>
-                    <div className="bg-green-50 rounded-xl p-4 text-center border border-green-100">
+                    <div className="bg-green-50/50 rounded-xl p-4 text-center border border-green-100">
                       <div className="text-3xl font-bold text-green-600">
                         {analyticsData.totalBookings}
                       </div>
@@ -1186,31 +2419,31 @@ const ServiceManagement: React.FC = () => {
                   </div>
 
                   <div className="grid grid-cols-2 gap-4">
-                    <div className="bg-purple-50 rounded-xl p-4 border border-purple-100 text-center">
-                      <p className="text-sm text-purple-700 font-medium">Click-through rate</p>
-                      <p className="text-2xl font-bold text-purple-600 mt-1">
+                    <div className="bg-nilin-coral/10 rounded-xl p-4 border border-nilin-coral/20 text-center">
+                      <p className="text-sm text-nilin-charcoal font-medium">Click-through rate</p>
+                      <p className="text-2xl font-bold text-nilin-rose mt-1">
                         {analyticsData.conversionRate.toFixed(1)}%
                       </p>
-                      <p className="text-xs text-purple-600 mt-1">Clicks ÷ impressions</p>
+                      <p className="text-xs text-nilin-warmGray mt-1">Clicks ÷ impressions</p>
                     </div>
-                    <div className="bg-amber-50 rounded-xl p-4 border border-amber-100 text-center">
-                      <p className="text-sm text-amber-800 font-medium">Booking rate</p>
-                      <p className="text-2xl font-bold text-amber-700 mt-1">
+                    <div className="bg-nilin-warning/20 rounded-xl p-4 border border-nilin-warning/30 text-center">
+                      <p className="text-sm text-nilin-charcoal font-medium">Booking rate</p>
+                      <p className="text-2xl font-bold text-nilin-charcoal mt-1">
                         {analyticsData.bookingRate.toFixed(1)}%
                       </p>
-                      <p className="text-xs text-amber-700 mt-1">Bookings ÷ clicks</p>
+                      <p className="text-xs text-nilin-warmGray mt-1">Bookings ÷ clicks</p>
                     </div>
                   </div>
 
-                  <div className="bg-yellow-50 rounded-xl p-4 border border-yellow-100">
+                  <div className="bg-nilin-peach/30 rounded-xl p-4 border border-nilin-coral/20">
                     <div className="flex items-center justify-between">
-                      <span className="text-sm font-medium text-yellow-700">Average rating</span>
+                      <span className="text-sm font-medium text-nilin-charcoal">Average rating</span>
                       {analyticsService.rating.count > 0 ? (
-                        <span className="text-lg font-bold text-yellow-600">
+                        <span className="text-lg font-bold text-nilin-rose">
                           {analyticsService.rating.average.toFixed(1)} ({analyticsService.rating.count})
                         </span>
                       ) : (
-                        <span className="text-sm text-yellow-700">No reviews yet</span>
+                        <span className="text-sm text-nilin-warmGray">No reviews yet</span>
                       )}
                     </div>
                   </div>
@@ -1258,6 +2491,143 @@ const ServiceManagement: React.FC = () => {
         isLoading={isDeleting}
         onConfirm={confirmDelete}
         onCancel={cancelDelete}
+      />
+
+      {/* Bulk Delete Confirmation Modal */}
+      <ConfirmModal
+        isOpen={showBulkDeleteModal}
+        title="Delete Multiple Services"
+        message={`Permanently delete ${selectedServices.size} service(s)? This cannot be undone.`}
+        confirmLabel="Delete All"
+        cancelLabel="Cancel"
+        variant="danger"
+        isLoading={isBulkOperating}
+        onConfirm={confirmBulkDelete}
+        onCancel={() => setShowBulkDeleteModal(false)}
+      />
+
+      {/* Status Toggle Confirmation Modal */}
+      <ConfirmModal
+        isOpen={showStatusModal}
+        title={statusModalService?.currentStatus === 'active' ? 'Deactivate Service' : 'Activate Service'}
+        message={
+          statusModalService?.currentStatus === 'active'
+            ? `Deactivate "${statusModalService?.name}"? Customers won't be able to book it.`
+            : `Activate "${statusModalService?.name}"? It will be visible to customers.`
+        }
+        confirmLabel={statusModalService?.currentStatus === 'active' ? 'Deactivate' : 'Activate'}
+        cancelLabel="Cancel"
+        variant="warning"
+        isLoading={isToggling}
+        onConfirm={() => {
+          if (statusModalService) {
+            void toggleServiceStatus(statusModalService.id, statusModalService.currentStatus);
+          }
+          setShowStatusModal(false);
+          setStatusModalService(null);
+        }}
+        onCancel={() => {
+          setShowStatusModal(false);
+          setStatusModalService(null);
+        }}
+      />
+
+      {/* Keyboard Shortcuts Help Modal */}
+      {showShortcutsHelp && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-nilin-charcoal/40 backdrop-blur-sm">
+          <div className="glass-nilin-strong rounded-nilin-lg shadow-nilin-lg max-w-md w-full border border-nilin-border">
+            <div className="px-6 py-4 bg-gradient-to-r from-nilin-rose to-nilin-coral flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Keyboard className="w-5 h-5 text-white" />
+                <h2 className="text-lg font-serif text-white">Keyboard Shortcuts</h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowShortcutsHelp(false)}
+                className="p-2 hover:bg-white/15 rounded-nilin transition-colors text-white/90 hover:text-white"
+                aria-label="Close"
+              >
+                <XCircle className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div className="space-y-3">
+                <div className="flex items-center justify-between py-2 border-b border-nilin-border/50">
+                  <span className="text-sm text-nilin-charcoal">Focus search</span>
+                  <kbd className="px-3 py-1.5 bg-nilin-muted rounded-nilin text-sm font-mono text-nilin-charcoal border border-nilin-border">/</kbd>
+                </div>
+                <div className="flex items-center justify-between py-2 border-b border-nilin-border/50">
+                  <span className="text-sm text-nilin-charcoal">Clear search / filters</span>
+                  <kbd className="px-3 py-1.5 bg-nilin-muted rounded-nilin text-sm font-mono text-nilin-charcoal border border-nilin-border">Esc</kbd>
+                </div>
+                <div className="flex items-center justify-between py-2 border-b border-nilin-border/50">
+                  <span className="text-sm text-nilin-charcoal">Add new service</span>
+                  <div className="flex gap-1">
+                    <kbd className="px-3 py-1.5 bg-nilin-muted rounded-nilin text-sm font-mono text-nilin-charcoal border border-nilin-border">n</kbd>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between py-2 border-b border-nilin-border/50">
+                  <span className="text-sm text-nilin-charcoal">Navigate rows</span>
+                  <div className="flex gap-1">
+                    <kbd className="px-3 py-1.5 bg-nilin-muted rounded-nilin text-sm font-mono text-nilin-charcoal border border-nilin-border"><ArrowUp className="w-3 h-3 inline" /></kbd>
+                    <kbd className="px-3 py-1.5 bg-nilin-muted rounded-nilin text-sm font-mono text-nilin-charcoal border border-nilin-border"><ArrowDown className="w-3 h-3 inline" /></kbd>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between py-2 border-b border-nilin-border/50">
+                  <span className="text-sm text-nilin-charcoal">Edit focused service</span>
+                  <div className="flex gap-1">
+                    <kbd className="px-3 py-1.5 bg-nilin-muted rounded-nilin text-sm font-mono text-nilin-charcoal border border-nilin-border">e</kbd>
+                    <span className="text-nilin-lightGray text-sm">or</span>
+                    <kbd className="px-3 py-1.5 bg-nilin-muted rounded-nilin text-sm font-mono text-nilin-charcoal border border-nilin-border">Enter</kbd>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between py-2 border-b border-nilin-border/50">
+                  <span className="text-sm text-nilin-charcoal">Delete focused service</span>
+                  <div className="flex gap-1">
+                    <kbd className="px-3 py-1.5 bg-nilin-muted rounded-nilin text-sm font-mono text-nilin-charcoal border border-nilin-border">Del</kbd>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between py-2">
+                  <span className="text-sm text-nilin-charcoal">Show shortcuts</span>
+                  <kbd className="px-3 py-1.5 bg-nilin-muted rounded-nilin text-sm font-mono text-nilin-charcoal border border-nilin-border">?</kbd>
+                </div>
+              </div>
+            </div>
+
+            <div className="px-6 py-4 border-t border-nilin-border bg-nilin-muted/30">
+              <button type="button" onClick={() => setShowShortcutsHelp(false)} className="btn-nilin w-full">
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Restore Confirmation Modal */}
+      <ConfirmModal
+        isOpen={showRestoreModal}
+        title="Restore Service"
+        message={`Restore "${restoringServiceName}"? The service will be moved back to your services list.`}
+        confirmLabel="Restore"
+        cancelLabel="Cancel"
+        variant="default"
+        isLoading={isRestoring}
+        onConfirm={confirmRestore}
+        onCancel={cancelRestore}
+      />
+
+      {/* Permanent Delete Confirmation Modal */}
+      <ConfirmModal
+        isOpen={showPermanentDeleteModal}
+        title="Permanently Delete Service"
+        message={`Permanently delete "${permanentDeletingServiceName}"? This action cannot be undone and the service will be lost forever.`}
+        confirmLabel="Delete Forever"
+        cancelLabel="Cancel"
+        variant="danger"
+        isLoading={isPermanentDeleting}
+        onConfirm={confirmPermanentDelete}
+        onCancel={cancelPermanentDelete}
       />
     </div>
   );

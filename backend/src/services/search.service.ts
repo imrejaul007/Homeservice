@@ -26,10 +26,13 @@ const SUGGESTIONS_CACHE_TTL = 15 * 60;
  * Build a simple cache key for search results using string concatenation
  * @param query - Search query string
  * @param options - Search options
+ * @param tenantId - Optional tenant ID for multi-tenant isolation
  * @returns Cache key string
  */
-const buildSearchCacheKey = (query: string, options: SearchOptions): string => {
+const buildSearchCacheKey = (query: string, options: SearchOptions, tenantId?: string): string => {
   const parts = ['search', query || ''];
+  // SECURITY FIX: Include tenantId in cache key for multi-tenant isolation
+  if (tenantId) parts.push(`tenant:${tenantId}`);
   if (options.category) parts.push(`cat:${options.category}`);
   if (options.subcategory) parts.push(`sub:${options.subcategory}`);
   if (options.minPrice !== undefined) parts.push(`minP:${options.minPrice}`);
@@ -283,11 +286,13 @@ const MAX_CACHED_TERMS = 10000; // Maximum number of search terms to cache (prev
 
 /**
  * Refresh the cached search terms with bounded cache size
+ * SECURITY FIX C6: Exclude soft-deleted services from search terms cache
  */
 export const refreshSearchTermsCache = async (): Promise<void> => {
   try {
+    // SECURITY FIX C6: Exclude soft-deleted services from search terms
     const [services, categories] = await Promise.all([
-      Service.find({ isActive: true }, { name: 1, tags: 1, category: 1 }).lean(),
+      Service.find({ isActive: true, isDeleted: { $ne: true } }, { name: 1, tags: 1, category: 1 }).lean(),
       ServiceCategory.find({ isActive: { $ne: false } }, { name: 1 }).lean(),
     ]);
 
@@ -681,6 +686,7 @@ export interface GeoSearchResults extends SearchResults {
 
 /**
  * Fallback geo search using MongoDB $geoWithin when Meilisearch is unavailable
+ * SECURITY FIX C3: Add isDeleted filter to exclude soft-deleted services
  * @param query - Search query
  * @param options - Search options including geo parameters
  * @returns Search results with distance information
@@ -706,8 +712,10 @@ const geoFallbackSearch = async (
       tags,
     } = options;
 
+    // SECURITY FIX C3: Exclude soft-deleted services
     const searchQuery: any = {
       isActive: true,
+      isDeleted: { $ne: true },
     };
 
     // Text search if query provided
@@ -880,6 +888,7 @@ export interface SearchOptions {
   sortBy?: 'rating' | 'price_asc' | 'price_desc' | 'popular';
   providerId?: string;
   tags?: string[];
+  tenantId?: string; // SECURITY: tenant isolation
 }
 
 const buildMongoSort = (sortBy?: SearchOptions['sortBy']): Record<string, 1 | -1> => {
@@ -956,6 +965,7 @@ export const initializeIndexes = async (): Promise<void> => {
     }
 
     // Configure services index with enhanced typo tolerance
+    // SECURITY FIX C10: Add tenantId, isDeleted, and status to filterableAttributes
     const servicesIndex = client.index(INDEXES.SERVICES);
     await servicesIndex.updateSettings({
       searchableAttributes: [
@@ -970,6 +980,9 @@ export const initializeIndexes = async (): Promise<void> => {
         'category',
         'subcategory',
         'isActive',
+        'isDeleted',
+        'status',
+        'tenantId',
         'pricing.basePrice',
         'rating.average',
         'provider.id',
@@ -1047,17 +1060,28 @@ export const initializeIndexes = async (): Promise<void> => {
  * Invalidate search cache
  * Called when services are created, updated, or deleted
  */
+// FIX: Use SCAN instead of KEYS to avoid blocking Redis in production
 const invalidateSearchCache = async (): Promise<void> => {
   const redisClient = cache.client;
   if (!redisClient) return;
 
   try {
-    // Delete all search cache keys using pattern matching
-    const keys = await redisClient.keys('cache:search*');
-    if (keys.length > 0) {
-      await redisClient.del(...keys);
-      logger.debug(`Invalidated ${keys.length} search cache entries`);
-    }
+    // Use SCAN with cursor iteration to avoid blocking Redis
+    let cursor = '0';
+    let deletedCount = 0;
+    do {
+      const [nextCursor, keys] = await redisClient.scan(
+        cursor,
+        'MATCH', 'cache:search*',
+        'COUNT', 100
+      );
+      cursor = nextCursor;
+      if (keys.length > 0) {
+        await redisClient.del(...keys);
+        deletedCount += keys.length;
+      }
+    } while (cursor !== '0');
+    logger.debug(`Invalidated ${deletedCount} search cache entries`);
   } catch (err) {
     logger.warn('Search cache invalidation failed:', err);
   }
@@ -1173,6 +1197,8 @@ export const indexService = async (service: any): Promise<void> => {
       },
       totalBookings: service.searchMetadata?.bookingCount || 0,
       isActive: service.isActive,
+      isDeleted: service.isDeleted || false, // SECURITY FIX: Track deletion status
+      tenantId: service.tenantId || null, // SECURITY FIX: Track tenant for isolation
       createdAt: new Date(service.createdAt).getTime(),
       updatedAt: new Date(service.updatedAt).getTime(),
       providerTrustScore: service.providerTrustScore || 0,
@@ -1311,6 +1337,7 @@ export const searchServices = async (
   previousQuery?: string
 ): Promise<SearchResults> => {
   const startTime = Date.now();
+  const { tenantId } = options;
 
   // Track search for analytics
   trackSearch(query, 0, previousQuery);
@@ -1323,7 +1350,8 @@ export const searchServices = async (
   const primaryQuery = expandedQueries[0];
 
   // Phase 1: Search result caching layer (5-minute TTL)
-  const cacheKey = buildSearchCacheKey(primaryQuery, options);
+  // SECURITY FIX: Include tenantId in cache key for multi-tenant isolation
+  const cacheKey = buildSearchCacheKey(primaryQuery, options, tenantId);
   const redisClient = cache.client;
   if (redisClient) {
     try {
@@ -1362,7 +1390,9 @@ export const searchServices = async (
     } = options;
 
     // Build filters
-    const filters: string[] = ['isActive = true'];
+    // SECURITY FIX C1-C2: Add tenantId and isDeleted filters for multi-tenant isolation
+    const filters: string[] = ['isActive = true', 'isDeleted = false'];
+    if (tenantId) filters.push(`tenantId = "${tenantId}"`);
     if (category) filters.push(`category = "${category}"`);
     if (subcategory) filters.push(`subcategory = "${subcategory}"`);
     if (minPrice !== undefined) filters.push(`pricing.basePrice >= ${minPrice}`);
@@ -1372,7 +1402,8 @@ export const searchServices = async (
       filters.push(`tags IN [${tags.map(t => `"${t}"`).join(', ')}]`);
     }
     if (options.providerId) {
-      filters.push(`providerId = "${options.providerId}"`);
+      // FIX: Use correct Meilisearch document field name 'provider.id' instead of 'providerId'
+      filters.push(`provider.id = "${options.providerId}"`);
     }
 
     // Build sort
@@ -1502,10 +1533,12 @@ export const searchServices = async (
 
 /**
  * Get search suggestions with typo tolerance and caching
+ * SECURITY FIX: Support tenant isolation
  */
 export const getSearchSuggestions = async (
   query: string,
-  limit: number = 5
+  limit: number = 5,
+  tenantId?: string
 ): Promise<string[]> => {
   // Check cache first
   const cachedSuggestions = await getCachedSuggestions(query);
@@ -1516,8 +1549,8 @@ export const getSearchSuggestions = async (
   const client = await getMeiliClient();
 
   if (!client) {
-    // Fallback to MongoDB suggestions
-    const suggestions = await getMongoSuggestions(query, limit);
+    // Fallback to MongoDB suggestions with tenant isolation
+    const suggestions = await getMongoSuggestions(query, limit, tenantId);
     await setCachedSuggestions(query, suggestions);
     return suggestions;
   }
@@ -1548,7 +1581,8 @@ export const getSearchSuggestions = async (
   } catch (error) {
     logSearchError('Meilisearch suggestions failed, using MongoDB fallback', error);
     resetMeiliClient();
-    const suggestions = await getMongoSuggestions(query, limit);
+    // Pass tenantId to MongoDB fallback for tenant isolation
+    const suggestions = await getMongoSuggestions(query, limit, tenantId);
     await setCachedSuggestions(query, suggestions);
     return suggestions;
   }
@@ -1556,19 +1590,31 @@ export const getSearchSuggestions = async (
 
 /**
  * Get suggestions from MongoDB fallback
+ * SECURITY FIX C11: Add tenantId and isDeleted filters for multi-tenant isolation
  */
 const getMongoSuggestions = async (
   query: string,
-  limit: number
+  limit: number,
+  tenantId?: string
 ): Promise<string[]> => {
   if (!query) return [];
 
   try {
     const escapedQuery = escapeRegex(query);
-    const services = await Service.find({
+    // SECURITY FIX C11: Exclude soft-deleted services and apply tenant isolation
+    const serviceQuery: any = {
       isActive: true,
-      name: { $regex: escapedQuery, $options: 'i' },
-    })
+      isDeleted: { $ne: true },
+    };
+
+    // SECURITY FIX: Apply tenant filter for multi-tenant isolation
+    if (tenantId) {
+      serviceQuery.tenantId = tenantId;
+    }
+
+    serviceQuery.name = { $regex: escapedQuery, $options: 'i' };
+
+    const services = await Service.find(serviceQuery)
       .select('name')
       .limit(limit)
       .lean();
@@ -1615,6 +1661,7 @@ export const searchServicesWithGeo = async (
     longitude,
     radiusKm = 50, // Default 50km radius for geo fallback
     tags,
+    tenantId,
   } = options;
 
   let textSearchResults: any[] = [];
@@ -1626,8 +1673,10 @@ export const searchServicesWithGeo = async (
     try {
       meilisearchAvailable = true;
 
+      // SECURITY FIX C1-C2: Add tenantId and isDeleted filters for multi-tenant isolation
       // Build filters
-      const filters: string[] = ['isActive = true'];
+      const filters: string[] = ['isActive = true', 'isDeleted = false'];
+      if (tenantId) filters.push(`tenantId = "${tenantId}"`);
       if (category) filters.push(`category = "${category}"`);
       if (subcategory) filters.push(`subcategory = "${subcategory}"`);
       if (minPrice !== undefined) filters.push(`pricing.basePrice >= ${minPrice}`);
@@ -1742,6 +1791,11 @@ export const searchServicesWithGeo = async (
  * Perform geo-only search to find nearby services
  * Uses service's registered location coordinates, not user's location
  */
+/**
+ * Perform geo-only search to find nearby services
+ * Uses service's registered location coordinates, not user's location
+ * SECURITY FIX C4: Add isDeleted filter and tenant isolation
+ */
 async function performGeoSearch(
   options: GeoSearchOptions,
   limit: number,
@@ -1754,17 +1808,23 @@ async function performGeoSearch(
   tags?: string[]
 ): Promise<{ hits: any[]; processingTimeMs: number }> {
   const startTime = Date.now();
-  const { latitude, longitude, radiusKm = 50 } = options;
+  const { latitude, longitude, radiusKm = 50, tenantId } = options;
 
   if (latitude === undefined || longitude === undefined) {
     return { hits: [], processingTimeMs: Date.now() - startTime };
   }
 
   try {
-    // Build filter query
+    // SECURITY FIX C4: Exclude soft-deleted services and apply tenant isolation
     const searchQuery: any = {
       isActive: true,
+      isDeleted: { $ne: true },
     };
+
+    // SECURITY FIX: Apply tenant filter for multi-tenant isolation
+    if (tenantId) {
+      searchQuery.tenantId = tenantId;
+    }
 
     if (category) searchQuery.category = buildCaseInsensitiveNameFilter(category);
     if (subcategory) searchQuery.subcategory = buildCaseInsensitiveNameFilter(subcategory);
@@ -1831,6 +1891,7 @@ async function performGeoSearch(
 
 /**
  * Fallback search using MongoDB when Meilisearch is unavailable
+ * SECURITY FIX C5: Add isDeleted filter and tenant isolation
  */
 const fallbackSearch = async (
   query: string,
@@ -1849,11 +1910,19 @@ const fallbackSearch = async (
       minRating,
       sortBy,
       tags,
+      tenantId,
     } = options;
 
+    // SECURITY FIX C5: Exclude soft-deleted services and apply tenant isolation
     const searchQuery: any = {
       isActive: true,
+      isDeleted: { $ne: true },
     };
+
+    // SECURITY FIX: Apply tenant filter for multi-tenant isolation
+    if (tenantId) {
+      searchQuery.tenantId = tenantId;
+    }
 
     // Text search if query provided - use escaped regex to prevent ReDoS
     if (query) {
@@ -1928,6 +1997,7 @@ const fallbackSearch = async (
 
 /**
  * Reindex all services
+ * SECURITY FIX C12: Exclude soft-deleted services from reindexing
  */
 export const reindexAllServices = async (): Promise<void> => {
   const client = await getMeiliClient();
@@ -1937,8 +2007,8 @@ export const reindexAllServices = async (): Promise<void> => {
     // Clear existing index
     await client.index(INDEXES.SERVICES).deleteAllDocuments();
 
-    // Fetch all active services
-    const services = await Service.find({ isActive: true }).lean();
+    // Fetch all active services (exclude soft-deleted)
+    const services = await Service.find({ isActive: true, isDeleted: { $ne: true } }).lean();
 
     // Transform to Meilisearch documents
     const documents = services.map((service: any) => ({
@@ -1963,6 +2033,9 @@ export const reindexAllServices = async (): Promise<void> => {
       },
       totalBookings: service.searchMetadata?.bookingCount || 0,
       isActive: service.isActive,
+      isDeleted: service.isDeleted || false, // SECURITY FIX: Track deletion status
+      tenantId: service.tenantId || null, // SECURITY FIX: Track tenant for isolation
+      status: service.status || 'active',
       createdAt: new Date(service.createdAt).getTime(),
       updatedAt: new Date(service.updatedAt).getTime(),
       providerTrustScore: service.providerTrustScore || 0,

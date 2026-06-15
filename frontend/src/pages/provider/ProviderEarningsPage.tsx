@@ -516,7 +516,7 @@ const ProviderEarningsPage: React.FC = () => {
             <div className="flex items-center justify-between flex-wrap gap-4">
               <div>
                 <h1 className="text-3xl font-serif text-nilin-charcoal mb-2">Earnings</h1>
-                <p className="text-nilin-warmGray">Track your income and manage withdrawals</p>
+                <p className="text-base text-nilin-warmGray">Track your income and manage withdrawals</p>
               </div>
 
               <div className="flex items-center gap-3">
@@ -546,6 +546,29 @@ const ProviderEarningsPage: React.FC = () => {
                 </button>
               </div>
             </div>
+          </div>
+
+          <div className="mb-8 flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="px-4 py-2 rounded-full text-sm font-medium bg-nilin-coral text-white"
+            >
+              Wallet
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate('/provider/earnings-report')}
+              className="px-4 py-2 rounded-full text-sm font-medium border border-nilin-border text-nilin-charcoal hover:bg-nilin-blush/40"
+            >
+              Commission Report
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate('/provider/payouts')}
+              className="px-4 py-2 rounded-full text-sm font-medium border border-nilin-border text-nilin-charcoal hover:bg-nilin-blush/40"
+            >
+              Payouts & Settlements
+            </button>
           </div>
 
           {/* Error Banner */}

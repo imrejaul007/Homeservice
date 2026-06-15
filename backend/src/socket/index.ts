@@ -130,7 +130,7 @@ export interface ServerToClientEvents {
   'provider:verification_complete': (data: { providerId: string; kycLevel: number }) => void;
 
   // Service status events (Admin → Provider)
-  'service:approved': (data: { serviceId: string; providerId: string }) => void;
+  'service:approved': (data: { serviceId: string; providerId: string; reason?: string }) => void;
   'service:rejected': (data: { serviceId: string; providerId: string; reason: string }) => void;
   'service:status_changed': (data: { serviceId: string; providerId: string; serviceName: string; status: string }) => void;
   // FIX: Added service:pending_review event for when provider submits service for review
@@ -1959,13 +1959,14 @@ class SocketServer {
   // =============================================================================
 
   // Emit service approved event
-  emitServiceApproved(serviceId: string, providerId: string): boolean {
+  emitServiceApproved(serviceId: string, providerId: string, reason?: string): boolean {
     const emitted = this.emitToUser(providerId, 'service:approved', {
       serviceId,
       providerId,
+      reason,
     });
     if (emitted) {
-      logger.info('Emitted service approved event', { serviceId, providerId, action: 'EMIT_SERVICE_APPROVED' });
+      logger.info('Emitted service approved event', { serviceId, providerId, reason, action: 'EMIT_SERVICE_APPROVED' });
     }
     return emitted;
   }
@@ -2291,12 +2292,13 @@ class SocketServer {
   }
 
   // Emit review moderated event to provider
-  emitReviewModerated(providerId: string, reviewId: string, action: string, rating: number): boolean {
+  emitReviewModerated(providerId: string, reviewId: string, action: string, rating: number, reason?: string): boolean {
     const emitted = this.emitToUser(providerId, 'review:moderated', {
       reviewId,
       providerId,
       action, // 'approved', 'hidden', 'rejected'
       rating,
+      reason, // Optional reason (useful for 'hidden' action)
       timestamp: new Date(),
     });
     if (emitted) {

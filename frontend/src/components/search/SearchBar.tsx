@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, X, MapPin, Clock, ChevronRight, Loader2, TrendingUp } from 'lucide-react';
+import { Search, X, MapPin, Clock, ChevronRight, Loader2, TrendingUp, Scissors, Flower2, Sparkles, Palette } from 'lucide-react';
 import { useSearchStore } from '@/stores/searchStore';
 import { useLocationStore, SUPPORTED_CITIES } from '@/stores/locationStore';
 import { cn } from '@/lib/utils';
@@ -16,10 +16,10 @@ interface SearchBarProps {
 }
 
 const CATEGORIES = [
-  { name: 'Hair', icon: '✂️', slug: 'hair' },
-  { name: 'Spa', icon: '💆', slug: 'spa' },
-  { name: 'Nails', icon: '💅', slug: 'nails' },
-  { name: 'Makeup', icon: '💄', slug: 'makeup' },
+  { name: 'Hair', icon: Scissors, slug: 'hair', color: 'bg-amber-50 text-amber-600' },
+  { name: 'Spa', icon: Flower2, slug: 'spa', color: 'bg-green-50 text-green-600' },
+  { name: 'Nails', icon: Sparkles, slug: 'nails', color: 'bg-pink-50 text-pink-600' },
+  { name: 'Makeup', icon: Palette, slug: 'makeup', color: 'bg-purple-50 text-purple-600' },
 ];
 
 const SearchBar: React.FC<SearchBarProps> = ({
@@ -47,7 +47,8 @@ const SearchBar: React.FC<SearchBarProps> = ({
   const [query, setQuery] = useState(filters.q || '');
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [location, setLocation] = useState(filters.city || '');
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [isFocused, setIsFocused] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(-1);
   const [showLocationPicker, setShowLocationPicker] = useState(false);
   const [locationQuery, setLocationQuery] = useState('');
@@ -94,9 +95,15 @@ const SearchBar: React.FC<SearchBarProps> = ({
         city: location.trim() || undefined,
         page: 1,
       });
-      navigate(`/search?q=${encodeURIComponent(query.trim())}`);
-      setShowSuggestions(false);
-      onSearch?.(query);
+      setIsSearching(true);
+
+      // Simulate search delay for animation
+      setTimeout(() => {
+        navigate(`/search?q=${encodeURIComponent(query.trim())}`);
+        setShowSuggestions(false);
+        setIsSearching(false);
+        onSearch?.(query);
+      }, 600);
     }
   }, [query, location, setFilters, navigate, onSearch, addToSearchHistory]);
 
@@ -201,41 +208,40 @@ const SearchBar: React.FC<SearchBarProps> = ({
 
   return (
     <div className={cn('relative w-full', className)}>
-      {/* Main Search Bar */}
+      {/* Main Search Bar - Reference Design: Outer shadow + inset shadow */}
       <div
         className={cn(
-          'relative flex items-center border rounded-xl transition-all duration-200',
+          'relative flex items-center transition-all duration-300',
           isMinimal
-            ? 'bg-nilin-blush/30 border-transparent focus-within:border-nilin-coral/30'
-            : 'bg-white border-nilin-border focus-within:border-nilin-coral focus-within:ring-2 focus-within:ring-nilin-coral/20',
+            ? 'bg-nilin-blush/30 rounded-nilin border border-transparent'
+            : 'bg-white rounded-nilin-lg border border-nilin-border/20',
+          // Reference design: Outer shadow effect
+          !isMinimal && 'shadow-[9px_9px_16px_rgba(189,189,189,0.6),-9px_-9px_16px_rgba(255,255,255,0.5)]',
+          isMinimal && 'shadow-nilin',
+          // Focus ring
+          isFocused && 'ring-2 ring-nilin-coral/40',
           currentSize.container
         )}
       >
-        {/* Search Icon */}
-        <Search className={cn(
-          'absolute left-4 top-1/2 -translate-y-1/2',
-          isMinimal ? 'text-nilin-warmGray' : 'text-nilin-warmGray'
-        )} size={20} />
-
         {/* Location Filter (optional) */}
         {showLocationFilter && (
           <div className="relative">
             <button
               onClick={() => setShowLocationPicker(!showLocationPicker)}
               className={cn(
-                'flex items-center gap-1.5 px-3 h-full border-r transition-colors',
-                isMinimal ? 'border-transparent/20 text-white/70' : 'border-nilin-border/50 text-nilin-warmGray hover:text-nilin-charcoal'
+                'flex items-center gap-1.5 px-4 h-full border-r transition-colors',
+                isMinimal ? 'border-transparent/20 text-white/70' : 'border-nilin-border/30 text-nilin-warmGray hover:text-nilin-charcoal'
               )}
             >
-              <MapPin size={16} />
-              <span className="text-sm whitespace-nowrap max-w-[100px] truncate">
+              <MapPin size={16} className="text-nilin-coral" />
+              <span className="text-sm whitespace-nowrap max-w-[100px] truncate text-nilin-charcoal">
                 {selectedCity?.name || 'Location'}
               </span>
             </button>
 
             {/* Location Picker Dropdown */}
             {showLocationPicker && (
-              <div className="absolute top-full left-0 mt-1 w-64 bg-white rounded-xl shadow-2xl border border-nilin-border z-50 overflow-hidden">
+              <div className="absolute top-full left-0 mt-1 w-64 bg-white rounded-nilin shadow-xl border border-nilin-border z-50 overflow-hidden">
                 <div className="p-2 border-b border-nilin-border">
                   <input
                     type="text"
@@ -263,56 +269,125 @@ const SearchBar: React.FC<SearchBarProps> = ({
           </div>
         )}
 
-        {/* Search Input */}
-        <input
-          ref={searchInputRef}
-          type="text"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={handleKeyDown}
-          onFocus={() => setIsExpanded(true)}
-          onBlur={() => setIsExpanded(false)}
-          placeholder={placeholder}
+        {/* Search Input - Reference Design: Inset shadow effect */}
+        <div
           className={cn(
-            'flex-1 bg-transparent outline-none text-nilin-charcoal placeholder:text-nilin-warmGray',
-            currentSize.input
-          )}
-        />
-
-        {/* Clear Button */}
-        {query && (
-          <button
-            onClick={clearQuery}
-            className="absolute right-20 top-1/2 -translate-y-1/2 p-1 rounded-full hover:bg-nilin-blush/50 transition-colors"
-          >
-            <X size={16} className="text-nilin-warmGray" />
-          </button>
-        )}
-
-        {/* Search Button */}
-        <button
-          onClick={handleSearch}
-          className={cn(
-            'flex items-center justify-center rounded-lg font-medium transition-colors',
-            isMinimal
-              ? 'bg-nilin-coral text-white hover:bg-nilin-rose'
-              : 'bg-nilin-coral text-white hover:bg-nilin-rose shadow-md',
-            currentSize.button
+            'flex-1 relative',
+            !isMinimal && 'mx-2'
           )}
         >
-          Search
+          {/* Reference Design: Inner shadow container */}
+          <div
+            className={cn(
+              'relative flex items-center h-full',
+              !isMinimal && 'rounded-nilin',
+              !isMinimal && 'shadow-[inset_10px_10px_15px_-10px_#c3c3c3,inset_-10px_-10px_15px_-10px_#ffffff]',
+              !isMinimal && 'bg-nilin-cream/50'
+            )}
+          >
+            {/* Reference Design: Morphing Search Icon (Magnifying Glass → Dot → Spinner) */}
+            <div
+              className={cn(
+                'relative flex items-center justify-center w-10 h-10 flex-shrink-0',
+                isSearching && 'animate-spin'
+              )}
+            >
+              {/* Circle part of magnifying glass */}
+              <div
+                className={cn(
+                  'absolute w-[18px] h-[18px] rounded-full border-[3px] transition-all duration-500 ease-out',
+                  'top-1/2 left-2 -translate-y-1/2',
+                  // Default: coral border (magnifying glass lens)
+                  'border-nilin-coral bg-transparent',
+                  // Size adjustments
+                  size === 'sm' && '!w-[14px] !h-[14px] !left-1.5',
+                  size === 'lg' && '!w-[22px] !h-[22px] !left-3',
+                  // Focused: fills with coral, border expands (becomes dot)
+                  isFocused && '!w-[14px] !h-[14px] !bg-nilin-coral !border-[10px] !border-nilin-blush !left-2.5',
+                  size === 'sm' && isFocused && '!w-[10px] !h-[10px] !border-[8px] !left-2',
+                  size === 'lg' && isFocused && '!w-[18px] !h-[18px] !border-[12px] !left-3.5',
+                  // Searching: spinner effect
+                  isSearching && '!w-[18px] !h-[18px] !border-nilin-coral !bg-transparent animate-pulse'
+                )}
+              />
+              {/* Handle part of magnifying glass */}
+              <div
+                className={cn(
+                  'absolute w-[4px] h-[14px] rounded-[4px] transition-all duration-500 ease-out',
+                  'top-1/2 left-[26px]',
+                  '-translate-y-[calc(50%-4px)] rotate-45 origin-top-left',
+                  // Default: coral handle
+                  'bg-nilin-coral',
+                  // Size adjustments
+                  size === 'sm' && '!w-[3px] !h-[10px] !left-[20px]',
+                  size === 'lg' && '!w-[5px] !h-[18px] !left-[32px]',
+                  // Focused: shrinks and fades (handle disappears)
+                  isFocused && '!w-[4px] !h-[4px] !bg-nilin-blush !opacity-0',
+                  size === 'sm' && isFocused && '!w-[3px] !h-[3px] !left-[18px]',
+                  size === 'lg' && isFocused && '!w-[5px] !h-[5px] !left-[32px]',
+                  // Searching: spinner effect
+                  isSearching && '!w-[4px] !h-[14px] !bg-nilin-coral !opacity-100'
+                )}
+              />
+            </div>
+
+            <input
+              ref={searchInputRef}
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={handleKeyDown}
+              onFocus={() => setIsFocused(true)}
+              onBlur={() => setIsFocused(false)}
+              placeholder={placeholder}
+              className={cn(
+                'w-full border-none outline-none bg-transparent text-nilin-charcoal placeholder:text-nilin-warmGray',
+                currentSize.input
+              )}
+            />
+
+            {/* Clear Button */}
+            {query && !isSearching && (
+              <button
+                onClick={clearQuery}
+                className="absolute right-4 top-1/2 -translate-y-1/2 p-1 rounded-full hover:bg-nilin-blush/50 transition-colors"
+              >
+                <X size={16} className="text-nilin-warmGray" />
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Search Button - Reference Design: Highlighted coral */}
+        <button
+          onClick={handleSearch}
+          disabled={isSearching}
+          className={cn(
+            'flex items-center justify-center rounded-nilin font-medium transition-all',
+            isMinimal
+              ? 'bg-nilin-coral text-white hover:bg-nilin-rose'
+              : 'bg-nilin-coral text-white hover:bg-nilin-rose shadow-lg',
+            currentSize.button,
+            isSearching && 'opacity-70 cursor-wait'
+          )}
+        >
+          {isSearching ? (
+            <Loader2 className={cn('w-5 h-5 animate-spin', size === 'sm' && 'w-4 h-4', size === 'lg' && 'w-6 h-6')} />
+          ) : (
+            'Search'
+          )}
         </button>
       </div>
 
-      {/* Suggestions Dropdown */}
+      {/* Suggestions Dropdown - Reference Design: Clean white card */}
       {showSuggestions && (
         <div
           ref={suggestionsRef}
           className={cn(
-            'absolute top-full left-0 right-0 z-50 mt-2 rounded-xl shadow-2xl overflow-hidden',
+            'absolute top-full left-0 right-0 z-50 mt-2 overflow-hidden',
             isMinimal
-              ? 'bg-nilin-charcoal/95 backdrop-blur-lg border border-white/10'
-              : 'bg-white border border-nilin-border'
+              ? 'rounded-nilin bg-nilin-charcoal/95 backdrop-blur-lg border border-white/10 shadow-xl'
+              : 'rounded-nilin-lg bg-white border border-nilin-border/20 shadow-[9px_9px_16px_rgba(189,189,189,0.3),-9px_-9px_16px_rgba(255,255,255,0.5)]'
           )}
         >
           {/* Loading State */}
@@ -376,30 +451,43 @@ const SearchBar: React.FC<SearchBarProps> = ({
             </div>
           )}
 
-          {/* Quick Categories */}
+          {/* Quick Categories - Reference Design: Subtle section */}
           {!isLoadingSuggestions && (
-            <div className={cn('border-t p-3', isMinimal ? 'border-white/10' : 'border-nilin-border/50')}>
+            <div className={cn('border-t p-3', isMinimal ? 'border-white/10 bg-white/5' : 'border-nilin-border/30 bg-nilin-cream/50')}>
               <div className="flex items-center justify-between mb-2">
                 <span className={cn('text-xs font-medium', isMinimal ? 'text-white/60' : 'text-nilin-warmGray')}>
-                  Quick access:
+                  Browse Categories
                 </span>
               </div>
-              <div className="flex flex-wrap gap-2">
-                {CATEGORIES.map((cat) => (
-                  <button
-                    key={cat.slug}
-                    onClick={() => handleCategoryClick(cat.slug)}
-                    className={cn(
-                      'flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors',
-                      isMinimal
-                        ? 'bg-white/10 text-white hover:bg-white/20'
-                        : 'bg-nilin-blush/50 text-nilin-charcoal hover:bg-nilin-coral hover:text-white'
-                    )}
-                  >
-                    <span>{cat.icon}</span>
-                    {cat.name}
-                  </button>
-                ))}
+              <div className="grid grid-cols-4 gap-2">
+                {CATEGORIES.map((cat) => {
+                  const Icon = cat.icon;
+                  return (
+                    <button
+                      key={cat.slug}
+                      onClick={() => handleCategoryClick(cat.slug)}
+                      className={cn(
+                        'flex flex-col items-center gap-1.5 p-2 rounded-xl transition-all duration-200',
+                        isMinimal
+                          ? 'hover:bg-white/10'
+                          : 'hover:shadow-sm hover:-translate-y-0.5'
+                      )}
+                    >
+                      <div className={cn(
+                        'w-9 h-9 rounded-full flex items-center justify-center',
+                        isMinimal ? 'bg-white/10' : cat.color
+                      )}>
+                        <Icon className={cn('w-4 h-4', isMinimal ? 'text-white' : '')} />
+                      </div>
+                      <span className={cn(
+                        'text-xs font-medium',
+                        isMinimal ? 'text-white/80' : 'text-nilin-charcoal'
+                      )}>
+                        {cat.name}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
           )}

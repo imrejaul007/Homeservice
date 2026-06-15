@@ -1,13 +1,36 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Star, Clock, MapPin, TrendingUp, ChevronRight, Heart } from 'lucide-react';
+import { Star, Clock, MapPin, TrendingUp, ChevronRight, Heart, Check, Eye, Bell } from 'lucide-react';
 import type { Service } from '../../types/service';
 import { useAuthStore } from '../../stores/authStore';
 import { favoritesApi } from '../../services/favoritesApi';
 import { toast } from 'react-hot-toast';
 import { usePriceConversion, formatPrice } from '../../utils/priceConverter';
+import { useComparisonStore } from '../../stores/comparisonStore';
+import { useTilt3D } from '../../hooks/useTilt3D';
 
 export type { Service };
+
+// N43: Price suffix constant
+const PRICE_SUFFIX = '/ service';
+
+// N48: i18n-ready 'by' prefix for provider attribution
+const PROVIDER_PREFIX = 'by';
+
+// M21: Extract price extraction to helper
+function extractPrice(service: any): number {
+  if (typeof service.price === 'number') return service.price;
+  if (service.price?.amount != null) return service.price.amount;
+  return 0;
+}
+
+// M22: Extract rating count extraction
+function extractRatingCount(service: any): number {
+  return service.reviewCount
+    || (service.rating?.count ?? 0)
+    || service.reviews?.count
+    || 0;
+}
 
 interface ServiceCardProps {
   service: Service;
@@ -26,6 +49,17 @@ interface ServiceCardProps {
   // NEW: Book Now handler for search results
   onBookNow?: (service: Service) => void;
   showBookNow?: boolean;
+  // NEW: Quick View handler — opens a modal with full service details
+  // without navigating away from the current page.
+  onQuickView?: (service: Service) => void;
+  // Whether to show the quick view eye button (default: true for default/featured variants)
+  showQuickView?: boolean;
+  // Bulk select mode props
+  showCheckbox?: boolean;
+  checked?: boolean;
+  onCheck?: (serviceId: string) => void;
+  // Notify Me handler for non-active services
+  onNotifyMe?: (service: Service) => void;
 }
 
 const ServiceCard: React.FC<ServiceCardProps> = ({
@@ -43,12 +77,46 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
   isFavoriteLoading,
   onBookNow,
   showBookNow = false,
+  onQuickView,
+  showQuickView = true,
+  showCheckbox = false,
+  checked = false,
+  onCheck,
+  onNotifyMe,
 }) => {
   const navigate = useNavigate();
   const { isAuthenticated } = useAuthStore();
   const { convert, format, currency } = usePriceConversion();
   const [isFavorited, setIsFavorited] = useState(initialFavorited);
   const [isToggling, setIsToggling] = useState(false);
+
+  // 3D tilt effect for the default variant (used in search results grid).
+  // The hook returns refs + inline styles + mouse handlers we spread onto
+  // the default variant's outer wrapper and glow overlay.
+  // Only enable on devices that support motion (motion-safe check)
+  const supportsMotion = typeof window !== 'undefined' &&
+    window.matchMedia('(prefers-reduced-motion: no-preference)').matches;
+  const {
+    cardRef: tiltCardRef,
+    glowRef: tiltGlowRef,
+    handlers: tiltHandlers,
+    cardStyle: tiltCardStyle,
+    glowStyle: tiltGlowStyle,
+  } = useTilt3D({ enabled: supportsMotion });
+
+  // Comparison store integration
+  const isInComparison = useComparisonStore((s) => s.isSelected(service._id));
+  const toggleComparison = useComparisonStore((s) => s.toggleService);
+  const canAddToComparison = useComparisonStore((s) => s.canAdd);
+
+  const handleToggleCompare = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!isInComparison && !canAddToComparison) {
+      toast.error('You can compare up to 4 services. Remove one to add another.');
+      return;
+    }
+    toggleComparison(service);
+  };
 
   const handleClick = () => {
     if (onClick) {
@@ -60,10 +128,10 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
 
   const handleBookNow = (e: React.MouseEvent) => {
     e.stopPropagation();
+    e.preventDefault();
     if (onBookNow) {
       onBookNow(service);
     } else {
-      // Default: navigate to booking page
       navigate(`/book/${service._id}`, { state: { service } });
     }
   };
@@ -79,14 +147,18 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
     setIsToggling(true);
 
     try {
-      const currentProviderId = service.provider?._id || (service as any).providerId;
+      const providerId = service.provider?._id || (service as any).providerId;
+      if (!providerId) {
+        toast.error('Unable to favorite this service');
+        return;
+      }
       if (isFavorited) {
-        await favoritesApi.removeFavorite(currentProviderId);
+        await favoritesApi.removeFavorite(providerId);
         setIsFavorited(false);
         onFavoriteChange?.(false);
         toast.success('Removed from favorites');
       } else {
-        await favoritesApi.addFavorite(currentProviderId);
+        await favoritesApi.addFavorite(providerId);
         setIsFavorited(true);
         onFavoriteChange?.(true);
         toast.success('Added to favorites');
@@ -101,50 +173,51 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
 
   // Extract display values from potentially nested objects
   const displayTitle = service.title || service.name;
-  // Handle multiple price formats: pricing.currentPrice, price.amount, or direct price
-  // Convert to user's local currency based on location
-  const rawPrice = (service as any).pricing?.currentPrice
-    ?? (typeof service.price === 'number' ? service.price : service.price?.amount || 0);
+  const rawPrice = (service as any).pricing?.currentPrice ?? extractPrice(service);
   const sourceCurrency = typeof service.price === 'object' ? service.price?.currency || 'AED' : 'AED';
   const displayPrice = convert(rawPrice, sourceCurrency);
+
+  // The search API returns `images: string[]` but no derived `image` field.
+  // Fall back to the first image so the card always shows a hero photo when
+  // the service has one, regardless of which endpoint supplied the data.
+  const heroImage = service.image ?? service.images?.[0];
 
   const displayRating = typeof service.rating === 'number'
     ? service.rating
     : (service.rating?.average || 0);
 
-  const ratingCount = service.reviewCount ||
-    (typeof service.rating === 'object' ? service.rating?.count : 0) ||
-    service.reviews?.count || 0;
+  const ratingCount = extractRatingCount(service);
 
   // NILIN warm gradient backgrounds based on category
   const categoryGradients: Record<string, string> = {
-    hair: 'bg-gradient-to-br from-[#F5E6E0] to-[#FAE5E0]',
-    makeup: 'bg-gradient-to-br from-[#FAE5E0] to-[#F5E6E0]',
-    nails: 'bg-gradient-to-br from-[#F5E6E0] to-[#EDE5DD]',
-    'skin & aesthetics': 'bg-gradient-to-br from-[#FAE5E0] to-[#F5E6E0]',
-    'massage & body': 'bg-gradient-to-br from-[#F5E6E0] to-[#FAE5E0]',
-    'personal care': 'bg-gradient-to-br from-[#EDE5DD] to-[#F5E6E0]',
-    default: 'bg-gradient-to-br from-[#F5E6E0] to-[#FAE5E0]',
+    hair: 'bg-gradient-to-br from-nilin-blush to-nilin-peach',
+    makeup: 'bg-gradient-to-br from-nilin-peach to-nilin-blush',
+    nails: 'bg-gradient-to-br from-nilin-blush to-nilin-cream',
+    'skin & aesthetics': 'bg-gradient-to-br from-nilin-peach to-nilin-blush',
+    'massage & body': 'bg-gradient-to-br from-nilin-blush to-nilin-peach',
+    'personal care': 'bg-gradient-to-br from-nilin-cream to-nilin-blush',
+    default: 'bg-gradient-to-br from-nilin-blush to-nilin-peach',
   };
 
-  const gradientClass = categoryGradients[service.category.toLowerCase()] || categoryGradients.default;
+  // FIX: Added null check to prevent crash when category is undefined
+  const gradientClass = categoryGradients[service.category?.toLowerCase() || ''] || categoryGradients.default;
 
   // Compact variant - for grids and lists
   if (variant === 'compact') {
     return (
       <button
         onClick={handleClick}
-        className="w-full text-left bg-white rounded-xl border border-[#E8E4E0] overflow-hidden group cursor-pointer
+        className="w-full text-left bg-white rounded-nilin border border-nilin-border overflow-hidden group cursor-pointer
           transition-all duration-300 ease-out
-          hover:shadow-[0_8px_30px_rgba(232,180,168,0.15)]
-          hover:-translate-y-1
-          focus:outline-none focus:ring-2 focus:ring-[#E8B4A8]/30"
+          hover:shadow-nilin-warm hover:-translate-y-1
+          active:scale-[0.98]
+          focus:outline-none focus:ring-2 focus:ring-nilin-coral/30"
       >
         {/* Image Area */}
         <div className={`relative h-28 ${gradientClass} overflow-hidden`}>
-          {service.image ? (
+          {heroImage ? (
             <img
-              src={service.image}
+              src={heroImage}
               alt={displayTitle}
               className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
             />
@@ -157,31 +230,32 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
           {/* Rating Badge */}
           {displayRating > 0 && (
             <div className="absolute top-2 right-2 bg-white/90 backdrop-blur-sm px-2 py-0.5 rounded-full flex items-center gap-1 shadow-sm">
-              <Star className="h-3 w-3 fill-[#E8B4A8] text-[#E8B4A8]" />
-              <span className="text-xs font-semibold text-[#2D2D2D]">{displayRating.toFixed(1)}</span>
+              <Star className="h-3 w-3 fill-nilin-coral text-nilin-coral" aria-hidden="true" />
+              <span className="text-xs font-semibold text-nilin-charcoal">{displayRating.toFixed(1)}</span>
             </div>
           )}
 
           {/* Favorite Button */}
           <button
             onClick={handleToggleFavorite}
-            aria-label={isFavorited ? "Remove from favorites" : "Add to favorites"}
+            aria-label={isFavorited ? "Remove this service from favorites" : "Add this service to favorites"}
             aria-pressed={isFavorited}
             className={`absolute top-2 left-2 p-1.5 rounded-full shadow-sm transition-all ${
               isFavorited
-                ? 'bg-red-500 text-white'
-                : 'bg-white/80 backdrop-blur-sm text-gray-600 hover:bg-white'
-            } ${isToggling ? 'opacity-50' : ''}`}
+                ? 'bg-nilin-coral text-white'
+                : 'bg-white/80 backdrop-blur-sm text-nilin-warmGray hover:bg-white'
+            } ${isToggling ? 'opacity-50' : ''} active:scale-[0.95]`}
           >
-            <Heart className={`h-3.5 w-3.5 ${isFavorited ? 'fill-current' : ''}`} />
+            <Heart className={`h-3.5 w-3.5 transition-colors duration-200 ${isFavorited ? 'fill-current' : ''}`} aria-hidden="true" />
           </button>
 
-          {/* Book Now Overlay - shows on hover */}
+          {/* Book Now Overlay */}
           {showBookNow && (
-            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex items-center justify-center">
+            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center z-10">
               <button
                 onClick={handleBookNow}
-                className="px-4 py-2 bg-white text-[#D4A89A] font-semibold text-sm rounded-full shadow-lg hover:bg-[#F5E6E0] transition-colors"
+                aria-label={`Book ${displayTitle}`}
+                className="px-4 py-2 bg-white text-nilin-rose font-semibold text-sm rounded-full shadow-lg hover:bg-nilin-blush transition-colors"
               >
                 Book Now
               </button>
@@ -191,15 +265,15 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
 
         {/* Content */}
         <div className="p-4">
-          <h3 className="font-medium text-[#2D2D2D] text-sm mb-1 line-clamp-1
-            group-hover:text-[#D4A89A] transition-colors duration-200">
+          <h3 className="font-medium text-nilin-charcoal text-sm mb-1 line-clamp-1
+            group-hover:text-nilin-rose transition-colors duration-300">
             {displayTitle}
           </h3>
           <div className="flex items-center justify-between">
-            <span className="text-lg font-bold text-[#2D2D2D]">
+            <span className="text-lg font-bold text-nilin-charcoal">
               {format(displayPrice, currency)}
             </span>
-            <ChevronRight className="h-4 w-4 text-[#9B9B9B] group-hover:translate-x-1 transition-transform duration-200" />
+            <ChevronRight className="h-4 w-4 text-nilin-lightGray group-hover:translate-x-1 group-hover:text-nilin-rose transition-all duration-300" aria-hidden="true" />
           </div>
         </div>
       </button>
@@ -211,17 +285,20 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
     return (
       <div
         onClick={handleClick}
-        className="w-full text-left bg-white rounded-2xl border border-[#E8E4E0] overflow-hidden group cursor-pointer
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleClick(); }}}
+        tabIndex={0}
+        role="button"
+        className="w-full text-left bg-white rounded-2xl border border-nilin-border overflow-hidden group cursor-pointer
           transition-all duration-300 ease-out
           hover:shadow-[0_12px_40px_rgba(232,180,168,0.2)]
           hover:-translate-y-2
-          focus:outline-none focus:ring-2 focus:ring-[#E8B4A8]/30"
+          focus:outline-none focus:ring-2 focus:ring-nilin-coral/30"
       >
         {/* Image Area */}
         <div className={`relative h-56 ${gradientClass} overflow-hidden`}>
-          {service.image ? (
+          {heroImage ? (
             <img
-              src={service.image}
+              src={heroImage}
               alt={displayTitle}
               className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
             />
@@ -234,13 +311,13 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
           {/* Badges */}
           <div className="absolute top-4 left-4 flex gap-2">
             {service.isNew && (
-              <span className="bg-[#E8B4A8] text-white text-xs font-semibold px-3 py-1 rounded-full shadow-sm">
+              <span className="bg-nilin-coral text-white text-xs font-semibold px-3 py-1 rounded-full shadow-sm">
                 NEW
               </span>
             )}
             {service.isFeatured && (
-              <span className="bg-[#D4A89A] text-white text-xs font-semibold px-3 py-1 rounded-full flex items-center gap-1 shadow-sm">
-                <TrendingUp className="h-3 w-3" />
+              <span className="bg-nilin-rose text-white text-xs font-semibold px-3 py-1 rounded-full flex items-center gap-1 shadow-sm">
+                <TrendingUp className="h-3 w-3" aria-hidden="true" />
                 Featured
               </span>
             )}
@@ -249,62 +326,69 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
           {/* Rating Badge */}
           {displayRating > 0 && (
             <div className="absolute top-4 right-4 bg-white/95 backdrop-blur-sm px-3 py-1.5 rounded-full flex items-center gap-1.5 shadow-lg">
-              <Star className="h-4 w-4 fill-[#E8B4A8] text-[#E8B4A8]" />
-              <span className="text-sm font-bold text-[#2D2D2D]">{displayRating.toFixed(1)}</span>
+              <Star className="h-4 w-4 fill-nilin-coral text-nilin-coral" aria-hidden="true" />
+              <span className="text-sm font-bold text-nilin-charcoal">{displayRating.toFixed(1)}</span>
               {ratingCount > 0 && (
-                <span className="text-xs text-[#6B6B6B]">({ratingCount})</span>
+                <span className="text-xs text-nilin-warmGray">({ratingCount})</span>
               )}
             </div>
           )}
 
           {/* Gradient Overlay */}
-          <div className="absolute inset-0 bg-gradient-to-t from-[#2D2D2D]/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+          <div className="absolute inset-0 bg-gradient-to-t from-nilin-charcoal/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
         </div>
 
         {/* Content */}
         <div className="p-6">
           {/* Category Tag */}
-          <span className="inline-block px-3 py-1 bg-[#F8F6F4] text-[#6B6B6B] text-xs font-medium rounded-lg mb-3">
+          <span className="inline-block px-3 py-1 bg-nilin-muted text-nilin-warmGray text-xs font-medium rounded-lg mb-3">
             {service.category}
           </span>
 
           {/* Title */}
-          <h3 className="font-semibold text-[#2D2D2D] text-lg mb-2 line-clamp-2
-            group-hover:text-[#D4A89A] transition-colors duration-200">
+          {/* N50: Featured variant title consistency - line-clamp-2 */}
+          <h3 className="font-semibold text-nilin-charcoal text-lg mb-2 line-clamp-2
+            group-hover:text-nilin-rose transition-colors duration-300">
             {displayTitle}
           </h3>
 
           {/* Description */}
+          {/* N49: line-clamp-2 consistency */}
           {service.description && (
-            <p className="text-sm text-[#6B6B6B] mb-4 line-clamp-2">
+            <p className="text-sm text-nilin-warmGray mb-4 line-clamp-2">
               {service.description}
             </p>
           )}
 
           {/* Meta Info */}
-          <div className="flex items-center gap-5 text-sm text-[#6B6B6B] mb-4">
+          <div className="flex items-center gap-5 text-sm text-nilin-warmGray mb-4">
             {service.duration && (
               <div className="flex items-center gap-1.5">
-                <Clock className="h-4 w-4 text-[#D4A89A]" />
+                <Clock className="h-4 w-4 text-nilin-rose" aria-hidden="true" />
                 <span>{service.duration} min</span>
               </div>
             )}
             {service.provider?.location && (
               <div className="flex items-center gap-1.5">
-                <MapPin className="h-4 w-4 text-[#D4A89A]" />
+                <MapPin className="h-4 w-4 text-nilin-rose" aria-hidden="true" />
                 <span className="truncate">{service.provider.location}</span>
               </div>
             )}
           </div>
 
           {/* Price and CTA */}
-          <div className="flex items-center justify-between pt-4 border-t border-[#E8E4E0]">
+          <div className="flex items-center justify-between pt-4 border-t border-nilin-border">
             <div>
               {(service.provider || (service as any).providerName) && (
-                <p className="text-xs text-[#9B9B9B] mb-0.5">by {service.provider?.businessName || (service as any).providerName || 'Service Provider'}</p>
+                /* N48: i18n-ready 'by' prefix for provider attribution */
+                <p className="text-xs text-nilin-lightGray mb-0.5">
+                  <span>{PROVIDER_PREFIX}</span> {service.provider?.businessName || (service as any).providerName || 'Service Provider'}
+                </p>
               )}
               <div className="flex items-baseline gap-1">
-                <span className="text-2xl font-bold text-[#2D2D2D]">{format(displayPrice, currency)}</span>
+                <span className="text-2xl font-bold text-nilin-charcoal">{format(displayPrice, currency)}</span>
+                {/* N51: Use PRICE_SUFFIX constant */}
+                <span className="text-xs text-nilin-lightGray">{PRICE_SUFFIX}</span>
               </div>
             </div>
             <button
@@ -312,8 +396,9 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
                 e.stopPropagation();
                 handleClick();
               }}
-              className="px-5 py-2.5 bg-[#E8B4A8] text-white font-medium text-sm rounded-xl
-                hover:bg-[#D4A89A] hover:shadow-[0_4px_20px_rgba(232,180,168,0.3)]
+              aria-label={`Book ${displayTitle}`}
+              className="px-5 py-2.5 bg-nilin-coral text-white font-medium text-sm rounded-xl
+                hover:bg-nilin-rose hover:shadow-nilin
                 active:scale-95
                 transition-all duration-200"
             >
@@ -328,18 +413,32 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
   // Default variant
   return (
     <div
+      ref={tiltCardRef}
       onClick={handleClick}
-      className="w-full text-left bg-white rounded-xl border border-[#E8E4E0] overflow-hidden group cursor-pointer
-        transition-all duration-300 ease-out
-        hover:shadow-[0_8px_30px_rgba(232,180,168,0.15)]
-        hover:-translate-y-1
-        focus:outline-none focus:ring-2 focus:ring-[#E8B4A8]/30"
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleClick(); }}}
+      onMouseEnter={tiltHandlers.onMouseEnter}
+      onMouseLeave={tiltHandlers.onMouseLeave}
+      tabIndex={0}
+      role="button"
+      style={tiltCardStyle}
+      className="relative w-full text-left bg-white rounded-nilin border border-nilin-border group cursor-pointer
+        hover:-translate-y-1 hover:shadow-nilin
+        focus:outline-none focus:ring-2 focus:ring-nilin-coral/30
+        motion-reduce:transition-none motion-reduce:hover:transform motion-reduce:hover:-translate-y-0 motion-reduce:hover:shadow-none"
     >
+      {/* 3D glow overlay — radial gradient that follows the cursor. */}
+      <div
+        ref={tiltGlowRef}
+        aria-hidden="true"
+        style={tiltGlowStyle}
+        className="pointer-events-none absolute inset-0 z-0"
+      />
+
       {/* Image/Gradient Header */}
-      <div className={`relative h-48 ${gradientClass} overflow-hidden`}>
-        {service.image ? (
+      <div className={`relative h-48 ${gradientClass}`}>
+        {heroImage ? (
           <img
-            src={service.image}
+            src={heroImage}
             alt={displayTitle}
             className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
           />
@@ -352,13 +451,13 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
         {/* Badges */}
         <div className="absolute top-3 left-4 flex gap-2">
           {service.isNew && (
-            <span className="bg-[#7BA889] text-white text-xs font-semibold px-2.5 py-1 rounded-full shadow-sm">
+            <span className="bg-nilin-success text-white text-xs font-semibold px-2.5 py-1 rounded-full shadow-sm">
               NEW
             </span>
           )}
           {service.isFeatured && (
-            <span className="bg-[#D4A89A] text-white text-xs font-semibold px-2.5 py-1 rounded-full flex items-center gap-1 shadow-sm">
-              <TrendingUp className="h-3 w-3" />
+            <span className="bg-nilin-rose text-white text-xs font-semibold px-2.5 py-1 rounded-full flex items-center gap-1 shadow-sm">
+              <TrendingUp className="h-3 w-3" aria-hidden="true" />
               Featured
             </span>
           )}
@@ -367,10 +466,10 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
         {/* Rating Badge */}
         {displayRating > 0 && (
           <div className="absolute top-3 right-3 bg-white/90 backdrop-blur-sm px-2.5 py-1 rounded-full flex items-center gap-1.5 shadow-sm">
-            <Star className="h-4 w-4 fill-[#E8B4A8] text-[#E8B4A8]" />
-            <span className="text-sm font-semibold text-[#2D2D2D]">{displayRating.toFixed(1)}</span>
+            <Star className="h-4 w-4 fill-nilin-coral text-nilin-coral" aria-hidden="true" />
+            <span className="text-sm font-semibold text-nilin-charcoal">{displayRating.toFixed(1)}</span>
             {ratingCount > 0 && (
-              <span className="text-xs text-[#6B6B6B]">({ratingCount})</span>
+              <span className="text-xs text-nilin-warmGray">({ratingCount})</span>
             )}
           </div>
         )}
@@ -378,78 +477,150 @@ const ServiceCard: React.FC<ServiceCardProps> = ({
         {/* Favorite Button */}
         <button
           onClick={handleToggleFavorite}
-          aria-label={isFavorited ? "Remove from favorites" : "Add to favorites"}
+          aria-label={isFavorited ? "Remove this service from favorites" : "Add this service to favorites"}
           aria-pressed={isFavorited}
           className={`absolute top-3 left-3 p-2 rounded-full shadow-sm transition-all ${
             isFavorited
-              ? 'bg-red-500 text-white'
-              : 'bg-white/80 backdrop-blur-sm text-gray-600 hover:bg-white'
-          } ${isToggling ? 'opacity-50' : ''}`}
+              ? 'bg-nilin-coral text-white'
+              : 'bg-white/80 backdrop-blur-sm text-nilin-warmGray hover:bg-white'
+          } ${isToggling ? 'opacity-50' : ''} active:scale-[0.95]`}
         >
-          <Heart className={`h-4 w-4 ${isFavorited ? 'fill-current' : ''}`} />
+          <Heart className={`h-4 w-4 transition-colors duration-200 ${isFavorited ? 'fill-current' : ''}`} aria-hidden="true" />
         </button>
+
+        {/* Compare Checkbox */}
+        <button
+          onClick={handleToggleCompare}
+          aria-label={isInComparison ? `Remove ${displayTitle} from comparison` : `Add ${displayTitle} to comparison`}
+          aria-pressed={isInComparison}
+          className={`absolute bottom-3 right-3 w-7 h-7 rounded-full border-2 shadow-sm flex items-center justify-center transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-1 z-10 ${
+            isInComparison
+              ? 'bg-nilin-coral border-nilin-coral text-white'
+              : 'bg-white/90 border-nilin-border text-nilin-warmGray/40 hover:border-nilin-coral'
+          }`}
+        >
+          <Check className={`w-4 h-4 transition-transform duration-200 ${isInComparison ? 'scale-110' : ''}`} strokeWidth={3} aria-hidden="true" />
+        </button>
+
+        {/* Bulk Select Checkbox */}
+        {showCheckbox && (
+          <div
+            className="absolute top-3 right-3 z-20"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <input
+              type="checkbox"
+              checked={checked}
+              onChange={(e) => {
+                e.stopPropagation();
+                onCheck?.(service._id);
+              }}
+              aria-label={`Select ${displayTitle}`}
+              className="w-6 h-6 rounded border-2 border-white bg-white/90 shadow-sm cursor-pointer
+                checked:bg-nilin-coral checked:border-nilin-coral
+                focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-1
+                transition-all duration-200"
+            />
+          </div>
+        )}
+
+        {/* Quick View Button */}
+        {showQuickView && onQuickView && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onQuickView(service); }}
+            aria-label={`Quick view of ${displayTitle}`}
+            className="absolute bottom-3 left-3 w-7 h-7 rounded-full bg-white/90 border border-nilin-border shadow-sm
+              flex items-center justify-center text-nilin-warmGray
+              hover:bg-nilin-blush hover:text-nilin-coral hover:border-nilin-coral
+              focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-1
+              active:scale-[0.95] transition-all opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 z-20"
+          >
+            <Eye className="w-4 h-4" aria-hidden="true" />
+          </button>
+        )}
       </div>
 
       {/* Content */}
       <div className="p-4">
         {/* Category Tag */}
-        <span className="inline-block px-2.5 py-1 bg-[#F8F6F4] text-[#6B6B6B] text-xs font-medium rounded-lg mb-2">
+        <span className="inline-block px-2.5 py-1 bg-nilin-muted text-nilin-warmGray text-xs font-medium rounded-lg mb-2">
           {service.category}
         </span>
 
         {/* Title */}
-        <h3 className="font-semibold text-[#2D2D2D] mb-2 line-clamp-2
-          group-hover:text-[#D4A89A] transition-colors duration-200">
+        <h3 className="font-semibold text-nilin-charcoal mb-2 line-clamp-2
+          group-hover:text-nilin-rose transition-colors duration-300">
           {displayTitle}
         </h3>
 
         {/* Description */}
         {service.description && (
-          <p className="text-sm text-[#6B6B6B] mb-3 line-clamp-2">
+          <p className="text-sm text-nilin-warmGray mb-3 line-clamp-2">
             {service.description}
           </p>
         )}
 
         {/* Meta Info */}
-        <div className="flex items-center gap-4 text-sm text-[#6B6B6B] mb-3">
+        <div className="flex items-center gap-4 text-sm text-nilin-warmGray mb-3">
           {service.duration && (
             <div className="flex items-center gap-1.5">
-              <Clock className="h-4 w-4 text-[#D4A89A]" />
+              <Clock className="h-4 w-4 text-nilin-rose" aria-hidden="true" />
               <span>{service.duration} min</span>
             </div>
           )}
           {service.provider?.location && (
             <div className="flex items-center gap-1.5">
-              <MapPin className="h-4 w-4 text-[#D4A89A]" />
+              <MapPin className="h-4 w-4 text-nilin-rose" aria-hidden="true" />
               <span className="truncate">{service.provider.location}</span>
             </div>
           )}
         </div>
 
         {/* Price and Provider */}
-        <div className="flex items-center justify-between pt-3 border-t border-[#E8E4E0]">
+        <div className="flex items-center justify-between pt-3 border-t border-nilin-border">
           <div>
             {(service.provider || (service as any).providerName) && (
-              <p className="text-xs text-[#9B9B9B] mb-0.5">by {service.provider?.businessName || (service as any).providerName || 'Service Provider'}</p>
+              /* N48: i18n-ready 'by' prefix for provider attribution */
+              <p className="text-xs text-nilin-lightGray mb-0.5">
+                <span>{PROVIDER_PREFIX}</span> {service.provider?.businessName || (service as any).providerName || 'Service Provider'}
+              </p>
             )}
             <div className="flex items-baseline gap-1">
-              <span className="text-xl font-bold text-[#2D2D2D]">{format(displayPrice, currency)}</span>
-              <span className="text-xs text-[#9B9B9B]">/ service</span>
+              <span className="text-xl font-bold text-nilin-charcoal">{format(displayPrice, currency)}</span>
+              {/* N51: Use PRICE_SUFFIX constant */}
+              <span className="text-xs text-nilin-lightGray">{PRICE_SUFFIX}</span>
             </div>
           </div>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              handleBookNow(e);
-            }}
-            aria-label={`Book ${displayTitle}`}
-            className="px-4 py-2 bg-[#E8B4A8] text-white font-medium text-sm rounded-lg
-              hover:bg-[#D4A89A] hover:shadow-[0_4px_20px_rgba(232,180,168,0.25)]
-              active:scale-95
-              transition-all duration-200"
-          >
-            Book
-          </button>
+          {service.status !== 'active' ? (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onNotifyMe?.(service);
+              }}
+              aria-label={`Notify me when ${displayTitle} is available`}
+              className="flex items-center gap-1.5 px-4 py-2 bg-nilin-muted text-nilin-warmGray font-medium text-sm rounded-nilin
+                hover:bg-nilin-blush hover:text-nilin-coral
+                active:scale-95
+                transition-all duration-200"
+            >
+              <Bell className="w-4 h-4" aria-hidden="true" />
+              Notify Me
+            </button>
+          ) : (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                handleBookNow(e);
+              }}
+              aria-label={`Book ${displayTitle}`}
+              className="px-4 py-2 bg-nilin-coral text-white font-medium text-sm rounded-nilin
+                hover:bg-nilin-rose hover:shadow-nilin
+                active:scale-95
+                transition-all duration-200"
+            >
+              Book
+            </button>
+          )}
         </div>
       </div>
     </div>

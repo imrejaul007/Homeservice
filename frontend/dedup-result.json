@@ -1,0 +1,857 @@
+{
+  "total": 106,
+  "mustFix": [
+    {
+      "rootCause": "currency inconsistency",
+      "file": "services/comparisonService.ts",
+      "severity": "HIGH",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Inject the priceConverter into buildComparison so the price metric converts to the user's selected currency. Currently the format() function returns 'AED 1,234' regardless of user locale — so if a user is browsing in EUR/USD/INR, the comparison table displays source AED while the surrounding ServiceCards show converted prices. This is the most visible inconsistency in the feature. Pass convert/format/currency as options to buildComparison, or have the modal call convert() before passing the value. Also remove the dead usePriceConversion/formatPrice import on line 7 of ServiceComparisonModal.tsx (and the unused destructure on line 22) once the conversion is centralized in comparisonService."
+    },
+    {
+      "rootCause": "modal stays open with 1 item",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "HIGH",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "When a user removes a service from the modal, items can drop to 1 — the modal stays open with a single column and an empty top-left cell, which is a dead-end UX. Add a guard: if (services.length < 2) render a friendly empty state with an 'Add another service to compare' message and a primary CTA 'Browse Services' that closes the modal and scrolls to the search results. Alternatively auto-close the modal. This makes removal feel intentional instead of broken."
+    },
+    {
+      "rootCause": "bar rounded-2xl shadow-2xl",
+      "file": "search/ComparisonBar.tsx",
+      "severity": "HIGH",
+      "agentCount": 3,
+      "rawCount": 3,
+      "fix": "Replace 'shadow-2xl' with 'shadow-nilin-warm-lg' (or shadow-nilin-warm) to stay on-brand. The dark charcoal bar over content needs a warm, elevated shadow to feel native to the nilin system."
+    },
+    {
+      "rootCause": "nested scroll broken",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "HIGH",
+      "agentCount": 3,
+      "rawCount": 3,
+      "fix": "`overflow-x-auto -mx-6 px-6 pb-2` works but combined with `rounded-nilin-lg` on the inner cards can cause horizontal scroll to reveal flat edges on cards. Not a brand-token issue, just confirm visually that the grid renders cleanly inside the Modal padding."
+    },
+    {
+      "rootCause": "contrast bar buttons",
+      "file": "search/ComparisonBar.tsx",
+      "severity": "HIGH",
+      "agentCount": 2,
+      "rawCount": 2,
+      "fix": "`text-nilin-coral` against `bg-nilin-charcoal` is on-brand but the coral-to-charcoal contrast is lower than the white-to-coral CTA. Consider `text-nilin-rose` (slightly lighter pink) for the icon to maintain the same warm-pink family while gaining a touch of luminance, OR keep coral and pair with `ring-1 ring-nilin-coral/30` on the bar for accent definition. Optional."
+    },
+    {
+      "rootCause": "image not keyboard accessible",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "CRITICAL",
+      "agentCount": 2,
+      "rawCount": 2,
+      "fix": "Replace the clickable background-image div with a focusable <button> (or add role=\"button\", tabIndex={0}, onKeyDown for Enter/Space, and an aria-label such as `View details for {displayTitle}`). The image itself is purely decorative once used as a link, so mark it aria-hidden."
+    },
+    {
+      "rootCause": "title not keyboard accessible",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "CRITICAL",
+      "agentCount": 2,
+      "rawCount": 2,
+      "fix": "Convert the h3 into a real <button> (or wrap it in one) with onClick handler. Ensure visible focus styles (e.g. focus:ring-2 focus:ring-nilin-coral) and an aria-label that includes the action, e.g. `View details for {displayTitle}`."
+    },
+    {
+      "rootCause": "contrast badge",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "CRITICAL",
+      "agentCount": 2,
+      "rawCount": 2,
+      "fix": "White (#FFFFFF) on nilin-coral (a warm pink ~#E8826F) at 10px fails WCAG AA 4.5:1 (and likely 3:1 for large text). Use a darker background such as bg-nilin-rose or text-nilin-charcoal on bg-nilin-coral, or bump font size to 12px and use a darker text/background pair. Verify with a contrast checker and aim for at least 4.5:1."
+    },
+    {
+      "rootCause": "\"compare now\" button: white text on coral likely fails 4.5:1",
+      "file": "search/ComparisonBar.tsx",
+      "severity": "CRITICAL",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "White on nilin-coral is borderline. Either darken the background to bg-nilin-rose (deeper pink) or use text-nilin-charcoal. Confirm with a contrast tool; target 4.5:1 for normal text. Also add an explicit focus-visible style (e.g. focus-visible:ring-2 focus-visible:ring-white)."
+    },
+    {
+      "rootCause": "metric labels use warmgray at 12px on white — likely below 4",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "HIGH",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "ntext-nilin-warmGray (~#7A7370) at 12px on white is borderline. Either darken the color (e.g. text-nilin-charcoal/70 or a darker custom value meeting 4.5:1) or increase font weight. Same fix applies to the \"Provider\" row label on line 144 and to the icon-only X button color (line 63)."
+    },
+    {
+      "rootCause": "contrast warmgray",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "HIGH",
+      "agentCount": 2,
+      "rawCount": 2,
+      "fix": "text-nilin-warmGray on bg-nilin-muted is likely below 3:1 for the icon. Use text-nilin-charcoal or text-nilin-error at default state, and add a visible focus ring (focus:ring-2 focus:ring-nilin-coral). The aria-label is already good."
+    },
+    {
+      "rootCause": "no focus visible ring",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "HIGH",
+      "agentCount": 2,
+      "rawCount": 2,
+      "fix": "Add focus-visible utilities to every button (focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2). Currently the only global focus style is the modal's own outline-none on the dialog content; interactive controls have no ring."
+    },
+    {
+      "rootCause": "remove x too small",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "HIGH",
+      "agentCount": 3,
+      "rawCount": 3,
+      "fix": "The remove button uses `p-1` (4px) with a `w-3.5 h-3.5` (14px) icon, yielding ~22px hit area. WCAG / Apple HIG recommend minimum 44x44px for touch targets. Increase to `p-2` with `w-4 h-4` icon (yielding ~36-40px). Also add `min-w-[44px] min-h-[44px]` to the button or use a hit-area expansion technique. Same touch-target concern applies to the small X button in ComparisonBar.tsx line 39-45 (p-0.5 with w-3 h-3 icon = ~20px)."
+    },
+    {
+      "rootCause": "header card height varies",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "HIGH",
+      "agentCount": 3,
+      "rawCount": 3,
+      "fix": "Line 70 sets `h-24` (96px) for the image and line 84 uses `flex flex-wrap gap-1` for badges. When a service wins in all 4 categories (price, rating, duration, distance), the badges wrap to 2 rows, pushing the header card from ~180px to ~220px. Because grid rows default to `auto`, the row stretches - but only for the services in the same row, and the empty `<div />` top-left cell (line 51) has no content to push its height. The real problem is that header cards in the same row will have different heights when services have different numbers of best badges, causing jagged top edges. Fix: set a `min-h` on every header card (e.g., `min-h-[180px]`) and use `flex flex-col` so the badge wrapper has `mt-auto` to push badges to the bottom, OR cap badges to one row using `truncate` / `line-clamp-1` on the badge container."
+    },
+    {
+      "rootCause": "action row scrolls away",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "HIGH",
+      "agentCount": 2,
+      "rawCount": 2,
+      "fix": "Lines 159-176 render the Details/Book Now buttons as the last row of the same CSS grid, inside the scrollable `overflow-x-auto -mx-6 px-6 pb-2` wrapper. With 3-4 services, the grid content (header row + 4 metric rows + provider row + action row = 6 grid rows of ~60-200px each) easily exceeds the Modal.Body's `max-h-[60vh]`. The user must scroll back to the bottom to find the Book Now button, which is a critical conversion action. Fix: extract the action row out of the scrollable grid into the Modal.Footer slot. The Modal already supports a `footer` prop (Modal.tsx line 24, 285) - pass it as `footer={actionRowContent}`. To align buttons under the right service columns, the action row should also be a grid with the same `160px repeat(N, minmax(220px, 1fr))` template, with an empty first column."
+    },
+    {
+      "rootCause": "checkbox invisible unchecked",
+      "file": "customer/ServiceCard.tsx",
+      "severity": "HIGH",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "The unchecked state uses `text-transparent` which hides the Check icon entirely, leaving a translucent white circle on busy card imagery. Replace `text-transparent` with `text-nilin-warmGray` (or `text-nilin-charcoal/40`) so the affordance is visible at a glance. Also drop `border-2` to `border` for a more refined look that matches the modal's subtle `border-nilin-border` usage."
+    },
+    {
+      "rootCause": "modal width too narrow",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "CRITICAL",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "The grid minimum width with 4 services is 160 + 220*4 = 1040px, but max-w-xl is only 576px. This forces almost the entire compare content into the horizontal scroll area, and the modal title/description waste a tiny card. Switch size to \"2xl\" (672px) or add a custom size like \"compare\" mapped to max-w-6xl (1152px). For 4-service comparison, the modal should be at least 1100px wide."
+    },
+    {
+      "rootCause": "header row alignment",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "HIGH",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "The first row of the grid is the service header (image + title + badges) and the first cell is an empty <div/>. With auto rows, this row sizes to its content (which can be tall due to 4 wrapping best badges), but the empty first cell has no content to vertically align against the metric labels in subsequent rows. Add a placeholder cell with a visible label like \"Services\" or \"Compare\" in the same uppercase tracking-wide style so the first column is filled and visually anchored. The empty cell also fails the accessibility tree as a meaningless empty div."
+    }
+  ],
+  "shouldFix": [
+    {
+      "rootCause": "best badge hierarchy",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "MEDIUM",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Replace the multi-badge stack with a smart hierarchy: show a prominent 'Top Pick' badge (px-2.5 py-1, text-xs, bg-nilin-coral, with a small Award icon) when a service wins 3+ metrics, and only show individual 'Best {label}' badges for 1-2 wins. Reduces visual noise, makes the winner obvious at a glance, and aligns with premium comparison UIs (Amazon, Booking.com). Extend isServiceBestIn to return both the count and labels so the modal can decide which tier to show."
+    },
+    {
+      "rootCause": "action buttons mobile cramped",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "MEDIUM",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Two issues bundled: (a) On mobile the 50/50 flex split of 'Details | Book Now' squeezes the labels. Change to flex-col on mobile (flex-col sm:flex-row) so 'Book Now' stacks below 'Details' on small screens. (b) The action row is inside the horizontally-scrolling grid — for 4 services users scroll horizontally and lose access to Book Now. Make the action row a sticky footer below the grid (outside the overflow-x-auto container) so it stays reachable. Use a 2-column repeat of the action buttons at the bottom with border-t and bg-white/80 backdrop-blur."
+    },
+    {
+      "rootCause": "modal description generic",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "MEDIUM",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Replace the static description with a dynamic, count-aware string: 'Comparing X services side-by-side — best price, rating, duration and distance highlighted'. Optionally show a small 'Up to 4 services' hint chip below the title so users understand the limit. Also raise the per-card image from h-24 (96px) to h-28 (112px) for better visual weight — combined with rounded-nilin-lg, it gives the header card a more premium poster look. These two tweaks together transform the modal from 'generic table' to 'deliberate comparison tool'."
+    },
+    {
+      "rootCause": "font serif missing",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "MEDIUM",
+      "agentCount": 2,
+      "rawCount": 2,
+      "fix": "Brand uses serif headings. The service `<h3>` should use `font-serif` to match the rest of the modal/componentry. Currently `font-semibold text-sm text-nilin-charcoal` reads as a sans emphasis, breaking the typographic hierarchy. Change to `font-serif text-sm font-semibold text-nilin-charcoal` (or whatever serif scale pairs with the rest of the app)."
+    },
+    {
+      "rootCause": "header card remove-x uses white hover background that looks ",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "MEDIUM",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "`hover:bg-white` on a `bg-nilin-muted` surface creates a flash to pure white, which is visually heavier than needed. Use a token-consistent hover: `hover:bg-nilin-blush hover:text-nilin-error` for a soft warm-pink hover that stays in the brand palette. Color tokens are otherwise correct (warmGray idle, error on hover) but the hover surface is the issue."
+    },
+    {
+      "rootCause": "aria hidden missing",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "MEDIUM",
+      "agentCount": 2,
+      "rawCount": 2,
+      "fix": "Add aria-hidden=\"true\" to all decorative lucide-react icons (Star, Clock, MapPin, Award, Check) so screen readers don't announce them as \"image\". The visible text already conveys the meaning."
+    },
+    {
+      "rootCause": "bar visible behind modal",
+      "file": "search/ComparisonBar.tsx",
+      "severity": "MEDIUM",
+      "agentCount": 3,
+      "rawCount": 3,
+      "fix": "Hide the bar (or render only the modal) when isModalOpen is true. The bar is z-40 and the modal is z-50, so the bar peeks at the bottom of the screen and is visually distracting/distracting. Render it conditionally on !isModalOpen, or use a CSS class that hides it via a state-derived class (e.g., `isModalOpen ? 'hidden' : 'animate-slide-up'`). The modal already lists selected services with their own X buttons, so the user has full control without the floating bar."
+    },
+    {
+      "rootCause": "header card image and badges push metric row vertical alignm",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "MEDIUM",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "The empty top-left cell (line 51) is a bare `<div />` with no content height, so grid auto-row sizing will set the first row to the tallest header card. With 4 services that have varying title lengths and 0-4 \"Best ...\" badges, header cards can grow from ~150px (no image, 0 badges) to ~280px (image + 4 wrapped badges). The metric label cell on the left of the next row (line 103) uses `flex items-center` which only centers within its own row height. Since the metric label cell has no padding/height styling, it sits at the TOP of the metric row (not vertically aligned to the middle of the header image). Fix: give the metric label cell a min-height matching the header card min-height (e.g., add `min-h-24` to match the image) or wrap the entire first column in a flex container that vertically centers content within the header card height."
+    },
+    {
+      "rootCause": "scrollbar under content",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "MEDIUM",
+      "agentCount": 2,
+      "rawCount": 2,
+      "fix": "Line 45 uses `-mx-6 px-6 pb-2` which is a common pattern to extend a child to the edges of a padded parent (Modal.Body has `px-6 pb-4` per Modal.tsx line 181). The intent is to let the horizontal scroll bar reach the modal edges. But Modal.Body has `overflow-y-auto` (Modal.tsx line 181), so any vertical scrollbar that appears occupies ~10-15px on the right edge. The inner wrapper's `-mx-6` pulls it under that scrollbar gutter, meaning the rightmost service column is partially hidden behind the scrollbar. Fix: replace the negative margin trick with `mx-[-24px] px-6` (or use `pr-[10px]` to account for scrollbar width) AND apply `scrollbar-gutter: stable` on Modal.Body via a className override, OR set `overflow-y-scroll` (always show scrollbar track) on Modal.Body to reserve gutter space."
+    },
+    {
+      "rootCause": "image has no fallback when service.image is empty string or ",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "MEDIUM",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Line 68 checks `service.image` truthiness. An empty string `\"\"` is falsy in JS so it falls through, but a whitespace string or broken URL would render the bg-cover div with no image. The 96px tall block is also clickable to view details (line 72) but if no image exists, the click target is invisible. Fix: add a fallback background color or icon placeholder when `!service.image`, e.g., `<div className=\"h-24 w-full bg-nilin-blush rounded-nilin mb-2 flex items-center justify-center\">` with a `<Star />` icon centered."
+    },
+    {
+      "rootCause": "compare now cta uses rounded-full, breaking the brand button",
+      "file": "search/ComparisonBar.tsx",
+      "severity": "MEDIUM",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Change `rounded-full` to `rounded-nilin` on the Compare Now button. All other primary CTAs across the codebase (HeroSearchBar, MapSearchCard, SearchFilters, ServiceComparisonModal Book Now) use `rounded-nilin`. Only the small icon-only buttons (X, Trash) should remain `rounded-full`."
+    },
+    {
+      "rootCause": "modal action buttons missing nilin shadow token",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "MEDIUM",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Add `shadow-nilin` (or `shadow-nilin-warm` for the coral Book Now) to the Details and Book Now CTAs. Every other primary/secondary CTA in the design system carries a nilin shadow; these are bare which makes them feel detached."
+    },
+    {
+      "rootCause": "metric label cells are not programmatically associated with ",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "MEDIUM",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Wrap the comparison in a real <table> with <thead>/<tbody> or use role=\"table\" with role=\"rowheader\" on the metric label cells and aria-labelledby/headers attributes. This lets screen readers announce \"Price: $50\" instead of reading columns of disconnected cells. Also add scope=\"row\" or scope=\"col\" appropriately."
+    },
+    {
+      "rootCause": "\"best\" badge is purely visual; screen readers get no semanti",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "MEDIUM",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Either add an aria-label to the badge span (e.g., `Best in ${label}`) or add an aria-hidden=\"true\" to the badge while ensuring the \"best\" status is conveyed elsewhere (e.g., aria-label on the best cell that says \"Best price: $50\"). The checkmark icon in the metric cell is also decorative and should be aria-hidden."
+    },
+    {
+      "rootCause": "service image rendered as background-image with no alt text ",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "MEDIUM",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Use a real <img> with alt={displayTitle} (or alt=\"\" if decorative) so screen readers can announce it. Background images are not announced. Combined with fix #1, wrap the img in a <button>."
+    },
+    {
+      "rootCause": "contrast warmgray",
+      "file": "common/Modal.tsx",
+      "severity": "MEDIUM",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "The description text inside the modal uses the same warmGray that may fail contrast (see issue #5). Increase contrast to meet 4.5:1 — use a darker shade or a more saturated gray. Also note: Radix uses this Description for aria-describedby, so it must be readable."
+    },
+    {
+      "rootCause": "aria hidden missing",
+      "file": "search/ComparisonBar.tsx",
+      "severity": "MEDIUM",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Add `aria-hidden=\"true\"` to the GitCompare icon — the adjacent text \"{items.length} to compare\" already conveys the meaning. Same for the X icon in the remove button (line 44) and the Trash2 icon in the clear-all button (line 58) — these are already covered by their parent button's aria-label."
+    },
+    {
+      "rootCause": "aria live count",
+      "file": "search/ComparisonBar.tsx",
+      "severity": "MEDIUM",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Wrap the dynamic count in an aria-live=\"polite\" region so assistive tech announces additions/removals. Without this, a screen reader user adding a 3rd service will not be told the bar is now showing 3 items."
+    },
+    {
+      "rootCause": "metric label alignment",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "MEDIUM",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Both use `flex items-center text-xs font-semibold text-nilin-warmGray uppercase tracking-wide`, but the metric label cell is in a row with the metric value cells (p-3, h-auto, line-height from text-sm). The Provider label cell sits in a row with provider name cards (also p-3). The visual issue is that the Provider label has no value text (like \"5.0 stars\") to its right - the row appears half-empty. Add a short subtitle like \"Verified Pro\" or \"Listed since 2023\" beneath, or just make the first column always show a small visual anchor (a horizontal line, a vertical line connector, or a colored dot) to mark the row category."
+    },
+    {
+      "rootCause": "metric label cell leading/tracking not balanced with upperca",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "MEDIUM",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "The label uses `text-xs font-semibold uppercase tracking-wide text-nilin-warmGray`. The value cells use `text-sm` (14px) which is larger. The label visually appears smaller and less prominent than the value it describes. Increase label size to `text-sm` (matching value) and reduce the value cell's font-size to `text-sm` as well so the label and value have equal visual weight. Currently the label is hierarchical secondary when it should be primary (it's the row identifier)."
+    },
+    {
+      "rootCause": "dead imports",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "MEDIUM",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Remove the `usePriceConversion, formatPrice` import on line 7 and the destructuring `const { convert, format, currency } = usePriceConversion();` on line 22. The modal renders price using `metric.format(service)` from `comparisonService` (which already localizes), so the hook is redundant."
+    }
+  ],
+  "niceFix": [
+    {
+      "rootCause": "compare checkbox and modal best badge both use nilin-coral c",
+      "file": "customer/ServiceCard.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "The checkbox uses bg-nilin-coral + white Check (filled), the modal best cell uses bg-nilin-blush + nilin-coral Check (outline). Both are valid 'best' signals but the card's rest state (text-transparent + white/90) hides the Check entirely which is the only signal a user gets that this is a comparison toggle. Consider keeping the Check icon visible at low opacity (e.g. text-nilin-warmGray/40) at rest to make the comparison affordance discoverable before hover."
+    },
+    {
+      "rootCause": "three different comparison surfaces (card bg-white/90, bar b",
+      "file": "search/ComparisonBar.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Visual coherence relies on the GitCompare icon (bar) and Check icon (card/modal) - all rendered in nilin-coral. Consider extracting a shared 'comparison-accent' rule: GitCompare + Check + 'Compare Now' pill all use the same coral token consistently (already true). Document this in the brandkit as the 'comparison signal' so future surfaces follow the rule. The current implementation already follows the rule - this is a documentation gap, not a code change."
+    },
+    {
+      "rootCause": "best cell icon (check) and best badge (award) use different ",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "The header 'Best Price/Rating/Duration/Distance' pill uses Award icon, while the per-cell 'best' indicator uses Check icon. Both are valid, but two different icons for one semantic concept (best-in-row) is redundant. Pick one: either use Award in both places (premium feel) or Check in both places (utilitarian). Recommend Check in the cell (compact) and Award in the header badge (label-style) - current is fine, but document the rationale."
+    },
+    {
+      "rootCause": "rounded-nilin not defined",
+      "file": "search/ComparisonBar.tsx",
+      "severity": "LOW",
+      "agentCount": 3,
+      "rawCount": 3,
+      "fix": "Replace 'rounded-2xl' with 'rounded-nilin-lg' (or 'rounded-full' for a pill - matches the inner item pills and the Compare Now CTA which are both rounded-full). A pill-shaped bar would actually unify with the item pills inside it."
+    },
+    {
+      "rootCause": "metric icons mix nilin-coral (star fill) and nilin-rose (clo",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Star uses coral (accent color, matches rating/award semantics), Clock and MapPin use rose. The rule is: filled accent icons = coral, outline context icons = rose. This is consistent. Document in brandkit as 'metric icon color rule'."
+    },
+    {
+      "rootCause": "border token missing",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "'border-nilin-coral/30' is fine but ensure the design system has a defined semantic border token (e.g. 'border-nilin-accent-soft'). If not, add this as a token so the same soft-coral border is reused everywhere a 'subtle highlight' is needed."
+    },
+    {
+      "rootCause": "hover state on service title uses text-nilin-rose but elsewh",
+      "file": "customer/ServiceCard.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Title hover = rose, checkbox hover = coral. Both are accent colors but the rose/coral split should be intentional: rose = nav/affordance hover, coral = comparison/action hover. Document this split in the brandkit hover-state rules."
+    },
+    {
+      "rootCause": "modal cta 'book now' uses bg-nilin-coral hover:bg-nilin-rose",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "No fix needed - this is a good pattern. muted-to-blush on hover is the proper secondary-button treatment in the nilin system. The 'active:scale-95' is also consistent across both buttons and the bar's Compare Now CTA."
+    },
+    {
+      "rootCause": "bar uses 'animate-slide-up' (tokenized), modal uses native m",
+      "file": "search/ComparisonBar.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Bar enters with animate-slide-up, modal enters with whatever the common Modal component uses (likely animate-modal-scale-in or animate-fade-in). Both are tokenized, so this is fine. Just confirm the Modal uses one of the three documented motions (slide-up, fade-in, modal-scale-in). If the Modal uses a non-token animation, swap it."
+    },
+    {
+      "rootCause": "best {label} badge lacks brand accent ring / serif text",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Badge uses `bg-nilin-coral text-white` (good, on-brand) but `font-semibold` sans. Consider `font-serif font-semibold` for consistency with brand typography on display elements, and add a subtle `ring-1 ring-nilin-rose/40` for depth on the white-on-coral. Optional polish."
+    },
+    {
+      "rootCause": "dark surface vs light surface x-button contrast is correctly",
+      "file": "search/ComparisonBar.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Verified consistent: bar uses `text-white/60 hover:text-white hover:bg-white/10` (dark surface) and modal header card uses `text-nilin-warmGray hover:text-nilin-error` (light surface). The two X-button treatments correctly match their surfaces. No change needed."
+    },
+    {
+      "rootCause": "best/non-best metric cell contrast is on-brand",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Verified: best cell `bg-nilin-blush border-nilin-coral/30` and non-best `bg-white border-nilin-border` create the correct warm-pink accent vs neutral. Coral check icon and rose duration/distance icons both use brand tokens. No change needed."
+    },
+    {
+      "rootCause": "primary ctas consistently use nilin-coral -> nilin-rose hove",
+      "file": "search/ComparisonBar.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Verified: `Compare Now` and the modal's `Book Now` both use `bg-nilin-coral hover:bg-nilin-rose text-white`. Match. Secondary `Details` button uses `bg-nilin-muted hover:bg-nilin-blush` - a sensible warm-neutral pair. No change needed."
+    },
+    {
+      "rootCause": "service header card uses bg-nilin-muted while other cells us",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Header card is `bg-nilin-muted rounded-nilin-lg` (warm beige) while metric cells and provider cells are `bg-white border-nilin-border`. The visual contrast helps the header stand out and is acceptable, but verify it doesn't look like a different \"card\" floating above the table. If it does, switch header to `bg-nilin-cream` for a softer warm-cream that still differentiates from `bg-white` cells while staying in the warm palette."
+    },
+    {
+      "rootCause": "modal lacks id-based wiring for aria-labelledby/aria-describ",
+      "file": "common/Modal.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Radix's DialogPrimitive.Title and Description auto-generate IDs that link to the DialogContent via aria-labelledby and aria-describedby, so this is fine. However, the modal renders ModalHeader only when title/description exists, which means the dialog has no label or description at all if a caller omits both. Either make title required or render a visually-hidden Title (sr-only) when not provided. Also add an explicit `aria-label` fallback on DialogContent as a safety net."
+    },
+    {
+      "rootCause": "screen reader table",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "The current implementation uses a CSS grid of divs to mimic a comparison table. Screen readers cannot infer the row/column relationship. Replace the grid with a real <table> (or ARIA grid with role=\"grid\", role=\"row\", role=\"columnheader\", role=\"rowheader\", role=\"gridcell\") so assistive tech can navigate by row/column. Add a <caption className=\"sr-only\"> comparing the selected services."
+    },
+    {
+      "rootCause": "\"best\" cells lack an accessible label explaining the badge m",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "For cells that are the best in a metric, add an sr-only span like \"Best {metric.label}\" or use aria-label on the cell. The checkmark <Check> is decorative (add aria-hidden=\"true\"). The header \"Best {label}\" badge is sufficient visually but is not associated with the matching cell."
+    },
+    {
+      "rootCause": "title may be truncated to \"service…shortitle\" without warnin",
+      "file": "search/ComparisonBar.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "The shortTitle is only used visually. The aria-label on the remove button uses the full `title` (good), but the visible truncated text is the only content screen readers will see for the chip itself. Wrap shortTitle in a span with aria-label={title} or set title={title} on the span so the full name is announced on hover/long-press."
+    },
+    {
+      "rootCause": "no focus visible ring",
+      "file": "common/Modal.tsx",
+      "severity": "LOW",
+      "agentCount": 2,
+      "rawCount": 2,
+      "fix": "ModalClose uses `btn-nilin` and `focus:outline-none` is implied at the dialog level. Verify btn-nilin includes a focus-visible style; if not, add `focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2` so keyboard users see the focus indicator on the X."
+    },
+    {
+      "rootCause": "focus return to trigger relies on radix's auto-tracking",
+      "file": "search/ComparisonBar.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Focus return is fine because Radix tracks the focused element on open, even when state is used instead of Trigger. However, because the comparison bar is fixed-positioned and may be visually hidden on scroll, returning focus to \"Compare Now\" can leave keyboard users confused. Add a visually-hidden status message (\"Comparison closed\") in an aria-live=\"polite\" region when the modal closes, and consider scrolling the trigger back into view."
+    },
+    {
+      "rootCause": "aria hidden missing",
+      "file": "common/Modal.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "The X icon is announced as \"image\" by some screen readers. Add `aria-hidden=\"true\"` to the <X /> so only the aria-label \"Close modal\" is announced."
+    },
+    {
+      "rootCause": "region landmark lacks an accessible heading",
+      "file": "search/ComparisonBar.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "The role=\"region\" with aria-label is acceptable, but adding an sr-only <h2> matching the aria-label (e.g. \"Service comparison bar\") gives screen-reader users a navigable heading. Optional but improves landmark navigation."
+    },
+    {
+      "rootCause": "font serif missing",
+      "file": "common/Modal.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Decorative serifs are fine at the 20px title size. The Description uses text-sm (14px) with warmGray — verify contrast (see issue 5). If warmGray is kept, ensure it's dark enough to meet 4.5:1."
+    },
+    {
+      "rootCause": "modal body 60vh cap",
+      "file": "common/Modal.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Modal.tsx wraps children in `<ModalBody>` which applies `overflow-y-auto max-h-[60vh]`. ServiceComparisonModal passes a `div.overflow-x-auto` directly as children, so it inherits the body's 60vh vertical cap. With 4 services and ~10 metric rows plus provider/action rows, vertical space can be tight. The outer `max-h-[90vh]` (ModalContent) wraps the body but the inner 60vh cap may clip metric rows when expanded. The body should default to a larger max-h for content-heavy modals, OR Modal should expose a 'scrollable' prop that removes the 60vh cap. Recommended fix: add a `bodyClassName` prop to Modal and pass `max-h-[calc(90vh-...)]` for comparison modal, or simply raise default body max-h to `max-h-[calc(90vh-180px)]` so it scales with the modal."
+    },
+    {
+      "rootCause": "no focus visible ring",
+      "file": "search/ComparisonBar.tsx",
+      "severity": "LOW",
+      "agentCount": 2,
+      "rawCount": 2,
+      "fix": "Add `focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2 focus-visible:ring-offset-nilin-charcoal` (or appropriate ring color for dark bar) to the X, Trash2, and Compare Now buttons. Currently the bar relies on default browser focus rings which look poor on the dark `bg-nilin-charcoal` surface. The modal Close button (ModalClose) inherits `btn-nilin` styles, so it should be checked separately."
+    },
+    {
+      "rootCause": "remove x button has no event propagation guard, image click ",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "The X button is absolutely positioned at `top-2 right-2` with no z-index, and the image below it is `h-24 w-full cursor-pointer` with an onClick. The X is visually above the image (absolute vs. in-flow), but on small touch devices a user may tap the corner of the image thinking it's the X. Add `e.stopPropagation()` to the remove button's onClick for safety, and ensure the X sits in a higher stacking context by giving the button `z-10` within its relative parent. Also add an `aria-label` (already present) and a visible focus ring."
+    },
+    {
+      "rootCause": "inner grid relies on min-w-fit and may force horizontal scro",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Grid uses `gridTemplateColumns: 160px repeat(N, minmax(220px, 1fr))` with `min-w-fit`. For 4 services that's 160 + 4*220 = 1040px minimum. The outer `overflow-x-auto` on the wrapping div works (no clipping), but on a 375px mobile screen the user must scroll horizontally a lot. Consider a stacked-card layout below `md:` breakpoint, or reduce 220px to 180px minimum. Also confirm that `overflow-x-auto` parent has visible vertical scrollbar space (`pb-2` already present) so the horizontal scrollbar doesn't get hidden behind the modal footer."
+    },
+    {
+      "rootCause": "modal close x and per-card x have redundant exit affordances",
+      "file": "common/Modal.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Verified: the global ModalClose (`absolute right-4 top-4`, 44x44 due to p-2) and the per-card X (`absolute top-2 right-2 p-1`) are in different stacking contexts (header area vs. inside each card). The header X closes the entire modal; the card X removes only that service from the comparison. No conflict, but consider raising the per-card X to a minimum 32x32 (e.g., `p-1.5`) and giving it a `bg-white/80` background so it stands out over the service image, reducing accidental taps on the image itself."
+    },
+    {
+      "rootCause": "bar uses only entrance animation, no exit animation when rem",
+      "file": "search/ComparisonBar.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "`if (items.length < 2) return null;` unmounts the bar instantly when the user drops to 0 or 1 items. The `animate-slide-up` only fires on mount. Add an exit animation by keeping the bar mounted with a conditional class (`items.length < 2 ? 'animate-slide-down pointer-events-none' : 'animate-slide-up'`) and use a `data-state` attribute. Otherwise the bar pops out abruptly when the last item is removed."
+    },
+    {
+      "rootCause": "modal renders via radix portal - confirmed correct z-index s",
+      "file": "common/Modal.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Verified correct: DialogPrimitive.Portal renders overlay and content at body level, both with z-50. ComparisonBar at z-40 is therefore visually behind the modal overlay. The only visible artifact is the bar peeking at the bottom of the screen because the modal is centered (not fullscreen). See CMP-01 for the fix recommendation."
+    },
+    {
+      "rootCause": "provider row label uses cramped uppercase tracking with no l",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Line 144-146 renders \"Provider\" with the same `text-xs font-semibold uppercase tracking-wide` as the metric labels above (line 103). However, \"Provider\" is a single short word (8 chars) while metric labels are typically \"Price\", \"Rating\", \"Duration\", \"Distance\" (6-8 chars each), so visually it doesn't look cramped by itself - the real issue is that the cell is a bare flex container with no `p-3` padding, so the text butts directly against the left edge of the 160px column while the metric label cells above also have no padding and appear flush. Inconsistency: the value cells use `p-3 rounded-nilin` (line 150) but the label cells have zero padding, so the text baseline differs. Fix: add `p-3` and `min-h-[48px] flex items-center` to the Provider label cell to match the visual rhythm of the metric rows."
+    },
+    {
+      "rootCause": "top-left cell of header row is empty and creates visual dead",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Line 51 renders `<div />` in the first column of the header row. This 160px column is empty, which is fine for alignment but wastes space. A common pattern is to put a small \"Service\" label or filter chip there to anchor the column visually. Not strictly an issue but a polish opportunity. Fix: add a subtle label like `<div className=\"text-xs font-semibold text-nilin-warmGray uppercase tracking-wide flex items-end pb-2\">Compare</div>` to give the empty cell purpose."
+    },
+    {
+      "rootCause": "header card has no min-height, causing inconsistent card hei",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Line 58 wraps the card content in `bg-nilin-muted rounded-nilin-lg p-3 border border-nilin-border` with no `min-h` or `flex flex-col`. Cards with no `service.image` (line 68 conditionally renders it) will be ~80px shorter than cards with an image, creating jagged top edges in the same row. Fix: add `min-h-[180px] flex flex-col` to the card, and wrap the badge div in `mt-auto` so badges stick to the bottom regardless of image presence."
+    },
+    {
+      "rootCause": "rounded-nilin not defined",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "LOW",
+      "agentCount": 2,
+      "rawCount": 2,
+      "fix": "Badges should follow the system radius. The \"Best {label}\" pill uses `rounded-full`. While pills are acceptable for badges, NILIN style favors `rounded-nilin` for consistency with action buttons and chips in the same modal. Change to `rounded-nilin` (or keep rounded-full if pills are an intentional badge system — document either way)."
+    },
+    {
+      "rootCause": "star icon uses fill-nilin-coral / text-nilin-coral — verify ",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Brand mentions `nilin-coral` as a primary token; using it for a star fill is fine and on-brand. No fix needed beyond verifying the same accent isn't diluted by overuse elsewhere in the modal. Consider reserving coral for action and using `nilin-rose` for non-action accents like the Check marker on line 136 to differentiate semantic states."
+    },
+    {
+      "rootCause": "metric label cell uses no background, creates visual mismatc",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Metric label cells (`text-nilin-warmGray uppercase tracking-wide`) sit on transparent background while the data cells have `bg-white` or `bg-nilin-blush` borders. This is acceptable for a row-label pattern, but add `p-3` for vertical alignment consistency with the data cells. Currently labels don't have the same vertical padding as data cells, causing baseline drift."
+    },
+    {
+      "rootCause": "remove-x on header card uses hover:bg-white which can clash ",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "The X button on the service header card has `hover:bg-white` while the card itself is `bg-nilin-muted`. The hover state would be subtle. Consider `hover:bg-nilin-blush hover:text-nilin-error` for a more on-brand warm hover state that matches the modal's warm palette."
+    },
+    {
+      "rootCause": "no hardcoded gray-100/200/700 found — token usage is consist",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "No fix. Confirmed: all color usage is routed through NILIN tokens (nilin-charcoal, nilin-warmGray, nilin-border, nilin-muted, nilin-blush, nilin-coral, nilin-rose, nilin-cream, white, white/10, white/60). No stray `gray-*` or `slate-*` classes detected."
+    },
+    {
+      "rootCause": "dark surface x uses white/60 hover:white with white/10 — cor",
+      "file": "search/ComparisonBar.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "No fix. The dark-surface close button pattern (text-white/60 hover:text-white hover:bg-white/10) is correct and matches NILIN dark-surface conventions. Light-surface close in the modal (text-nilin-warmGray hover:text-nilin-error) is also correct. The two contexts are intentionally different and both on-brand."
+    },
+    {
+      "rootCause": "primary cta coral/rose pair is consistent across both compon",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "No fix. `bg-nilin-coral hover:bg-nilin-rose` for the primary action is used identically in both the bar's \"Compare Now\" button and the modal's \"Book Now\" button. Consistent."
+    },
+    {
+      "rootCause": "modal body 60vh cap",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "LOW",
+      "agentCount": 2,
+      "rawCount": 2,
+      "fix": "The children are passed directly to Modal without using Modal.Body, so the inner `overflow-x-auto` is fine horizontally, but the surrounding ModalBody's `max-h-[60vh] overflow-y-auto` clamps the visible height. With 4 services plus 5+ metric rows the user will need to scroll vertically inside the body while also scrolling horizontally. Add a wrapper that ensures the inner scroll container has a bounded height: pass the grid as Modal.Body content with an explicit `max-h-[calc(90vh-180px)] overflow-auto` and remove the redundant overflow-x-auto on a non-scrolling element. Also consider raising Modal.Body's max-h when content is wide (or expose a `bodyClassName` prop in Modal.tsx)."
+    },
+    {
+      "rootCause": "compare now and clear buttons lack visible keyboard focus st",
+      "file": "search/ComparisonBar.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Both buttons only define `active:scale-95 transition-all` with no `focus-visible` ring. The bar is the primary global action surface and must be reachable by Tab. Add `focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2 focus-visible:ring-offset-nilin-charcoal` to the Compare Now button, and a white-tinted ring to the Clear/Trash icon button. The remove-X buttons on the chips should also receive a focus ring for parity."
+    },
+    {
+      "rootCause": "bar still animates in after items drop below 2 if the modal ",
+      "file": "search/ComparisonBar.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Modal can be open with N services, user removes services until items.length < 2, the bar disappears but the modal stays open. Either auto-close the modal when `items.length < 2` (cleanest) or render a friendly empty state. Add a useEffect that calls setIsModalOpen(false) when items.length < 2, and inside the modal guard with a redirect/empty-state if services.length < 2."
+    },
+    {
+      "rootCause": "remove-x button is inside a card whose image and title have ",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "React onClick bubbles up the DOM, not laterally, so a click on the X button does not trigger the image's handleViewDetails. Confirmed safe. However, the X sits at `top-2 right-2` with `p-1` (~22px) and the image starts underneath, so a near-miss tap on the image immediately to the left of the X still routes to Details. Add `e.stopPropagation()` only if a future refactor wraps the card in an onClick; today no fix needed beyond enlarging the X per SC-5."
+    },
+    {
+      "rootCause": "horizontal scroll on bar chips can collide with modal open g",
+      "file": "search/ComparisonBar.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "The chip strip uses `overflow-x-auto` with no scrollbar hide utility; on some platforms a horizontal scrollbar appears under the bar near the modal's bottom edge. Add `scrollbar-thin` / `overflow-x-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden` to keep the bar visually clean, especially while modal is open."
+    },
+    {
+      "rootCause": "modal close x and per-card x can be confused on small viewpo",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "ModalClose (in Modal.tsx) renders top-right of the dialog content; the comparison modal's header is short so the two X's sit close together. They don't overlap, but users sometimes expect per-row delete behavior from the header X. Consider hiding ModalClose in this context (pass `showCloseButton={false}`) since ESC and the backdrop already close the dialog, reducing visual noise."
+    },
+    {
+      "rootCause": "backdrop click closes modal while remove-x actions may also ",
+      "file": "common/Modal.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "DialogPrimitive.Overlay already stops propagation by treating any pointerdown on itself as outside-click. Confirmed working, but a fast tap on a card's X that lands slightly outside the card can still close the modal before the button's onClick fires. Mitigate by giving the X a `min-h-[44px] min-w-[44px]` (per SC-5) so the hit area is generous and the click registers cleanly inside the content element."
+    },
+    {
+      "rootCause": "modal 'best' badge and servicecard active checkbox both use ",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Acceptable but worth noting: coral+white is now used for three distinct intents (Best badge in modal header, selected compare checkbox on card, Compare Now CTA in bar). Consider reserving solid `bg-nilin-coral` for primary CTAs only and using a softer token (e.g. `bg-nilin-blush` with `text-nilin-coral`) for the Best badge to differentiate 'winner' from 'action'. This is optional - current usage is internally consistent."
+    },
+    {
+      "rootCause": "check icon strokewidth inconsistency between card checkbox a",
+      "file": "customer/ServiceCard.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "ServiceCard compare checkbox uses `strokeWidth={3}` on the Check icon for visibility at 16px; the modal best-cell Check uses default 2. Keep strokeWidth={3} on the card (it works at small size) but consider standardising across the system by either always using 2.5 or defining a `text-nilin-coral` icon component."
+    },
+    {
+      "rootCause": "modal's x remove button hover uses text-nilin-error on white",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "`text-nilin-warmGray hover:bg-white hover:text-nilin-error` - the warmGray→error jump on hover is jarring. Consider `hover:bg-nilin-blush hover:text-nilin-error` for a softer, on-brand hover that warms before signaling error."
+    },
+    {
+      "rootCause": "gitcompare icon in bar uses text-nilin-coral on dark surface",
+      "file": "search/ComparisonBar.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "This is the only coral-on-charcoal accent in the bar, and it does tie visually to the modal's coral CTAs and Best badges. No fix needed - flagging that the visual relationship between bar/icon → modal/badges → card/checkbox depends on this single coral element, so it should not be changed."
+    },
+    {
+      "rootCause": "compare now button lacks an aria-label or description of sta",
+      "file": "search/ComparisonBar.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Although visible text \"Compare Now\" is present, consider an aria-label like `Compare ${items.length} selected services` for clarity. The button is also only rendered when items.length >= 2 — this implicit gating should be documented or made explicit."
+    },
+    {
+      "rootCause": "truncated service titles lose information for screen reader ",
+      "file": "search/ComparisonBar.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "The visual ellipsis at 18 chars (line 32) is applied only to shortTitle, but the <span> renders shortTitle. Screen readers will read the truncated text only. Either render the full title and rely on CSS truncation, or set the truncated text via CSS (text-overflow: ellipsis; overflow: hidden; white-space: nowrap) on a span containing the full title."
+    },
+    {
+      "rootCause": "no focus return trigger — depends entirely on radix default ",
+      "file": "search/ComparisonBar.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Radix Dialog does return focus to the trigger element by default (the Compare Now button), but verify this works with the onOpenChange controlled pattern. Also, when the modal closes after a Details/Book Now click, focus may be lost because the entire comparison bar is hidden when items.length < 2 — handle that edge case in handleViewDetails/handleBookNow."
+    },
+    {
+      "rootCause": "tab order inside modal grid may not be intuitive",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Focusable elements per column are: close X, image-button, title-button, then far below in the same column: Details, Book Now. Tab order traverses column-by-column which is fine, but the gap is large. Consider a logical `tabIndex={0}` order or a skip link. Verify the remove X is reachable (it is, since buttons receive focus)."
+    },
+    {
+      "rootCause": "metric.format can return null; modal renders nothing in that",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Audit noted 'N/A' / '—' / 'New' as screen-reader friendly. The code at line 96 of comparisonService.ts returns 'N/A' for missing duration, but other metrics may return null. When null, the metric cell renders empty, which is not great. Confirm format always returns a string (or coerce null to a label like 'Not available' inside the modal for consistent screen reader announcements)."
+    },
+    {
+      "rootCause": "action button row has no visual separation from the metric r",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "The action row uses the same `gap-3` as the metric rows, with no top border, extra spacing, or background. It visually blends with the metric rows above, especially when the \"Provider\" row above has the same bg-white border style. Add `mt-3 pt-3 border-t border-nilin-border/50` to the action row container, or add a subtle background to the action cells (bg-nilin-cream) to visually separate the \"data\" from the \"actions\" zones."
+    },
+    {
+      "rootCause": "empty spacer cell on action row uses bare <div/> with no sem",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Same issue as the empty top-left cell (line 51). Two empty divs in the grid layout as spacers are not meaningful to screen readers and waste grid cells. If the action row stays in-grid, label this column header as \"Actions\" to give it semantic value. Better: move actions to a sticky footer (see issue 4) which removes the need for both empty cells."
+    },
+    {
+      "rootCause": "remove x button absolute positioning can overlap with long s",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "The X button is positioned at top-2 right-2 but the title (line-clamp-2, text-sm, font-semibold) can be 2 lines and may extend under the X button if the title is long. The text wraps under the button visually but the button is on top with no background, making the last word of the title hard to read. Add a small padding-right (pr-6) to the title, or give the X button a subtle background (bg-nilin-muted/80) so the title doesn't bleed through."
+    },
+    {
+      "rootCause": "grid gap-3 with min-w-fit and 4 services creates a 1040px+ w",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "With 4 services: 160 (label) + 4*(220+12 gap) = 1040 + 36 = 1076px. The modal is max-w-xl = 576px. This means EVERY comparison with 2+ services requires horizontal scrolling inside a 576px wide modal. Users see only ~50% of the content at a time. Consider: (a) capping to 3 services max, (b) reducing minmax to 180px and label col to 140px to fit in ~900px, (c) making the modal size proportional to number of services via dynamic size prop."
+    },
+    {
+      "rootCause": "border token missing",
+      "file": "common/Modal.tsx",
+      "severity": "LOW",
+      "agentCount": 2,
+      "rawCount": 2,
+      "fix": "Replace `border-[#E8E4E0]` with the design-system token `border-nilin-border` (already used elsewhere in this file at line 93) to keep the design system as the single source of truth. (Note: the border on ModalContent at line 93 also uses the hard-coded hex and should be tokenized for the same reason.)"
+    },
+    {
+      "rootCause": "animation timing inconsistency between modal and comparisonb",
+      "file": "search/ComparisonBar.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "The bar mounts/unmounts with no exit transition (it just disappears when `items.length < 2`). Add a paired exit: gate the inner content with a stateful `mounted` flag that delays unmount ~200ms (matching Modal's `duration-200`) and toggles `animate-slide-down` so the bar slides out instead of popping. This also makes the appear/disappear timing match the modal's `animate-fade-in` / `animate-modal-scale-in`."
+    },
+    {
+      "rootCause": "image missing fallback",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Render a placeholder (e.g., `bg-nilin-blush` with an `<Award>` or initial) when `service.image` is falsy, with the same `h-24` height so the rows beneath stay aligned across columns. Currently the height collapses to zero and the \"Best\" badge cluster ends up at the top of the card, creating a jagged header row when one service has an image and another doesn't."
+    },
+    {
+      "rootCause": "metric cells with `isbest` use heavier border (`border-nilin",
+      "file": "search/ServiceComparisonModal.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "The \"best\" cell is `bg-nilin-blush border-nilin-coral/30` while non-best is `bg-white border-nilin-border`. With long provider names or formatted prices, the two-tone treatment plus `font-semibold` weight difference can make baseline alignment drift row-to-row. Add `min-h-[2.5rem]` (or use a fixed inner span height) to the metric cell so values align horizontally across columns regardless of font-weight swap."
+    },
+    {
+      "rootCause": "modal size preset 'xl' caps at `max-w-xl` which is too narro",
+      "file": "common/Modal.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "With 2 services the grid needs `160 + 2*220 = 600px` (xl = 576px is too tight, causing horizontal overflow inside the modal). With 3-4 services it gets worse. Either add a `2xl`/`3xl` size preset (e.g., `max-w-3xl` / `max-w-5xl`) and use it in `ServiceComparisonModal` (`size=\"2xl\"`), or compute the modal width from the column count. The current overflow-x-auto inside the modal hides this but produces a scrollbar inside a card - not the intended look."
+    },
+    {
+      "rootCause": "truncated title in comparisonbar uses `…` (single char ellip",
+      "file": "search/ComparisonBar.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "Each pill has `whitespace-nowrap` but the container is `max-w-xs overflow-x-auto` only on `sm:`. On `<sm` the pills list is hidden entirely (good), but on `sm` to `md` (640-767px) the bar's `max-w-[calc(100vw-2rem)]` can clip the \"Compare Now\" button. Add `flex-shrink-0` to the Compare Now button or wrap the pills in a flex-1 container with `min-w-0 overflow-hidden` so the button never gets pushed off-screen."
+    },
+    {
+      "rootCause": "animation `animate-slide-up` referenced by classname - verif",
+      "file": "search/ComparisonBar.tsx",
+      "severity": "LOW",
+      "agentCount": 1,
+      "rawCount": 1,
+      "fix": "The bar uses `animate-slide-up` on mount but the modal uses `animate-fade-in` / `animate-modal-scale-in`. Confirm `slide-up` is defined in `tailwind.config.js` `theme.extend.keyframes`; if not, the animation silently does nothing and the bar appears instantly. Add the missing keyframe (translateY 16px -> 0, ~250ms ease-out) to match the rest of the design system's motion tokens."
+    }
+  ]
+}

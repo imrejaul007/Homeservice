@@ -3,6 +3,7 @@ export { default as CategoryCards } from './CategoryCards';
 export { default as OfferBanner } from './OfferBanner';
 export { default as CategorySpotlight } from './CategorySpotlight';
 export { default as RecommendedServicesSection } from './RecommendedServicesSection';
+export { default as ParallaxServiceSlider } from './ParallaxServiceSlider';
 export { default as WhyNilin } from './WhyNilin';
 export { default as CuratedReels, TrendingNowSection } from './CuratedReels';
 export { default as TrendingFeedCard } from './TrendingFeedCard';

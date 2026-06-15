@@ -317,7 +317,14 @@ class BookingService {
       // Service Info (populated via virtual or serviceId populate)
       service: (() => {
         const raw = booking.service
-          || (typeof booking.serviceId === 'object' && booking.serviceId?.name ? booking.serviceId : null);
+          || (typeof booking.serviceId === 'object' && booking.serviceId?.name ? booking.serviceId : null)
+          || (booking.metadata?.packageName
+            ? {
+                _id: booking.serviceId,
+                name: booking.metadata.packageName,
+                category: booking.metadata.packageCategory || 'Package',
+              }
+            : null);
         if (!raw) return undefined;
         return {
           _id: toStringId(raw._id),
@@ -525,11 +532,11 @@ class BookingService {
 
   /**
    * Provider rejects a booking
-   * Backend uses POST /bookings/:id/decline
+   * Backend uses PATCH /bookings/:id/reject
    */
   async rejectBooking(bookingId: string, data: BookingCancelData): Promise<BookingResponse<{ booking: Booking }>> {
     try {
-      const response = await authService.post<any>(`/bookings/${bookingId}/decline`, data);
+      const response = await authService.patch<any>(`/bookings/${bookingId}/reject`, data);
       // Transform the booking if it exists
       if (response?.data?.booking) {
         response.data.booking = this.transformBooking(response.data.booking);
@@ -546,7 +553,7 @@ class BookingService {
    */
   async declineBooking(bookingId: string, reason?: string): Promise<BookingResponse<{ booking: Booking }>> {
     try {
-      const response = await authService.post<any>(`/bookings/${bookingId}/decline`, { reason });
+      const response = await authService.patch<any>(`/bookings/${bookingId}/reject`, { reason });
       // Transform the booking if it exists
       if (response?.data?.booking) {
         response.data.booking = this.transformBooking(response.data.booking);

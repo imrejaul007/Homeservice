@@ -876,22 +876,34 @@ export default analyticsService;
 // Provider-Specific Analytics
 // ============================================
 
+export type TrendResult = {
+  value: number | null;
+  label: 'percent' | 'new' | 'none';
+};
+
 export interface ProviderAnalyticsData {
   overview: {
     totalViews: number;
-    viewsTrend: number;
+    totalViewsAllTime?: number;
+    viewsTrend: TrendResult;
     profileViews: number;
-    profileViewsTrend: number;
+    profileViewsTrend: TrendResult;
     bookingRequests: number;
-    bookingRequestsTrend: number;
+    bookingRequestsTrend: TrendResult;
     conversionRate: number;
-    conversionRateTrend: number;
+    conversionRateTrend: TrendResult;
+    confirmedBookingRate: number;
+    confirmedBookingRateTrend: TrendResult;
+    dataQuality: {
+      trackingSince: string | null;
+      level: 'full' | 'bookings_only';
+    };
   };
   // FIX #1 & #2: Net earnings (after deductions) with gross and fee breakdown
   earnings: {
     thisMonth: number;
     lastMonth: number;
-    trend: number;
+    trend: TrendResult;
     // New fields for gross/net breakdown
     grossEarnings: {
       thisMonth: number;
@@ -903,6 +915,7 @@ export interface ProviderAnalyticsData {
     };
     commissionRate: number;
     platformFeeRate: number;
+    revenueMode?: 'net' | 'gross';
   };
   bookings: {
     total: number;
@@ -922,6 +935,23 @@ export interface ProviderAnalyticsData {
     revenue: number;
     grossRevenue: number;
   }>;
+  timeSeries: Array<{
+    date: string;
+    revenue: number;
+    grossRevenue?: number;
+    bookings: number;
+  }>;
+  timeSeriesPrevious?: Array<{
+    date: string;
+    revenue: number;
+    grossRevenue?: number;
+    bookings: number;
+  }>;
+  metadata?: {
+    dateFields?: Record<string, string>;
+    revenueMode?: 'net' | 'gross';
+    cityFilter?: string | null;
+  };
   ratings: {
     average: number;
     total: number;

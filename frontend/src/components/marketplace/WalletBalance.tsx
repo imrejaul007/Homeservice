@@ -63,7 +63,7 @@ export function WalletBalance({
           <div>
             <p className="text-xs text-white/60">Wallet</p>
             {error ? (
-              <p className="text-sm text-red-400" onClick={(e) => { e.stopPropagation(); refresh(); }}>
+              <p className="text-sm text-nilin-error" onClick={(e) => { e.stopPropagation(); refresh(); }}>
                 Tap to retry
               </p>
             ) : (
@@ -92,7 +92,7 @@ export function WalletBalance({
           <div>
             <p className="text-white/60 text-sm">{t('wallet.available_balance')}</p>
             {error ? (
-              <p className="text-3xl font-bold text-red-400">--</p>
+              <p className="text-3xl font-bold text-nilin-error">--</p>
             ) : (
               <p className="text-3xl font-bold">{wallet ? `${getCurrencySymbol(wallet.currency)}${wallet.balance.toLocaleString()}` : '--'}</p>
             )}
@@ -112,11 +112,11 @@ export function WalletBalance({
         <div className="grid grid-cols-2 gap-4 mb-6">
           <div className="bg-white/10 rounded-xl p-3">
             <p className="text-white/60 text-xs">{t('wallet.monthly_earnings')}</p>
-            <p className="text-lg font-bold text-green-400">+{getCurrencySymbol(wallet.currency)}{(wallet.monthlyEarnings ?? 0).toLocaleString()}</p>
+            <p className="text-lg font-bold text-nilin-success">+{getCurrencySymbol(wallet.currency)}{(wallet.monthlyEarnings ?? 0).toLocaleString()}</p>
           </div>
           <div className="bg-white/10 rounded-xl p-3">
             <p className="text-white/60 text-xs">{t('wallet.pending_balance')}</p>
-            <p className="text-lg font-bold text-amber-400">{getCurrencySymbol(wallet.currency)}{(wallet.pendingCredits ?? 0).toLocaleString()}</p>
+            <p className="text-lg font-bold text-nilin-warning">{getCurrencySymbol(wallet.currency)}{(wallet.pendingCredits ?? 0).toLocaleString()}</p>
           </div>
         </div>
 
@@ -133,8 +133,8 @@ export function WalletBalance({
               <div className="flex items-center gap-3">
                 <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
                   transaction.type === 'credit'
-                    ? 'bg-green-500/20 text-green-400'
-                    : 'bg-red-500/20 text-red-400'
+                    ? 'bg-nilin-success/20 text-nilin-success'
+                    : 'bg-nilin-error/20 text-nilin-error'
                 }`}>
                   {transaction.type === 'credit' ? (
                     <ArrowDownLeft className="w-4 h-4" />
@@ -143,12 +143,12 @@ export function WalletBalance({
                   )}
                 </div>
                 <div>
-                  <p className="text-sm font-medium">{transaction.reason}</p>
+                  <p className="text-sm font-medium truncate">{transaction.reason}</p>
                   <p className="text-xs text-white/50">{new Date(transaction.createdAt).toLocaleDateString()}</p>
                 </div>
               </div>
-              <span className={`font-medium ${transaction.type === 'credit' ? 'text-green-400' : 'text-red-400'}`}>
-                {transaction.type === 'credit' ? '+' : '-'}{getCurrencySymbol(wallet.currency)}{transaction.amount}
+              <span className={`font-medium tabular-nums ${transaction.type === 'credit' ? 'text-nilin-success' : 'text-nilin-error'}`}>
+                {transaction.type === 'credit' ? '+' : '−'}{getCurrencySymbol(wallet.currency)}{transaction.amount}
               </span>
             </div>
           ))}

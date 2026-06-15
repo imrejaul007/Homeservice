@@ -352,7 +352,7 @@ export const bookingApi: BookingApi = {
    */
   declineBooking: async (bookingId: string, reason?: string) => {
     try {
-      const response = await api.post(`/bookings/${bookingId}/decline`, { reason });
+      const response = await api.patch(`/bookings/${bookingId}/reject`, { reason });
       return response.data.data;
     } catch (error: unknown) {
       const err = error as { response?: { status?: number; data?: { message?: string } }; message?: string };

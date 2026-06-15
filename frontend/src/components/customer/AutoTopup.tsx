@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import toast from 'react-hot-toast';
 import {
   Zap,
   CreditCard,
@@ -16,6 +17,7 @@ import {
   History,
   Eye,
   Info,
+  X,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { formatCurrency } from '../../utils/formatting';
@@ -126,6 +128,7 @@ export const AutoTopup: React.FC<AutoTopupProps> = ({
       fetchData();
     } catch (err) {
       console.error('Failed to save config:', err);
+      toast.error('Failed to save auto-topup settings. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -142,7 +145,7 @@ export const AutoTopup: React.FC<AutoTopupProps> = ({
       fetchData();
     } catch (err) {
       setEnabled(!newEnabled); // Revert on error
-      console.error('Failed to toggle:', err);
+      toast.error('Failed to update auto-topup settings. Please try again.');
     }
   };
 
@@ -171,27 +174,28 @@ export const AutoTopup: React.FC<AutoTopupProps> = ({
 
   if (compact) {
     return (
-      <div className="bg-white rounded-xl p-4 shadow-sm">
+      <div className="bg-white rounded-2xl p-4 shadow-nilin-sm">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-blue-100 flex items-center justify-center">
-              <Zap className="w-4 h-4 text-blue-600" />
+            <div className="w-8 h-8 rounded-xl bg-nilin-coral/10 flex items-center justify-center">
+              <Zap className="w-4 h-4 text-nilin-coral" />
             </div>
             <span className="font-medium text-nilin-charcoal">Auto-Topup</span>
           </div>
           <button
             onClick={() => fetchData(true)}
-            className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
+            className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral/40"
             disabled={refreshing}
+            aria-label="Refresh auto-topup"
           >
-            <RefreshCw className={cn('w-4 h-4 text-gray-400', refreshing && 'animate-spin')} />
+            <RefreshCw className={cn('w-4 h-4 text-nilin-warmGray', refreshing && 'animate-spin')} />
           </button>
         </div>
         <div className="flex items-center justify-between">
           <div>
             <p className={cn(
               'text-sm font-medium',
-              config?.enabled ? 'text-green-600' : 'text-gray-400'
+              config?.enabled ? 'text-nilin-success' : 'text-nilin-warmGray'
             )}>
               {config?.enabled ? 'Active' : 'Inactive'}
             </p>
@@ -203,12 +207,15 @@ export const AutoTopup: React.FC<AutoTopupProps> = ({
           </div>
           <button
             onClick={handleToggle}
-            className={cn(
-              'text-2xl transition-colors',
-              config?.enabled ? 'text-green-500' : 'text-gray-300'
-            )}
+            aria-label={config?.enabled ? 'Disable auto-topup' : 'Enable auto-topup'}
+            className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral/40 rounded-lg"
           >
-            {config?.enabled ? <ToggleRight /> : <ToggleLeft />}
+            <span className={cn(
+              'text-2xl transition-colors',
+              config?.enabled ? 'text-nilin-success' : 'text-nilin-warmGray'
+            )}>
+              {config?.enabled ? <ToggleRight /> : <ToggleLeft />}
+            </span>
           </button>
         </div>
       </div>
@@ -217,7 +224,7 @@ export const AutoTopup: React.FC<AutoTopupProps> = ({
 
   if (loading) {
     return (
-      <div className="bg-white rounded-2xl p-6 shadow-sm flex items-center justify-center min-h-[400px]">
+      <div className="bg-white rounded-2xl p-6 shadow-nilin flex items-center justify-center min-h-[400px]">
         <Loader2 className="w-8 h-8 text-nilin-coral animate-spin" />
       </div>
     );
@@ -225,14 +232,14 @@ export const AutoTopup: React.FC<AutoTopupProps> = ({
 
   if (error) {
     return (
-      <div className="bg-white rounded-2xl p-6 shadow-sm">
+      <div className="bg-white rounded-2xl p-6 shadow-nilin">
         <div className="text-center py-8">
-          <AlertTriangle className="w-12 h-12 text-amber-500 mx-auto mb-3" />
+          <AlertTriangle className="w-12 h-12 text-nilin-error mx-auto mb-3" />
           <p className="text-nilin-charcoal font-medium mb-2">Unable to load auto-topup</p>
           <p className="text-sm text-nilin-warmGray mb-4">{error}</p>
           <button
             onClick={() => fetchData()}
-            className="px-4 py-2 bg-nilin-coral text-white rounded-lg hover:bg-nilin-coral/90 transition-colors"
+            className="px-4 py-2 bg-nilin-coral text-white rounded-lg hover:bg-nilin-coral/90 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral/40"
           >
             Try Again
           </button>
@@ -246,8 +253,8 @@ export const AutoTopup: React.FC<AutoTopupProps> = ({
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-blue-100 flex items-center justify-center">
-            <Zap className="w-5 h-5 text-blue-600" />
+          <div className="w-10 h-10 rounded-xl bg-nilin-coral/10 flex items-center justify-center">
+            <Zap className="w-5 h-5 text-nilin-coral" />
           </div>
           <div>
             <h2 className="text-xl font-bold text-nilin-charcoal">Auto-Topup</h2>
@@ -259,7 +266,7 @@ export const AutoTopup: React.FC<AutoTopupProps> = ({
             onClick={() => setShowHistory(!showHistory)}
             className={cn(
               'p-2 rounded-lg transition-colors',
-              showHistory ? 'bg-nilin-coral/10 text-nilin-coral' : 'hover:bg-gray-100 text-gray-500'
+              showHistory ? 'bg-nilin-coral/10 text-nilin-coral' : 'hover:bg-gray-100 text-nilin-warmGray'
             )}
           >
             <History className="w-5 h-5" />
@@ -269,23 +276,26 @@ export const AutoTopup: React.FC<AutoTopupProps> = ({
             className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
             disabled={refreshing}
           >
-            <RefreshCw className={cn('w-5 h-5 text-gray-500', refreshing && 'animate-spin')} />
+            <RefreshCw className={cn('w-5 h-5 text-nilin-warmGray', refreshing && 'animate-spin')} />
           </button>
         </div>
       </div>
 
       {/* Main Toggle Card */}
-      <div className="bg-white rounded-2xl p-6 shadow-sm border-2 border-gray-100">
+      <div className="bg-white rounded-2xl p-6 shadow-nilin-sm border border-gray-100">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-3">
             <button
               onClick={handleToggle}
-              className={cn(
-                'text-4xl transition-colors',
-                enabled ? 'text-green-500' : 'text-gray-300'
-              )}
+              aria-label={enabled ? 'Disable auto-topup' : 'Enable auto-topup'}
+              className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral/40 rounded-lg"
             >
-              {enabled ? <ToggleRight /> : <ToggleLeft />}
+              <span className={cn(
+                'text-4xl transition-colors',
+                enabled ? 'text-nilin-success' : 'text-nilin-warmGray'
+              )}>
+                {enabled ? <ToggleRight /> : <ToggleLeft />}
+              </span>
             </button>
             <div>
               <p className="font-semibold text-nilin-charcoal">
@@ -304,8 +314,8 @@ export const AutoTopup: React.FC<AutoTopupProps> = ({
         {enabled && preview && (
           <div className="bg-gray-50 rounded-xl p-4 mb-4">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-lg bg-blue-100 flex items-center justify-center">
-                <Eye className="w-5 h-5 text-blue-600" />
+              <div className="w-10 h-10 rounded-xl bg-nilin-coral/10 flex items-center justify-center">
+                <Eye className="w-5 h-5 text-nilin-coral" />
               </div>
               <div className="flex-1">
                 <p className="text-sm text-nilin-warmGray">Next Topup Preview</p>
@@ -313,8 +323,8 @@ export const AutoTopup: React.FC<AutoTopupProps> = ({
                   <span className="text-nilin-charcoal">
                     When balance drops below {formatCurrency(preview.thresholdAmount, 'AED')}
                   </span>
-                  <ChevronRight className="w-4 h-4 text-gray-400" />
-                  <span className="text-green-600 font-medium">
+                  <ChevronRight className="w-4 h-4 text-nilin-warmGray" />
+                  <span className="text-nilin-success font-medium">
                     +{formatCurrency(preview.topupAmount, 'AED')}
                   </span>
                 </div>
@@ -322,12 +332,12 @@ export const AutoTopup: React.FC<AutoTopupProps> = ({
             </div>
 
             {preview.willTrigger && (
-              <div className="mt-3 p-3 bg-amber-50 rounded-lg border border-amber-200">
+              <div className="mt-3 p-3 bg-nilin-warning/10 rounded-lg border border-nilin-warning/20">
                 <div className="flex items-start gap-2">
-                  <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5" />
+                  <AlertTriangle className="w-4 h-4 text-nilin-warning mt-0.5" />
                   <div>
-                    <p className="text-sm font-medium text-amber-800">Topup will trigger soon</p>
-                    <p className="text-xs text-amber-700 mt-1">
+                    <p className="text-sm font-medium text-nilin-charcoal">Topup will trigger soon</p>
+                    <p className="text-xs text-nilin-warmGray mt-1">
                       Current balance ({formatCurrency(preview.currentBalance, 'AED')}) is below threshold
                     </p>
                   </div>
@@ -350,23 +360,23 @@ export const AutoTopup: React.FC<AutoTopupProps> = ({
       {/* Usage Stats */}
       {config && (
         <div className="grid grid-cols-3 gap-4">
-          <div className="bg-white rounded-xl p-4 shadow-sm">
+          <div className="bg-white rounded-xl p-4 shadow-nilin-sm">
             <p className="text-xs text-nilin-warmGray">This Month</p>
-            <p className="text-lg font-bold text-nilin-charcoal mt-1">
-              {config.maxAutoTopupsPerMonth - config.autoTopupsThisMonth || 0}
+            <p className="text-lg font-bold text-nilin-charcoal mt-1 tabular-nums">
+              {Math.max(0, (config.maxAutoTopupsPerMonth ?? 0) - (config.autoTopupsThisMonth ?? 0))}
             </p>
             <p className="text-xs text-nilin-warmGray">topups left</p>
           </div>
-          <div className="bg-white rounded-xl p-4 shadow-sm">
+          <div className="bg-white rounded-xl p-4 shadow-nilin-sm">
             <p className="text-xs text-nilin-warmGray">Threshold</p>
-            <p className="text-lg font-bold text-nilin-charcoal mt-1">
+            <p className="text-lg font-bold text-nilin-charcoal mt-1 tabular-nums">
               {formatCurrency(config.thresholdAmount, 'AED')}
             </p>
             <p className="text-xs text-nilin-warmGray">min balance</p>
           </div>
-          <div className="bg-white rounded-xl p-4 shadow-sm">
+          <div className="bg-white rounded-xl p-4 shadow-nilin-sm">
             <p className="text-xs text-nilin-warmGray">Topup Amount</p>
-            <p className="text-lg font-bold text-nilin-charcoal mt-1">
+            <p className="text-lg font-bold text-nilin-charcoal mt-1 tabular-nums">
               {formatCurrency(config.topupAmount, 'AED')}
             </p>
             <p className="text-xs text-nilin-warmGray">per topup</p>
@@ -376,13 +386,13 @@ export const AutoTopup: React.FC<AutoTopupProps> = ({
 
       {/* History Tab */}
       {showHistory && (
-        <div className="bg-white rounded-2xl shadow-sm overflow-hidden">
+        <div className="bg-white rounded-2xl shadow-nilin-sm overflow-hidden">
           <div className="p-4 border-b border-gray-100 flex items-center justify-between">
             <h3 className="font-semibold text-nilin-charcoal">Recent Auto-Topups</h3>
           </div>
           {logs.length === 0 ? (
             <div className="p-8 text-center">
-              <History className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+              <History className="w-12 h-12 text-nilin-blush mx-auto mb-3" />
               <p className="text-nilin-warmGray">No auto-topup history</p>
             </div>
           ) : (
@@ -391,16 +401,16 @@ export const AutoTopup: React.FC<AutoTopupProps> = ({
                 <div key={log.id} className="p-4 flex items-center gap-3">
                   <div className={cn(
                     'w-10 h-10 rounded-xl flex items-center justify-center',
-                    log.status === 'success' ? 'bg-green-100' : 'bg-red-100'
+                    log.status === 'success' ? 'bg-nilin-success/10' : 'bg-nilin-error/10'
                   )}>
                     {log.status === 'success' ? (
-                      <TrendingUp className="w-5 h-5 text-green-600" />
+                      <TrendingUp className="w-5 h-5 text-nilin-success" />
                     ) : (
-                      <AlertTriangle className="w-5 h-5 text-red-600" />
+                      <AlertTriangle className="w-5 h-5 text-nilin-error" />
                     )}
                   </div>
                   <div className="flex-1">
-                    <p className="font-medium text-nilin-charcoal">
+                    <p className="font-medium text-nilin-charcoal tabular-nums">
                       {log.status === 'success'
                         ? `+${formatCurrency(log.topupAmount, 'AED')}`
                         : 'Failed'}
@@ -409,7 +419,7 @@ export const AutoTopup: React.FC<AutoTopupProps> = ({
                       Balance: {formatCurrency(log.triggerBalance, 'AED')} - {formatDate(log.triggeredAt)}
                     </p>
                     {log.failureReason && (
-                      <p className="text-xs text-red-500 mt-1">{log.failureReason}</p>
+                      <p className="text-xs text-nilin-error mt-1">{log.failureReason}</p>
                     )}
                   </div>
                 </div>
@@ -421,16 +431,22 @@ export const AutoTopup: React.FC<AutoTopupProps> = ({
 
       {/* Settings Modal */}
       {showSettings && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center">
-          <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-md max-h-[90vh] overflow-y-auto">
+        <div
+          className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="auto-topup-settings-title"
+        >
+          <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-md max-h-[90vh] overflow-y-auto shadow-nilin-lg">
             {/* Modal Header */}
             <div className="sticky top-0 bg-white p-4 border-b border-gray-100 flex items-center justify-between">
-              <h3 className="text-lg font-bold text-nilin-charcoal">Auto-Topup Settings</h3>
+              <h3 id="auto-topup-settings-title" className="text-lg font-bold text-nilin-charcoal">Auto-Topup Settings</h3>
               <button
                 onClick={() => setShowSettings(false)}
-                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                className="p-2 hover:bg-gray-100 rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral/40"
+                aria-label="Close settings"
               >
-                &times;
+                <X className="w-5 h-5 text-nilin-warmGray" />
               </button>
             </div>
 
@@ -439,17 +455,20 @@ export const AutoTopup: React.FC<AutoTopupProps> = ({
               {/* Enable Toggle */}
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <Zap className="w-5 h-5 text-blue-600" />
+                  <Zap className="w-5 h-5 text-nilin-coral" />
                   <span className="font-medium text-nilin-charcoal">Enable Auto-Topup</span>
                 </div>
                 <button
                   onClick={() => setEnabled(!enabled)}
-                  className={cn(
-                    'text-3xl transition-colors',
-                    enabled ? 'text-green-500' : 'text-gray-300'
-                  )}
+                  aria-label={enabled ? 'Disable auto-topup' : 'Enable auto-topup'}
+                  className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral/40 rounded-lg"
                 >
-                  {enabled ? <ToggleRight /> : <ToggleLeft />}
+                  <span className={cn(
+                    'text-3xl transition-colors',
+                    enabled ? 'text-nilin-success' : 'text-nilin-warmGray'
+                  )}>
+                    {enabled ? <ToggleRight /> : <ToggleLeft />}
+                  </span>
                 </button>
               </div>
 
@@ -461,20 +480,20 @@ export const AutoTopup: React.FC<AutoTopupProps> = ({
                 <div className="flex items-center gap-3">
                   <button
                     onClick={() => adjustAmount(setThresholdAmount, thresholdAmount, -10)}
-                    className="w-12 h-12 rounded-xl bg-gray-100 flex items-center justify-center hover:bg-gray-200 transition-colors"
+                    className="w-12 h-12 rounded-xl bg-gray-100 flex items-center justify-center hover:bg-gray-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral/40"
                   >
-                    <Minus className="w-5 h-5 text-gray-600" />
+                    <Minus className="w-5 h-5 text-nilin-charcoal" />
                   </button>
                   <div className="flex-1 text-center">
-                    <p className="text-2xl font-bold text-nilin-charcoal">
+                    <p className="text-2xl font-bold text-nilin-charcoal tabular-nums">
                       {formatCurrency(thresholdAmount, 'AED')}
                     </p>
                   </div>
                   <button
                     onClick={() => adjustAmount(setThresholdAmount, thresholdAmount, 10)}
-                    className="w-12 h-12 rounded-xl bg-gray-100 flex items-center justify-center hover:bg-gray-200 transition-colors"
+                    className="w-12 h-12 rounded-xl bg-gray-100 flex items-center justify-center hover:bg-gray-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral/40"
                   >
-                    <Plus className="w-5 h-5 text-gray-600" />
+                    <Plus className="w-5 h-5 text-nilin-charcoal" />
                   </button>
                 </div>
               </div>
@@ -487,18 +506,18 @@ export const AutoTopup: React.FC<AutoTopupProps> = ({
                 <div className="flex items-center gap-3">
                   <button
                     onClick={() => adjustAmount(setTopupAmount, topupAmount, -25)}
-                    className="w-12 h-12 rounded-xl bg-gray-100 flex items-center justify-center hover:bg-gray-200 transition-colors"
+                    className="w-12 h-12 rounded-xl bg-gray-100 flex items-center justify-center hover:bg-gray-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral/40"
                   >
-                    <Minus className="w-5 h-5 text-gray-600" />
+                    <Minus className="w-5 h-5 text-nilin-charcoal" />
                   </button>
                   <div className="flex-1 text-center">
-                    <p className="text-2xl font-bold text-nilin-charcoal">
+                    <p className="text-2xl font-bold text-nilin-charcoal tabular-nums">
                       {formatCurrency(topupAmount, 'AED')}
                     </p>
                   </div>
                   <button
                     onClick={() => adjustAmount(setTopupAmount, topupAmount, 25)}
-                    className="w-12 h-12 rounded-xl bg-gray-100 flex items-center justify-center hover:bg-gray-200 transition-colors"
+                    className="w-12 h-12 rounded-xl bg-gray-100 flex items-center justify-center hover:bg-gray-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral/40"
                   >
                     <Plus className="w-5 h-5 text-gray-600" />
                   </button>
@@ -547,11 +566,11 @@ export const AutoTopup: React.FC<AutoTopupProps> = ({
               </div>
 
               {/* Info Box */}
-              <div className="bg-blue-50 rounded-xl p-4 flex items-start gap-3">
-                <Info className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
-                <div className="text-sm text-blue-800">
+              <div className="bg-nilin-blush/30 rounded-xl p-4 flex items-start gap-3">
+                <Info className="w-5 h-5 text-nilin-coral flex-shrink-0 mt-0.5" />
+                <div className="text-sm text-nilin-charcoal">
                   <p className="font-medium">How it works</p>
-                  <p className="mt-1">
+                  <p className="mt-1 text-nilin-warmGray">
                     When your wallet balance drops below {formatCurrency(thresholdAmount, 'AED')},
                     we will automatically add {formatCurrency(topupAmount, 'AED')} using your selected payment method.
                   </p>
@@ -563,14 +582,14 @@ export const AutoTopup: React.FC<AutoTopupProps> = ({
             <div className="sticky bottom-0 bg-white p-4 border-t border-gray-100 flex gap-3">
               <button
                 onClick={() => setShowSettings(false)}
-                className="flex-1 py-3 border border-gray-200 text-nilin-charcoal rounded-xl hover:bg-gray-50 transition-colors"
+                className="flex-1 py-3 border border-gray-200 text-nilin-charcoal rounded-xl hover:bg-gray-50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral/40"
               >
                 Cancel
               </button>
               <button
                 onClick={handleSave}
                 disabled={saving || !selectedPaymentMethod}
-                className="flex-1 py-3 bg-nilin-coral text-white rounded-xl hover:bg-nilin-coral/90 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                className="flex-1 py-3 bg-nilin-coral text-white rounded-xl hover:bg-nilin-coral/90 transition-colors disabled:opacity-50 flex items-center justify-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral/40"
               >
                 {saving && <Loader2 className="w-4 h-4 animate-spin" />}
                 Save Changes

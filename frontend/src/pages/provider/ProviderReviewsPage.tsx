@@ -256,7 +256,7 @@ const ProviderReviewsPage: React.FC = () => {
               </div>
               <div>
                 <h1 className="text-3xl font-serif text-nilin-charcoal">My Reviews</h1>
-                <p className="text-nilin-warmGray">Customer feedback for your services</p>
+                <p className="text-base text-nilin-warmGray">Customer feedback for your services</p>
               </div>
             </div>
             <button
@@ -267,6 +267,17 @@ const ProviderReviewsPage: React.FC = () => {
               <Settings className="w-4 h-4" />
               Settings
             </button>
+          </div>
+
+          <div className="mb-6 p-4 rounded-xl bg-amber-50 border border-amber-200 flex items-start gap-3">
+            <Clock className="w-5 h-5 text-amber-600 mt-0.5 shrink-0" />
+            <div>
+              <p className="text-sm font-medium text-amber-900">Review moderation</p>
+              <p className="text-sm text-amber-800 mt-1">
+                New customer reviews appear here immediately but are only published on your public
+                profile after platform approval. You can reply to pending reviews at any time.
+              </p>
+            </div>
           </div>
 
           {error && (

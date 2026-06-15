@@ -36,11 +36,11 @@ const serviceCreationSchema = Joi.object({
   
   description: Joi.string()
     .min(50)
-    .max(2000)
+    .max(1000)
     .required()
     .messages({
       'string.min': 'Description must be at least 50 characters',
-      'string.max': 'Description cannot exceed 2000 characters',
+      'string.max': 'Description cannot exceed 1000 characters',
       'any.required': 'Service description is required'
     }),
   

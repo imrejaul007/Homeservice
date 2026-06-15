@@ -91,6 +91,8 @@ router.patch('/bookings/:id/cancel', perUserRateLimiter, authenticate, validateB
 router.patch('/bookings/:id/reschedule', authenticate, rescheduleBooking);
 router.patch('/bookings/:id/accept', authenticate, validateBookingAcceptance, acceptBooking);
 router.patch('/bookings/:id/reject', authenticate, validateBookingRejection, rejectBooking);
+// Backward-compatible alias for clients still calling /decline
+router.post('/bookings/:id/decline', authenticate, validateBookingRejection, rejectBooking);
 router.patch('/bookings/:id/start', authenticate, validateBookingCompletion, startBooking);
 router.patch('/bookings/:id/complete', authenticate, validateBookingCompletion, completeBooking);
 

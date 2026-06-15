@@ -27,6 +27,10 @@ import PaymentMethodSelector from './ui/PaymentMethodSelector';
 import { TrustBadge } from './ui/TrustBadge';
 import { useBookingStore } from '../../stores/bookingStore';
 import { useAuthStore } from '../../stores/authStore';
+import {
+  buildBookingAttributionMetadata,
+  type BookingAttributionContext,
+} from '../../types/bookingAttribution';
 import { API_BASE_URL } from '../../config/api';
 import { api } from '../../services/api';
 
@@ -134,6 +138,7 @@ export interface PackageBookingWizardProps {
   onCancel: () => void;
   initialScheduledDate?: string;
   initialScheduledTime?: string;
+  attribution?: BookingAttributionContext;
 }
 
 interface FormData {
@@ -233,6 +238,7 @@ const PackageBookingWizard: React.FC<PackageBookingWizardProps> = ({
   onCancel,
   initialScheduledDate,
   initialScheduledTime,
+  attribution,
 }) => {
   const navigate = useNavigate();
   const { user, isAuthenticated, tokens } = useAuthStore();
@@ -521,8 +527,8 @@ const PackageBookingWizard: React.FC<PackageBookingWizardProps> = ({
         metadata: {
           idempotencyKey,
           sessionId: crypto.randomUUID(),
-          bookingSource: 'package',
-          deviceType: 'desktop'
+          ...buildBookingAttributionMetadata(attribution, 'direct'),
+          deviceType: 'desktop',
         }
       };
 

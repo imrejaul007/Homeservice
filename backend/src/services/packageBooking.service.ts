@@ -363,10 +363,15 @@ class PackageBookingService {
           if (socketServer) {
             const io = socketServer.getIO();
             if (io) {
-              io.to(`provider:${providerId}`).emit('booking:created', {
-                bookingId: booking._id,
-                bookingNumber: booking.bookingNumber,
-                status: booking.status,
+              io.to(`provider:${providerId}`).emit('booking:new_request', {
+                booking: {
+                  bookingId: booking._id.toString(),
+                  bookingNumber: booking.bookingNumber,
+                  status: booking.status,
+                  userId: providerId.toString(),
+                  timestamp: new Date(),
+                },
+                providerId: providerId.toString(),
               });
               io.to(`customer:${customerId}`).emit('booking:confirmed', {
                 bookingId: booking._id,

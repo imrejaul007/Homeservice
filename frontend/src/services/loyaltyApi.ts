@@ -85,7 +85,7 @@ interface PointsHistoryResponse {
   };
 }
 
-interface TierBenefitsResponse {
+export interface TierBenefitsResponse {
   success: boolean;
   data: {
     bronze: TierBenefits;

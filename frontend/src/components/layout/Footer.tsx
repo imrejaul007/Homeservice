@@ -75,17 +75,17 @@ const Footer: React.FC = () => {
   };
 
   return (
-    <footer className="relative bg-[#2D2D2D] mt-auto overflow-hidden">
+    <footer className="relative bg-[var(--nilin-charcoal)] mt-auto overflow-hidden">
       {/* Decorative gradient orbs */}
-      <div className="absolute top-0 left-0 w-96 h-96 bg-[#E8B4A8]/10 rounded-full blur-[120px] -translate-x-1/2 -translate-y-1/2" />
-      <div className="absolute bottom-0 right-0 w-80 h-80 bg-[#D4A89A]/10 rounded-full blur-[100px] translate-x-1/2 translate-y-1/2" />
+      <div className="absolute top-0 left-0 w-96 h-96 bg-[var(--nilin-coral)]/10 rounded-full blur-[120px] -translate-x-1/2 -translate-y-1/2" />
+      <div className="absolute bottom-0 right-0 w-80 h-80 bg-[var(--nilin-rose)]/10 rounded-full blur-[100px] translate-x-1/2 translate-y-1/2" />
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 md:py-20 relative z-10">
         {/* Top Section with Newsletter */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 mb-16 pb-12 border-b border-white/10">
           {/* Brand & Description */}
           <div>
-            <h2 className="text-4xl md:text-5xl font-serif font-light tracking-tight text-white mb-6">
+            <h2 className="text-4xl md:text-5xl font-serif font-light tracking-widest text-white mb-6">
               NILIN
             </h2>
             <p className="text-white/60 text-base leading-relaxed mb-8 max-w-md">
@@ -97,8 +97,8 @@ const Footer: React.FC = () => {
               <p className="text-white/80 text-sm mb-3">Subscribe for updates & exclusive offers</p>
 
               {isSubscribed ? (
-                <div className="flex items-center gap-3 p-4 bg-[#E8B4A8]/20 rounded-xl border border-[#E8B4A8]/30">
-                  <div className="w-10 h-10 rounded-full bg-[#E8B4A8] flex items-center justify-center flex-shrink-0">
+                <div className="flex items-center gap-3 p-4 bg-[var(--nilin-coral)]/20 rounded-xl border border-[var(--nilin-coral)]/30">
+                  <div className="w-10 h-10 rounded-full bg-[var(--nilin-coral)] flex items-center justify-center flex-shrink-0">
                     <CheckCircle className="w-5 h-5 text-white" />
                   </div>
                   <div>
@@ -118,7 +118,7 @@ const Footer: React.FC = () => {
                         onKeyDown={handleKeyDown}
                         disabled={isLoading}
                         className={`w-full px-4 py-3 bg-white/10 backdrop-blur-sm border rounded-xl text-white placeholder-white/40 focus:outline-none focus:bg-white/15 transition-all ${
-                          error ? 'border-red-500/60 focus:border-red-500' : 'border-white/20 focus:border-[#E8B4A8]/60'
+                          error ? 'border-red-500/60 focus:border-red-500' : 'border-white/20 focus:border-[var(--nilin-coral)]/60'
                         }`}
                         aria-label="Email address"
                         aria-invalid={!!error}
@@ -128,7 +128,7 @@ const Footer: React.FC = () => {
                     <button
                       onClick={handleSubscribe}
                       disabled={isLoading}
-                      className="px-5 py-3 bg-[#E8B4A8] text-white font-medium rounded-xl hover:bg-[#D4A89A] hover:shadow-lg hover:shadow-[#E8B4A8]/20 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="px-5 py-3 bg-[var(--nilin-coral)] text-white font-medium rounded-xl hover:bg-[var(--nilin-rose)] hover:shadow-lg hover:shadow-[var(--nilin-coral)]/20 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       {isLoading ? (
                         <Loader2 className="w-4 h-4 animate-spin" />
@@ -150,9 +150,9 @@ const Footer: React.FC = () => {
 
                   <p className="text-white/40 text-xs">
                     By subscribing, you agree to our{' '}
-                    <Link to="/privacy" className="text-[#E8B4A8] hover:underline">Privacy Policy</Link>
+                    <Link to="/privacy" className="text-[var(--nilin-coral)] hover:underline">Privacy Policy</Link>
                     {' '}and{' '}
-                    <Link to="/cookies" className="text-[#E8B4A8] hover:underline">Cookie Policy</Link>.
+                    <Link to="/cookies" className="text-[var(--nilin-coral)] hover:underline">Cookie Policy</Link>.
                   </p>
                 </div>
               )}
@@ -172,10 +172,10 @@ const Footer: React.FC = () => {
                 href={social.href}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="group w-12 h-12 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center hover:bg-[#E8B4A8]/20 hover:border-[#E8B4A8]/30 hover:-translate-y-1 transition-all"
+                className="group w-12 h-12 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center hover:bg-[var(--nilin-coral)]/20 hover:border-[var(--nilin-coral)]/30 hover:-translate-y-1 hover-lift transition-all"
                 aria-label={`Follow us on ${social.name}`}
               >
-                <SocialIcon name={social.icon} className="w-5 h-5 text-white/60 group-hover:text-[#E8B4A8] transition-colors" />
+                <SocialIcon name={social.icon} className="w-5 h-5 text-white/60 group-hover:text-[var(--nilin-coral)] transition-colors" />
               </a>
             ))}
           </div>
@@ -186,7 +186,7 @@ const Footer: React.FC = () => {
           {/* Services */}
           <div>
             <h3 className="text-white font-semibold text-sm uppercase tracking-wider mb-6 flex items-center gap-2">
-              <span className="w-8 h-0.5 bg-[#E8B4A8] rounded-full" />
+              <span className="w-8 h-0.5 bg-[var(--nilin-coral)] rounded-full" />
               Services
             </h3>
             <ul className="space-y-3">
@@ -194,9 +194,9 @@ const Footer: React.FC = () => {
                 <li key={item.name}>
                   <Link
                     to={item.path}
-                    className="text-white/50 text-sm hover:text-[#E8B4A8] transition-colors inline-flex items-center gap-2 group"
+                    className="text-white/50 text-sm hover:text-[var(--nilin-coral)] transition-colors inline-flex items-center gap-2 group"
                   >
-                    <span className="w-0 h-0.5 bg-[#E8B4A8] rounded-full group-hover:w-3 transition-all" />
+                    <span className="w-0 h-0.5 bg-[var(--nilin-coral)] rounded-full group-hover:w-3 transition-all" />
                     {item.name}
                   </Link>
                 </li>
@@ -215,9 +215,9 @@ const Footer: React.FC = () => {
                 <li key={item.name}>
                   <Link
                     to={item.path}
-                    className="text-white/50 text-sm hover:text-[#E8B4A8] transition-colors inline-flex items-center gap-2 group"
+                    className="text-white/50 text-sm hover:text-[var(--nilin-coral)] transition-colors inline-flex items-center gap-2 group"
                   >
-                    <span className="w-0 h-0.5 bg-[#E8B4A8] rounded-full group-hover:w-3 transition-all" />
+                    <span className="w-0 h-0.5 bg-[var(--nilin-coral)] rounded-full group-hover:w-3 transition-all" />
                     {item.name}
                   </Link>
                 </li>
@@ -236,9 +236,9 @@ const Footer: React.FC = () => {
                 <li key={item.name}>
                   <Link
                     to={item.path}
-                    className="text-white/50 text-sm hover:text-[#E8B4A8] transition-colors inline-flex items-center gap-2 group"
+                    className="text-white/50 text-sm hover:text-[var(--nilin-coral)] transition-colors inline-flex items-center gap-2 group"
                   >
-                    <span className="w-0 h-0.5 bg-[#E8B4A8] rounded-full group-hover:w-3 transition-all" />
+                    <span className="w-0 h-0.5 bg-[var(--nilin-coral)] rounded-full group-hover:w-3 transition-all" />
                     {item.name}
                   </Link>
                 </li>
@@ -254,8 +254,8 @@ const Footer: React.FC = () => {
             </h3>
             <ul className="space-y-4">
               <li className="flex items-start gap-3">
-                <div className="w-10 h-10 rounded-xl bg-[#E8B4A8]/10 flex items-center justify-center flex-shrink-0">
-                  <Phone className="w-4 h-4 text-[#E8B4A8]" />
+                <div className="w-10 h-10 rounded-xl bg-[var(--nilin-coral)]/10 flex items-center justify-center flex-shrink-0">
+                  <Phone className="w-4 h-4 text-[var(--nilin-coral)]" />
                 </div>
                 <div>
                   <p className="text-white/40 text-xs mb-0.5">Phone</p>
@@ -263,8 +263,8 @@ const Footer: React.FC = () => {
                 </div>
               </li>
               <li className="flex items-start gap-3">
-                <div className="w-10 h-10 rounded-xl bg-[#E8B4A8]/10 flex items-center justify-center flex-shrink-0">
-                  <Mail className="w-4 h-4 text-[#E8B4A8]" />
+                <div className="w-10 h-10 rounded-xl bg-[var(--nilin-coral)]/10 flex items-center justify-center flex-shrink-0">
+                  <Mail className="w-4 h-4 text-[var(--nilin-coral)]" />
                 </div>
                 <div>
                   <p className="text-white/40 text-xs mb-0.5">Email</p>
@@ -272,8 +272,8 @@ const Footer: React.FC = () => {
                 </div>
               </li>
               <li className="flex items-start gap-3">
-                <div className="w-10 h-10 rounded-xl bg-[#E8B4A8]/10 flex items-center justify-center flex-shrink-0">
-                  <MapPin className="w-4 h-4 text-[#E8B4A8]" />
+                <div className="w-10 h-10 rounded-xl bg-[var(--nilin-coral)]/10 flex items-center justify-center flex-shrink-0">
+                  <MapPin className="w-4 h-4 text-[var(--nilin-coral)]" />
                 </div>
                 <div>
                   <p className="text-white/40 text-xs mb-0.5">Location</p>
@@ -290,7 +290,7 @@ const Footer: React.FC = () => {
             <span>© {currentYear} NILIN. All rights reserved.</span>
             <span className="hidden sm:inline">•</span>
             <span className="flex items-center gap-1">
-              Made with <Heart className="w-3 h-3 text-[#E8B4A8] fill-[#E8B4A8]" /> in Dubai
+              Made with <Heart className="w-3 h-3 text-[var(--nilin-coral)] fill-[var(--nilin-coral)]" /> in Dubai
             </span>
           </div>
           <div className="flex gap-6">

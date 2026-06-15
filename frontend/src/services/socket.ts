@@ -269,7 +269,7 @@ export interface ServerToClientEvents {
 
   // Service status events (Admin -> Provider)
   /** Service approved by admin */
-  'service:approved': (data: { serviceId: string; providerId: string }) => void;
+  'service:approved': (data: { serviceId: string; providerId: string; reason?: string }) => void;
 
   /** Service rejected by admin */
   'service:rejected': (data: { serviceId: string; providerId: string; reason: string }) => void;
@@ -1682,7 +1682,7 @@ class SocketService {
   // ---------------------------------------------------------------------------
 
   onServiceApproved(
-    callback: (data: { serviceId: string; providerId: string }) => void
+    callback: (data: { serviceId: string; providerId: string; reason?: string }) => void
   ): () => void {
     return this.on('service:approved', callback);
   }

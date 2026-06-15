@@ -229,6 +229,68 @@ class AnalyticsService {
   }
 
   /**
+   * Get current session ID
+   */
+  public getSessionId(): string | null {
+    return this.sessionId;
+  }
+
+  /**
+   * Track provider-relevant funnel event with explicit backend fields
+   */
+  public trackProviderFunnelEvent(
+    eventType: string,
+    properties: Record<string, unknown> = {},
+  ): void {
+    const providerId = properties.providerId;
+    if (!providerId || typeof providerId !== 'string') {
+      return;
+    }
+
+    this.track(EventCategory.BOOKING, eventType, {
+      ...properties,
+      providerId,
+      eventType,
+      sessionId: this.sessionId ?? undefined,
+    });
+  }
+
+  /**
+   * Track listing impression with 30s debounce per provider per session.
+   */
+  public trackListingImpression(
+    providerId: string,
+    properties: { query?: string; position?: number; serviceId?: string } = {},
+  ): void {
+    if (!providerId) return;
+
+    const sessionId = this.sessionId ?? this.getOrCreateSessionId();
+    const storageKey = `nilin_impression_${sessionId}_${providerId}`;
+    const now = Date.now();
+    const debounceMs = 30_000;
+
+    try {
+      const raw = sessionStorage.getItem(storageKey);
+      if (raw) {
+        const lastTracked = Number(raw);
+        if (!Number.isNaN(lastTracked) && now - lastTracked < debounceMs) {
+          return;
+        }
+      }
+      sessionStorage.setItem(storageKey, String(now));
+    } catch {
+      // sessionStorage unavailable — still track once per call
+    }
+
+    this.trackProviderFunnelEvent('listing_impression', {
+      providerId,
+      query: properties.query,
+      position: properties.position,
+      serviceId: properties.serviceId,
+    });
+  }
+
+  /**
    * Track auth event
    */
   public trackAuth(event: AuthEvent, properties?: Record<string, unknown>): void {

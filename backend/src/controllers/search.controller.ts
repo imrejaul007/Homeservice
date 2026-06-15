@@ -19,6 +19,11 @@ import {
 } from '../services/search.service';
 import { escapeRegex } from '../utils/formatBookingListItem';
 import { resolveCategoryFilters, buildCaseInsensitiveNameFilter } from '../utils/categoryResolver';
+import {
+  getViewerKey,
+  isBotUserAgent,
+  trackListingImpressions,
+} from '../services/providerAnalyticsTracking.service';
 
 // ===================================
 // INTERFACES & TYPES
@@ -121,6 +126,7 @@ export const searchServices = asyncHandler(async (req: Request, res: Response) =
     // Check if geo-search is needed
     if (filters.lat && filters.lng && filters.radius) {
       // Geo search with Meilisearch
+      // SECURITY: Pass tenantId for multi-tenant isolation
       const geoOptions: GeoSearchOptions = {
         limit: filters.limit,
         offset: ((filters.page || 1) - 1) * (filters.limit || 20),
@@ -135,6 +141,7 @@ export const searchServices = asyncHandler(async (req: Request, res: Response) =
         latitude: filters.lat,
         longitude: filters.lng,
         radiusKm: filters.radius,
+        tenantId: tenantContext.isAdmin ? undefined : tenantContext.tenantId,
       };
 
       const geoResults = await searchServicesWithGeo(filters.q || '', geoOptions, previousQuery);
@@ -142,6 +149,7 @@ export const searchServices = asyncHandler(async (req: Request, res: Response) =
       totalCount = geoResults.estimatedTotalHits;
     } else {
       // Standard search with typo tolerance and synonyms
+      // SECURITY: Pass tenantId for multi-tenant isolation
       const searchOptions = {
         limit: filters.limit,
         offset: ((filters.page || 1) - 1) * (filters.limit || 20),
@@ -154,6 +162,7 @@ export const searchServices = asyncHandler(async (req: Request, res: Response) =
                 filters.sortBy === 'price_desc' ? 'price_desc' :
                 filters.sortBy === 'rating' ? 'rating' : 'popular') as 'price_asc' | 'price_desc' | 'rating' | 'popular',
         providerId: filters.providerId,
+        tenantId: tenantContext.isAdmin ? undefined : tenantContext.tenantId,
       };
 
       const searchResults = await meiliSearchServices(filters.q || '', searchOptions, previousQuery);
@@ -172,7 +181,7 @@ export const searchServices = asyncHandler(async (req: Request, res: Response) =
     const processedServices = await processSearchResults(services, filters);
 
     // Increment search counts for tracked services (background task)
-    incrementSearchCounts(processedServices.slice(0, 10));
+    incrementSearchCounts(req, processedServices.slice(0, 10), getViewerKey(req));
 
     // Generate pagination
     const pagination = generatePagination(
@@ -235,8 +244,11 @@ export const getSearchSuggestions = asyncHandler(async (req: Request, res: Respo
   }
 
   try {
+    // SECURITY: Pass tenantId for multi-tenant isolation
+    const tenantId = tenantContext.isAdmin ? undefined : tenantContext.tenantId;
+
     // Try Meilisearch suggestions first (with typo tolerance)
-    const meiliSuggestions = await getMeiliSuggestions(q as string, Number(limit));
+    const meiliSuggestions = await getMeiliSuggestions(q as string, Number(limit), tenantId);
 
     if (meiliSuggestions.length > 0) {
       return res.json({
@@ -252,7 +264,7 @@ export const getSearchSuggestions = asyncHandler(async (req: Request, res: Respo
     // Build tenant filter for suggestions
     // FIX: Escape regex special characters to prevent regex injection
     const escapedQ = escapeRegex(q as string);
-    const tenantMatch: any = { isActive: true, name: { $regex: new RegExp(escapedQ, 'i') } };
+    const tenantMatch: any = { isActive: true, isDeleted: { $ne: true }, name: { $regex: new RegExp(escapedQ, 'i') } };
     if (!tenantContext.isAdmin && tenantContext.tenantId) {
       tenantMatch.tenantId = tenantContext.tenantId;
     }
@@ -353,7 +365,7 @@ export const getTrendingServices = asyncHandler(async (req: Request, res: Respon
 
     res.json({
       success: true,
-      data: { services: trendingServices }
+      data: { services: deriveHeroImage(trendingServices) }
     });
 
   } catch (error: any) {
@@ -568,13 +580,13 @@ export const searchProviders = asyncHandler(async (req: Request, res: Response) 
       }
       providerQuery.userId = { $in: Array.from(providerIdSet) };
     } else {
-      // Only providers that have at least one active service
-      const allActiveServices = await Service.find({
+      // FIX: Use distinct() instead of fetching all services to extract provider IDs
+      // This avoids loading entire service documents just to get provider IDs
+      const allProviderIds = await Service.distinct('providerId', {
         isActive: true,
         status: 'active',
         ...(tenantContext.tenantId && !tenantContext.isAdmin ? { tenantId: tenantContext.tenantId } : {}),
-      }).select('providerId').lean();
-      const allProviderIds = [...new Set(allActiveServices.map((s: any) => s.providerId))];
+      });
       if (allProviderIds.length === 0) {
         return res.json({
           success: true,
@@ -663,6 +675,9 @@ export const searchProviders = asyncHandler(async (req: Request, res: Response) 
       const services = servicesByProvider.get(provider.userId.toString()) || [];
       const prices = services.map((s: any) => s.price?.amount || 0).filter((p: number) => p > 0);
 
+      // FIX: Include coordinates in location for map view
+      const providerCoords = provider.locationInfo?.coordinates?.coordinates;
+
       return {
         id: provider.userId,
         _id: provider.userId.toString(),
@@ -676,6 +691,10 @@ export const searchProviders = asyncHandler(async (req: Request, res: Response) 
         location: provider.locationInfo?.primaryAddress ? {
           city: provider.locationInfo.primaryAddress.city,
           state: provider.locationInfo.primaryAddress.state,
+          // GeoJSON format: [longitude, latitude]
+          coordinates: Array.isArray(providerCoords) && providerCoords.length === 2
+            ? [providerCoords[0], providerCoords[1]]
+            : undefined,
         } : null,
         rating: provider.reviewsData?.averageRating || 0,
         reviewCount: provider.reviewsData?.totalReviews || 0,
@@ -775,8 +794,11 @@ function buildServiceSearchQuery(filters: SearchFilters, tenantContext: TenantCo
   if (filters.isActive !== false) {
     query.isActive = true;
     query.status = 'active'; // ✅ SECURITY FIX: Only show approved services to customers
+    // FIX: Exclude soft-deleted services from customer-facing results
+    query.isDeleted = { $ne: true };
     countQuery.isActive = true;
     countQuery.status = 'active';
+    countQuery.isDeleted = { $ne: true };
   }
 
   // Text search
@@ -890,29 +912,54 @@ function buildSortQuery(filters: SearchFilters): any {
 }
 
 async function processSearchResults(services: any[], filters: SearchFilters) {
+  // FIX: Batch fetch provider data to avoid N+1 queries within the map
+  // Collect all unique provider IDs
+  const providerIds = new Set<string>();
+  services.forEach(service => {
+    const result = typeof service.toJSON === 'function' ? service.toJSON() : { ...service };
+    if (result.providerId) {
+      const pid = typeof result.providerId === 'object' ? result.providerId._id?.toString() : result.providerId.toString();
+      if (pid) providerIds.add(pid);
+    }
+  });
+
+  // Batch fetch all providers in one query
+  const providerDataMap = new Map<string, any>();
+  if (providerIds.size > 0) {
+    const [providerProfiles, users] = await Promise.all([
+      ProviderProfile.find({ userId: { $in: Array.from(providerIds) } }).lean(),
+      User.find({ _id: { $in: Array.from(providerIds) } }).select('firstName lastName avatar rating location').lean(),
+    ]);
+    users.forEach(user => providerDataMap.set(user._id.toString(), { type: 'user', data: user }));
+    providerProfiles.forEach(profile => providerDataMap.set(profile.userId.toString(), { type: 'profile', data: profile }));
+  }
+
   return services.map(service => {
-    // Handle both Mongoose documents (with toJSON) and plain objects
     const result = typeof service.toJSON === 'function' ? service.toJSON() : { ...service };
 
-    // Transform providerId to provider object for frontend compatibility
+    // Transform providerId to provider object using batch-loaded data
     if (result.providerId && !result.provider) {
+      const pid = typeof result.providerId === 'object' ? result.providerId._id?.toString() : result.providerId.toString();
+      const userData = pid ? providerDataMap.get(pid) : null;
+      const user = userData?.type === 'user' ? userData.data : null;
+      const profile = userData?.type === 'profile' ? userData.data : null;
+
       result.provider = {
-        _id: result.providerId._id || result.providerId,
-        firstName: result.providerId.firstName || '',
-        lastName: result.providerId.lastName || '',
-        avatar: result.providerId.avatar || '',
-        rating: result.providerId.rating || 0,
-        location: result.providerId.location || null,
-        // isVerified will be populated from Meilisearch indexed data if available
-        isVerified: result.providerId.isVerified || false,
+        _id: pid,
+        firstName: user?.firstName || result.provider?.firstName || '',
+        lastName: user?.lastName || result.provider?.lastName || '',
+        avatar: user?.avatar || profile?.instagramStyleProfile?.profilePhoto || '',
+        rating: user?.rating || profile?.reviewsData?.averageRating || 0,
+        location: user?.location || profile?.locationInfo?.primaryAddress?.city || null,
+        businessName: profile?.businessInfo?.businessName || '',
+        isVerified: profile?.instagramStyleProfile?.isVerified || profile?.verificationStatus?.overall === 'approved' || false,
       };
     } else {
       result.provider = result.provider || {};
-      // Ensure isVerified field exists
       result.provider.isVerified = result.provider.isVerified || false;
     }
     result.fullLocation = service.fullLocation;
-    
+
     // Add distance if it's a geographic search
     if (filters.lat && filters.lng && result.location?.coordinates?.coordinates) {
       result.distance = calculateDistance(
@@ -923,7 +970,29 @@ async function processSearchResults(services: any[], filters: SearchFilters) {
       );
     }
 
+    // Derive a singular `image` field from `images[0]` so the frontend
+    // ServiceCard component (which reads `service.image`) always has a
+    // hero image to render, regardless of which endpoint supplied the data.
+    if (!result.image && Array.isArray(result.images) && result.images.length > 0) {
+      result.image = result.images[0];
+    }
+
     return result;
+  });
+}
+
+/**
+ * Add a derived `image` (singular) field to each service so the frontend
+ * ServiceCard — which reads `service.image` per its documented type — has
+ * a hero image to render. Idempotent: respects any explicit `image` value
+ * already on the document. Used by endpoints that bypass processSearchResults.
+ */
+function deriveHeroImage<T extends { image?: string; images?: string[] }>(services: T[]): T[] {
+  return services.map((s) => {
+    if (!s.image && Array.isArray(s.images) && s.images.length > 0) {
+      return { ...s, image: s.images[0] };
+    }
+    return s;
   });
 }
 
@@ -958,15 +1027,21 @@ function generatePagination(page: number, limit: number, total: number) {
   };
 }
 
+/**
+ * Generate search suggestions from services
+ * SECURITY FIX C8: Add isDeleted filter to exclude soft-deleted services
+ */
 async function generateSearchSuggestions(query?: string): Promise<string[]> {
   if (!query || query.length < 2) return [];
 
   try {
     // Get similar service names
+    // SECURITY FIX C8: Exclude soft-deleted services
     const suggestions = await Service.aggregate([
       {
         $match: {
           isActive: true,
+          isDeleted: { $ne: true },
           $or: [
             { name: { $regex: new RegExp(query, 'i') } },
             { category: { $regex: new RegExp(query, 'i') } },
@@ -1055,12 +1130,18 @@ export const getServiceById = asyncHandler(async (req: Request, res: Response) =
       throw new ApiError(404, 'Service not found or not available');
     }
 
-    // PERFORMANCE FIX: Batch fetch provider data to avoid N+1 queries
+    // SECURITY FIX: Batch fetch provider data with tenant isolation to prevent cross-tenant leaks
+    const providerQuery: any = { userId: service.providerId };
+    const userQuery: any = { _id: service.providerId };
+    if (!tenantContext.isAdmin && tenantContext.tenantId) {
+      providerQuery.tenantId = tenantContext.tenantId;
+      userQuery.tenantId = tenantContext.tenantId;
+    }
     const [providerProfile, providerUser] = await Promise.all([
-      ProviderProfile.findOne({ userId: service.providerId })
+      ProviderProfile.findOne(providerQuery)
         .select('instagramStyleProfile.profilePhoto businessInfo businessType verificationStatus')
         .lean(),
-      User.findById(service.providerId)
+      User.findOne(userQuery)
         .select('firstName lastName')
         .lean(),
     ]);
@@ -1163,7 +1244,7 @@ export const getServicesByIds = async (req: Request, res: Response): Promise<voi
 
     res.json({
       success: true,
-      data: services,
+      data: deriveHeroImage(services),
     });
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : 'Failed to get services';
@@ -1174,26 +1255,33 @@ export const getServicesByIds = async (req: Request, res: Response): Promise<voi
 /**
  * Track service click
  * POST /api/search/service/:id/click
+ * SECURITY FIX C6: Add tenant validation to ensure service belongs to tenant
  */
 export const trackServiceClick = asyncHandler(async (req: Request, res: Response) => {
   // Extract tenant context for service calls
   const tenantContext: TenantContext = getTenantContext(req);
   const { id } = req.params;
-  
+
   try {
-    const service = await Service.findByIdAndUpdate(
-      id,
-      { 
+    // SECURITY FIX C6: Build tenant-scoped query to verify service belongs to tenant
+    const serviceQuery: any = { _id: id };
+    if (!tenantContext.isAdmin && tenantContext.tenantId) {
+      serviceQuery.tenantId = tenantContext.tenantId;
+    }
+
+    const service = await Service.findOneAndUpdate(
+      serviceQuery,
+      {
         $inc: { 'searchMetadata.clickCount': 1 },
         $set: { 'searchMetadata.lastSearched': new Date() }
       },
       { new: true }
     );
-    
+
     if (!service) {
-      throw new ApiError(404, 'Service not found');
+      throw new ApiError(404, 'Service not found or not accessible');
     }
-    
+
     res.json({
       success: true,
       message: 'Click tracked successfully'
@@ -1209,11 +1297,22 @@ export const trackServiceClick = asyncHandler(async (req: Request, res: Response
  */
 export const getPopularServices = asyncHandler(async (req: Request, res: Response) => {
   const { limit = 20, category } = req.query;
+  // FIX: Apply tenant isolation to prevent cross-tenant data leaks
+  const tenantContext: TenantContext = getTenantContext(req);
 
   try {
-    let query: any = { isActive: true, status: 'active', isPopular: true }; // ✅ SECURITY FIX: Only show approved services in popular
+    let query: any = {
+      isActive: true,
+      status: 'active',
+      isPopular: true,
+      isDeleted: { $ne: true }, // FIX: Exclude soft-deleted
+    };
     if (category) {
       query.category = category;
+    }
+    // FIX: Apply tenant filter for non-admin users
+    if (!tenantContext.isAdmin && tenantContext.tenantId) {
+      query.tenantId = tenantContext.tenantId;
     }
 
     // PERFORMANCE FIX: Add projection to limit fields returned
@@ -1226,7 +1325,7 @@ export const getPopularServices = asyncHandler(async (req: Request, res: Respons
 
     res.json({
       success: true,
-      data: { services: popularServices }
+      data: { services: deriveHeroImage(popularServices) }
     });
   } catch (error: any) {
     throw new ApiError(500, 'Failed to get popular services', error.message);
@@ -1261,12 +1360,12 @@ export const getServicesByCategory = asyncHandler(async (req: Request, res: Resp
     const totalPages = Math.ceil(totalCount / filters.limit);
 
     // Track search counts in background
-    incrementSearchCounts(services);
+    incrementSearchCounts(req, services, getViewerKey(req));
 
     const response: SearchResponse = {
       success: true,
       data: {
-        services,
+        services: deriveHeroImage(services),
         pagination: {
           page: filters.page,
           limit: filters.limit,
@@ -1282,18 +1381,34 @@ export const getServicesByCategory = asyncHandler(async (req: Request, res: Resp
   }
 });
 
-function incrementSearchCounts(services: any[]) {
-  // Background task - don't await
+function incrementSearchCounts(req: Request, services: any[], sessionKey: string) {
+  if (isBotUserAgent(req)) {
+    return;
+  }
+
   setImmediate(async () => {
     try {
-      const serviceIds = services.map(s => s._id);
+      const serviceIds = services.map((s) => s._id);
       await Service.updateMany(
         { _id: { $in: serviceIds } },
         {
           $inc: { 'searchMetadata.searchCount': 1 },
-          $set: { 'searchMetadata.lastSearched': new Date() }
-        }
+          $set: { 'searchMetadata.lastSearched': new Date() },
+        },
       );
+
+      const providerRows = await Service.find({ _id: { $in: serviceIds } })
+        .select('providerId')
+        .lean();
+      const providerCounts = new Map<string, number>();
+      providerRows.forEach((row) => {
+        const providerId = row.providerId?.toString();
+        if (providerId) {
+          providerCounts.set(providerId, (providerCounts.get(providerId) || 0) + 1);
+        }
+      });
+
+      await trackListingImpressions(providerCounts, sessionKey);
     } catch (error) {
       logger.error('Error incrementing search counts', {
         context: 'SearchController',

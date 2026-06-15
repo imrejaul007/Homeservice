@@ -314,6 +314,17 @@ const useToastActions = () => {
       addToast({ title, description, variant: 'info' }),
     default: (title: string, description?: string) =>
       addToast({ title, description, variant: 'default' }),
+    undo: (title: string, action: () => void, description?: string, duration = 8000) =>
+      addToast({
+        title,
+        description,
+        variant: 'success',
+        duration,
+        action: {
+          label: 'Undo',
+          onClick: action,
+        },
+      }),
   };
 };
 

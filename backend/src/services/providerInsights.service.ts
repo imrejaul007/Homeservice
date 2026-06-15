@@ -5,6 +5,11 @@ import Service from '../models/service.model';
 import ProviderProfile from '../models/providerProfile.model';
 import logger from '../utils/logger';
 import { cache } from '../config/redis';
+import {
+  getGrossRevenueForPeriod,
+  getInsightsPeriodDates,
+  getNetMultiplier,
+} from './providerMetrics.shared';
 
 // ============================================
 // INTERFACES
@@ -352,49 +357,14 @@ export const getProviderRevenueMetrics = async (
   const ttl = 300;
 
   return getCached(cacheKey, async () => {
-    const { startDate, endDate, previousStartDate, previousEndDate } = getDateRange(period);
+    const { startDate, endDate, previousStartDate, previousEndDate } = getInsightsPeriodDates(period);
     const providerObjectId = new Types.ObjectId(providerId);
+    const netMultiplier = getNetMultiplier();
 
-    const [
-      currentRevenue,
-      previousRevenue,
-      revenueByDay,
-      revenueByService,
-      hourlyRevenue
-    ] = await Promise.all([
-      // Current period revenue
-      Booking.aggregate([
-        {
-          $match: {
-            providerId: providerObjectId,
-            status: 'completed',
-            completedAt: { $gte: startDate, $lte: endDate }
-          }
-        },
-        {
-          $group: {
-            _id: null,
-            total: { $sum: '$pricing.totalAmount' },
-            count: { $sum: 1 }
-          }
-        }
-      ]),
-      // Previous period revenue for comparison
-      Booking.aggregate([
-        {
-          $match: {
-            providerId: providerObjectId,
-            status: 'completed',
-            completedAt: { $gte: previousStartDate, $lte: previousEndDate }
-          }
-        },
-        {
-          $group: {
-            _id: null,
-            total: { $sum: '$pricing.totalAmount' }
-          }
-        }
-      ]),
+    const [currentRevenue, previousRevenue, revenueByDay, revenueByService, hourlyRevenue] =
+      await Promise.all([
+      getGrossRevenueForPeriod(providerObjectId, startDate, endDate),
+      getGrossRevenueForPeriod(providerObjectId, previousStartDate, previousEndDate),
       // Revenue by day
       Booking.aggregate([
         {
@@ -462,9 +432,11 @@ export const getProviderRevenueMetrics = async (
       ])
     ]);
 
-    const currentTotal = currentRevenue[0]?.total || 0;
-    const currentCount = currentRevenue[0]?.count || 0;
-    const previousTotal = previousRevenue[0]?.total || 0;
+    const currentGross = currentRevenue.grossTotal;
+    const currentCount = currentRevenue.count;
+    const previousGross = previousRevenue.grossTotal;
+    const currentTotal = Math.round(currentGross * netMultiplier);
+    const previousTotal = Math.round(previousGross * netMultiplier);
     const revenueGrowth = previousTotal > 0 ? ((currentTotal - previousTotal) / previousTotal) * 100 : 0;
     const peakHour = hourlyRevenue[0]?._id || 9;
 
@@ -482,14 +454,14 @@ export const getProviderRevenueMetrics = async (
       revenueGrowth,
       revenueByDay: revenueByDay.map((d: any) => ({
         date: d._id,
-        amount: d.amount,
-        count: d.count
+        amount: Math.round(d.amount * netMultiplier),
+        count: d.count,
       })),
       revenueByService: revenueByService.map((s: any) => ({
         serviceId: s._id.toString(),
         serviceName: s.serviceName,
-        revenue: s.revenue,
-        count: s.count
+        revenue: Math.round(s.revenue * netMultiplier),
+        count: s.count,
       })),
       peakRevenueHour: peakHour,
       projectedMonthlyRevenue,
@@ -837,7 +809,8 @@ export const getBookingTrends = async (
         groupFormat = '%Y-%m-%d';
         break;
       case 'month':
-        groupFormat = '%Y-%W'; // Week number
+        // ISO 8601 year-week (%G-%V). %W is not valid in MongoDB $dateToString.
+        groupFormat = '%G-%V';
         sortOrder = 1;
         break;
       case 'quarter':
@@ -944,6 +917,18 @@ export interface RevenueOptimizationTip {
   potentialImpact: number; // Estimated revenue increase percentage
   difficulty: 'easy' | 'medium' | 'hard';
   actionItems: string[];
+  confidence: number;
+}
+
+function clampConfidence(value: number): number {
+  return Math.min(99, Math.max(55, Math.round(value)));
+}
+
+function sampleSizeBoost(totalBookings: number): number {
+  if (totalBookings >= 50) return 12;
+  if (totalBookings >= 20) return 8;
+  if (totalBookings >= 5) return 4;
+  return 0;
 }
 
 export const getRevenueOptimizationTips = async (
@@ -952,15 +937,18 @@ export const getRevenueOptimizationTips = async (
   const tips: RevenueOptimizationTip[] = [];
   const revenue = await getProviderRevenueMetrics(providerId, 'month');
   const performance = await getProviderPerformanceMetrics(providerId, 'month');
+  const sampleBoost = sampleSizeBoost(performance.totalBookings);
 
   // Pricing optimization
   if (revenue.averageBookingValue < 150) {
+    const pricingGap = Math.min(1, (150 - revenue.averageBookingValue) / 150);
     tips.push({
       category: 'pricing',
       title: 'Increase Average Order Value',
       description: 'Your average booking value is below the platform average. Consider introducing premium service tiers or bundled packages.',
       potentialImpact: 15,
       difficulty: 'medium',
+      confidence: clampConfidence(68 + pricingGap * 22 + sampleBoost),
       actionItems: [
         'Create premium versions of your popular services',
         'Offer package deals (e.g., "Book 3, get 10% off")',
@@ -978,6 +966,7 @@ export const getRevenueOptimizationTips = async (
       description: `Most of your revenue comes from ${revenue.peakRevenueHour}:00 - ${revenue.peakRevenueHour + 3}:00. Consider promoting off-peak availability.`,
       potentialImpact: 20,
       difficulty: 'easy',
+      confidence: clampConfidence(72 + Math.min(performance.totalBookings, 20) + sampleBoost),
       actionItems: [
         'Add incentives for morning (7-9 AM) bookings',
         'Create a "Happy Hour" discount for afternoon slots',
@@ -989,12 +978,14 @@ export const getRevenueOptimizationTips = async (
 
   // Efficiency optimization
   if (performance.completionRate < 80) {
+    const completionGap = Math.min(1, (80 - performance.completionRate) / 80);
     tips.push({
       category: 'efficiency',
       title: 'Improve Booking Completion',
       description: `${(100 - performance.completionRate).toFixed(0)}% of your bookings don\'t complete. Reducing this can significantly increase revenue.`,
       potentialImpact: 25,
       difficulty: 'medium',
+      confidence: clampConfidence(70 + completionGap * 20 + sampleBoost),
       actionItems: [
         'Send booking confirmations immediately',
         'Follow up with pending bookings within 1 hour',
@@ -1006,12 +997,14 @@ export const getRevenueOptimizationTips = async (
 
   // Retention optimization
   if (performance.repeatCustomerRate < 20) {
+    const retentionGap = Math.min(1, (20 - performance.repeatCustomerRate) / 20);
     tips.push({
       category: 'retention',
       title: 'Build Customer Loyalty',
       description: 'Only a small percentage of your customers return. Increasing retention is more cost-effective than acquiring new customers.',
       potentialImpact: 30,
       difficulty: 'medium',
+      confidence: clampConfidence(66 + retentionGap * 24 + sampleBoost),
       actionItems: [
         'Implement a loyalty points system',
         'Offer discounts to returning customers',
@@ -1030,6 +1023,7 @@ export const getRevenueOptimizationTips = async (
       description: 'Consider adding complementary services to attract more customers and increase booking frequency.',
       potentialImpact: 10,
       difficulty: 'hard',
+      confidence: clampConfidence(58 + sampleBoost),
       actionItems: [
         'Survey customers about services they want',
         'Research popular services in your category',

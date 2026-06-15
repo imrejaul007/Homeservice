@@ -321,37 +321,50 @@ export function useAnalytics(options: UseAnalyticsOptions = DEFAULT_OPTIONS) {
         step: stepNumber,
       };
 
+      const funnelPayload = {
+        ...bookingFunnelRef.current,
+        ...data,
+        funnelStep: stepNumber,
+        eventType: BOOKING_FUNNEL_EVENT_TYPES[step],
+        sessionId: analyticsService.getSessionId() ?? undefined,
+      };
+
       // Track the step
       switch (step) {
         case 'start':
-          analyticsService.trackBooking(BookingEvent.BOOKING_START, data);
+          analyticsService.trackBooking(BookingEvent.BOOKING_START, funnelPayload);
           break;
         case 'providerSelected':
-          analyticsService.trackBooking(BookingEvent.PROVIDER_SELECTED, data);
+          analyticsService.trackBooking(BookingEvent.PROVIDER_SELECTED, funnelPayload);
           break;
         case 'timeSelected':
-          analyticsService.trackBooking(BookingEvent.TIME_SELECTED, data);
+          analyticsService.trackBooking(BookingEvent.TIME_SELECTED, funnelPayload);
           break;
         case 'addressEntered':
-          analyticsService.trackBooking(BookingEvent.ADDRESS_ENTERED, data);
+          analyticsService.trackBooking(BookingEvent.ADDRESS_ENTERED, funnelPayload);
           break;
         case 'paymentStarted':
-          analyticsService.trackBooking(BookingEvent.PAYMENT_STARTED, data);
+          analyticsService.trackBooking(BookingEvent.PAYMENT_STARTED, funnelPayload);
           break;
         case 'paymentCompleted':
-          analyticsService.trackBooking(BookingEvent.PAYMENT_COMPLETED, data);
+          analyticsService.trackBooking(BookingEvent.PAYMENT_COMPLETED, funnelPayload);
           break;
         case 'bookingConfirmed':
-          analyticsService.trackBooking(BookingEvent.BOOKING_CONFIRMED, data);
+          analyticsService.trackBooking(BookingEvent.BOOKING_CONFIRMED, funnelPayload);
           break;
         case 'bookingCancelled':
-          analyticsService.trackBooking(BookingEvent.BOOKING_CANCELLED, data);
+          analyticsService.trackBooking(BookingEvent.BOOKING_CANCELLED, funnelPayload);
           break;
+      }
+
+      if (PROVIDER_FUNNEL_FLUSH_STEPS.has(step)) {
+        void analyticsService.flushQueue();
       }
 
       // Track funnel drop-off if step decreased
       if (stepNumber < previousStep && previousStep > 0) {
         analyticsService.trackBooking(BookingEvent.BOOKING_CANCELLED, {
+          ...funnelPayload,
           dropOffStep: previousStep,
           completedStep: stepNumber,
         });
@@ -489,6 +502,22 @@ const BOOKING_FUNNEL_STEPS = {
   bookingConfirmed: 7,
   bookingCancelled: 0,
 } as const;
+
+const BOOKING_FUNNEL_EVENT_TYPES: Record<keyof typeof BOOKING_FUNNEL_STEPS, string> = {
+  start: 'booking_start',
+  providerSelected: 'provider_selected',
+  timeSelected: 'time_selected',
+  addressEntered: 'address_entered',
+  paymentStarted: 'payment_started',
+  paymentCompleted: 'payment_completed',
+  bookingConfirmed: 'booking_confirmed',
+  bookingCancelled: 'booking_cancelled',
+};
+
+const PROVIDER_FUNNEL_FLUSH_STEPS = new Set<keyof typeof BOOKING_FUNNEL_STEPS>([
+  'paymentCompleted',
+  'bookingConfirmed',
+]);
 
 type BookingFunnelStep = keyof typeof BOOKING_FUNNEL_STEPS;
 

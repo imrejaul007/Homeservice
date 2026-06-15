@@ -13,6 +13,7 @@ import { useAuthStore } from '../stores/authStore';
 import { CATEGORY_IMAGES, SUBCATEGORY_IMAGES } from '../constants/images';
 import { PageErrorBoundary } from '../components/common/PageErrorBoundary';
 import { ShareModal } from '../components/common/ShareModal';
+import { analyticsService } from '../lib/AnalyticsService';
 
 interface ServiceDetail {
   _id: string;
@@ -119,7 +120,15 @@ const ServiceDetailPage: React.FC = () => {
       setError(null);
       const response = await searchApi.getServiceById(id);
       if (response.success && response.data.service) {
-        setService(response.data.service);
+        const loaded = response.data.service;
+        setService(loaded);
+        if (loaded.provider?._id) {
+          analyticsService.trackProviderFunnelEvent('service.service_viewed', {
+            providerId: loaded.provider._id,
+            serviceId: loaded._id,
+            serviceName: loaded.name,
+          });
+        }
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to load service';
@@ -134,6 +143,13 @@ const ServiceDetailPage: React.FC = () => {
     if (!service || loading) {
       toast.error('Please wait for service to load');
       return;
+    }
+    if (service.provider?._id) {
+      analyticsService.trackProviderFunnelEvent('booking.book_now_clicked', {
+        providerId: service.provider._id,
+        serviceId: service._id,
+        serviceName: service.name,
+      });
     }
     navigate(`/book/${id}`, {
       state: {

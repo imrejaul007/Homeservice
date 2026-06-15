@@ -1,5 +1,11 @@
 import { api } from './api';
 import { AxiosError } from 'axios';
+import type { AITip, TipCategory, TipPriority } from '../components/provider/AITipsAlerts';
+import {
+  getPreventionActionLabel,
+  getPreventionTipActionRoute,
+  getRevenueTipActionRoute,
+} from '../utils/aiTipRoutes';
 
 /**
  * Retry configuration
@@ -164,6 +170,13 @@ export interface RevenueOptimizationTip {
   potentialImpact: number;
   difficulty: 'easy' | 'medium' | 'hard';
   actionItems: string[];
+  confidence: number;
+}
+
+export interface InsightTipPreferences {
+  dismissed: string[];
+  read: string[];
+  updatedAt?: string;
 }
 
 // Schedule Optimization Types
@@ -311,6 +324,7 @@ export interface PreventionRecommendation {
   targetBookings: string[];
   message: string;
   estimatedImpact: number;
+  confidence: number;
 }
 
 export interface ScheduleConflict {
@@ -371,8 +385,7 @@ class ProviderInsightsApiService {
     const response = await api.get(`${this.baseUrl}/insights`, {
       params: { period: normalizedPeriod },
     });
-    // FIX: Backend returns ProviderInsightsData directly in response.data.data
-    return response.data.data;
+    return response.data.data.insights;
   }
 
   async getPerformance(period: Period = 'month'): Promise<PerformanceMetrics> {
@@ -418,6 +431,40 @@ class ProviderInsightsApiService {
   async getOptimizationTips(): Promise<RevenueOptimizationTip[]> {
     const response = await api.get(`${this.baseUrl}/insights/optimization-tips`);
     return response.data.data.tips;
+  }
+
+  async getInsightPreferences(): Promise<InsightTipPreferences> {
+    const response = await api.get(`${this.baseUrl}/insights/preferences`);
+    return response.data.data.preferences;
+  }
+
+  async updateInsightPreferences(updates: {
+    dismissTipId?: string;
+    readTipId?: string;
+    dismissed?: string[];
+    read?: string[];
+  }): Promise<InsightTipPreferences> {
+    const response = await api.patch(`${this.baseUrl}/insights/preferences`, updates);
+    return response.data.data.preferences;
+  }
+
+  async syncInsightPreferences(payload: {
+    dismissed?: string[];
+    read?: string[];
+  }): Promise<InsightTipPreferences> {
+    const response = await api.post(`${this.baseUrl}/insights/preferences/sync`, payload);
+    return response.data.data.preferences;
+  }
+
+  async getAITips(): Promise<{
+    tips: AITip[];
+    preferences: InsightTipPreferences;
+  }> {
+    const response = await api.get(`${this.baseUrl}/insights/ai-tips`);
+    return {
+      tips: response.data.data.tips || [],
+      preferences: response.data.data.preferences || { dismissed: [], read: [] },
+    };
   }
 
   // ============================================
@@ -583,6 +630,111 @@ class ProviderInsightsApiService {
       '☆'.repeat(emptyStars)
     );
   }
+
+  // ============================================
+  // DATA TRANSFORMATION - Backend to Frontend AITip
+  // ============================================
+
+  // Transform RevenueOptimizationTip to AITip (stable id: rev-{category})
+  transformRevenueTipToAITip(tip: RevenueOptimizationTip): AITip {
+    const priorityMap: Record<RevenueOptimizationTip['difficulty'], TipPriority> = {
+      easy: 'low',
+      medium: 'medium',
+      hard: 'high',
+    };
+    const categoryMap: Record<RevenueOptimizationTip['category'], TipCategory> = {
+      pricing: 'revenue',
+      volume: 'bookings',
+      efficiency: 'efficiency',
+      retention: 'rating',
+    };
+    return {
+      id: `rev-${tip.category}`,
+      title: tip.title,
+      description: tip.description,
+      priority: priorityMap[tip.difficulty] || 'medium',
+      category: categoryMap[tip.category] || 'general',
+      potentialImpact: `+${tip.potentialImpact}% revenue`,
+      actionLabel: tip.actionItems[0] || 'Take Action',
+      actionRoute: getRevenueTipActionRoute(tip.category),
+      confidence: tip.confidence ?? 70,
+      isRead: false,
+      isDismissed: false,
+    };
+  }
+
+  // Transform PreventionRecommendation to AITip (stable id: prev-{type})
+  transformPreventionToAITip(tip: PreventionRecommendation): AITip {
+    const titles: Record<PreventionRecommendation['type'], string> = {
+      reminder: 'Send Booking Reminders',
+      confirmation: 'Request Booking Confirmation',
+      deposit: 'Require Deposit for Risky Bookings',
+      follow_up: 'Follow Up with At-Risk Customers',
+    };
+    return {
+      id: `prev-${tip.type}`,
+      title: titles[tip.type] || 'Improve Booking Management',
+      description: tip.message,
+      priority: tip.priority,
+      category: 'bookings',
+      potentialImpact: `-${tip.estimatedImpact}% cancellations`,
+      actionLabel: getPreventionActionLabel(tip.type),
+      actionRoute: getPreventionTipActionRoute(tip.type),
+      confidence: tip.confidence ?? 68,
+      isRead: false,
+      isDismissed: false,
+    };
+  }
+
+  // Combined method - prefer unified server endpoint (confidence + preferences)
+  async getAllTipsAsAITips(_providerId: string): Promise<{
+    tips: AITip[];
+    preferences?: InsightTipPreferences;
+    isLoading: boolean;
+    error: string | null;
+  }> {
+    try {
+      const { tips, preferences } = await this.getAITips();
+      return { tips, preferences, isLoading: false, error: null };
+    } catch (primaryError) {
+      console.warn('[AI Tips] Unified endpoint failed, using fallback:', primaryError);
+
+      const [optimizationResult, preventionResult] = await Promise.allSettled([
+        this.getOptimizationTips(),
+        this.getPreventionRecommendations(),
+      ]);
+
+      const tips: AITip[] = [];
+      const failures: string[] = [];
+
+      if (optimizationResult.status === 'fulfilled' && Array.isArray(optimizationResult.value)) {
+        optimizationResult.value.forEach((tip) => tips.push(this.transformRevenueTipToAITip(tip)));
+      } else {
+        failures.push('optimization tips');
+      }
+
+      if (preventionResult.status === 'fulfilled' && Array.isArray(preventionResult.value)) {
+        preventionResult.value.forEach((tip) => tips.push(this.transformPreventionToAITip(tip)));
+      } else {
+        failures.push('prevention recommendations');
+      }
+
+      const priorityOrder: Record<TipPriority, number> = { high: 0, medium: 1, low: 2 };
+      tips.sort((a, b) => priorityOrder[a.priority] - priorityOrder[b.priority]);
+
+      return {
+        tips,
+        isLoading: false,
+        error:
+          tips.length === 0 && failures.length > 0
+            ? 'Failed to load recommendations'
+            : failures.length > 0
+              ? `Some recommendations could not be loaded (${failures.join(', ')})`
+              : null,
+      };
+    }
+  }
+
 }
 
 export const providerInsightsApi = new ProviderInsightsApiService();

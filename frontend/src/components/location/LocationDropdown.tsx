@@ -54,15 +54,11 @@ const LocationDropdown: React.FC<LocationDropdownProps> = ({ variant = 'desktop'
     return (
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className={`flex items-center gap-1 px-2 py-1 text-sm transition-colors duration-200 ${
-          overlay
-            ? 'text-white/90 hover:text-white [text-shadow:0_1px_3px_rgba(0,0,0,0.4)]'
-            : 'text-nilin-warmGray hover:text-nilin-charcoal'
-        }`}
+        className="flex items-center gap-1 px-3 py-2 text-sm font-medium transition-colors duration-200 text-nilin-charcoal hover:text-nilin-coral"
       >
-        <MapPin className="h-4 w-4" />
+        <MapPin className="h-5 w-5" />
         <span className="text-xs font-medium">{displayLocation}</span>
-        <ChevronDown className={`h-3 w-3 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+        <ChevronDown className={`h-4 w-4 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
       </button>
     );
   }
@@ -71,15 +67,11 @@ const LocationDropdown: React.FC<LocationDropdownProps> = ({ variant = 'desktop'
     <div className="relative" ref={dropdownRef}>
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className={`flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-nilin transition-all duration-200 ${
-          overlay
-            ? 'text-white/95 hover:text-white hover:bg-white/15 [text-shadow:0_1px_3px_rgba(0,0,0,0.4)]'
-            : 'text-nilin-warmGray hover:text-nilin-charcoal hover:bg-nilin-blush/50 shadow-nilin-warm hover:shadow-lg'
-        }`}
+        className="flex items-center gap-2 px-4 py-2.5 text-base font-semibold rounded-full transition-all duration-200 text-nilin-charcoal hover:text-nilin-coral hover:bg-white/80 hover:-translate-y-0.5 hover:shadow-md"
       >
-        <MapPin className="h-4 w-4" />
+        <MapPin className="h-5 w-5" />
         <span>{displayLocation}</span>
-        <ChevronDown className={`h-3 w-3 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+        <ChevronDown className={`h-4 w-4 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
       </button>
 
       {isOpen && (

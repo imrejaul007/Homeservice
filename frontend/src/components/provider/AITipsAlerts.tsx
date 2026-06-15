@@ -3,6 +3,7 @@
  * Provider Dashboard Component
  */
 import React, { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { cn } from '../../lib/utils';
 import {
   Lightbulb,
@@ -20,7 +21,6 @@ import {
   X,
   Sparkles,
   Bell,
-  BellOff,
 } from 'lucide-react';
 
 // =============================================================================
@@ -45,6 +45,8 @@ export interface AITip {
   potentialImpact?: string;
   /** Suggested action */
   actionLabel?: string;
+  /** Deep link when the action is taken */
+  actionRoute?: string;
   /** Icon to display */
   icon?: React.ElementType;
   /** Whether tip has been read */
@@ -70,6 +72,8 @@ export interface AITipsAlertsProps {
   onDismiss?: (tipId: string) => void;
   /** Callback when tip is marked as read */
   onMarkAsRead?: (tipId: string) => void;
+  /** Route for the "view all" link */
+  viewAllHref?: string;
   /** Custom className */
   className?: string;
 }
@@ -165,8 +169,10 @@ const TipCard: React.FC<TipCardProps> = ({ tip, onAction, onDismiss }) => {
           </div>
         </div>
         <button
+          type="button"
           onClick={onDismiss}
           className="p-1 text-nilin-lightGray hover:text-nilin-charcoal hover:bg-white/50 rounded-lg transition-colors"
+          aria-label="Dismiss insight"
         >
           <X className="w-4 h-4" />
         </button>
@@ -198,6 +204,7 @@ const TipCard: React.FC<TipCardProps> = ({ tip, onAction, onDismiss }) => {
       {/* Action Button */}
       {tip.actionLabel && (
         <button
+          type="button"
           onClick={onAction}
           className="w-full py-2.5 rounded-lg bg-white text-nilin-charcoal font-medium text-sm border border-nilin-border hover:bg-nilin-blush transition-colors flex items-center justify-center gap-2"
         >
@@ -293,9 +300,9 @@ export const AITipsAlerts: React.FC<AITipsAlertsProps> = ({
   onTipAction,
   onDismiss,
   onMarkAsRead,
+  viewAllHref = '/provider/analytics?tab=insights',
   className,
 }) => {
-  const [soundsEnabled, setSoundsEnabled] = useState(true);
   const [categoryFilter, setCategoryFilter] = useState<TipCategory | 'all'>('all');
 
   const activeTips = tips.filter((t) => !t.isDismissed);
@@ -328,24 +335,9 @@ export const AITipsAlerts: React.FC<AITipsAlertsProps> = ({
     onTipAction?.(tip);
   };
 
-  if (isLoading) {
-    return (
-      <div className={cn('bg-white rounded-2xl p-6 shadow-nilin-sm', className)}>
-        <div className="animate-pulse">
-          <div className="h-6 w-48 bg-nilin-muted rounded mb-6" />
-          <div className="space-y-4">
-            {[...Array(3)].map((_, i) => (
-              <div key={i} className="h-32 bg-nilin-muted rounded-xl" />
-            ))}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div className={cn('bg-white rounded-2xl p-6 shadow-nilin-sm', className)}>
-      {/* Header */}
+    <div className={cn('bg-white rounded-2xl p-6 shadow-nilin-sm min-h-[12rem]', className)}>
+      {/* Header — always rendered to avoid layout shift */}
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center">
@@ -361,11 +353,12 @@ export const AITipsAlerts: React.FC<AITipsAlertsProps> = ({
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {/* Category Filter */}
           <select
             value={categoryFilter}
             onChange={(e) => setCategoryFilter(e.target.value as typeof categoryFilter)}
-            className="text-sm border border-nilin-border rounded-lg px-3 py-1.5 text-nilin-charcoal focus:outline-none focus:ring-2 focus:ring-nilin-coral/30"
+            disabled={isLoading}
+            className="text-sm border border-nilin-border rounded-lg px-3 py-1.5 text-nilin-charcoal focus:outline-none focus:ring-2 focus:ring-nilin-coral/30 disabled:opacity-60"
+            aria-label="Filter insights by category"
           >
             <option value="all">All Categories</option>
             <option value="revenue">Revenue</option>
@@ -374,23 +367,22 @@ export const AITipsAlerts: React.FC<AITipsAlertsProps> = ({
             <option value="bookings">Bookings</option>
             <option value="general">General</option>
           </select>
-
-          {/* Sound Toggle */}
-          <button
-            onClick={() => setSoundsEnabled(!soundsEnabled)}
-            className={cn(
-              'p-2 rounded-lg transition-colors',
-              soundsEnabled
-                ? 'bg-nilin-coral/10 text-nilin-coral'
-                : 'bg-nilin-muted text-nilin-lightGray'
-            )}
-            title={soundsEnabled ? 'Notifications on' : 'Notifications off'}
+          <Link
+            to={viewAllHref}
+            className="text-sm text-nilin-coral hover:text-nilin-rose font-medium whitespace-nowrap"
           >
-            {soundsEnabled ? <Bell className="w-4 h-4" /> : <BellOff className="w-4 h-4" />}
-          </button>
+            Full insights
+          </Link>
         </div>
       </div>
 
+      {isLoading ? (
+        <div className="animate-pulse space-y-3" aria-hidden="true">
+          <div className="h-16 bg-nilin-muted rounded-xl" />
+          <div className="h-16 bg-nilin-muted rounded-xl" />
+        </div>
+      ) : (
+        <>
       {/* Stats Summary */}
       {activeTips.length > 0 && <StatsSummary tips={activeTips} unreadCount={unreadCount} />}
 
@@ -413,10 +405,15 @@ export const AITipsAlerts: React.FC<AITipsAlertsProps> = ({
       {/* Show More */}
       {filteredTips.length > maxVisible && (
         <div className="mt-6 text-center">
-          <button className="text-nilin-coral hover:text-nilin-rose text-sm font-medium transition-colors">
+          <Link
+            to={viewAllHref}
+            className="text-nilin-coral hover:text-nilin-rose text-sm font-medium transition-colors"
+          >
             View all {filteredTips.length} insights
-          </button>
+          </Link>
         </div>
+      )}
+        </>
       )}
     </div>
   );

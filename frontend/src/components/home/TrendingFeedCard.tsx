@@ -1,12 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ArrowRight, Star, TrendingUp, Sparkles } from 'lucide-react';
+import { ArrowRight, Star, TrendingUp, Sparkles, Play } from 'lucide-react';
 import type { TrendingFeedItem } from '../../types/trendingFeed';
 import { CATEGORY_IMAGES } from '../../constants/images';
 import analytics from '../../services/product/AnalyticsService';
+import { cn } from '@/lib/utils';
 
 interface TrendingFeedCardProps {
   item: TrendingFeedItem;
   onClick: (item: TrendingFeedItem) => void;
+  isHovered?: boolean;
 }
 
 function optimizeImageUrl(url: string): string {
@@ -39,11 +41,11 @@ function getTypeBadge(item: TrendingFeedItem): string {
   }
 }
 
-const TrendingFeedCard: React.FC<TrendingFeedCardProps> = ({ item, onClick }) => {
+const TrendingFeedCard: React.FC<TrendingFeedCardProps> = ({ item, onClick, isHovered = false }) => {
   const [imageSrc, setImageSrc] = useState(
     optimizeImageUrl(item.imageUrl) || getFallbackImage(item.category)
   );
-  const cardRef = useRef<HTMLButtonElement>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
   const hasTrackedImpression = useRef(false);
 
   useEffect(() => {
@@ -82,59 +84,137 @@ const TrendingFeedCard: React.FC<TrendingFeedCardProps> = ({ item, onClick }) =>
 
   const metricIcon =
     item.metric.kind === 'rating' ? (
-      <Star className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />
+      <Star className="w-4 h-4 text-amber-400 fill-amber-400" />
     ) : item.metric.kind === 'bookings' || item.metric.kind === 'trend' ? (
-      <TrendingUp className="w-3.5 h-3.5 text-nilin-coral" />
+      <TrendingUp className="w-4 h-4 text-nilin-coral" />
     ) : (
-      <Sparkles className="w-3.5 h-3.5 text-nilin-coral" />
+      <Sparkles className="w-4 h-4 text-nilin-coral" />
     );
 
+  // Fixed dimensions - no intermediate size
+  const baseWidth = 400;
+  const baseHeight = 530;
+  const hoverWidth = 430;
+  const hoverHeight = 570;
+
   return (
-    <button
+    <div
       ref={cardRef}
-      type="button"
-      data-carousel-card
       onClick={handleClick}
-      className="flex-shrink-0 group text-left"
+      className={cn(
+        'relative flex-shrink-0 cursor-pointer transition-all duration-500 ease-out',
+        isHovered ? 'z-30' : 'z-20'
+      )}
+      style={{
+        width: isHovered ? `${hoverWidth}px` : `${baseWidth}px`,
+        height: isHovered ? `${hoverHeight}px` : `${baseHeight}px`,
+      }}
       aria-label={`${item.title} - ${item.category}`}
     >
-      <div className="relative w-[280px] md:w-[320px] aspect-[4/5] rounded-3xl overflow-hidden shadow-xl card-3d">
+      {/* 3D Card with smooth corners */}
+      <div
+        className={cn(
+          'relative w-full h-full transition-all duration-500 ease-out',
+          isHovered
+            ? 'rounded-3xl shadow-2xl shadow-nilin-charcoal/30'
+            : 'rounded-3xl shadow-xl shadow-nilin-charcoal/15',
+          // Apply 3D transform at the same time as size
+          isHovered && 'hover:shadow-2xl'
+        )}
+        style={{
+          transform: isHovered
+            ? 'perspective(1000px) rotateY(-4deg) rotateX(3deg) scale(1.02)'
+            : 'perspective(1000px) rotateY(0deg) rotateX(0deg) scale(1)',
+          transition: 'all 0.5s cubic-bezier(0.4, 0, 0.2, 1)',
+        }}
+      >
+        {/* Image */}
         <img
           src={imageSrc}
           alt={`${item.title} - ${item.category}`}
-          width={320}
-          height={400}
+          width={hoverWidth}
+          height={hoverHeight}
           loading="lazy"
-          className="w-full h-full object-cover transition-transform duration-500 motion-reduce:transition-none group-hover:scale-110 motion-reduce:group-hover:scale-100"
+          className={cn(
+            'w-full h-full object-cover transition-transform duration-700 ease-out rounded-3xl',
+            'group-hover:scale-110',
+            isHovered && 'scale-105'
+          )}
           onError={() => setImageSrc(getFallbackImage(item.category))}
         />
 
-        <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
+        {/* Gradient Overlays */}
+        <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent rounded-3xl" />
+        <div className="absolute inset-0 bg-gradient-to-b from-black/20 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500 rounded-3xl" />
 
-        <div className="absolute top-4 left-4">
-          <span className="glass rounded-full px-4 py-2 text-sm font-medium text-nilin-charcoal backdrop-blur-md">
+        {/* Badge - Top Left */}
+        <div className="absolute top-6 left-6">
+          <span className={cn(
+            'rounded-full px-5 py-3 text-sm font-semibold backdrop-blur-md transition-all duration-300',
+            'bg-white/95 text-nilin-charcoal shadow-lg'
+          )}>
             {getTypeBadge(item)}
           </span>
         </div>
 
-        <div className="absolute top-4 right-4">
-          <span className="glass rounded-full px-3 py-2 flex items-center gap-1.5 backdrop-blur-md">
+        {/* Metric Badge - Top Right */}
+        <div className="absolute top-6 right-6">
+          <span className={cn(
+            'rounded-full px-4 py-3 flex items-center gap-2 backdrop-blur-md transition-all duration-300',
+            'bg-white/95 text-nilin-charcoal shadow-lg'
+          )}>
             {metricIcon}
-            <span className="text-sm font-semibold text-nilin-charcoal">{item.metric.value}</span>
+            <span className="text-sm font-bold">{item.metric.value}</span>
           </span>
         </div>
 
-        <div className="absolute bottom-0 left-0 right-0 p-6">
-          <h3 className="text-xl font-medium text-white mb-1">{item.title}</h3>
-          <p className="text-sm text-white/80 mb-4 line-clamp-2">{item.subtitle}</p>
+        {/* Video Play Indicator */}
+        {item.videoUrl && (
+          <div className={cn(
+            'absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 transition-all duration-300',
+            'opacity-0 group-hover:opacity-100',
+            isHovered && 'opacity-100'
+          )}>
+            <div className="w-24 h-24 rounded-full bg-white/40 backdrop-blur-md flex items-center justify-center shadow-2xl">
+              <Play className="w-12 h-12 text-white fill-white ml-2" />
+            </div>
+          </div>
+        )}
 
-          <div className="flex items-center gap-2 text-white/0 group-hover:text-white transition-all duration-300">
-            <span className="text-sm font-medium">Explore</span>
-            <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-2" />
+        {/* Content - Bottom */}
+        <div className="absolute bottom-0 left-0 right-0 p-8">
+          {/* Title */}
+          <h3 className="text-2xl font-bold text-white mb-2 leading-tight">
+            {item.title}
+          </h3>
+
+          {/* Subtitle */}
+          <p className="text-base text-white/80 mb-6 line-clamp-2">
+            {item.subtitle}
+          </p>
+
+          {/* Explore CTA - Bottom Right */}
+          <div className={cn(
+            'flex items-center justify-end gap-2 text-white transition-all duration-500 ease-out',
+            'translate-x-8 opacity-0 group-hover:translate-x-0 group-hover:opacity-100',
+            isHovered && 'translate-x-0 opacity-100'
+          )}>
+            <span className="text-sm font-semibold">Explore</span>
+            <ArrowRight className="w-5 h-5 transition-transform group-hover:translate-x-2" />
           </div>
         </div>
+
+        {/* Glow Effect on Hover */}
+        {isHovered && (
+          <div className="absolute inset-0 rounded-3xl bg-gradient-to-t from-nilin-coral/15 via-transparent to-transparent pointer-events-none" />
+        )}
+
+        {/* 3D Border Effect */}
+        {isHovered && (
+          <div className="absolute inset-0 rounded-3xl border-2 border-nilin-coral/50 pointer-events-none" />
+        )}
       </div>
-    </button>
+    </div>
   );
 };
 

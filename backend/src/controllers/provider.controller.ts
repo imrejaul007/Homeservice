@@ -21,6 +21,17 @@ import Review, { PUBLIC_REVIEW_QUERY } from '../models/review.model';
 import { getCommissionRate, DEFAULT_PLATFORM_FEE_CONFIG } from '../services/settlement.service';
 import { deleteFromCloudinary } from '../utils/cloudinary';
 
+function buildBookingCityFilter(city?: string): Record<string, unknown> {
+  if (!city || city.toLowerCase() === 'all') return {};
+  const pattern = new RegExp(`^${escapeRegex(city)}$`, 'i');
+  return {
+    $or: [
+      { 'location.address.city': pattern },
+      { 'location.address.state': pattern },
+    ],
+  };
+}
+
 function estimateNetFromGross(gross: number): number {
   if (!gross) return 0;
   const commissionRate = getCommissionRate(gross);
@@ -950,7 +961,8 @@ export const deleteService = asyncHandler(async (req: Request, res: Response) =>
 /**
  * Restore a soft-deleted service
  * POST /api/provider/services/:id/restore
- * FIX: New endpoint to restore soft-deleted services
+ * SECURITY FIX: Uses verifyServiceOwnership helper to prevent IDOR
+ * Admins can restore any service, providers can only restore their own
  */
 export const restoreService = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
@@ -958,15 +970,11 @@ export const restoreService = asyncHandler(async (req: Request, res: Response) =
 
   try {
     // SECURITY: Use reusable helper for ownership verification
-    // Note: verifyServiceOwnership doesn't check isDeleted, so we need to verify ownership first
-    const service = await Service.findOne({
-      _id: id,
-      providerId: (req.user as IUser)._id.toString(),
-      isDeleted: true // Must be deleted to restore
-    }).lean();
+    const { service } = await verifyServiceOwnership(id, user);
 
-    if (!service) {
-      throw new ApiError(404, 'Deleted service not found or access denied');
+    // Must be deleted to restore
+    if (!service.isDeleted) {
+      throw new ApiError(400, 'Service is not deleted');
     }
 
     // Restore the service
@@ -1050,6 +1058,45 @@ export const getDeletedServices = asyncHandler(async (req: Request, res: Respons
       }
     }
   });
+});
+
+/**
+ * Permanently delete a soft-deleted service
+ * DELETE /api/provider/services/:id/permanent
+ * Only allows permanent deletion of already soft-deleted services
+ */
+export const permanentDeleteService = asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const user = req.user as IUser;
+
+  try {
+    // Use verifyServiceOwnership helper for ownership verification
+    const { service } = await verifyServiceOwnership(id, user);
+
+    // Must be already deleted to permanently delete
+    if (!service.isDeleted) {
+      throw new ApiError(400, 'Service must be in trash before permanent deletion');
+    }
+
+    // Permanently remove the service
+    await Service.findByIdAndDelete(id);
+
+    logger.info('Service permanently deleted', {
+      context: 'ProviderController',
+      action: 'SERVICE_PERMANENTLY_DELETED',
+      serviceId: id,
+      serviceName: service.name,
+      userId: user._id.toString(),
+    });
+
+    res.json({
+      success: true,
+      message: 'Service permanently deleted'
+    });
+  } catch (error: any) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, 'Failed to permanently delete service', error.message);
+  }
 });
 
 /**
@@ -1179,11 +1226,14 @@ export const getProviderInsightsAnalytics = asyncHandler(
     const period = (['7d', '30d', '90d'].includes(periodParam)
       ? periodParam
       : '30d') as '7d' | '30d' | '90d';
+    const revenueParam = String(req.query.revenue || 'net');
+    const revenue = revenueParam === 'gross' ? 'gross' : 'net';
+    const city = typeof req.query.city === 'string' ? req.query.city : undefined;
 
     const { getProviderInsightsAnalytics: loadInsights } = await import(
       '../services/providerInsightsAnalytics.service'
     );
-    const analytics = await loadInsights(providerId, period);
+    const analytics = await loadInsights(providerId, period, { revenue, city });
 
     res.json({
       success: true,
@@ -1199,10 +1249,13 @@ export const getProviderInsightsAnalytics = asyncHandler(
 export const getOverviewAnalytics = asyncHandler(async (req: Request, res: Response) => {
   try {
     const providerId = (req.user as IUser)._id.toString();
+    const cityParam = typeof req.query.city === 'string' ? req.query.city.trim() : '';
+    const cityFilter = buildBookingCityFilter(cityParam);
 
-    // Get all provider services
+    // Get all provider services (exclude soft-deleted)
     const services = await Service.find({
-      providerId
+      providerId,
+      isDeleted: { $ne: true }
     }).lean();
 
     // Calculate overview statistics from services
@@ -1231,14 +1284,28 @@ export const getOverviewAnalytics = asyncHandler(async (req: Request, res: Respo
         $match: {
           providerId: new mongoose.Types.ObjectId(providerId),
           status: 'completed',
+          'metadata.packageBookingId': { $exists: false },
+          ...cityFilter,
         },
       },
-      { $group: { _id: '$serviceId', count: { $sum: 1 } } },
+      {
+        $group: {
+          _id: '$serviceId',
+          count: { $sum: 1 },
+          revenue: { $sum: '$pricing.totalAmount' },
+        },
+      },
     ]);
     const bookingCountByServiceId = new Map<string, number>(
       completedBookingCounts.map((row: { _id: mongoose.Types.ObjectId; count: number }) => [
         row._id.toString(),
         row.count,
+      ])
+    );
+    const revenueByServiceId = new Map<string, number>(
+      completedBookingCounts.map((row: { _id: mongoose.Types.ObjectId; revenue: number }) => [
+        row._id.toString(),
+        row.revenue || 0,
       ])
     );
     const totalBookings = completedBookingCounts.reduce(
@@ -1257,10 +1324,17 @@ export const getOverviewAnalytics = asyncHandler(async (req: Request, res: Respo
     const endOfToday = new Date(startOfToday.getTime() + 24 * 60 * 60 * 1000);
     const startOfWeek = new Date(startOfToday.getTime() - 7 * 24 * 60 * 60 * 1000);
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
 
     // Use aggregation to compute booking stats in a single query
     const bookingStats = await Booking.aggregate([
-      { $match: { providerId: new mongoose.Types.ObjectId(providerId) } },
+      {
+        $match: {
+          providerId: new mongoose.Types.ObjectId(providerId),
+          'metadata.packageBookingId': { $exists: false },
+          ...cityFilter,
+        },
+      },
       {
         $facet: {
           // Pending requests count
@@ -1321,7 +1395,30 @@ export const getOverviewAnalytics = asyncHandler(async (req: Request, res: Respo
                 avgBookingValue: { $avg: '$pricing.totalAmount' }
               }
             }
-          ]
+          ],
+          completedLastMonth: [
+            {
+              $match: {
+                status: 'completed',
+                completedAt: { $gte: startOfLastMonth, $lt: startOfMonth },
+              },
+            },
+            { $count: 'count' },
+          ],
+          revenueLastMonth: [
+            {
+              $match: {
+                status: 'completed',
+                completedAt: { $gte: startOfLastMonth, $lt: startOfMonth },
+              },
+            },
+            {
+              $group: {
+                _id: null,
+                totalRevenue: { $sum: '$pricing.totalAmount' },
+              },
+            },
+          ],
         }
       }
     ]);
@@ -1334,6 +1431,13 @@ export const getOverviewAnalytics = asyncHandler(async (req: Request, res: Respo
     const newBookings = stats.newBookingsCount?.[0]?.count || 0;
     const monthlyRevenue = stats.monthlyRevenue?.[0]?.totalRevenue || 0;
     const avgBookingValue = stats.monthlyRevenue?.[0]?.avgBookingValue || 0;
+    const completedLastMonth = stats.completedLastMonth?.[0]?.count || 0;
+    const revenueLastMonth = stats.revenueLastMonth?.[0]?.totalRevenue || 0;
+
+    const percentChange = (current: number, previous: number): number | null => {
+      if (!previous || previous === 0) return null;
+      return Math.round(((current - previous) / previous) * 100);
+    };
 
     // Create status map for easy lookup
     const statusMap = new Map<string, number>();
@@ -1352,6 +1456,7 @@ export const getOverviewAnalytics = asyncHandler(async (req: Request, res: Respo
         views: service.searchMetadata.searchCount,
         clicks: service.searchMetadata.clickCount,
         bookings: bookingCountByServiceId.get(service._id.toString()) ?? 0,
+        revenue: revenueByServiceId.get(service._id.toString()) ?? 0,
         rating: service.rating.average,
         popularityScore: service.searchMetadata.popularityScore
       }));
@@ -1366,6 +1471,43 @@ export const getOverviewAnalytics = asyncHandler(async (req: Request, res: Respo
       .lean();
 
     const allCategoryNames = allCategories.map(c => c.name);
+
+    const categoryBookingStats = await Booking.aggregate([
+      {
+        $match: {
+          providerId: new mongoose.Types.ObjectId(providerId),
+          status: 'completed',
+          'metadata.packageBookingId': { $exists: false },
+          ...cityFilter,
+        },
+      },
+      {
+        $lookup: {
+          from: 'services',
+          localField: 'serviceId',
+          foreignField: '_id',
+          as: 'serviceDoc',
+        },
+      },
+      { $unwind: { path: '$serviceDoc', preserveNullAndEmptyArrays: true } },
+      {
+        $group: {
+          _id: {
+            $ifNull: ['$serviceDoc.category', '$metadata.packageCategory', 'Other'],
+          },
+          bookingCount: { $sum: 1 },
+        },
+      },
+      { $sort: { bookingCount: -1 } },
+      { $limit: 8 },
+      {
+        $project: {
+          _id: 0,
+          name: '$_id',
+          bookingCount: 1,
+        },
+      },
+    ]);
 
     const providerProfileDoc = await ProviderProfile.findOne({ userId: providerId })
       .select('analytics.customerMetrics reviewsData')
@@ -1424,7 +1566,12 @@ export const getOverviewAnalytics = asyncHandler(async (req: Request, res: Respo
       },
       categories: providerCategories,
       allCategories: allCategoryNames,
-      topServices
+      categoryStats: categoryBookingStats,
+      topServices,
+      trendStats: {
+        earningsChangePercent: percentChange(monthlyRevenue, revenueLastMonth),
+        bookingsChangePercent: percentChange(completedThisMonth, completedLastMonth),
+      },
     };
 
     res.json({
@@ -2005,30 +2152,24 @@ function computeApprovedReviewStats(reviews: Array<{ rating: number }>) {
 async function transformProviderReviews(reviews: any[]) {
   const bookingIds = [...new Set(reviews.map((r) => r.bookingId?.toString()).filter(Boolean))];
 
-  // FIX: Use Promise.all for truly parallel fetches instead of sequential queries
-  const fetchBookings = bookingIds.length > 0
-    ? Booking.find({ _id: { $in: bookingIds } })
+  // Fetch bookings once
+  const bookings = bookingIds.length > 0
+    ? await Booking.find({ _id: { $in: bookingIds } })
         .select('serviceId')
         .lean()
-    : Promise.resolve([]);
+    : [];
 
-  // Start fetching bookings, then extract serviceIds and fetch services in parallel
-  const bookingsPromise = fetchBookings;
+  // Extract serviceIds from bookings
+  const serviceIds = [
+    ...new Set(bookings.map((b: { serviceId?: { toString: () => string } }) => b.serviceId?.toString()).filter(Boolean)),
+  ];
 
-  // Chain the service fetch to happen in parallel with bookings
-  const servicesPromise = fetchBookings.then(bookings => {
-    const serviceIds = [
-      ...new Set(bookings.map((b: { serviceId?: { toString: () => string } }) => b.serviceId?.toString()).filter(Boolean)),
-    ];
-    return serviceIds.length > 0
-      ? Service.find({ _id: { $in: serviceIds } })
-          .select('name')
-          .lean()
-      : [];
-  });
-
-  // Execute both fetches in parallel
-  const [bookings, services] = await Promise.all([bookingsPromise, servicesPromise]);
+  // Fetch services
+  const services = serviceIds.length > 0
+    ? await Service.find({ _id: { $in: serviceIds } })
+        .select('name')
+        .lean()
+    : [];
 
   const bookingServiceMap = new Map(
     bookings.map((b: { _id: { toString: () => string }; serviceId?: { toString: () => string } }) => [b._id.toString(), b.serviceId?.toString()])
@@ -2100,6 +2241,7 @@ export const getProviderReviews = asyncHandler(async (req: Request, res: Respons
     .lean();
 
   // Use aggregation pipeline to compute stats in a single query (replaces inefficient Review.find().select('rating'))
+  // Use same criteria as PUBLIC_REVIEW_QUERY for consistency
   const statsAggregation = Review.aggregate([
     {
       $match: {
@@ -2110,7 +2252,9 @@ export const getProviderReviews = asyncHandler(async (req: Request, res: Respons
           { moderationStatus: 'approved' },
           { moderationStatus: { $exists: false } },
         ],
-        reportCount: { $not: { $gte: 3 } },
+        $nor: [
+          { reportCount: { $gte: 3 } },
+        ],
       },
     },
     {
@@ -2217,15 +2361,19 @@ export const getProviderSettings = asyncHandler(async (req: Request, res: Respon
   }
 
   const settings = providerProfile.settings as any || {};
+  const availability = providerProfile.availability || ({} as any);
   const businessSettings = {
-    autoAcceptBookings: settings.autoAcceptBookings || false,
+    autoAcceptBookings:
+      settings.autoAcceptBookings ?? availability.autoAcceptBookings ?? false,
     instantBookingEnabled: settings.instantBookingEnabled || false,
+    maxAdvanceBookingDays: availability.maxAdvanceBooking ?? 30,
+    minBookingNoticeHours: availability.minNoticeTime ?? 24,
     cancellationPolicyHours: settings.cancellationPolicy?.freeUntilHours || 24,
   };
   const privacySettings = {
     showEmail: settings.privacySettings?.showEmail ?? false,
     showPhone: settings.privacySettings?.showPhoneNumber ?? true,
-    showReviewsPublicly: true,
+    showReviewsPublicly: settings.privacySettings?.showReviewsPublicly ?? true,
   };
   const reviewDisplaySettings = {
     showPendingOnReviewsPage:
@@ -2239,6 +2387,10 @@ export const getProviderSettings = asyncHandler(async (req: Request, res: Respon
       locationInfo: providerProfile.locationInfo || {},
       privacySettings,
       reviewDisplaySettings,
+      analyticsPreferences: {
+        emailReports: settings.analyticsPreferences?.emailReports ?? false,
+        emailReportsFrequency: settings.analyticsPreferences?.emailReportsFrequency ?? 'weekly',
+      },
     },
   });
 });
@@ -2254,6 +2406,7 @@ export const updateProviderSettings = asyncHandler(async (req: Request, res: Res
     locationInfo,
     privacySettings,
     reviewDisplaySettings,
+    analyticsPreferences,
   } = req.body;
 
   const providerProfile = await ProviderProfile.findOne({ userId: providerId });
@@ -2272,6 +2425,31 @@ export const updateProviderSettings = asyncHandler(async (req: Request, res: Res
     if (businessSettings.cancellationPolicyHours !== undefined) {
       settings.cancellationPolicy = settings.cancellationPolicy || {};
       settings.cancellationPolicy.freeUntilHours = businessSettings.cancellationPolicyHours;
+    }
+    if (
+      providerProfile.availability &&
+      (
+        businessSettings.maxAdvanceBookingDays !== undefined ||
+        businessSettings.minBookingNoticeHours !== undefined ||
+        businessSettings.autoAcceptBookings !== undefined
+      )
+    ) {
+      if (businessSettings.maxAdvanceBookingDays !== undefined) {
+        providerProfile.availability.maxAdvanceBooking = Math.max(
+          1,
+          Math.min(365, businessSettings.maxAdvanceBookingDays),
+        );
+      }
+      if (businessSettings.minBookingNoticeHours !== undefined) {
+        providerProfile.availability.minNoticeTime = Math.max(
+          0,
+          Math.min(168, businessSettings.minBookingNoticeHours),
+        );
+      }
+      if (businessSettings.autoAcceptBookings !== undefined) {
+        providerProfile.availability.autoAcceptBookings = businessSettings.autoAcceptBookings;
+      }
+      providerProfile.markModified('availability');
     }
   }
 
@@ -2299,6 +2477,9 @@ export const updateProviderSettings = asyncHandler(async (req: Request, res: Res
     if (privacySettings.showPhone !== undefined) {
       settings.privacySettings.showPhoneNumber = privacySettings.showPhone;
     }
+    if (privacySettings.showReviewsPublicly !== undefined) {
+      settings.privacySettings.showReviewsPublicly = privacySettings.showReviewsPublicly;
+    }
   }
 
   if (reviewDisplaySettings) {
@@ -2311,6 +2492,19 @@ export const updateProviderSettings = asyncHandler(async (req: Request, res: Res
     }
   }
 
+  if (analyticsPreferences) {
+    settings.analyticsPreferences = settings.analyticsPreferences || {
+      emailReports: false,
+      emailReportsFrequency: 'weekly',
+    };
+    if (analyticsPreferences.emailReports !== undefined) {
+      settings.analyticsPreferences.emailReports = analyticsPreferences.emailReports;
+    }
+    if (analyticsPreferences.emailReportsFrequency !== undefined) {
+      settings.analyticsPreferences.emailReportsFrequency = analyticsPreferences.emailReportsFrequency;
+    }
+  }
+
   providerProfile.settings = settings;
 
   await providerProfile.save();
@@ -2320,19 +2514,28 @@ export const updateProviderSettings = asyncHandler(async (req: Request, res: Res
     message: 'Settings updated successfully',
     data: {
       businessSettings: {
-        autoAcceptBookings: settings.autoAcceptBookings || false,
+        autoAcceptBookings:
+          settings.autoAcceptBookings
+          ?? providerProfile.availability?.autoAcceptBookings
+          ?? false,
         instantBookingEnabled: settings.instantBookingEnabled || false,
+        maxAdvanceBookingDays: providerProfile.availability?.maxAdvanceBooking ?? 30,
+        minBookingNoticeHours: providerProfile.availability?.minNoticeTime ?? 24,
         cancellationPolicyHours: settings.cancellationPolicy?.freeUntilHours || 24,
       },
       locationInfo: providerProfile.locationInfo,
       privacySettings: {
         showEmail: settings.privacySettings?.showEmail ?? false,
         showPhone: settings.privacySettings?.showPhoneNumber ?? true,
-        showReviewsPublicly: true,
+        showReviewsPublicly: settings.privacySettings?.showReviewsPublicly ?? true,
       },
       reviewDisplaySettings: {
         showPendingOnReviewsPage:
           settings.reviewDisplaySettings?.showPendingOnReviewsPage ?? true,
+      },
+      analyticsPreferences: {
+        emailReports: settings.analyticsPreferences?.emailReports ?? false,
+        emailReportsFrequency: settings.analyticsPreferences?.emailReportsFrequency ?? 'weekly',
       },
     },
   });

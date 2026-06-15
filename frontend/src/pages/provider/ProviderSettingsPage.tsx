@@ -32,6 +32,7 @@ interface NotificationSettings {
     bookingReminders: boolean;
     reviewRequests: boolean;
     marketingEmails: boolean;
+    analyticsReports: boolean;
   };
   sms: {
     newBookings: boolean;
@@ -64,6 +65,14 @@ interface PrivacySettings {
 }
 
 interface ProviderProfileSettings {
+  analyticsPreferences?: {
+    emailReports?: boolean;
+  };
+  settings?: {
+    analyticsPreferences?: {
+      emailReports?: boolean;
+    };
+  };
   businessSettings?: {
     autoAcceptBookings?: boolean;
     maxAdvanceBookingDays?: number;
@@ -123,6 +132,7 @@ const ProviderSettingsPage: React.FC = () => {
       bookingReminders: true,
       reviewRequests: true,
       marketingEmails: false,
+      analyticsReports: false,
     },
     sms: {
       newBookings: true,
@@ -174,12 +184,14 @@ const ProviderSettingsPage: React.FC = () => {
         const notifResponse = await api.get('/notifications/preferences');
         if (notifResponse.data?.success) {
           const prefs = notifResponse.data.data;
-          setNotifications({
+          setNotifications((prev) => ({
+            ...prev,
             email: {
               newBookings: prefs.email?.bookingUpdates ?? true,
               bookingReminders: prefs.email?.reminders ?? true,
-              reviewRequests: true,
+              reviewRequests: prefs.email?.reviews ?? true,
               marketingEmails: prefs.email?.marketing ?? false,
+              analyticsReports: prev.email.analyticsReports,
             },
             sms: {
               newBookings: prefs.sms?.bookingUpdates ?? true,
@@ -195,24 +207,60 @@ const ProviderSettingsPage: React.FC = () => {
               startTime: prefs.quietHours?.startTime ?? '22:00',
               endTime: prefs.quietHours?.endTime ?? '08:00',
             },
-          });
+          }));
         }
 
-        // Load provider business settings
-        const profileData = providerProfile as ProviderProfileSettings | null;
-        if (profileData) {
+        // Load provider settings from dedicated API (authoritative source)
+        const settingsResponse = await api.get('/provider/settings');
+        if (settingsResponse.data?.success) {
+          const settingsData = settingsResponse.data.data;
           setBusiness({
-            autoAcceptBookings: profileData.businessSettings?.autoAcceptBookings ?? false,
-            maxAdvanceBookingDays: profileData.businessSettings?.maxAdvanceBookingDays ?? 30,
-            minBookingNoticeHours: profileData.businessSettings?.minBookingNoticeHours ?? 2,
-            cancellationPolicyHours: profileData.businessSettings?.cancellationPolicyHours ?? 24,
-            serviceAreas: serviceAreasToStrings(profileData.locationInfo?.serviceAreas),
+            autoAcceptBookings: settingsData.businessSettings?.autoAcceptBookings ?? false,
+            maxAdvanceBookingDays: settingsData.businessSettings?.maxAdvanceBookingDays ?? 30,
+            minBookingNoticeHours: settingsData.businessSettings?.minBookingNoticeHours ?? 24,
+            cancellationPolicyHours: settingsData.businessSettings?.cancellationPolicyHours ?? 24,
+            serviceAreas: serviceAreasToStrings(settingsData.locationInfo?.serviceAreas),
           });
           setPrivacy({
-            showEmail: profileData.privacySettings?.showEmail ?? false,
-            showPhone: profileData.privacySettings?.showPhone ?? true,
-            showReviewsPublicly: profileData.privacySettings?.showReviewsPublicly ?? true,
+            showEmail: settingsData.privacySettings?.showEmail ?? false,
+            showPhone: settingsData.privacySettings?.showPhone ?? true,
+            showReviewsPublicly: settingsData.privacySettings?.showReviewsPublicly ?? true,
           });
+          const analyticsReports =
+            settingsData.analyticsPreferences?.emailReports ??
+            settingsData.settings?.analyticsPreferences?.emailReports;
+          if (typeof analyticsReports === 'boolean') {
+            setNotifications((prev) => ({
+              ...prev,
+              email: { ...prev.email, analyticsReports },
+            }));
+          }
+        } else {
+          const profileData = providerProfile as ProviderProfileSettings | null;
+          if (profileData) {
+            setBusiness({
+              autoAcceptBookings: profileData.businessSettings?.autoAcceptBookings ?? false,
+              maxAdvanceBookingDays: profileData.businessSettings?.maxAdvanceBookingDays ?? 30,
+              minBookingNoticeHours: profileData.businessSettings?.minBookingNoticeHours ?? 24,
+              cancellationPolicyHours: profileData.businessSettings?.cancellationPolicyHours ?? 24,
+              serviceAreas: serviceAreasToStrings(profileData.locationInfo?.serviceAreas),
+            });
+            setPrivacy({
+              showEmail: profileData.privacySettings?.showEmail ?? false,
+              showPhone: profileData.privacySettings?.showPhone ?? true,
+              showReviewsPublicly: profileData.privacySettings?.showReviewsPublicly ?? true,
+            });
+          }
+        }
+        const storedAnalyticsReports = localStorage.getItem('nilin_provider_analytics_email_reports');
+        if (storedAnalyticsReports != null) {
+          setNotifications((prev) => ({
+            ...prev,
+            email: {
+              ...prev.email,
+              analyticsReports: storedAnalyticsReports === 'true',
+            },
+          }));
         }
       } catch (error) {
         console.error('Failed to load settings:', error);
@@ -247,6 +295,7 @@ const ProviderSettingsPage: React.FC = () => {
         email: {
           bookingUpdates: notifications.email.newBookings,
           reminders: notifications.email.bookingReminders,
+          reviews: notifications.email.reviewRequests,
           marketing: notifications.email.marketingEmails,
         },
         sms: {
@@ -260,6 +309,22 @@ const ProviderSettingsPage: React.FC = () => {
         },
         quietHours: notifications.quietHours,
       });
+
+      try {
+        await api.patch('/provider/settings', {
+          analyticsPreferences: {
+            emailReports: notifications.email.analyticsReports,
+            emailReportsFrequency: 'weekly',
+          },
+        });
+      } catch (analyticsError) {
+        console.warn('[ProviderSettings] Analytics email preference API unavailable, stored locally', analyticsError);
+        localStorage.setItem(
+          'nilin_provider_analytics_email_reports',
+          String(notifications.email.analyticsReports),
+        );
+      }
+
       setSaveMessage({ type: 'success', text: 'Notification settings saved!' });
     } catch (error: any) {
       setSaveMessage({ type: 'error', text: error.response?.data?.message || 'Failed to save' });
@@ -274,12 +339,24 @@ const ProviderSettingsPage: React.FC = () => {
     setIsSaving(true);
     setSaveMessage(null);
     try {
-      await api.patch('/provider/settings', {
-        businessSettings: business,
-        locationInfo: {
-          serviceAreas: business.serviceAreas,
-        },
-      });
+      await Promise.all([
+        api.patch('/provider/settings', {
+          businessSettings: {
+            autoAcceptBookings: business.autoAcceptBookings,
+            maxAdvanceBookingDays: business.maxAdvanceBookingDays,
+            minBookingNoticeHours: business.minBookingNoticeHours,
+            cancellationPolicyHours: business.cancellationPolicyHours,
+          },
+          locationInfo: {
+            serviceAreas: business.serviceAreas,
+          },
+        }),
+        api.patch('/availability/settings', {
+          maxAdvanceBookingDays: business.maxAdvanceBookingDays,
+          minNoticeTime: business.minBookingNoticeHours,
+          autoAcceptBookings: business.autoAcceptBookings,
+        }),
+      ]);
       setSaveMessage({ type: 'success', text: 'Business settings saved!' });
     } catch (error: any) {
       setSaveMessage({ type: 'error', text: error.response?.data?.message || 'Failed to save' });
@@ -440,6 +517,7 @@ const ProviderSettingsPage: React.FC = () => {
                         { key: 'newBookings', label: 'New booking requests' },
                         { key: 'bookingReminders', label: 'Booking reminders' },
                         { key: 'reviewRequests', label: 'Review requests' },
+                        { key: 'analyticsReports', label: 'Weekly analytics email report' },
                         { key: 'marketingEmails', label: 'Marketing & promotions' },
                       ].map((item) => (
                         <label key={item.key} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
@@ -650,6 +728,27 @@ const ProviderSettingsPage: React.FC = () => {
                             }
                             className="w-full px-3 py-2 border border-nilin-border rounded-lg text-sm"
                           />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="p-4 bg-nilin-blush/30 rounded-lg border border-nilin-border/40">
+                      <div className="flex items-start gap-3">
+                        <MapPin className="h-5 w-5 text-nilin-coral mt-0.5" />
+                        <div className="flex-1">
+                          <p className="text-sm font-medium text-nilin-charcoal">Service areas</p>
+                          <p className="text-sm text-nilin-warmGray mt-1">
+                            {business.serviceAreas.length > 0
+                              ? business.serviceAreas.join(', ')
+                              : 'No service areas configured yet.'}
+                          </p>
+                          <Link
+                            to="/provider/profile"
+                            className="inline-flex items-center gap-1 text-sm text-nilin-coral hover:text-nilin-rose mt-2 font-medium"
+                          >
+                            Edit service areas on profile
+                            <ChevronRight className="h-4 w-4" />
+                          </Link>
                         </div>
                       </div>
                     </div>

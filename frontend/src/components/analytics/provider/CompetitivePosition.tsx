@@ -1,6 +1,5 @@
 // Competitive Position - Provider Analytics Component
-import React, { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import React, { useState, useEffect } from 'react';
 import {
   BarChart,
   Bar,
@@ -17,86 +16,11 @@ import {
 } from 'recharts';
 import { Trophy, TrendingUp, TrendingDown, Loader, Users, Star, Target, Lightbulb } from 'lucide-react';
 import { motion } from 'framer-motion';
-import {
-  analyticsApi,
-  RankingData,
-  ComparisonData,
-  RadarData,
-  SuggestionData,
-  PositionStats,
-} from '../../../services/analyticsApi';
+import { analyticsApi, type CompetitivePositionData } from '../../../services/analyticsApi';
 
 interface CompetitivePositionProps {
   providerId?: string;
 }
-
-// Default mock data for fallback when API is unavailable
-const DEFAULT_RANKING_DATA: RankingData[] = [
-  { metric: 'Overall', yourRank: 45, totalProviders: 892, percentile: 95, change: 5 },
-  { metric: 'Rating', yourRank: 62, totalProviders: 892, percentile: 93, change: 2 },
-  { metric: 'Response Time', yourRank: 120, totalProviders: 892, percentile: 86, change: -8 },
-  { metric: 'Completion Rate', yourRank: 28, totalProviders: 892, percentile: 97, change: 12 },
-  { metric: 'Revenue', yourRank: 55, totalProviders: 892, percentile: 94, change: 8 },
-  { metric: 'Repeat Customers', yourRank: 180, totalProviders: 892, percentile: 80, change: -5 },
-];
-
-const DEFAULT_COMPARISON_DATA: ComparisonData[] = [
-  { category: 'Rating', you: 4.8, average: 4.2, top10: 4.7, top1: 4.9 },
-  { category: 'Response Time', you: 85, average: 72, top10: 90, top1: 98 },
-  { category: 'Completion %', you: 96, average: 85, top10: 95, top1: 99 },
-  { category: 'Revenue', you: 8500, average: 5200, top10: 9500, top1: 15000 },
-  { category: 'Repeat Rate', you: 31, average: 38, top10: 48, top1: 65 },
-];
-
-const DEFAULT_RADAR_DATA: RadarData[] = [
-  { metric: 'Quality', value: 92, max: 100 },
-  { metric: 'Speed', value: 85, max: 100 },
-  { metric: 'Price', value: 78, max: 100 },
-  { metric: 'Communication', value: 88, max: 100 },
-  { metric: 'Availability', value: 75, max: 100 },
-  { metric: 'Repeat', value: 70, max: 100 },
-];
-
-const DEFAULT_SUGGESTIONS: SuggestionData[] = [
-  {
-    category: 'Repeat Customers',
-    priority: 'high',
-    title: 'Build loyalty program',
-    description: 'Implement a rewards system to encourage repeat bookings',
-    potential: 25,
-  },
-  {
-    category: 'Response Time',
-    priority: 'medium',
-    title: 'Set quick response templates',
-    description: 'Use pre-defined responses for common inquiries',
-    potential: 15,
-  },
-  {
-    category: 'Availability',
-    priority: 'medium',
-    title: 'Expand service hours',
-    description: 'Add evening and weekend slots to capture more demand',
-    potential: 20,
-  },
-  {
-    category: 'Pricing',
-    priority: 'low',
-    title: 'Review competitive rates',
-    description: 'Analyze local market pricing to stay competitive',
-    potential: 10,
-  },
-];
-
-const DEFAULT_STATS: PositionStats = {
-  overallRank: 45,
-  totalProviders: 892,
-  percentile: 95,
-  trend: 5,
-  marketShare: 5.0,
-  rating: 4.8,
-  reviews: 234,
-};
 
 const PRIORITY_COLORS = {
   high: { bg: 'bg-red-100', text: 'text-red-700', border: 'border-red-200' },
@@ -108,23 +32,73 @@ export const CompetitivePosition: React.FC<CompetitivePositionProps> = ({
   providerId,
 }) => {
   const [viewMode, setViewMode] = useState<'radar' | 'comparison'>('radar');
+  const [loading, setLoading] = useState(false);
+  const [apiData, setApiData] = useState<CompetitivePositionData | null>(null);
+  const [isError, setIsError] = useState(false);
 
   // Use API if providerId is available, otherwise show empty state
   const shouldFetch = Boolean(providerId);
   const effectiveProviderId = providerId || '';
 
-  const { data: apiData, isLoading: loading } = useQuery({
-    queryKey: ['provider', 'competitivePosition', effectiveProviderId],
-    queryFn: () => analyticsApi.getCompetitivePosition(effectiveProviderId),
-    enabled: shouldFetch,
-  });
+  useEffect(() => {
+    if (!shouldFetch) return;
 
-  // Use API data if available, otherwise use defaults
-  const rankingData = apiData?.rankingData ?? DEFAULT_RANKING_DATA;
-  const comparisonData = apiData?.comparisonData ?? DEFAULT_COMPARISON_DATA;
-  const radarData = apiData?.radarData ?? DEFAULT_RADAR_DATA;
-  const suggestions = apiData?.suggestions ?? DEFAULT_SUGGESTIONS;
-  const stats = apiData?.stats ?? DEFAULT_STATS;
+    let cancelled = false;
+    setLoading(true);
+    setIsError(false);
+
+    analyticsApi
+      .getCompetitivePosition(effectiveProviderId)
+      .then((data) => {
+        if (!cancelled) {
+          setApiData(data);
+          setLoading(false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setIsError(true);
+          setApiData(null);
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [shouldFetch, effectiveProviderId]);
+
+  if (!shouldFetch) {
+    return null;
+  }
+
+  if (loading) {
+    return (
+      <div className="glass-nilin rounded-nilin-lg p-6 flex items-center justify-center min-h-[280px]">
+        <Loader className="h-8 w-8 animate-spin text-nilin-coral" />
+      </div>
+    );
+  }
+
+  if (isError || !apiData) {
+    return (
+      <div className="glass-nilin rounded-nilin-lg p-6 text-center min-h-[280px] flex flex-col items-center justify-center">
+        <Trophy className="h-10 w-10 text-nilin-warmGray mb-3 opacity-60" />
+        <h3 className="text-lg font-semibold text-nilin-charcoal">Competitive position unavailable</h3>
+        <p className="text-sm text-nilin-warmGray mt-1 max-w-sm">
+          {isError
+            ? 'Unable to load ranking data right now. Please try again shortly.'
+            : 'Complete more bookings to unlock market ranking and comparison data.'}
+        </p>
+      </div>
+    );
+  }
+
+  const rankingData = apiData.rankingData ?? [];
+  const comparisonData = apiData.comparisonData ?? [];
+  const radarData = apiData.radarData ?? [];
+  const suggestions = apiData.suggestions ?? [];
+  const stats = apiData.stats;
 
   const formatCurrency = (value: number) => {
     if (value >= 1000) {
@@ -268,8 +242,8 @@ export const CompetitivePosition: React.FC<CompetitivePositionProps> = ({
       ) : viewMode === 'radar' ? (
         <>
           {/* Radar Chart */}
-          <div className="h-72">
-            <ResponsiveContainer width="100%" height="100%">
+          <div className="h-72 min-h-[288px] w-full">
+            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={288}>
               <RadarChart data={radarData}>
                 <PolarGrid stroke="#E5E7EB" />
                 <PolarAngleAxis
@@ -305,8 +279,8 @@ export const CompetitivePosition: React.FC<CompetitivePositionProps> = ({
       ) : (
         <>
           {/* Comparison Bar Chart */}
-          <div className="h-72">
-            <ResponsiveContainer width="100%" height="100%">
+          <div className="h-72 min-h-[288px] w-full">
+            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={288}>
               <BarChart data={comparisonData} layout="vertical" margin={{ top: 10, right: 30, left: 80, bottom: 10 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" horizontal={true} vertical={false} />
                 <XAxis

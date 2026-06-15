@@ -1,5 +1,6 @@
 import React, { useEffect, lazy, Suspense, useMemo } from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import ProviderDashboard from './components/dashboard/ProviderDashboard';
 import { useAuthStore } from './stores/authStore';
 import { useBackButton } from './hooks/useBackButton';
 import { useCapacitor } from './hooks/useCapacitor';
@@ -11,6 +12,8 @@ import { AppShell } from './components/mobile/AppShell';
 import FloatingChatWidget from './components/chat/FloatingChatWidget';
 import { SearchModalProvider, useSearchModal } from './context/SearchModalContext';
 import SearchModal from './components/search/SearchModal';
+import { GlobalLoadingOverlay } from './components/common/GlobalLoadingOverlay';
+import { usePageLoading } from './hooks/usePageLoading';
 
 // =============================================================================
 // Error Boundary Component
@@ -108,9 +111,8 @@ const ResetPassword = lazy(() => import('./components/auth/ResetPassword'));
 const EmailVerification = lazy(() => import('./components/auth/EmailVerification'));
 const EmailVerificationRequired = lazy(() => import('./components/auth/EmailVerificationRequired'));
 const ChangePassword = lazy(() => import('./components/auth/ChangePassword'));
-const CustomerDashboard = lazy(() => import('./pages/CustomerDashboard'));
+const CustomerDashboard = lazy(() => import('./pages/CustomerDashboardEnhanced'));
 const StatsView = lazy(() => import('./components/dashboard/StatsView'));
-const ProviderDashboard = lazy(() => import('./components/dashboard/ProviderDashboard'));
 const AdminDashboard = lazy(() => import('./pages/admin/AdminDashboard'));
 const AdminSettings = lazy(() => import('./components/dashboard/AdminSettings'));
 const AdminReports = lazy(() => import('./components/dashboard/AdminReports'));
@@ -176,9 +178,10 @@ const ManagedServicesPage = lazy(() => import('./pages/provider/ManagedServicesP
 const MyBundlesPage = lazy(() => import('./pages/provider/MyBundlesPage'));
 const BundleAnalyticsPage = lazy(() => import('./pages/provider/BundleAnalyticsPage'));
 const EarningsReport = lazy(() => import('./pages/provider/EarningsReport'));
-const InsightsDashboard = lazy(() => import('./pages/provider/InsightsDashboard'));
+const ProviderInsightsRedirect = lazy(() => import('./pages/provider/ProviderInsightsRedirect'));
 const AvailabilityPage = lazy(() => import('./pages/provider/AvailabilityPage'));
 const ServiceAvailabilityPage = lazy(() => import('./pages/provider/ServiceAvailabilityPage'));
+const ProviderCalendarPage = lazy(() => import('./pages/provider/ProviderCalendarPage'));
 const OperationsDashboard = lazy(() => import('./pages/provider/OperationsDashboard'));
 const PayoutDashboard = lazy(() => import('./pages/provider/PayoutDashboard'));
 const SuperAppPage = lazy(() => import('./pages/customer/SuperAppPage'));
@@ -205,13 +208,8 @@ import {
   PublicRoute
 } from './components/auth/ProtectedRoute';
 
-// Loading spinner for Suspense fallback
-const LoadingSpinner = () => (
-  <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-    <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-  </div>
-);
-
+// Loading spinner for Suspense fallback - uses NILIN theme
+const LoadingSpinner = () => null; // Global loading overlay handles loading state
 
 
 const AccountSuspended = () => (
@@ -309,6 +307,8 @@ function App() {
   const { initialize, isInitialized } = useAuthStore();
   const { isCapacitor, isMobile } = useCapacitor();
   useBackButton();
+  // Enable global page loading on route changes
+  usePageLoading();
 
   // FIX: Memoize platform detection to prevent re-computation on every render
   const isMobilePlatform = useMemo(() => isMobile || isCapacitor, [isMobile, isCapacitor]);
@@ -329,16 +329,18 @@ function App() {
             <SearchModalWrapper />
             {/* CRITICAL FIX: Global offline indicator */}
             <OfflineBanner autoHideDelay={3000} showCloseButton={true} />
+            {/* Global Loading Overlay */}
+            <GlobalLoadingOverlay />
             <MaintenanceGuard>
               <div className="App">
                 <ScrollToTop />
-                <Suspense fallback={<LoadingSpinner />}>
+                <Suspense fallback={null}>
                   <Routes>
         {/* Public Routes */}
         <Route
           path="/unsubscribe"
           element={
-            <Suspense fallback={<div className="min-h-screen flex items-center justify-center">Loading...</div>}>
+            <Suspense fallback={null}>
               <UnsubscribePage />
             </Suspense>
           }
@@ -840,6 +842,15 @@ function App() {
         />
 
         <Route
+          path="/provider/calendar"
+          element={
+            <ProviderRoute>
+              <ProviderCalendarPage />
+            </ProviderRoute>
+          }
+        />
+
+        <Route
           path="/provider/profile"
           element={
             <ProviderRoute>
@@ -928,6 +939,14 @@ function App() {
             </ProviderRoute>
           }
         />
+        <Route
+          path="/provider/managed-services/:contractId"
+          element={
+            <ProviderRoute>
+              <ManagedServicesPage />
+            </ProviderRoute>
+          }
+        />
 
         <Route
           path="/provider/bundles"
@@ -960,7 +979,7 @@ function App() {
           path="/provider/insights"
           element={
             <ProviderRoute>
-              <InsightsDashboard />
+              <ProviderInsightsRedirect />
             </ProviderRoute>
           }
         />
@@ -1164,13 +1183,13 @@ function App() {
           botName="NILIN Assistant"
           welcomeMessage="Hi there! How can I help you today?"
         />
-        </Suspense>
-        </div>
-        </MaintenanceGuard>
-        </SearchModalProvider>
-        </PlatformConfigProvider>
-      </ToastProvider>
-    </AppErrorBoundary>
+              </Suspense>
+              </div>
+              </MaintenanceGuard>
+            </SearchModalProvider>
+          </PlatformConfigProvider>
+        </ToastProvider>
+      </AppErrorBoundary>
   );
 
   // Wrap with AppShell on mobile devices (Capacitor or small screens)

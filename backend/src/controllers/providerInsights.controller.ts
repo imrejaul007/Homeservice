@@ -33,6 +33,10 @@ import {
   AvailabilityGap
 } from '../services/scheduleOptimization.service';
 import {
+  getInsightTipPreferences,
+  updateInsightTipPreferences,
+} from '../services/providerInsightPreferences.service';
+import {
   getCustomerCancellationProfile,
   predictBookingCancellation,
   getProviderCancellationStats,
@@ -47,6 +51,7 @@ import {
   NoShowRisk,
   PreventionRecommendation
 } from '../services/cancellationPrediction.service';
+import { getProviderAITips, syncAiTipPreferences } from '../services/providerAiTips.service';
 
 // ============================================
 // PROVIDER INSIGHTS CONTROLLERS
@@ -500,8 +505,78 @@ export const getPreventionRecommendations = asyncHandler(async (req: Request, re
 });
 
 // ============================================
+// INSIGHT TIP PREFERENCES (cross-device sync)
+// ============================================
+
+/**
+ * GET /api/provider/insights/preferences
+ */
+export const getInsightPreferences = asyncHandler(async (req: Request, res: Response) => {
+  const providerId = (req.user as IUser)._id.toString();
+  const preferences = await getInsightTipPreferences(providerId);
+
+  res.json({
+    success: true,
+    data: { preferences },
+  });
+});
+
+/**
+ * PATCH /api/provider/insights/preferences
+ */
+export const updateInsightPreferences = asyncHandler(async (req: Request, res: Response) => {
+  const providerId = (req.user as IUser)._id.toString();
+  const { dismissTipId, readTipId, dismissed, read } = req.body || {};
+
+  const preferences = await updateInsightTipPreferences(providerId, {
+    dismissTipId,
+    readTipId,
+    dismissed,
+    read,
+  });
+
+  res.json({
+    success: true,
+    data: { preferences },
+  });
+});
+
+// ============================================
 // CACHE MANAGEMENT
 // ============================================
+
+/**
+ * Get unified AI tips with metric-based confidence and preferences
+ * GET /api/provider/insights/ai-tips
+ */
+export const getAITips = asyncHandler(async (req: Request, res: Response) => {
+  const providerId = (req.user as IUser)._id.toString();
+  const result = await getProviderAITips(providerId);
+
+  res.json({
+    success: true,
+    data: result,
+  });
+});
+
+/**
+ * Merge client-side tip preferences (cross-device migration)
+ * POST /api/provider/insights/preferences/sync
+ */
+export const syncAITipPreferences = asyncHandler(async (req: Request, res: Response) => {
+  const providerId = (req.user as IUser)._id.toString();
+  const { dismissed, read } = req.body || {};
+
+  const preferences = await syncAiTipPreferences(providerId, {
+    dismissed: Array.isArray(dismissed) ? dismissed : [],
+    read: Array.isArray(read) ? read : [],
+  });
+
+  res.json({
+    success: true,
+    data: { preferences },
+  });
+});
 
 /**
  * Clear all insights cache
@@ -531,6 +606,8 @@ export default {
   getTrends,
   generateInsights,
   getOptimizationTips,
+  getAITips,
+  syncAITipPreferences,
 
   // Schedule Optimization
   getScheduleOptimal,
@@ -547,6 +624,10 @@ export default {
   getUpcomingCancellations,
   getNoShows,
   getPreventionRecommendations,
+
+  // Tip preferences
+  getInsightPreferences,
+  updateInsightPreferences,
 
   // Cache Management
   clearCache

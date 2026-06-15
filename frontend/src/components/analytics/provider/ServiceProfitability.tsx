@@ -1,6 +1,5 @@
 // Service Profitability Analysis - Provider Analytics Component
-import React, { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import React, { useState, useEffect } from 'react';
 import {
   BarChart,
   Bar,
@@ -15,11 +14,17 @@ import {
 } from 'recharts';
 import { DollarSign, TrendingUp, TrendingDown, Loader, ArrowUpRight, ArrowDownRight } from 'lucide-react';
 import { motion } from 'framer-motion';
-import { analyticsApi, ServiceData, ProfitabilityStats } from '../../../services/analyticsApi';
+import {
+  analyticsApi,
+  ServiceData,
+  ProfitabilityStats,
+  type ServiceProfitabilityData,
+} from '../../../services/analyticsApi';
 
 interface ServiceProfitabilityProps {
   providerId?: string;
-  timeRange?: '30d' | '90d' | '1y';
+  timeRange?: '7d' | '30d' | '90d' | '1y';
+  hidePeriodSelector?: boolean;
 }
 
 // Default mock data for fallback when API is unavailable
@@ -47,26 +52,81 @@ const DEFAULT_PROFITABILITY_STATS: ProfitabilityStats = {
 export const ServiceProfitability: React.FC<ServiceProfitabilityProps> = ({
   providerId,
   timeRange = '30d',
+  hidePeriodSelector = false,
 }) => {
   const [selectedRange, setSelectedRange] = useState(timeRange);
+
+  useEffect(() => {
+    setSelectedRange(timeRange);
+  }, [timeRange]);
   const [sortBy, setSortBy] = useState<'profit' | 'margin' | 'revenue'>('profit');
   const [viewMode, setViewMode] = useState<'bars' | 'trend'>('bars');
+  const [loading, setLoading] = useState(false);
+  const [apiData, setApiData] = useState<ServiceProfitabilityData | null>(null);
+  const [isError, setIsError] = useState(false);
 
   // Use API if providerId is available, otherwise show empty state
   const shouldFetch = Boolean(providerId);
   const effectiveProviderId = providerId || '';
 
-  const { data: apiData, isLoading: loading } = useQuery({
-    queryKey: ['provider', 'serviceAnalytics', effectiveProviderId, selectedRange],
-    queryFn: () => analyticsApi.getServiceProfitability(effectiveProviderId),
-    enabled: shouldFetch,
-  });
+  useEffect(() => {
+    if (!shouldFetch) return;
 
-  // Use API data if available, otherwise use defaults
-  const services = apiData?.services ?? DEFAULT_SERVICE_DATA;
-  const stats = apiData?.stats ?? DEFAULT_PROFITABILITY_STATS;
+    let cancelled = false;
+    setLoading(true);
+    setIsError(false);
 
-  const sortedData = [...services].sort((a, b) => b[sortBy] - a[sortBy]);
+    analyticsApi
+      .getServiceProfitability(effectiveProviderId, selectedRange)
+      .then((data) => {
+        if (!cancelled) {
+          setApiData(data);
+          setLoading(false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setIsError(true);
+          setApiData(null);
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [shouldFetch, effectiveProviderId, selectedRange]);
+
+  if (!shouldFetch) {
+    return null;
+  }
+
+  if (loading) {
+    return (
+      <div className="glass-nilin rounded-nilin-lg p-6 flex items-center justify-center min-h-[280px]">
+        <Loader className="h-8 w-8 animate-spin text-nilin-coral" />
+      </div>
+    );
+  }
+
+  if (isError || !apiData || apiData.services.length === 0) {
+    return (
+      <div className="glass-nilin rounded-nilin-lg p-6 text-center min-h-[280px] flex flex-col items-center justify-center">
+        <DollarSign className="h-10 w-10 text-nilin-warmGray mb-3 opacity-60" />
+        <h3 className="text-lg font-semibold text-nilin-charcoal">No profitability data yet</h3>
+        <p className="text-sm text-nilin-warmGray mt-1 max-w-sm">
+          {isError
+            ? 'Unable to load profitability data right now. Please try again shortly.'
+            : 'Service profit margins appear here after you complete paid bookings.'}
+        </p>
+      </div>
+    );
+  }
+
+  const services = apiData.services;
+  const stats = apiData.stats;
+
+  const sortedData = [...services].sort((a, b) => (b[sortBy] ?? 0) - (a[sortBy] ?? 0));
 
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('en-AE', {
@@ -161,17 +221,19 @@ export const ServiceProfitability: React.FC<ServiceProfitabilityProps> = ({
             </button>
           </div>
 
-          <select
-            value={selectedRange}
-            onChange={(e) => setSelectedRange(e.target.value as typeof selectedRange)}
-            className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500"
-          >
-            {timeRanges.map((range) => (
-              <option key={range.key} value={range.key}>
-                {range.label}
-              </option>
-            ))}
-          </select>
+          {!hidePeriodSelector && (
+            <select
+              value={selectedRange}
+              onChange={(e) => setSelectedRange(e.target.value as typeof selectedRange)}
+              className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500"
+            >
+              {timeRanges.map((range) => (
+                <option key={range.key} value={range.key}>
+                  {range.label}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
       </div>
 

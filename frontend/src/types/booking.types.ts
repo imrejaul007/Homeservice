@@ -380,6 +380,8 @@ export interface BookingFilters {
   serviceId?: string;
   minPrice?: number;
   maxPrice?: number;
+  /** Filter bookings by service location city/emirate */
+  city?: string;
 }
 
 // ==========================================

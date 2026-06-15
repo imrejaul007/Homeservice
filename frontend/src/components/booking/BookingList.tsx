@@ -23,6 +23,7 @@ import type { Booking, BookingFilters, ProviderBookingsStats } from '../../servi
 import bookingService from '../../services/BookingService';
 import { cn, formatPrice } from '../../lib/utils';
 import { useToastActions } from '../common/Toast';
+import { socketService } from '../../services/socket';
 
 interface BookingListProps {
   userType: 'customer' | 'provider';
@@ -109,6 +110,27 @@ const BookingList: React.FC<BookingListProps> = ({ userType, className, hideHead
   useEffect(() => {
     void reloadBookings();
   }, [reloadBookings]);
+
+  // Real-time refresh for provider booking list
+  useEffect(() => {
+    if (userType !== 'provider') return;
+
+    const unsubscribers = [
+      socketService.on('booking:new_request', () => {
+        void reloadBookings();
+      }),
+      socketService.on('booking:status_changed', () => {
+        void reloadBookings();
+      }),
+      socketService.on('booking:confirmed', () => {
+        void reloadBookings();
+      }),
+    ];
+
+    return () => {
+      unsubscribers.forEach((unsub) => unsub());
+    };
+  }, [userType, reloadBookings]);
 
   // Focus trap and Escape key handling for reject modal
   useEffect(() => {

@@ -320,7 +320,7 @@ const PRODUCTION_CHECKLIST: ChecklistItem[] = [
     category: 'analytics',
     severity: 'high',
     checkFunction: async (): Promise<CheckResult> => {
-      const hasFirebase = await checkFileExists('src/services/AnalyticsService.ts') ||
+      const hasFirebase = await checkFileExists('src/services/chatAnalyticsService.ts') ||
         await checkFileExists('src/config/firebase.ts');
 
       const packageJson = await readFile('package.json');
@@ -372,7 +372,7 @@ const PRODUCTION_CHECKLIST: ChecklistItem[] = [
     category: 'analytics',
     severity: 'medium',
     checkFunction: async (): Promise<CheckResult> => {
-      const analyticsService = await readFile('src/services/AnalyticsService.ts');
+      const analyticsService = await readFile('src/services/chatAnalyticsService.ts');
       const hasEventTypes = analyticsService.includes('EVENT_') ||
         analyticsService.includes('eventName') ||
         analyticsService.includes('track(');

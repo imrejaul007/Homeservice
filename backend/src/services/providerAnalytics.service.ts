@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import Booking from '../models/booking.model';
 import User from '../models/user.model';
 import ProviderProfile from '../models/providerProfile.model';
@@ -6,6 +7,17 @@ import ServiceCategory from '../models/serviceCategory.model';
 import ProviderAd from '../models/providerAd.model';
 import logger from '../utils/logger';
 import { cache } from '../config/redis';
+import geolocationService from './geolocation.service';
+import {
+  BOOKING_ATTRIBUTION_SOURCES,
+  BookingAttributionSource,
+  buildAdAttributedBookingFilter,
+  resolveStoredAttributionSource,
+} from '../utils/bookingAttribution';
+import {
+  geographicLookupStages,
+  resolvedCityAggregationField,
+} from '../utils/bookingLocation.util';
 
 export interface DateRange {
   startDate: Date;
@@ -53,20 +65,46 @@ export interface ProfitabilityData {
   lowestPerformingService: string;
 }
 
-export interface ROASData {
-  providerId: string;
-  totalAdSpend: number;
-  revenueFromAds: number;
+export interface ROASChartPoint {
+  date: string;
+  adSpend: number;
+  revenue: number;
+  bookings: number;
   roas: number;
-  benchmark: number;
-  trend: number;
-  dailyData: Array<{
-    date: string;
-    spend: number;
-    revenue: number;
-    roas: number;
-  }>;
+  cpc: number;
+  impressions: number;
+  clicks: number;
 }
+
+export interface ROASStats {
+  totalAdSpend: number;
+  totalRevenue: number;
+  overallROAS: number;
+  averageROAS: number;
+  totalBookings: number;
+  costPerBooking: number;
+  bestCampaign: string;
+  worstCampaign: string;
+  targetROAS: number;
+}
+
+export interface ROASCampaign {
+  name: string;
+  spend: number;
+  revenue: number;
+  roas: number;
+  status: 'active' | 'paused';
+}
+
+export interface ROASMetricsData {
+  providerId: string;
+  roasData: ROASChartPoint[];
+  stats: ROASStats;
+  campaigns: ROASCampaign[];
+}
+
+/** @deprecated Use ROASMetricsData — kept as alias for route imports */
+export type ROASData = ROASMetricsData;
 
 export interface CompetitivePositionData {
   providerId: string;
@@ -95,6 +133,42 @@ export interface CompetitivePositionData {
     description: string;
     potential: number;
   }>;
+  reviews?: number;
+  marketShare?: number;
+  trend?: number;
+}
+
+export interface BookingSourceAttributionRow {
+  source: BookingAttributionSource;
+  bookings: number;
+  completedBookings: number;
+  revenue: number;
+}
+
+export interface BookingSourceAttributionData {
+  providerId: string;
+  period: string;
+  startDate: string;
+  endDate: string;
+  totalBookings: number;
+  totalCompletedBookings: number;
+  totalRevenue: number;
+  bySource: BookingSourceAttributionRow[];
+}
+
+export interface RepeatCustomerTrendPoint {
+  month: string;
+  newCustomers: number;
+  repeatCustomers: number;
+  repeatRate: number;
+}
+
+export interface RepeatCustomerCohort {
+  cohort: string;
+  month1: number;
+  month2: number;
+  month3: number;
+  month6: number;
 }
 
 export interface RepeatCustomerData {
@@ -103,19 +177,115 @@ export interface RepeatCustomerData {
   totalCustomers: number;
   repeatCustomers: number;
   newCustomers: number;
-  avgTimeToRepeat: number;
-  trend: number;
-  cohortData: Array<{
-    cohort: string;
-    month1: number;
-    month2: number;
-    month3: number;
-    month6: number;
+  trendData: RepeatCustomerTrendPoint[];
+  cohortData: RepeatCustomerCohort[];
+}
+
+export interface ProviderLTVData {
+  providerId: string;
+  period: string;
+  totalCustomers: number;
+  avgRevenuePerCustomer: number;
+  totalLTV: number;
+  avgBookingsPerCustomer: number;
+  topCustomers: Array<{
+    customerId: string;
+    totalSpent: number;
+    bookingCount: number;
   }>;
-  retentionFactors: Array<{
-    factor: string;
-    impact: number;
-  }>;
+}
+
+export interface RevenueForecastPoint {
+  date: string;
+  predicted: number;
+  lowerBound: number;
+  upperBound: number;
+}
+
+export interface RevenueForecastData {
+  providerId: string;
+  period: string;
+  historicalDaily: Array<{ date: string; revenue: number }>;
+  forecast7d: RevenueForecastPoint[];
+  forecast30d: RevenueForecastPoint[];
+  projectedRevenue7d: number;
+  projectedRevenue30d: number;
+  trend: 'increasing' | 'stable' | 'decreasing';
+}
+
+export interface GeographicDemandEntry {
+  city: string;
+  emirate: string;
+  bookings: number;
+  revenue: number;
+  avgBookingValue: number;
+  share: number;
+}
+
+export interface GeographicDemandData {
+  providerId: string;
+  period: string;
+  locations: GeographicDemandEntry[];
+  totalBookings: number;
+  totalRevenue: number;
+}
+
+export interface ResponseTimeMetricsData {
+  providerId: string;
+  period: string;
+  avgResponseTimeMinutes: number;
+  medianResponseTimeMinutes: number;
+  p95ResponseTimeMinutes: number;
+  sampleSize: number;
+  targetMinutes: number;
+  compliant: boolean;
+  profileAvgResponseTimeMinutes: number;
+  trend: 'improving' | 'stable' | 'declining';
+}
+
+export interface ProviderAnomalyAlert {
+  id: string;
+  severity: 'info' | 'warning' | 'critical';
+  title: string;
+  message: string;
+  metric?: string;
+  detectedAt: string;
+}
+
+export interface TravelDataPoint {
+  date: string;
+  totalTravelTime: number;
+  avgTravelTime: number;
+  totalDistance: number;
+  bookings: number;
+  efficiency: number;
+}
+
+export interface TravelStats {
+  totalTravelTime: number;
+  avgTravelTime: number;
+  totalDistance: number;
+  avgDistance: number;
+  fuelCost: number;
+  mostRemoteJob: string;
+  leastEfficient: string;
+  potentialSavings: number;
+  efficiency: number;
+}
+
+export interface JobsByArea {
+  area: string;
+  jobs: number;
+  avgTravel: number;
+  avgDistance: number;
+}
+
+export interface ProviderTravelMetrics {
+  providerId: string;
+  period: string;
+  travelData: TravelDataPoint[];
+  stats: TravelStats;
+  jobsByArea: JobsByArea[];
 }
 
 // ============================================
@@ -137,11 +307,94 @@ const getDateRange = (period: string): DateRange => {
     case '90d':
       startDate = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
       break;
+    case '1y':
+      startDate = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate());
+      break;
     default:
       startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
   }
 
   return { startDate, endDate };
+};
+
+const round2 = (value: number): number => Math.round(value * 100) / 100;
+
+const monthKey = (date: Date): string => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  return `${year}-${month}`;
+};
+
+const formatMonthLabel = (key: string): string => {
+  const [year, month] = key.split('-').map(Number);
+  return new Date(year, month - 1, 1).toLocaleDateString('en-US', {
+    month: 'short',
+    year: 'numeric',
+  });
+};
+
+const addMonths = (key: string, offset: number): string => {
+  const [year, month] = key.split('-').map(Number);
+  const date = new Date(year, month - 1 + offset, 1);
+  return monthKey(date);
+};
+
+const getTrendMonthCount = (period: string): number => {
+  if (period === '1y') return 12;
+  if (period === '90d') return 9;
+  return 6;
+};
+
+const linearForecast = (
+  dailyValues: number[],
+  forecastDays: number,
+): RevenueForecastPoint[] => {
+  if (dailyValues.length === 0) {
+    return Array.from({ length: forecastDays }, (_, index) => {
+      const date = new Date();
+      date.setDate(date.getDate() + index + 1);
+      return {
+        date: date.toISOString().split('T')[0],
+        predicted: 0,
+        lowerBound: 0,
+        upperBound: 0,
+      };
+    });
+  }
+
+  const n = dailyValues.length;
+  const avg =
+    dailyValues.reduce((sum, value) => sum + value, 0) / Math.max(n, 1);
+  const recentAvg =
+    dailyValues.slice(-7).reduce((sum, value) => sum + value, 0) /
+    Math.max(Math.min(7, n), 1);
+
+  let slope = 0;
+  if (n >= 2) {
+    const xMean = (n - 1) / 2;
+    const yMean = avg;
+    let numerator = 0;
+    let denominator = 0;
+    for (let i = 0; i < n; i++) {
+      numerator += (i - xMean) * (dailyValues[i] - yMean);
+      denominator += (i - xMean) ** 2;
+    }
+    slope = denominator > 0 ? numerator / denominator : 0;
+  }
+
+  const base = recentAvg > 0 ? recentAvg : avg;
+
+  return Array.from({ length: forecastDays }, (_, index) => {
+    const date = new Date();
+    date.setDate(date.getDate() + index + 1);
+    const predicted = Math.max(0, base + slope * (index + 1));
+    return {
+      date: date.toISOString().split('T')[0],
+      predicted: round2(predicted),
+      lowerBound: round2(predicted * 0.85),
+      upperBound: round2(predicted * 1.15),
+    };
+  });
 };
 
 const getCachedData = async <T>(key: string, fetchFn: () => Promise<T>, ttl = 300): Promise<T> => {
@@ -254,9 +507,10 @@ export class ProviderAnalyticsService {
 
     return getCachedData(cacheKey, async () => {
       const { startDate, endDate } = getDateRange(period);
+      const providerObjectId = new mongoose.Types.ObjectId(providerId);
 
       const bookings = await Booking.find({
-        providerId,
+        providerId: providerObjectId,
         status: 'completed',
         createdAt: { $gte: startDate, $lte: endDate },
       })
@@ -281,7 +535,7 @@ export class ProviderAnalyticsService {
         const current = serviceData.get(serviceId) || {
           revenue: 0,
           bookings: 0,
-          name: service.name || 'Unknown Service',
+          name: service.title || service.name || 'Unknown Service',
           categoryId: service.category?.toString() || '',
           categoryName: '',
           rating: service.rating?.average || 0,
@@ -292,8 +546,14 @@ export class ProviderAnalyticsService {
         serviceData.set(serviceId, current);
       });
 
-      // Get category names
-      const categoryIds = [...new Set(Array.from(serviceData.values()).map(s => s.categoryId))];
+      // Get category names (skip empty/invalid ids — avoids CastError → 400)
+      const categoryIds = [
+        ...new Set(
+          Array.from(serviceData.values())
+            .map((s) => s.categoryId)
+            .filter((id) => id && mongoose.Types.ObjectId.isValid(id)),
+        ),
+      ];
       if (categoryIds.length > 0) {
         const categories = await ServiceCategory.find({ _id: { $in: categoryIds } }).lean();
         categories.forEach(cat => {
@@ -340,108 +600,220 @@ export class ProviderAnalyticsService {
 
   /**
    * Get ROAS (Return on Ad Spend) data for a provider
-   * FIX #3: Connect ROAS calculation to real ad spend data from providerAd model
+   * Returns frontend-compatible shape: roasData, stats, campaigns
    */
-  async getROAS(providerId: string, period: string = '30d'): Promise<ROASData> {
+  async getROAS(providerId: string, period: string = '30d'): Promise<ROASMetricsData> {
     const cacheKey = `analytics:provider:${providerId}:roas:${period}`;
 
     return getCachedData(cacheKey, async () => {
       const { startDate, endDate } = getDateRange(period);
-      const providerObjectId = new (require('mongoose').Types.ObjectId)(providerId);
+      const providerObjectId = new mongoose.Types.ObjectId(providerId);
 
-      // FIX #3: Get real ad spend data from providerAd model
       const ads = await ProviderAd.find({
         providerId: providerObjectId,
-        isActive: true,
-        status: { $in: ['active', 'paused'] },
+        status: { $in: ['active', 'paused', 'completed'] },
       }).lean();
 
-      // Aggregate ad spend by day from dailyStats
-      const dailyAdSpend: Map<string, number> = new Map();
-      let totalAdSpend = 0;
+      const dailyAdSpend: Map<string, { spend: number; impressions: number; clicks: number }> = new Map();
+      let periodAdSpend = 0;
 
       for (const ad of ads) {
-        // Add total spent from budget
-        totalAdSpend += (ad.budget?.spent || 0);
-
-        // Process daily statistics if available
         const dailyStats = ad.statistics?.dailyStats || [];
         for (const stat of dailyStats) {
-          const dateStr = new Date(stat.date).toISOString().split('T')[0];
-          if (new Date(stat.date) >= startDate && new Date(stat.date) <= endDate) {
-            const currentSpend = dailyAdSpend.get(dateStr) || 0;
-            dailyAdSpend.set(dateStr, currentSpend + (stat.spent || 0));
-          }
+          const statDate = new Date(stat.date);
+          if (statDate < startDate || statDate > endDate) continue;
+
+          const dateStr = statDate.toISOString().split('T')[0];
+          const current = dailyAdSpend.get(dateStr) || { spend: 0, impressions: 0, clicks: 0 };
+          current.spend += stat.spent || 0;
+          current.impressions += stat.views || 0;
+          current.clicks += stat.clicks || 0;
+          dailyAdSpend.set(dateStr, current);
+          periodAdSpend += stat.spent || 0;
         }
       }
 
-      // Get bookings attributed to ads within the period
-      // FIX #3: Calculate real revenue from ad-attributed bookings
-      // We track conversions from ad clicks to determine revenue attribution
-      const bookingsFromAds = await Booking.find({
-        providerId: providerObjectId,
-        status: 'completed',
-        createdAt: { $gte: startDate, $lte: endDate },
-        // bookingsFromAd: true, // Would need this field in booking model
-      }).lean();
+      const adAttributedBookings = await Booking.find({
+        ...buildAdAttributedBookingFilter(providerObjectId),
+        completedAt: { $gte: startDate, $lte: endDate },
+      })
+        .select('pricing.totalAmount completedAt attribution.adCampaignId')
+        .lean();
 
-      // For now, estimate ad-attributed revenue based on ad conversions
-      // This could be enhanced by tracking the source of each booking
+      const dailyRevenue: Map<string, { revenue: number; bookings: number }> = new Map();
+      const campaignRevenue: Map<string, number> = new Map();
       let totalRevenueFromAds = 0;
-      let adConversionCount = 0;
 
-      for (const ad of ads) {
-        adConversionCount += (ad.statistics?.conversions || 0);
+      for (const booking of adAttributedBookings) {
+        const revenue = booking.pricing?.totalAmount || 0;
+        totalRevenueFromAds += revenue;
+
+        const completedAt = booking.completedAt ? new Date(booking.completedAt) : null;
+        if (completedAt) {
+          const dateStr = completedAt.toISOString().split('T')[0];
+          const current = dailyRevenue.get(dateStr) || { revenue: 0, bookings: 0 };
+          current.revenue += revenue;
+          current.bookings += 1;
+          dailyRevenue.set(dateStr, current);
+        }
+
+        const campaignId = booking.attribution?.adCampaignId?.toString();
+        if (campaignId) {
+          campaignRevenue.set(campaignId, (campaignRevenue.get(campaignId) || 0) + revenue);
+        }
       }
 
-      // Estimate average booking value from completed bookings
-      const completedBookings = await Booking.find({
-        providerId: providerObjectId,
-        status: 'completed',
-        createdAt: { $gte: startDate, $lte: endDate },
-      }).lean();
-
-      const avgBookingValue = completedBookings.length > 0
-        ? completedBookings.reduce((sum, b) => sum + (b.pricing?.totalAmount || 0), 0) / completedBookings.length
-        : 0;
-
-      // Revenue from ads = conversions * estimated value per conversion
-      // This is an approximation; ideally we'd track booking source
-      totalRevenueFromAds = adConversionCount * avgBookingValue;
-
-      // Generate daily data for the period
-      const days = Math.ceil((endDate.getTime() - startDate.getTime()) / (24 * 60 * 60 * 1000));
-      const dailyData: Array<{ date: string; spend: number; revenue: number; roas: number }> = [];
+      const adConversionCount = adAttributedBookings.length;
+      const days = Math.ceil((endDate.getTime() - startDate.getTime()) / (24 * 60 * 60 * 1000)) || 1;
+      const dailyData: Array<{ date: string; spend: number; revenue: number; bookings: number; roas: number; impressions: number; clicks: number }> = [];
 
       for (let i = 0; i < days; i++) {
         const date = new Date(startDate.getTime() + i * 24 * 60 * 60 * 1000);
         const dateStr = date.toISOString().split('T')[0];
-
-        const spend = dailyAdSpend.get(dateStr) || 0;
-        // Estimate daily revenue proportionally
-        const dailyRevenue = days > 0 ? (totalRevenueFromAds / days) : 0;
-        const dailyROAS = spend > 0 ? dailyRevenue / spend : 0;
+        const spendEntry = dailyAdSpend.get(dateStr) || { spend: 0, impressions: 0, clicks: 0 };
+        const revenueEntry = dailyRevenue.get(dateStr) || { revenue: 0, bookings: 0 };
+        const spend = spendEntry.spend;
+        const revenue = revenueEntry.revenue;
+        const dailyROAS = spend > 0 ? revenue / spend : 0;
 
         dailyData.push({
           date: dateStr,
           spend: Math.round(spend * 100) / 100,
-          revenue: Math.round(dailyRevenue * 100) / 100,
+          revenue: Math.round(revenue * 100) / 100,
+          bookings: revenueEntry.bookings,
           roas: Math.round(dailyROAS * 100) / 100,
+          impressions: spendEntry.impressions,
+          clicks: spendEntry.clicks,
         });
       }
 
-      const overallROAS = totalAdSpend > 0 ? totalRevenueFromAds / totalAdSpend : 0;
-      const benchmark = 3.0; // Industry benchmark
-      const trend = Math.round((overallROAS - benchmark) * 10) / 10;
+      const roundedAdSpend = Math.round(periodAdSpend * 100) / 100;
+      const roundedRevenue = Math.round(totalRevenueFromAds * 100) / 100;
+      const overallROAS = roundedAdSpend > 0 ? roundedRevenue / roundedAdSpend : 0;
+
+      const campaigns: ROASCampaign[] = ads.map((ad) => {
+        const spend = Math.round((ad.budget?.spent || 0) * 100) / 100;
+        const revenue = Math.round((campaignRevenue.get(ad._id.toString()) || 0) * 100) / 100;
+        const roas = spend > 0 ? Math.round((revenue / spend) * 100) / 100 : 0;
+        const status: 'active' | 'paused' = ad.status === 'active' ? 'active' : 'paused';
+        return { name: ad.name || 'Unnamed campaign', spend, revenue, roas, status };
+      });
+
+      const roasData: ROASChartPoint[] = dailyData.map((d) => ({
+        date: d.date,
+        adSpend: d.spend,
+        revenue: d.revenue,
+        bookings: d.bookings,
+        roas: d.roas,
+        cpc: d.clicks > 0 ? Math.round((d.spend / d.clicks) * 100) / 100 : 0,
+        impressions: d.impressions,
+        clicks: d.clicks,
+      }));
+
+      const nonZeroRoasDays = dailyData.filter((d) => d.roas > 0);
+      const averageROAS = nonZeroRoasDays.length > 0
+        ? Math.round(
+            (nonZeroRoasDays.reduce((sum, d) => sum + d.roas, 0) / nonZeroRoasDays.length) * 100,
+          ) / 100
+        : 0;
+
+      const sortedCampaigns = [...campaigns].sort((a, b) => b.roas - a.roas);
+
+      const stats: ROASStats = {
+        totalAdSpend: roundedAdSpend,
+        totalRevenue: roundedRevenue,
+        overallROAS: Math.round(overallROAS * 100) / 100,
+        averageROAS,
+        totalBookings: adConversionCount,
+        costPerBooking:
+          adConversionCount > 0
+            ? Math.round((roundedAdSpend / adConversionCount) * 100) / 100
+            : 0,
+        bestCampaign: sortedCampaigns[0]?.name || '',
+        worstCampaign: sortedCampaigns[sortedCampaigns.length - 1]?.name || '',
+        targetROAS: 5.0,
+      };
 
       return {
         providerId,
-        totalAdSpend: Math.round(totalAdSpend * 100) / 100,
-        revenueFromAds: Math.round(totalRevenueFromAds * 100) / 100,
-        roas: Math.round(overallROAS * 100) / 100,
-        benchmark,
-        trend,
-        dailyData,
+        roasData,
+        stats,
+        campaigns,
+      };
+    }, 300);
+  }
+
+  /**
+   * Breakdown of bookings and revenue by attribution source for a provider.
+   */
+  async getBookingSourceAttribution(
+    providerId: string,
+    period: string = '30d',
+  ): Promise<BookingSourceAttributionData> {
+    const cacheKey = `analytics:provider:${providerId}:source-attribution:${period}`;
+
+    return getCachedData(cacheKey, async () => {
+      const { startDate, endDate } = getDateRange(period);
+      const providerObjectId = new mongoose.Types.ObjectId(providerId);
+
+      const bookings = await Booking.find({
+        providerId: providerObjectId,
+        createdAt: { $gte: startDate, $lte: endDate },
+        deletedAt: { $exists: false },
+      })
+        .select('status pricing.totalAmount attribution metadata.bookingSource completedAt')
+        .lean();
+
+      const bySourceMap = new Map<BookingAttributionSource, BookingSourceAttributionRow>();
+
+      for (const source of BOOKING_ATTRIBUTION_SOURCES) {
+        bySourceMap.set(source, {
+          source,
+          bookings: 0,
+          completedBookings: 0,
+          revenue: 0,
+        });
+      }
+
+      let totalBookings = 0;
+      let totalCompletedBookings = 0;
+      let totalRevenue = 0;
+
+      for (const booking of bookings) {
+        const source = resolveStoredAttributionSource(booking);
+        const row = bySourceMap.get(source)!;
+        row.bookings += 1;
+        totalBookings += 1;
+
+        if (booking.status === 'completed') {
+          const completedAt = booking.completedAt ? new Date(booking.completedAt) : null;
+          if (completedAt && completedAt >= startDate && completedAt <= endDate) {
+            const revenue = booking.pricing?.totalAmount || 0;
+            row.completedBookings += 1;
+            row.revenue += revenue;
+            totalCompletedBookings += 1;
+            totalRevenue += revenue;
+          }
+        }
+      }
+
+      const bySource = Array.from(bySourceMap.values())
+        .filter((row) => row.bookings > 0 || row.revenue > 0)
+        .map((row) => ({
+          ...row,
+          revenue: Math.round(row.revenue * 100) / 100,
+        }))
+        .sort((a, b) => b.revenue - a.revenue);
+
+      return {
+        providerId,
+        period,
+        startDate: startDate.toISOString(),
+        endDate: endDate.toISOString(),
+        totalBookings,
+        totalCompletedBookings,
+        totalRevenue: Math.round(totalRevenue * 100) / 100,
+        bySource,
       };
     }, 300);
   }
@@ -663,6 +1035,15 @@ export class ProviderAnalyticsService {
         });
       }
 
+      const totalPlatformBookings = allProviderVolumes.reduce(
+        (sum, p) => sum + (p.bookingCount || 0),
+        0
+      );
+      const marketShare =
+        totalPlatformBookings > 0
+          ? Math.round((providerBookingsCount / totalPlatformBookings) * 1000) / 10
+          : 0;
+
       return {
         providerId,
         overallRank,
@@ -671,6 +1052,9 @@ export class ProviderAnalyticsService {
         metrics,
         comparison,
         suggestions,
+        reviews: providerProfile?.reviewsData?.totalReviews ?? 0,
+        marketShare,
+        trend: 0,
       };
     }, 600);
   }
@@ -683,41 +1067,165 @@ export class ProviderAnalyticsService {
 
     return getCachedData(cacheKey, async () => {
       const { startDate, endDate } = getDateRange(period);
+      const providerObjectId = new mongoose.Types.ObjectId(providerId);
+      const trendMonths = getTrendMonthCount(period);
+      const trendStart = new Date(endDate.getFullYear(), endDate.getMonth() - trendMonths + 1, 1);
 
-      const bookings = await Booking.find({
-        providerId,
-        status: 'completed',
-        createdAt: { $gte: startDate, $lte: endDate },
-      }).lean();
+      const [periodCustomers, customerProfiles, monthlyActivity] = await Promise.all([
+        Booking.aggregate([
+          {
+            $match: {
+              providerId: providerObjectId,
+              status: 'completed',
+              createdAt: { $gte: startDate, $lte: endDate },
+              customerId: { $exists: true, $ne: null },
+            },
+          },
+          {
+            $group: {
+              _id: '$customerId',
+              bookingCount: { $sum: 1 },
+            },
+          },
+        ]),
+        Booking.aggregate([
+          {
+            $match: {
+              providerId: providerObjectId,
+              status: 'completed',
+              customerId: { $exists: true, $ne: null },
+            },
+          },
+          { $sort: { createdAt: 1 } },
+          {
+            $group: {
+              _id: '$customerId',
+              firstBookingAt: { $first: '$createdAt' },
+              bookingMonths: {
+                $addToSet: {
+                  $dateToString: { format: '%Y-%m', date: '$createdAt' },
+                },
+              },
+            },
+          },
+        ]),
+        Booking.aggregate([
+          {
+            $match: {
+              providerId: providerObjectId,
+              status: 'completed',
+              createdAt: { $gte: trendStart, $lte: endDate },
+              customerId: { $exists: true, $ne: null },
+            },
+          },
+          {
+            $group: {
+              _id: {
+                month: { $dateToString: { format: '%Y-%m', date: '$createdAt' } },
+                customerId: '$customerId',
+              },
+            },
+          },
+          {
+            $group: {
+              _id: '$_id.month',
+              customers: { $addToSet: '$_id.customerId' },
+            },
+          },
+          { $sort: { _id: 1 } },
+        ]),
+      ]);
 
-      // Count unique customers
-      const customerBookings: Map<string, number> = new Map();
-      bookings.forEach(booking => {
-        const customerId = booking.customerId?.toString() || '';
-        customerBookings.set(customerId, (customerBookings.get(customerId) || 0) + 1);
+      const firstBookingByCustomer = new Map<string, Date>();
+      const bookingMonthsByCustomer = new Map<string, Set<string>>();
+
+      customerProfiles.forEach((profile) => {
+        const customerId = profile._id.toString();
+        firstBookingByCustomer.set(customerId, new Date(profile.firstBookingAt));
+        bookingMonthsByCustomer.set(
+          customerId,
+          new Set((profile.bookingMonths as string[]) || []),
+        );
       });
 
-      const totalCustomers = customerBookings.size;
-      const repeatCustomers = Array.from(customerBookings.values()).filter(count => count > 1).length;
+      const totalCustomers = periodCustomers.length;
+      const repeatCustomers = periodCustomers.filter((customer) => customer.bookingCount > 1).length;
       const newCustomers = totalCustomers - repeatCustomers;
-      const repeatRate = totalCustomers > 0 ? (repeatCustomers / totalCustomers) * 100 : 0;
+      const repeatRate = totalCustomers > 0 ? round2((repeatCustomers / totalCustomers) * 100) : 0;
 
-      // Calculate average time to repeat (simplified)
-      const avgTimeToRepeat = 18;
+      const trendMonthKeys: string[] = [];
+      for (let offset = trendMonths - 1; offset >= 0; offset--) {
+        trendMonthKeys.push(addMonths(monthKey(endDate), -offset));
+      }
 
-      // Generate cohort data (simplified)
-      const cohortData = [
-        { cohort: '3 months ago', month1: 100, month2: 72, month3: 58, month6: 0 },
-        { cohort: '2 months ago', month1: 100, month2: 78, month3: 65, month6: 0 },
-        { cohort: '1 month ago', month1: 100, month2: 82, month6: 0, month3: 0 },
-      ];
+      const monthlyMap = new Map<string, Set<string>>();
+      monthlyActivity.forEach((entry) => {
+        monthlyMap.set(
+          entry._id,
+          new Set(entry.customers.map((id: mongoose.Types.ObjectId) => id.toString())),
+        );
+      });
 
-      const retentionFactors = [
-        { factor: 'Service Quality', impact: 85 },
-        { factor: 'Response Time', impact: 72 },
-        { factor: 'Pricing', impact: 58 },
-        { factor: 'Communication', impact: 65 },
-      ];
+      const trendData: RepeatCustomerTrendPoint[] = trendMonthKeys.map((key) => {
+        const customersInMonth = monthlyMap.get(key) || new Set<string>();
+        let monthNewCustomers = 0;
+        let monthRepeatCustomers = 0;
+
+        customersInMonth.forEach((customerId) => {
+          const firstBookingAt = firstBookingByCustomer.get(customerId);
+          if (!firstBookingAt) return;
+
+          if (monthKey(firstBookingAt) === key) {
+            monthNewCustomers += 1;
+          } else {
+            monthRepeatCustomers += 1;
+          }
+        });
+
+        const monthTotal = monthNewCustomers + monthRepeatCustomers;
+
+        return {
+          month: formatMonthLabel(key),
+          newCustomers: monthNewCustomers,
+          repeatCustomers: monthRepeatCustomers,
+          repeatRate: monthTotal > 0 ? round2((monthRepeatCustomers / monthTotal) * 100) : 0,
+        };
+      });
+
+      const cohortKeys = trendMonthKeys.slice(-6);
+      const cohortData: RepeatCustomerCohort[] = cohortKeys.map((cohortKey) => {
+        const cohortCustomers = Array.from(firstBookingByCustomer.entries())
+          .filter(([, firstBookingAt]) => monthKey(firstBookingAt) === cohortKey)
+          .map(([customerId]) => customerId);
+
+        const cohortSize = cohortCustomers.length;
+        if (cohortSize === 0) {
+          return {
+            cohort: formatMonthLabel(cohortKey),
+            month1: 0,
+            month2: 0,
+            month3: 0,
+            month6: 0,
+          };
+        }
+
+        const retentionAtOffset = (offset: number = 0): number => {
+          if (offset === 0) return 100;
+          const targetMonth = addMonths(cohortKey, offset);
+          const retained = cohortCustomers.filter((customerId) =>
+            bookingMonthsByCustomer.get(customerId)?.has(targetMonth),
+          ).length;
+          return round2((retained / cohortSize) * 100);
+        };
+
+        return {
+          cohort: formatMonthLabel(cohortKey),
+          month1: retentionAtOffset(0),
+          month2: retentionAtOffset(1),
+          month3: retentionAtOffset(2),
+          month6: retentionAtOffset(5),
+        };
+      });
 
       return {
         providerId,
@@ -725,12 +1233,679 @@ export class ProviderAnalyticsService {
         totalCustomers,
         repeatCustomers,
         newCustomers,
-        avgTimeToRepeat,
-        trend: repeatRate > 30 ? 5 : -2,
+        trendData,
         cohortData,
-        retentionFactors,
       };
     }, 300);
+  }
+
+  async getResponseTimeMetrics(
+    providerId: string,
+    period: string = '30d',
+  ): Promise<ResponseTimeMetricsData> {
+    const cacheKey = `analytics:provider:${providerId}:response-time:${period}`;
+
+    return getCachedData(cacheKey, async () => {
+      const { startDate, endDate } = getDateRange(period);
+      const providerObjectId = new mongoose.Types.ObjectId(providerId);
+      const targetMinutes = 60;
+
+      const [responseAgg, profile, previousAgg] = await Promise.all([
+        Booking.aggregate([
+          {
+            $match: {
+              providerId: providerObjectId,
+              createdAt: { $gte: startDate, $lte: endDate },
+              $or: [
+                { 'providerResponse.acceptedAt': { $exists: true, $ne: null } },
+                { 'messages.0': { $exists: true } },
+              ],
+            },
+          },
+          {
+            $addFields: {
+              firstProviderMessageAt: {
+                $let: {
+                  vars: {
+                    providerMessages: {
+                      $filter: {
+                        input: { $ifNull: ['$messages', []] },
+                        as: 'message',
+                        cond: { $eq: ['$$message.from', '$providerId'] },
+                      },
+                    },
+                  },
+                  in: {
+                    $min: '$$providerMessages.timestamp',
+                  },
+                },
+              },
+            },
+          },
+          {
+            $project: {
+              responseMinutes: {
+                $cond: [
+                  { $ifNull: ['$providerResponse.acceptedAt', false] },
+                  {
+                    $divide: [
+                      { $subtract: ['$providerResponse.acceptedAt', '$createdAt'] },
+                      60000,
+                    ],
+                  },
+                  {
+                    $divide: [
+                      { $subtract: ['$firstProviderMessageAt', '$createdAt'] },
+                      60000,
+                    ],
+                  },
+                ],
+              },
+            },
+          },
+          { $match: { responseMinutes: { $gt: 0, $lt: 24 * 60 } } },
+          {
+            $group: {
+              _id: null,
+              avg: { $avg: '$responseMinutes' },
+              values: { $push: '$responseMinutes' },
+            },
+          },
+        ]),
+        ProviderProfile.findOne({ userId: providerObjectId })
+          .select('reviewsData.avgResponseTime analytics.performanceMetrics.responseTime')
+          .lean(),
+        Booking.aggregate([
+          {
+            $match: {
+              providerId: providerObjectId,
+              createdAt: {
+                $gte: new Date(startDate.getTime() - (endDate.getTime() - startDate.getTime())),
+                $lt: startDate,
+              },
+              $or: [
+                { 'providerResponse.acceptedAt': { $exists: true, $ne: null } },
+                { 'messages.0': { $exists: true } },
+              ],
+            },
+          },
+          {
+            $addFields: {
+              firstProviderMessageAt: {
+                $let: {
+                  vars: {
+                    providerMessages: {
+                      $filter: {
+                        input: { $ifNull: ['$messages', []] },
+                        as: 'message',
+                        cond: { $eq: ['$$message.from', '$providerId'] },
+                      },
+                    },
+                  },
+                  in: {
+                    $min: '$$providerMessages.timestamp',
+                  },
+                },
+              },
+            },
+          },
+          {
+            $project: {
+              responseMinutes: {
+                $cond: [
+                  { $ifNull: ['$providerResponse.acceptedAt', false] },
+                  {
+                    $divide: [
+                      { $subtract: ['$providerResponse.acceptedAt', '$createdAt'] },
+                      60000,
+                    ],
+                  },
+                  {
+                    $divide: [
+                      { $subtract: ['$firstProviderMessageAt', '$createdAt'] },
+                      60000,
+                    ],
+                  },
+                ],
+              },
+            },
+          },
+          { $match: { responseMinutes: { $gt: 0, $lt: 24 * 60 } } },
+          { $group: { _id: null, avg: { $avg: '$responseMinutes' } } },
+        ]),
+      ]);
+
+      const values: number[] = (responseAgg[0]?.values || []).sort((a: number, b: number) => a - b);
+      const sampleSize = values.length;
+      const profileFallbackMinutes =
+        profile?.analytics?.performanceMetrics?.responseTime ||
+        (profile?.reviewsData?.avgResponseTime ? profile.reviewsData.avgResponseTime * 60 : 0);
+      const avgResponseTimeMinutes = round2(
+        responseAgg[0]?.avg || profileFallbackMinutes || 0,
+      );
+      const medianResponseTimeMinutes =
+        sampleSize > 0 ? round2(values[Math.floor(sampleSize / 2)]) : avgResponseTimeMinutes;
+      const p95ResponseTimeMinutes =
+        sampleSize > 0 ? round2(values[Math.min(sampleSize - 1, Math.floor(sampleSize * 0.95))]) : 0;
+
+      const previousAvg = previousAgg[0]?.avg ?? avgResponseTimeMinutes;
+      let trend: ResponseTimeMetricsData['trend'] = 'stable';
+      if (avgResponseTimeMinutes < previousAvg * 0.9) trend = 'improving';
+      else if (avgResponseTimeMinutes > previousAvg * 1.1) trend = 'declining';
+
+      return {
+        providerId,
+        period,
+        avgResponseTimeMinutes,
+        medianResponseTimeMinutes,
+        p95ResponseTimeMinutes,
+        sampleSize,
+        targetMinutes,
+        compliant: avgResponseTimeMinutes <= targetMinutes,
+        profileAvgResponseTimeMinutes: round2(profileFallbackMinutes),
+        trend,
+      };
+    }, 300);
+  }
+
+  async getProviderLTV(providerId: string, period: string = '30d'): Promise<ProviderLTVData> {
+    const cacheKey = `analytics:provider:${providerId}:ltv:${period}`;
+
+    return getCachedData(cacheKey, async () => {
+      const { startDate, endDate } = getDateRange(period);
+      const providerObjectId = new mongoose.Types.ObjectId(providerId);
+
+      const customerStats = await Booking.aggregate([
+        {
+          $match: {
+            providerId: providerObjectId,
+            status: 'completed',
+            customerId: { $exists: true, $ne: null },
+            $or: [
+              { completedAt: { $gte: startDate, $lte: endDate } },
+              {
+                completedAt: { $exists: false },
+                createdAt: { $gte: startDate, $lte: endDate },
+              },
+            ],
+          },
+        },
+        {
+          $group: {
+            _id: '$customerId',
+            totalSpent: { $sum: '$pricing.totalAmount' },
+            bookingCount: { $sum: 1 },
+          },
+        },
+        { $sort: { totalSpent: -1 } },
+      ]);
+
+      const totalCustomers = customerStats.length;
+      const totalLTV = customerStats.reduce((sum, row) => sum + (row.totalSpent || 0), 0);
+      const totalBookings = customerStats.reduce((sum, row) => sum + (row.bookingCount || 0), 0);
+
+      return {
+        providerId,
+        period,
+        totalCustomers,
+        avgRevenuePerCustomer: totalCustomers > 0 ? round2(totalLTV / totalCustomers) : 0,
+        totalLTV: round2(totalLTV),
+        avgBookingsPerCustomer: totalCustomers > 0 ? round2(totalBookings / totalCustomers) : 0,
+        topCustomers: customerStats.slice(0, 5).map((row) => ({
+          customerId: row._id?.toString() || '',
+          totalSpent: round2(row.totalSpent || 0),
+          bookingCount: row.bookingCount || 0,
+        })),
+      };
+    }, 300);
+  }
+
+  async getGeographicDemand(providerId: string, period: string = '30d'): Promise<GeographicDemandData> {
+    const cacheKey = `analytics:provider:${providerId}:geographic:${period}`;
+
+    return getCachedData(cacheKey, async () => {
+      const { startDate, endDate } = getDateRange(period);
+      const providerObjectId = new mongoose.Types.ObjectId(providerId);
+
+      const rows = await Booking.aggregate([
+        {
+          $match: {
+            providerId: providerObjectId,
+            status: 'completed',
+            $or: [
+              { completedAt: { $gte: startDate, $lte: endDate } },
+              {
+                completedAt: { $exists: false },
+                createdAt: { $gte: startDate, $lte: endDate },
+              },
+            ],
+          },
+        },
+        ...geographicLookupStages(),
+        {
+          $addFields: {
+            resolvedCity: resolvedCityAggregationField(),
+            resolvedEmirate: {
+              $ifNull: [
+                '$location.address.state',
+                '$customer.address.state',
+                '$defaultAddress.state',
+                'Unknown',
+              ],
+            },
+          },
+        },
+        {
+          $group: {
+            _id: { city: '$resolvedCity', emirate: '$resolvedEmirate' },
+            bookings: { $sum: 1 },
+            revenue: { $sum: '$pricing.totalAmount' },
+          },
+        },
+        { $sort: { revenue: -1 } },
+        { $limit: 10 },
+      ]);
+
+      const totalBookings = rows.reduce((sum, row) => sum + row.bookings, 0);
+      const totalRevenue = rows.reduce((sum, row) => sum + row.revenue, 0);
+
+      const locations: GeographicDemandEntry[] = rows.map((row) => ({
+        city: row._id.city,
+        emirate: row._id.emirate,
+        bookings: row.bookings,
+        revenue: round2(row.revenue),
+        avgBookingValue: row.bookings > 0 ? round2(row.revenue / row.bookings) : 0,
+        share: totalBookings > 0 ? round2((row.bookings / totalBookings) * 100) : 0,
+      }));
+
+      return {
+        providerId,
+        period,
+        locations,
+        totalBookings,
+        totalRevenue: round2(totalRevenue),
+      };
+    }, 300);
+  }
+
+  async getRevenueForecast(providerId: string, period: string = '30d'): Promise<RevenueForecastData> {
+    const cacheKey = `analytics:provider:${providerId}:forecast:${period}`;
+
+    return getCachedData(cacheKey, async () => {
+      const { startDate, endDate } = getDateRange(period);
+      const providerObjectId = new mongoose.Types.ObjectId(providerId);
+
+      const dailyRows = await Booking.aggregate([
+        {
+          $match: {
+            providerId: providerObjectId,
+            status: 'completed',
+            completedAt: { $gte: startDate, $lte: endDate },
+          },
+        },
+        {
+          $group: {
+            _id: {
+              $dateToString: { format: '%Y-%m-%d', date: '$completedAt' },
+            },
+            revenue: { $sum: '$pricing.totalAmount' },
+          },
+        },
+        { $sort: { _id: 1 } },
+      ]);
+
+      const historicalDaily = dailyRows.map((row) => ({
+        date: row._id,
+        revenue: round2(row.revenue),
+      }));
+
+      const dailyValues = historicalDaily.map((row) => row.revenue);
+      const forecast7d = linearForecast(dailyValues, 7);
+      const forecast30d = linearForecast(dailyValues, 30);
+      const projectedRevenue7d = round2(forecast7d.reduce((sum, point) => sum + point.predicted, 0));
+      const projectedRevenue30d = round2(forecast30d.reduce((sum, point) => sum + point.predicted, 0));
+
+      const firstHalf = dailyValues.slice(0, Math.floor(dailyValues.length / 2));
+      const secondHalf = dailyValues.slice(Math.floor(dailyValues.length / 2));
+      const firstAvg = firstHalf.length ? firstHalf.reduce((a, b) => a + b, 0) / firstHalf.length : 0;
+      const secondAvg = secondHalf.length ? secondHalf.reduce((a, b) => a + b, 0) / secondHalf.length : 0;
+      let trend: RevenueForecastData['trend'] = 'stable';
+      if (secondAvg > firstAvg * 1.1) trend = 'increasing';
+      else if (secondAvg < firstAvg * 0.9) trend = 'decreasing';
+
+      return {
+        providerId,
+        period,
+        historicalDaily,
+        forecast7d,
+        forecast30d,
+        projectedRevenue7d,
+        projectedRevenue30d,
+        trend,
+      };
+    }, 300);
+  }
+
+  async getProviderAnomalyAlerts(providerId: string, period: string = '30d'): Promise<ProviderAnomalyAlert[]> {
+    const cacheKey = `analytics:provider:${providerId}:anomalies:${period}`;
+
+    return getCachedData(cacheKey, async () => {
+      const { startDate, endDate } = getDateRange(period);
+      const providerObjectId = new mongoose.Types.ObjectId(providerId);
+      const previousStart = new Date(startDate.getTime() - (endDate.getTime() - startDate.getTime()));
+      const alerts: ProviderAnomalyAlert[] = [];
+      const now = new Date().toISOString();
+
+      const [currentBookings, previousBookings, cancellationStats, responseTime] = await Promise.all([
+        Booking.countDocuments({
+          providerId: providerObjectId,
+          createdAt: { $gte: startDate, $lte: endDate },
+        }),
+        Booking.countDocuments({
+          providerId: providerObjectId,
+          createdAt: { $gte: previousStart, $lt: startDate },
+        }),
+        Booking.aggregate([
+          {
+            $match: {
+              providerId: providerObjectId,
+              createdAt: { $gte: startDate, $lte: endDate },
+              status: { $in: ['completed', 'cancelled'] },
+            },
+          },
+          {
+            $group: {
+              _id: null,
+              total: { $sum: 1 },
+              cancelled: { $sum: { $cond: [{ $eq: ['$status', 'cancelled'] }, 1, 0] } },
+            },
+          },
+        ]),
+        this.getResponseTimeMetrics(providerId, period),
+      ]);
+
+      // Minimum thresholds to avoid false positives on low-volume providers
+      const MIN_BOOKINGS_FOR_ANALYSIS = 5;
+      const BOOKING_DROP_THRESHOLD = 0.5; // 50% drop
+      const CANCEL_RATE_WARNING = 25; // 25%
+      const CANCEL_RATE_CRITICAL = 40; // 40%
+
+      // Booking drop detection - only if we have enough historical data
+      if (previousBookings >= MIN_BOOKINGS_FOR_ANALYSIS && currentBookings < previousBookings * BOOKING_DROP_THRESHOLD) {
+        const dropPercent = round2(((previousBookings - currentBookings) / previousBookings) * 100);
+        if (dropPercent >= 50) {
+          alerts.push({
+            id: `booking-drop-${period}`,
+            severity: dropPercent >= 70 ? 'critical' : 'warning',
+            title: dropPercent >= 70 ? 'Significant booking drop' : 'Booking volume declining',
+            message: `Bookings fell ${dropPercent}% (${previousBookings} → ${currentBookings}) vs the previous period.`,
+            metric: 'bookings',
+            detectedAt: now,
+          });
+        }
+      }
+
+      // Cancellation rate - only if we have enough completed/cancelled bookings
+      const cancelTotal = cancellationStats[0]?.total || 0;
+      if (cancelTotal >= MIN_BOOKINGS_FOR_ANALYSIS) {
+        const cancelRate = cancelTotal > 0 ? (cancellationStats[0].cancelled / cancelTotal) * 100 : 0;
+        if (cancelRate > CANCEL_RATE_CRITICAL) {
+          alerts.push({
+            id: `high-cancellation-${period}`,
+            severity: 'critical',
+            title: 'Critical cancellation rate',
+            message: `Cancellation rate is ${round2(cancelRate)}% — well above recommended levels.`,
+            metric: 'cancellationRate',
+            detectedAt: now,
+          });
+        } else if (cancelRate > CANCEL_RATE_WARNING) {
+          alerts.push({
+            id: `high-cancellation-${period}`,
+            severity: 'warning',
+            title: 'Elevated cancellation rate',
+            message: `Cancellation rate is ${round2(cancelRate)}% — consider implementing prevention strategies.`,
+            metric: 'cancellationRate',
+            detectedAt: now,
+          });
+        }
+      }
+
+      // Response time - only if we have a meaningful sample and significant deviation
+      if (responseTime.sampleSize >= MIN_BOOKINGS_FOR_ANALYSIS) {
+        if (!responseTime.compliant) {
+          const deviationPercent = round2((responseTime.avgResponseTimeMinutes / responseTime.targetMinutes) * 100 - 100);
+          if (responseTime.avgResponseTimeMinutes > responseTime.targetMinutes * 2.5) {
+            alerts.push({
+              id: `slow-response-${period}`,
+              severity: 'critical',
+              title: 'Response time significantly above target',
+              message: `Average response time is ${round2(responseTime.avgResponseTimeMinutes)}m — ${deviationPercent}% above your ${responseTime.targetMinutes}m target.`,
+              metric: 'responseTime',
+              detectedAt: now,
+            });
+          } else if (responseTime.avgResponseTimeMinutes > responseTime.targetMinutes) {
+            alerts.push({
+              id: `slow-response-${period}`,
+              severity: 'warning',
+              title: 'Response time above target',
+              message: `Average response time is ${round2(responseTime.avgResponseTimeMinutes)} minutes (target: ${responseTime.targetMinutes}m).`,
+              metric: 'responseTime',
+              detectedAt: now,
+            });
+          }
+        }
+      }
+
+      if (alerts.length === 0) {
+        alerts.push({
+          id: `all-clear-${period}`,
+          severity: 'info',
+          title: 'All metrics healthy',
+          message: 'Your key performance metrics are within normal ranges.',
+          detectedAt: now,
+        });
+      }
+
+      return alerts;
+    }, 120);
+  }
+
+  /**
+   * Travel time and distance analytics from completed/on-site bookings
+   */
+  async getTravelMetrics(providerId: string, period: string = '30d'): Promise<ProviderTravelMetrics> {
+    const cacheKey = `analytics:provider:${providerId}:travel:${period}`;
+
+    return getCachedData(cacheKey, async () => {
+      const { startDate, endDate } = getDateRange(period);
+      const providerObjectId = new mongoose.Types.ObjectId(providerId);
+
+      const UAE_EMIRATE_CENTROIDS: Record<string, { lat: number; lng: number }> = {
+        dubai: { lat: 25.2048, lng: 55.2708 },
+        'abu dhabi': { lat: 24.4539, lng: 54.3773 },
+        sharjah: { lat: 25.3463, lng: 55.4209 },
+        ajman: { lat: 25.4052, lng: 55.5136 },
+        'ras al khaimah': { lat: 25.7895, lng: 55.9432 },
+        rak: { lat: 25.7895, lng: 55.9432 },
+        fujairah: { lat: 25.1288, lng: 56.3264 },
+        'umm al quwain': { lat: 25.5647, lng: 55.5552 },
+        uaq: { lat: 25.5647, lng: 55.5552 },
+      };
+
+      const resolveBookingCoordinates = (
+        booking: {
+          location?: {
+            address?: {
+              coordinates?: { coordinates?: number[] };
+              city?: string;
+              state?: string;
+            };
+          };
+        },
+      ): { lat: number; lng: number } | null => {
+        const bookingCoords = booking.location?.address?.coordinates?.coordinates;
+        if (bookingCoords && bookingCoords.length === 2) {
+          return { lat: bookingCoords[1], lng: bookingCoords[0] };
+        }
+
+        const cityKey = (booking.location?.address?.city || booking.location?.address?.state || '')
+          .trim()
+          .toLowerCase();
+        if (!cityKey) return null;
+
+        const centroid = UAE_EMIRATE_CENTROIDS[cityKey]
+          || Object.entries(UAE_EMIRATE_CENTROIDS).find(([name]) => cityKey.includes(name))?.[1];
+        return centroid || null;
+      };
+
+      const [profile, bookings] = await Promise.all([
+        ProviderProfile.findOne({ userId: providerId })
+          .select('locationInfo.primaryAddress.coordinates locationInfo.travelFee')
+          .lean(),
+        Booking.find({
+          providerId: providerObjectId,
+          status: { $in: ['confirmed', 'in_progress', 'completed'] },
+          createdAt: { $gte: startDate, $lte: endDate },
+        })
+          .select('location scheduledDate pricing.addOns createdAt')
+          .lean(),
+      ]);
+
+      const providerCoords = profile?.locationInfo?.primaryAddress?.coordinates?.coordinates;
+      const travelFeeConfig = profile?.locationInfo?.travelFee || {
+        baseFee: 0,
+        perKmFee: 0,
+        maxTravelDistance: 25,
+      };
+
+      const dayLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+      const dailyBuckets = new Map<number, {
+        totalTravelTime: number;
+        totalDistance: number;
+        bookings: number;
+      }>();
+      for (let i = 0; i < 7; i += 1) {
+        dailyBuckets.set(i, { totalTravelTime: 0, totalDistance: 0, bookings: 0 });
+      }
+
+      const areaBuckets = new Map<string, {
+        jobs: number;
+        totalTravel: number;
+        totalDistance: number;
+      }>();
+
+      let totalTravelTime = 0;
+      let totalDistance = 0;
+      let totalTravelFees = 0;
+      let remoteArea = { name: '', distance: 0 };
+      let inefficientArea = { name: '', travelPerJob: 0 };
+
+      for (const booking of bookings) {
+        const to = resolveBookingCoordinates(booking);
+        if (!to) continue;
+
+        let distanceKm = 0;
+        let travelMinutes = 0;
+
+        if (providerCoords && providerCoords.length === 2) {
+          const from = { lat: providerCoords[1], lng: providerCoords[0] };
+          const estimate = geolocationService.estimateTravelTime(from, to, {
+            departureTime: booking.scheduledDate ? new Date(booking.scheduledDate) : undefined,
+          });
+          distanceKm = estimate.distance;
+          travelMinutes = estimate.durationMinutes;
+        } else {
+          distanceKm = Math.min(travelFeeConfig.maxTravelDistance, 10);
+          travelMinutes = Math.ceil((distanceKm / 30) * 60);
+        }
+
+        const travelFeeFromAddOn = (booking.pricing?.addOns || [])
+          .filter((addOn) => /travel/i.test(addOn.name))
+          .reduce((sum, addOn) => sum + (addOn.price || 0), 0);
+        const computedTravelFee = travelFeeConfig.baseFee + (distanceKm * travelFeeConfig.perKmFee);
+        totalTravelFees += travelFeeFromAddOn > 0 ? travelFeeFromAddOn : computedTravelFee;
+
+        totalTravelTime += travelMinutes;
+        totalDistance += distanceKm;
+
+        const dayIndex = booking.scheduledDate
+          ? new Date(booking.scheduledDate).getDay()
+          : new Date(booking.createdAt).getDay();
+        const dayBucket = dailyBuckets.get(dayIndex)!;
+        dayBucket.totalTravelTime += travelMinutes;
+        dayBucket.totalDistance += distanceKm;
+        dayBucket.bookings += 1;
+
+        const area = booking.location?.address?.city || booking.location?.address?.state || 'Unknown';
+        const areaBucket = areaBuckets.get(area) || { jobs: 0, totalTravel: 0, totalDistance: 0 };
+        areaBucket.jobs += 1;
+        areaBucket.totalTravel += travelMinutes;
+        areaBucket.totalDistance += distanceKm;
+        areaBuckets.set(area, areaBucket);
+
+        if (distanceKm > remoteArea.distance) {
+          remoteArea = { name: area, distance: distanceKm };
+        }
+
+        const travelPerJob = areaBucket.totalTravel / areaBucket.jobs;
+        if (travelPerJob > inefficientArea.travelPerJob) {
+          inefficientArea = { name: area, travelPerJob };
+        }
+      }
+
+      const bookingCount = bookings.filter((booking) => resolveBookingCoordinates(booking)).length;
+      const avgTravelTime = bookingCount > 0 ? Math.round(totalTravelTime / bookingCount) : 0;
+      const avgDistance = bookingCount > 0 ? round2(totalDistance / bookingCount) : 0;
+      const fuelCost = round2(totalDistance * 0.35);
+      const maxReasonableTravel = avgTravelTime * bookingCount * 0.85;
+      const potentialSavings = round2(Math.max(0, totalTravelFees - maxReasonableTravel * 0.5));
+      const efficiency = bookingCount > 0
+        ? Math.min(100, Math.round((avgDistance <= travelFeeConfig.maxTravelDistance ? 85 : 65)))
+        : 0;
+
+      const travelData: TravelDataPoint[] = dayLabels.map((label, index) => {
+        const bucket = dailyBuckets.get(index)!;
+        const dayBookings = bucket.bookings || 0;
+        return {
+          date: label,
+          totalTravelTime: bucket.totalTravelTime,
+          avgTravelTime: dayBookings > 0 ? Math.round(bucket.totalTravelTime / dayBookings) : 0,
+          totalDistance: round2(bucket.totalDistance),
+          bookings: dayBookings,
+          efficiency: dayBookings > 0
+            ? Math.min(100, Math.round(100 - (bucket.totalDistance / dayBookings)))
+            : 0,
+        };
+      });
+
+      const jobsByArea: JobsByArea[] = Array.from(areaBuckets.entries())
+        .map(([area, bucket]) => ({
+          area,
+          jobs: bucket.jobs,
+          avgTravel: bucket.jobs > 0 ? Math.round(bucket.totalTravel / bucket.jobs) : 0,
+          avgDistance: bucket.jobs > 0 ? round2(bucket.totalDistance / bucket.jobs) : 0,
+        }))
+        .sort((a, b) => b.jobs - a.jobs)
+        .slice(0, 10);
+
+      return {
+        providerId,
+        period,
+        travelData,
+        stats: {
+          totalTravelTime,
+          avgTravelTime,
+          totalDistance: round2(totalDistance),
+          avgDistance,
+          fuelCost,
+          mostRemoteJob: remoteArea.name || 'N/A',
+          leastEfficient: inefficientArea.name || 'N/A',
+          potentialSavings,
+          efficiency,
+        },
+        jobsByArea,
+      };
+    }, 600);
   }
 
   /**

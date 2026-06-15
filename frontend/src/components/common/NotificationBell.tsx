@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Bell, BellOff, Check, Clock, AlertCircle, Calendar, MessageSquare, Star, X } from 'lucide-react';
+import { Check, Clock, AlertCircle, Calendar, MessageSquare, Star, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../services/api';
 import { socketService, type NotificationEvent } from '../../services/socket';
@@ -33,6 +33,66 @@ function normalizeNotification(raw: Partial<Notification> & { id?: string }): No
   };
 }
 
+// Custom NILIN-styled Bell SVG Component
+const NilinBellIcon: React.FC<{ hasUnread: boolean; isRinging: boolean }> = ({ hasUnread, isRinging }) => (
+  <svg
+    width="24"
+    height="24"
+    viewBox="0 0 24 24"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+    className={`transition-colors duration-300 ${isRinging ? 'animate-nilin-bell-ringing' : ''}`}
+  >
+    {/* Bell body */}
+    <path
+      d="M12 2C10.9 2 10 2.9 10 4V4.29C7.19 5.17 5 7.92 5 11V15L3 17V18H21V17L19 15V11C19 7.92 16.81 5.17 14 4.29V4C14 2.9 13.1 2 12 2ZM12 22C13.1 22 14 21.1 14 20H10C10 21.1 10.9 22 12 22Z"
+      fill={hasUnread ? '#E8B4A8' : '#6B6B6B'}
+      className="transition-colors duration-300"
+    />
+    {/* Bell top mount */}
+    <path
+      d="M12 1V0C12 0 13 0 13 1V2H11V1C11 0 12 0 12 1Z"
+      fill={hasUnread ? '#D4A89A' : '#9B9B9B'}
+      className="transition-colors duration-300"
+    />
+    {/* Glow effect when has unread */}
+    {hasUnread && (
+      <circle
+        cx="12"
+        cy="13"
+        r="10"
+        fill="none"
+        stroke="#E8B4A8"
+        strokeWidth="2"
+        strokeDasharray="4 2"
+        className="animate-pulse opacity-50"
+      />
+    )}
+  </svg>
+);
+
+// Empty state bell icon
+const NilinBellOffIcon: React.FC = () => (
+  <svg
+    width="24"
+    height="24"
+    viewBox="0 0 24 24"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <path
+      d="M12 2C10.9 2 10 2.9 10 4V4.29C7.19 5.17 5 7.92 5 11V15L3 17V18H21V17L19 15V11C19 7.92 16.81 5.17 14 4.29V4C14 2.9 13.1 2 12 2Z"
+      fill="#9B9B9B"
+    />
+    <path
+      d="M12 1V0C12 0 13 0 13 1V2H11V1C11 0 12 0 12 1Z"
+      fill="#BDBDBD"
+    />
+    {/* Crossed out line */}
+    <line x1="4" y1="4" x2="20" y2="20" stroke="#9B9B9B" strokeWidth="2" strokeLinecap="round" />
+  </svg>
+);
+
 const NotificationBell: React.FC<NotificationBellProps> = ({ userId, userRole = 'customer' }) => {
   const navigate = useNavigate();
   const { isAuthenticated, tokens } = useAuthStore();
@@ -42,7 +102,9 @@ const NotificationBell: React.FC<NotificationBellProps> = ({ userId, userRole = 
   const [unreadCount, setUnreadCount] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
+  const [isRinging, setIsRinging] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const prevUnreadCount = useRef(unreadCount);
 
   // Handle new notification from socket
   const handleNewNotification = useCallback((event: NotificationEvent) => {
@@ -59,6 +121,10 @@ const NotificationBell: React.FC<NotificationBellProps> = ({ userId, userRole = 
 
     setNotifications(prev => [newNotification, ...prev.slice(0, 9)]);
     setUnreadCount(prev => prev + 1);
+
+    // Trigger ringing animation on new notification
+    setIsRinging(true);
+    setTimeout(() => setIsRinging(false), 1500);
 
     // Play sound or show toast if window is not focused
     if (document.hidden) {
@@ -135,6 +201,15 @@ const NotificationBell: React.FC<NotificationBellProps> = ({ userId, userRole = 
     }
   }, [userId, hasAuthToken]);
 
+  // Ring animation when new notifications arrive
+  useEffect(() => {
+    if (unreadCount > prevUnreadCount.current) {
+      setIsRinging(true);
+      setTimeout(() => setIsRinging(false), 1500);
+    }
+    prevUnreadCount.current = unreadCount;
+  }, [unreadCount]);
+
   // Close dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -179,13 +254,19 @@ const NotificationBell: React.FC<NotificationBellProps> = ({ userId, userRole = 
   const getNotificationIcon = (type: string) => {
     switch (type) {
       case 'booking':
-        return <Calendar className="h-4 w-4 text-blue-500" />;
+        return <Calendar className="h-4 w-4 text-nilin-coral" />;
       case 'message':
-        return <MessageSquare className="h-4 w-4 text-green-500" />;
+      case 'message_received':
+      case 'chat':
+        return <MessageSquare className="h-4 w-4 text-nilin-success" />;
       case 'promotion':
         return <Star className="h-4 w-4 text-yellow-500" />;
+      case 'review':
+        return <Star className="h-4 w-4 text-nilin-rose" />;
+      case 'support':
+        return <AlertCircle className="h-4 w-4 text-nilin-warning" />;
       default:
-        return <AlertCircle className="h-4 w-4 text-gray-500" />;
+        return <AlertCircle className="h-4 w-4 text-nilin-warmGray" />;
     }
   };
 
@@ -239,43 +320,73 @@ const NotificationBell: React.FC<NotificationBellProps> = ({ userId, userRole = 
 
   if (!userId) return null;
 
+  const hasUnread = unreadCount > 0;
+
   return (
     <div className="relative" ref={dropdownRef}>
-      {/* Bell Button */}
+      {/* Bell Button - NILIN styled with glass effect */}
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="p-2 rounded-xl text-nilin-warmGray hover:text-nilin-charcoal hover:bg-nilin-blush/50 transition-colors relative"
+        className={`
+          relative p-2.5 rounded-full transition-all duration-300
+          ${hasUnread
+            ? 'bg-nilin-blush/50 hover:bg-nilin-blush shadow-nilin-warm'
+            : 'hover:bg-nilin-muted'
+          }
+          ${isRinging ? 'animate-nilin-bell-button' : ''}
+        `}
+        aria-label={`Notifications${hasUnread ? ` (${unreadCount} unread)` : ''}`}
       >
-        {unreadCount > 0 ? (
-          <Bell className="h-5 w-5" />
-        ) : (
-          <BellOff className="h-5 w-5" />
-        )}
-        {unreadCount > 0 && (
-          <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] flex items-center justify-center text-[10px] font-bold text-white bg-nilin-coral rounded-full px-1">
+        {/* Glass effect background */}
+        <div className={`
+          absolute inset-0 rounded-full transition-opacity duration-300
+          ${hasUnread ? 'opacity-100' : 'opacity-0'}
+        `}>
+          <div className="absolute inset-0 rounded-full bg-gradient-to-br from-nilin-peach/30 to-nilin-blush/30" />
+        </div>
+
+        {/* Bell Icon */}
+        <div className="relative z-10">
+          {hasUnread ? (
+            <NilinBellIcon hasUnread={true} isRinging={isRinging} />
+          ) : (
+            <NilinBellOffIcon />
+          )}
+        </div>
+
+        {/* Unread Badge - NILIN styled */}
+        {hasUnread && (
+          <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] flex items-center justify-center text-[10px] font-bold text-white bg-nilin-coral rounded-full px-1 shadow-nilin-warm animate-nilin-badge-pulse z-20">
             {unreadCount > 99 ? '99+' : unreadCount}
           </span>
         )}
       </button>
 
-      {/* Dropdown */}
+      {/* Dropdown - NILIN styled */}
       {isOpen && (
-        <div className="origin-top-right absolute right-0 mt-2 w-80 rounded-xl shadow-nilin-lg bg-white ring-1 ring-nilin-border z-50 overflow-hidden">
+        <div className="origin-top-right absolute right-0 mt-3 w-80 rounded-nilin-lg shadow-nilin-lg bg-white ring-1 ring-nilin-border z-50 overflow-hidden animate-nilin-dropdown-in">
           {/* Header */}
-          <div className="flex items-center justify-between px-4 py-3 border-b border-nilin-border/50">
-            <h3 className="font-semibold text-nilin-charcoal">Notifications</h3>
+          <div className="flex items-center justify-between px-4 py-3 border-b border-nilin-border/50 bg-gradient-to-r from-nilin-cream to-nilin-peach/20">
+            <div className="flex items-center gap-2">
+              <h3 className="font-serif font-medium text-nilin-charcoal text-lg">Notifications</h3>
+              {hasUnread && (
+                <span className="px-2 py-0.5 text-[10px] font-medium text-white bg-nilin-coral rounded-full">
+                  {unreadCount} new
+                </span>
+              )}
+            </div>
             <div className="flex items-center space-x-2">
               {unreadCount > 0 && (
                 <button
                   onClick={markAllAsRead}
-                  className="text-xs text-nilin-coral hover:text-nilin-coral/80 font-medium"
+                  className="text-xs text-nilin-coral hover:text-nilin-rose font-medium transition-colors"
                 >
                   Mark all read
                 </button>
               )}
               <button
                 onClick={() => setIsOpen(false)}
-                className="p-1 rounded-lg hover:bg-gray-100"
+                className="p-1.5 rounded-lg hover:bg-nilin-blush/50 transition-colors"
               >
                 <X className="h-4 w-4 text-nilin-warmGray" />
               </button>
@@ -283,53 +394,75 @@ const NotificationBell: React.FC<NotificationBellProps> = ({ userId, userRole = 
           </div>
 
           {/* Notification List */}
-          <div className="max-h-96 overflow-y-auto">
+          <div className="max-h-96 overflow-y-auto scrollbar-nilin">
             {isLoading ? (
               <div className="p-8 text-center">
-                <div className="animate-spin h-6 w-6 border-2 border-nilin-coral border-t-transparent rounded-full mx-auto"></div>
+                <div className="animate-spin h-8 w-8 border-2 border-nilin-coral border-t-transparent rounded-full mx-auto" />
+                <p className="text-sm text-nilin-warmGray mt-3">Loading...</p>
               </div>
             ) : notifications.length === 0 ? (
               <div className="p-8 text-center">
-                <BellOff className="h-12 w-12 text-gray-300 mx-auto mb-2" />
-                <p className="text-sm text-nilin-warmGray">No notifications yet</p>
+                <div className="w-16 h-16 mx-auto mb-3 rounded-full bg-nilin-muted flex items-center justify-center">
+                  <NilinBellOffIcon />
+                </div>
+                <p className="text-sm text-nilin-warmGray font-medium">No notifications yet</p>
+                <p className="text-xs text-nilin-lightGray mt-1">We'll notify you when something arrives</p>
               </div>
             ) : (
-              notifications.map((notification) => (
+              notifications.map((notification, index) => (
                 <div
                   key={notification._id || `notification-${notification.createdAt}-${notification.title}`}
                   onClick={() => handleNotificationClick(notification)}
-                  className={`px-4 py-3 hover:bg-gray-50 cursor-pointer border-b border-nilin-border/30 last:border-b-0 ${
-                    !notification.isRead ? 'bg-nilin-blush/20' : ''
-                  }`}
+                  className={`
+                    px-4 py-3 cursor-pointer border-b border-nilin-border/30
+                    transition-all duration-200 hover:bg-nilin-blush/30
+                    ${!notification.isRead ? 'bg-nilin-blush/20' : ''}
+                    ${index === 0 && !notification.isRead ? 'rounded-t-nilin-lg' : ''}
+                    ${index === notifications.length - 1 ? 'rounded-b-nilin-lg' : ''}
+                  `}
                 >
                   <div className="flex items-start space-x-3">
-                    <div className="flex-shrink-0 mt-1">
+                    {/* Icon container */}
+                    <div className={`
+                      flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center
+                      ${!notification.isRead ? 'bg-nilin-coral/10' : 'bg-nilin-muted'}
+                    `}>
                       {getNotificationIcon(notification.type)}
                     </div>
+
+                    {/* Content */}
                     <div className="flex-1 min-w-0">
-                      <p className={`text-sm ${!notification.isRead ? 'font-medium text-nilin-charcoal' : 'text-nilin-charcoal'}`}>
-                        {notification.title}
-                      </p>
-                      <p className="text-xs text-nilin-warmGray mt-0.5 line-clamp-2">
-                        {notification.message}
-                      </p>
-                      <div className="flex items-center mt-1">
-                        <Clock className="h-3 w-3 text-nilin-warmGray mr-1" />
-                        <span className="text-[10px] text-nilin-warmGray">
-                          {formatTime(notification.createdAt)}
-                        </span>
+                      <div className="flex items-center gap-2">
+                        <p className={`
+                          text-sm truncate
+                          ${!notification.isRead ? 'font-semibold text-nilin-charcoal' : 'text-nilin-warmGray'}
+                        `}>
+                          {notification.title}
+                        </p>
                         {!notification.isRead && (
-                          <span className="ml-2 h-2 w-2 bg-nilin-coral rounded-full"></span>
+                          <span className="h-2 w-2 bg-nilin-coral rounded-full flex-shrink-0" />
                         )}
                       </div>
+                      <p className="text-xs text-nilin-warmGray mt-0.5 line-clamp-2 leading-relaxed">
+                        {notification.message}
+                      </p>
+                      <div className="flex items-center mt-1.5 gap-2">
+                        <Clock className="h-3 w-3 text-nilin-lightGray" />
+                        <span className="text-[10px] text-nilin-lightGray">
+                          {formatTime(notification.createdAt)}
+                        </span>
+                      </div>
                     </div>
+
+                    {/* Quick action */}
                     {!notification.isRead && (
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
                           markAsRead(notification._id);
                         }}
-                        className="flex-shrink-0 p-1 rounded-lg hover:bg-gray-200 text-nilin-warmGray hover:text-nilin-coral"
+                        className="flex-shrink-0 p-1.5 rounded-lg hover:bg-nilin-coral/20 text-nilin-warmGray hover:text-nilin-coral transition-colors"
+                        title="Mark as read"
                       >
                         <Check className="h-4 w-4" />
                       </button>
@@ -341,13 +474,13 @@ const NotificationBell: React.FC<NotificationBellProps> = ({ userId, userRole = 
           </div>
 
           {/* Footer */}
-          <div className="px-4 py-3 border-t border-nilin-border/50 bg-gray-50/50">
+          <div className="px-4 py-3 border-t border-nilin-border/50 bg-gradient-to-r from-nilin-muted/50 to-nilin-cream/50">
             <button
               onClick={() => {
                 setIsOpen(false);
-                navigate('/customer/notifications');
+                navigate(userRole === 'provider' ? '/provider/notifications' : '/customer/notifications');
               }}
-              className="w-full text-center text-sm text-nilin-coral hover:text-nilin-coral/80 font-medium"
+              className="w-full text-center text-sm text-nilin-coral hover:text-nilin-rose font-medium transition-colors py-1"
             >
               View all notifications
             </button>

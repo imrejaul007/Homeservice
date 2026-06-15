@@ -7,6 +7,7 @@ import {
   deleteService,
   restoreService,
   getDeletedServices,
+  permanentDeleteService,
   toggleServiceStatus,
   cloneService,
   getServiceAnalytics,
@@ -49,6 +50,7 @@ const router = express.Router();
 const providerRateLimit = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 100, // Limit each provider to 100 requests per windowMs
+  skip: () => process.env.NODE_ENV !== 'production',
   message: {
     error: 'Too many requests from this provider, please try again later.',
     retryAfter: 15 * 60
@@ -67,18 +69,17 @@ router.get('/analytics', getOverviewAnalytics);
 // Service Management Routes (specific routes before :id)
 router.get('/services', getMyServices);
 router.post('/services', validateServiceCreation, requireProviderAccount, createService);
+router.get('/services/trash', getDeletedServices);
 
 // Service Routes with ID (after specific routes)
 router.get('/services/:id', validateServiceId, getServiceById);
 router.put('/services/:id', validateServiceId, validateServiceUpdate, updateService);
 router.delete('/services/:id', validateServiceId, deleteService);
 router.patch('/services/:id/status', validateServiceId, toggleServiceStatus);
-router.patch('/services/:id/toggle-status', validateServiceId, toggleServiceStatus);
+// Removed duplicate route: /services/:id/toggle-status (now only /services/:id/status exists)
 router.patch('/services/:id/restore', validateServiceId, restoreService);
+router.delete('/services/:id/permanent', validateServiceId, permanentDeleteService);
 router.get('/services/:id/analytics', validateServiceId, getServiceAnalytics);
-
-// Soft delete routes (trash management)
-router.get('/services/trash', getDeletedServices);
 
 // Service clone
 router.post('/services/:id/clone', validateServiceId, cloneService);

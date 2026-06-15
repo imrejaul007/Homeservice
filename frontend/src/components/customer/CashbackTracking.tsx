@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import toast from 'react-hot-toast';
 import {
   Wallet,
   Gift,
@@ -14,6 +15,7 @@ import {
   Tag,
   Users,
   Sparkles,
+  X,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { formatCurrency } from '../../utils/formatting';
@@ -36,11 +38,12 @@ const SOURCE_LABELS: Record<string, string> = {
 };
 
 const SOURCE_COLORS: Record<string, string> = {
-  booking: 'bg-blue-100 text-blue-600',
-  referral: 'bg-purple-100 text-purple-600',
-  promotion: 'bg-amber-100 text-amber-600',
-  refund: 'bg-green-100 text-green-600',
-  loyalty: 'bg-pink-100 text-pink-600',
+  // Mapped to NILIN-adjacent palette while keeping per-source visual distinction
+  booking: 'bg-nilin-blush text-nilin-rose',
+  referral: 'bg-nilin-peach text-nilin-coral',
+  promotion: 'bg-amber-50 text-nilin-warning',
+  refund: 'bg-green-50 text-nilin-success',
+  loyalty: 'bg-amber-50 text-nilin-warning',
 };
 
 const SOURCE_ICONS: Record<string, React.ReactNode> = {
@@ -108,6 +111,7 @@ export const CashbackTracking: React.FC<CashbackTrackingProps> = ({
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to load cashback data';
       setError(errorMessage);
+      toast.error(errorMessage);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -138,7 +142,6 @@ export const CashbackTracking: React.FC<CashbackTrackingProps> = ({
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to load more entries';
       setLoadMoreError(errorMessage);
-      console.error('Failed to load more:', err);
     }
   };
 
@@ -177,6 +180,7 @@ export const CashbackTracking: React.FC<CashbackTrackingProps> = ({
       }
     } catch (err) {
       console.error('Redemption failed:', err);
+      toast.error('Redemption failed. Please try again.');
     } finally {
       setRedeeming(false);
     }
@@ -206,23 +210,24 @@ export const CashbackTracking: React.FC<CashbackTrackingProps> = ({
 
   if (compact) {
     return (
-      <div className="bg-white rounded-xl p-4 shadow-sm">
+      <div className="bg-white rounded-2xl p-4 shadow-nilin-sm">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-amber-100 flex items-center justify-center">
-              <Gift className="w-4 h-4 text-amber-600" />
+            <div className="w-8 h-8 rounded-xl bg-nilin-warning/20 flex items-center justify-center">
+              <Gift className="w-4 h-4 text-nilin-warning" />
             </div>
             <span className="font-medium text-nilin-charcoal">Cashback</span>
           </div>
           <button
             onClick={() => fetchData(true)}
-            className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
+            className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral/40"
             disabled={refreshing}
+            aria-label="Refresh cashback"
           >
-            <RefreshCw className={cn('w-4 h-4 text-gray-400', refreshing && 'animate-spin')} />
+            <RefreshCw className={cn('w-4 h-4 text-nilin-warmGray', refreshing && 'animate-spin')} />
           </button>
         </div>
-        <div className="text-2xl font-bold text-nilin-charcoal">
+        <div className="text-2xl font-bold text-nilin-charcoal tabular-nums">
           {formatCurrency(balance?.balance || 0, balance?.currency || 'AED')}
         </div>
         <p className="text-xs text-nilin-warmGray mt-1">
@@ -234,7 +239,7 @@ export const CashbackTracking: React.FC<CashbackTrackingProps> = ({
 
   if (loading) {
     return (
-      <div className="bg-white rounded-2xl p-6 shadow-sm flex items-center justify-center min-h-[400px]">
+      <div className="bg-white rounded-2xl p-6 shadow-nilin flex items-center justify-center min-h-[400px]">
         <Loader2 className="w-8 h-8 text-nilin-coral animate-spin" />
       </div>
     );
@@ -242,14 +247,14 @@ export const CashbackTracking: React.FC<CashbackTrackingProps> = ({
 
   if (error) {
     return (
-      <div className="bg-white rounded-2xl p-6 shadow-sm">
+      <div className="bg-white rounded-2xl p-6 shadow-nilin">
         <div className="text-center py-8">
-          <AlertTriangle className="w-12 h-12 text-amber-500 mx-auto mb-3" />
+          <AlertTriangle className="w-12 h-12 text-nilin-error mx-auto mb-3" />
           <p className="text-nilin-charcoal font-medium mb-2">Unable to load cashback</p>
           <p className="text-sm text-nilin-warmGray mb-4">{error}</p>
           <button
             onClick={() => fetchData()}
-            className="px-4 py-2 bg-nilin-coral text-white rounded-lg hover:bg-nilin-coral/90 transition-colors"
+            className="px-4 py-2 bg-nilin-coral text-white rounded-lg hover:bg-nilin-coral/90 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral/40"
           >
             Try Again
           </button>
@@ -273,7 +278,7 @@ export const CashbackTracking: React.FC<CashbackTrackingProps> = ({
       </div>
 
       {/* Balance Card */}
-      <div className="bg-gradient-to-br from-amber-500 to-orange-500 rounded-2xl p-6 text-white">
+      <div className="bg-gradient-to-br from-nilin-coral to-nilin-rose rounded-2xl p-6 text-white shadow-nilin-warm">
         <div className="flex items-center gap-3 mb-4">
           <div className="w-12 h-12 rounded-xl bg-white/20 flex items-center justify-center">
             <Gift className="w-6 h-6" />
@@ -332,21 +337,25 @@ export const CashbackTracking: React.FC<CashbackTrackingProps> = ({
 
       {/* Expiring Alert */}
       {expiringCashbacks.length > 0 && (
-        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+        <div className="bg-nilin-warning/10 border border-nilin-warning/20 rounded-xl p-4">
           <div className="flex items-start gap-3">
-            <div className="w-8 h-8 rounded-lg bg-amber-100 flex items-center justify-center flex-shrink-0">
-              <AlertTriangle className="w-4 h-4 text-amber-600" />
+            <div className="w-8 h-8 rounded-lg bg-nilin-warning/20 flex items-center justify-center flex-shrink-0">
+              <AlertTriangle className="w-4 h-4 text-nilin-warning" />
             </div>
             <div className="flex-1">
-              <p className="font-medium text-amber-800">Expiring Soon</p>
-              <p className="text-sm text-amber-700 mt-1">
+              <p className="font-medium text-nilin-charcoal">Expiring Soon</p>
+              <p className="text-sm text-nilin-warmGray mt-1">
                 {expiringCashbacks.length} cashback {expiringCashbacks.length === 1 ? 'entry' : 'entries'} expiring in the next 14 days
               </p>
               <div className="mt-2 space-y-1">
                 {expiringCashbacks.slice(0, 3).map((cb) => (
                   <div key={cb.id} className="flex items-center justify-between text-sm">
-                    <span className="text-amber-800">{formatCurrency(cb.amount, 'AED')}</span>
-                    <span className="text-amber-600">Expires {daysUntilExpiry(cb.expiresAt)} days</span>
+                    <span className="text-nilin-charcoal tabular-nums">{formatCurrency(cb.amount, 'AED')}</span>
+                    <span className="text-nilin-warning font-medium">
+                      {Math.max(0, daysUntilExpiry(cb.expiresAt)) > 0
+                        ? `Expires ${Math.max(0, daysUntilExpiry(cb.expiresAt))} days`
+                        : 'Expired'}
+                    </span>
                   </div>
                 ))}
               </div>
@@ -356,7 +365,7 @@ export const CashbackTracking: React.FC<CashbackTrackingProps> = ({
       )}
 
       {/* Filters */}
-      <div className="bg-white rounded-xl p-4 shadow-sm">
+      <div className="bg-white rounded-xl p-4 shadow-nilin-sm">
         <div className="flex items-center gap-2 mb-3">
           <Filter className="w-4 h-4 text-gray-400" />
           <span className="text-sm font-medium text-nilin-charcoal">Filters</span>
@@ -395,7 +404,7 @@ export const CashbackTracking: React.FC<CashbackTrackingProps> = ({
       </div>
 
       {/* Cashback History */}
-      <div className="bg-white rounded-xl shadow-sm overflow-hidden">
+      <div className="bg-white rounded-xl shadow-nilin-sm overflow-hidden">
         <div className="p-4 border-b border-gray-100">
           <h3 className="font-semibold text-nilin-charcoal">History</h3>
         </div>
@@ -444,9 +453,11 @@ export const CashbackTracking: React.FC<CashbackTrackingProps> = ({
                     {cb.isExpiringSoon && (
                       <>
                         <span className="w-1 h-1 rounded-full bg-gray-300" />
-                        <span className="text-amber-600 flex items-center gap-1">
+                        <span className="text-nilin-warning flex items-center gap-1">
                           <Clock className="w-3 h-3" />
-                          {daysUntilExpiry(cb.expiresAt)} days left
+                          {Math.max(0, daysUntilExpiry(cb.expiresAt)) > 0
+                            ? `${Math.max(0, daysUntilExpiry(cb.expiresAt))} days left`
+                            : 'Expired'}
                         </span>
                       </>
                     )}
@@ -456,17 +467,17 @@ export const CashbackTracking: React.FC<CashbackTrackingProps> = ({
                 {/* Amount and status */}
                 <div className="text-right">
                   <p className={cn(
-                    'font-semibold',
-                    cb.status === 'redeemed' ? 'text-green-600' :
-                    cb.status === 'expired' ? 'text-gray-400' : 'text-nilin-charcoal'
+                    'font-semibold tabular-nums',
+                    cb.status === 'redeemed' ? 'text-nilin-success' :
+                    cb.status === 'expired' ? 'text-nilin-warmGray' : 'text-nilin-charcoal'
                   )}>
-                    {cb.status === 'redeemed' ? '-' : ''}{formatCurrency(cb.amount, cb.currency)}
+                    {cb.status === 'redeemed' ? '−' : ''}{formatCurrency(cb.amount, cb.currency)}
                   </p>
                   <p className={cn(
                     'text-xs capitalize',
-                    cb.status === 'available' ? 'text-green-600' :
-                    cb.status === 'redeemed' ? 'text-green-500' :
-                    cb.status === 'expired' ? 'text-gray-400' : 'text-amber-600'
+                    cb.status === 'available' ? 'text-nilin-success' :
+                    cb.status === 'redeemed' ? 'text-nilin-success' :
+                    cb.status === 'expired' ? 'text-nilin-warmGray' : 'text-nilin-warning'
                   )}>
                     {cb.status}
                   </p>
@@ -480,7 +491,7 @@ export const CashbackTracking: React.FC<CashbackTrackingProps> = ({
         {hasMore && (
           <div className="p-4 border-t border-gray-100">
             {loadMoreError && (
-              <div className="mb-3 p-2 bg-red-50 border border-red-200 rounded-lg text-sm text-red-600">
+              <div className="mb-3 p-2 bg-nilin-error/10 border border-nilin-error/20 rounded-lg text-sm text-nilin-charcoal">
                 {loadMoreError}
               </div>
             )}
@@ -496,16 +507,30 @@ export const CashbackTracking: React.FC<CashbackTrackingProps> = ({
 
       {/* Redeem Modal */}
       {showRedeemModal && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6">
-            <h3 className="text-lg font-bold text-nilin-charcoal mb-4">Redeem Cashback</h3>
+        <div
+          className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="redeem-modal-title"
+        >
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-nilin-lg">
+            <div className="flex items-center justify-between mb-4">
+              <h3 id="redeem-modal-title" className="text-lg font-bold text-nilin-charcoal">Redeem Cashback</h3>
+              <button
+                onClick={() => setShowRedeemModal(false)}
+                className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral/40"
+                aria-label="Close"
+              >
+                <X className="w-5 h-5 text-nilin-warmGray" />
+              </button>
+            </div>
             <p className="text-nilin-warmGray mb-4">
               You are about to redeem {selectedIds.size} cashback {selectedIds.size === 1 ? 'entry' : 'entries'} to your wallet.
             </p>
-            <div className="bg-gray-50 rounded-xl p-4 mb-4">
+            <div className="bg-nilin-blush/30 rounded-xl p-4 mb-4">
               <div className="flex items-center justify-between">
                 <span className="text-nilin-warmGray">Total Amount</span>
-                <span className="text-2xl font-bold text-nilin-charcoal">
+                <span className="text-2xl font-bold text-nilin-charcoal tabular-nums">
                   {formatCurrency(selectedTotal, 'AED')}
                 </span>
               </div>
@@ -513,14 +538,14 @@ export const CashbackTracking: React.FC<CashbackTrackingProps> = ({
             <div className="flex gap-3">
               <button
                 onClick={() => setShowRedeemModal(false)}
-                className="flex-1 py-3 border border-gray-200 text-nilin-charcoal rounded-xl hover:bg-gray-50 transition-colors"
+                className="flex-1 py-3 border border-gray-200 text-nilin-charcoal rounded-xl hover:bg-gray-50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral/40"
               >
                 Cancel
               </button>
               <button
                 onClick={handleRedeem}
                 disabled={redeeming || selectedIds.size === 0}
-                className="flex-1 py-3 bg-nilin-coral text-white rounded-xl hover:bg-nilin-coral/90 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                className="flex-1 py-3 bg-nilin-coral text-white rounded-xl hover:bg-nilin-coral/90 transition-colors disabled:opacity-50 flex items-center justify-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral/40"
               >
                 {redeeming && <Loader2 className="w-4 h-4 animate-spin" />}
                 Redeem

@@ -73,12 +73,12 @@ const WalletTransactionsPage: React.FC = () => {
 
   const getTransactionIcon = (transaction: WalletTransaction) => {
     if (transaction.referenceType === 'bonus' || transaction.referenceType === 'refund') {
-      return <Gift className="w-5 h-5 text-amber-600" />;
+      return <Gift className="w-5 h-5 text-nilin-warning" />;
     }
     if (transaction.type === 'credit') {
-      return <TrendingUp className="w-5 h-5 text-green-600" />;
+      return <TrendingUp className="w-5 h-5 text-nilin-success" />;
     }
-    return <CreditCard className="w-5 h-5 text-red-600" />;
+    return <CreditCard className="w-5 h-5 text-nilin-error" />;
   };
 
   return (
@@ -128,10 +128,10 @@ const WalletTransactionsPage: React.FC = () => {
               </div>
             ) : error ? (
               <div className="text-center py-12">
-                <p className="text-sm text-red-500 mb-3">{error}</p>
+                <p className="text-sm text-nilin-charcoal mb-3">{error}</p>
                 <button
                   onClick={() => fetchTransactions(1)}
-                  className="text-sm text-nilin-coral hover:underline"
+                  className="text-sm text-nilin-coral hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral/40 rounded-md px-2 py-1"
                 >
                   {t('wallet.try_again')}
                 </button>
@@ -147,29 +147,28 @@ const WalletTransactionsPage: React.FC = () => {
               <>
                 <div className="divide-y divide-gray-50">
                   {transactions.map((transaction) => (
-                    <div key={transaction.id} className="flex items-center justify-between p-4 hover:bg-nilin-blush/20">
-                      <div className="flex items-center gap-3">
+                    <div key={transaction.id} className="flex items-center justify-between p-4 hover:bg-nilin-blush/20 transition-colors">
+                      <div className="flex items-center gap-3 min-w-0 flex-1">
                         <div
-                          className={`w-10 h-10 rounded-full flex items-center justify-center ${
-                            transaction.type === 'credit' ? 'bg-green-100' : 'bg-red-100'
+                          className={`flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center ${
+                            transaction.type === 'credit' ? 'bg-nilin-success/10' : 'bg-nilin-error/10'
                           }`}
                         >
                           {getTransactionIcon(transaction)}
                         </div>
-                        <div>
-                          <p className="font-medium text-nilin-charcoal">{transaction.description}</p>
+                        <div className="min-w-0">
+                          <p className="font-medium text-nilin-charcoal truncate">{transaction.description}</p>
                           <p className="text-xs text-nilin-warmGray">
-                            {formatTransactionTime(transaction.createdAt)} · {transaction.referenceType}
+                            {formatTransactionTime(transaction.createdAt)} · <span className="capitalize">{transaction.referenceType}</span>
                           </p>
                         </div>
                       </div>
                       <span
-                        className={`font-semibold ${
-                          transaction.type === 'credit' ? 'text-green-600' : 'text-red-600'
+                        className={`flex-shrink-0 font-semibold tabular-nums ${
+                          transaction.type === 'credit' ? 'text-nilin-success' : 'text-nilin-error'
                         }`}
                       >
-                        {transaction.type === 'credit' ? '+' : '-'}
-                        {formatCurrency(transaction.amount, 'AED')}
+                        {transaction.type === 'credit' ? '+' : '−'}{formatCurrency(transaction.amount, 'AED')}
                       </span>
                     </div>
                   ))}

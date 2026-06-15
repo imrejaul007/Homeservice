@@ -131,6 +131,7 @@ AnalyticsEventSchema.index({ timestamp: 1 }, { expireAfterSeconds: 90 * 24 * 60 
 AnalyticsEventSchema.index({ eventType: 1, timestamp: -1 });
 AnalyticsEventSchema.index({ userId: 1, timestamp: -1 });
 AnalyticsEventSchema.index({ sessionId: 1, timestamp: -1 });
+AnalyticsEventSchema.index({ 'properties.idempotencyKey': 1 }, { sparse: true });
 
 export const AnalyticsEventModel: mongoose.Model<IAnalyticsEventDocument> =
   mongoose.models.AnalyticsEvent || mongoose.model<IAnalyticsEventDocument>('AnalyticsEvent', AnalyticsEventSchema);

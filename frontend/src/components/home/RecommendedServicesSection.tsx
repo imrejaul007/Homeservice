@@ -7,6 +7,7 @@ import { favoritesApi } from '../../services/favoritesApi';
 import { toast } from 'react-hot-toast';
 import type { Service } from '../../types/service';
 import { usePriceConversion, formatPrice } from '../../utils/priceConverter';
+import { CardContainer, CardBody, CardItem } from '../ui/3d-card';
 
 interface RecommendedServicesSectionProps {
   limit?: number;
@@ -176,7 +177,7 @@ const RecommendedServicesSection: React.FC<RecommendedServicesSectionProps> = ({
           <>
             <div
               ref={scrollRef}
-              className="flex gap-5 overflow-x-auto pb-4 scrollbar-hide"
+              className="flex gap-6 overflow-x-auto pb-8 pt-4 px-2 scrollbar-hide"
               style={{ scrollbarWidth: 'none' }}
             >
               {services.map((service, index) => {
@@ -189,64 +190,70 @@ const RecommendedServicesSection: React.FC<RecommendedServicesSectionProps> = ({
                 const reviewCount = service.reviewCount || (typeof service.rating === 'object' ? service.rating?.count : 0) || 0;
 
                 return (
-                  <div
+                  <CardContainer
                     key={service._id || index}
-                    className="flex-shrink-0 w-[300px] group cursor-pointer"
-                    onClick={() => navigate(`/services/${service._id}`)}
+                    className="flex-shrink-0 w-[300px]"
+                    containerClassName="py-6"
                   >
-                    <div className="bg-white rounded-2xl border border-nilin-border/30 overflow-hidden shadow-sm hover:shadow-xl transition-all duration-300 hover:-translate-y-1">
-                      {/* Image Area */}
-                      <div className={`relative h-40 bg-gradient-to-br ${categoryStyle.from} ${categoryStyle.to} overflow-hidden`}>
-                        {service.image ? (
-                          <img
-                            src={service.image}
-                            alt={title}
-                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                          />
-                        ) : (
-                          <div className="w-full h-full flex items-center justify-center">
-                            <span className="text-5xl opacity-50">✨</span>
-                          </div>
-                        )}
+                    <CardBody
+                      className="bg-white rounded-2xl border border-nilin-border/30 overflow-hidden shadow-sm w-full cursor-pointer"
+                      onClick={() => navigate(`/services/${service._id}`)}
+                    >
+                      {/* Image Area - 3D Effect */}
+                      <CardItem translateZ="80px" className="relative h-40 w-full">
+                        <div className={`absolute inset-0 bg-gradient-to-br ${categoryStyle.from} ${categoryStyle.to} overflow-hidden`}>
+                          {service.image ? (
+                            <img
+                              src={service.image}
+                              alt={title}
+                              className="w-full h-full object-cover"
+                            />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center">
+                              <span className="text-5xl opacity-50">✨</span>
+                            </div>
+                          )}
+                        </div>
 
-                        {/* Gradient overlay */}
-                        <div className="absolute inset-0 bg-gradient-to-t from-black/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
-
-                        {/* Rating Badge */}
+                        {/* Rating Badge - 3D Effect */}
                         {rating > 0 && (
-                          <div className="absolute top-3 right-3 bg-white/95 backdrop-blur-sm px-2.5 py-1 rounded-full flex items-center gap-1.5 shadow-lg">
-                            <Star className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
-                            <span className="text-xs font-bold text-nilin-charcoal">{rating.toFixed(1)}</span>
-                            {reviewCount > 0 && (
-                              <span className="text-[10px] text-nilin-warmGray">({reviewCount})</span>
-                            )}
-                          </div>
+                          <CardItem translateZ="120px" className="absolute top-3 right-3">
+                            <div className="bg-white/95 backdrop-blur-sm px-2.5 py-1 rounded-full flex items-center gap-1.5 shadow-lg">
+                              <Star className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
+                              <span className="text-xs font-bold text-nilin-charcoal">{rating.toFixed(1)}</span>
+                              {reviewCount > 0 && (
+                                <span className="text-[10px] text-nilin-warmGray">({reviewCount})</span>
+                              )}
+                            </div>
+                          </CardItem>
                         )}
 
-                        {/* Favorite Button */}
-                        <button
-                          onClick={(e) => handleToggleFavorite(e, service._id || '', providerId)}
-                          className={`absolute top-3 left-3 p-2 rounded-full shadow-sm transition-all duration-200 ${
-                            isFavorite
-                              ? 'bg-red-500 text-white'
-                              : 'bg-white/90 backdrop-blur-sm text-gray-500 hover:bg-white hover:text-red-500'
-                          }`}
-                        >
-                          <Heart className={`w-4 h-4 ${isFavorite ? 'fill-current' : ''}`} />
-                        </button>
+                        {/* Favorite Button - 3D Effect */}
+                        <CardItem translateZ="100px" className="absolute top-3 left-3">
+                          <button
+                            onClick={(e) => handleToggleFavorite(e, service._id || '', providerId)}
+                            className={`p-2 rounded-full shadow-sm transition-all duration-200 ${
+                              isFavorite
+                                ? 'bg-red-500 text-white'
+                                : 'bg-white/90 backdrop-blur-sm text-gray-500 hover:bg-white hover:text-red-500'
+                            }`}
+                          >
+                            <Heart className={`w-4 h-4 ${isFavorite ? 'fill-current' : ''}`} />
+                          </button>
+                        </CardItem>
 
-                        {/* Category Tag */}
-                        <div className="absolute bottom-3 left-3">
+                        {/* Category Tag - 3D Effect */}
+                        <CardItem translateZ="60px" className="absolute bottom-3 left-3">
                           <span className="px-2.5 py-1 bg-white/90 backdrop-blur-sm text-nilin-charcoal text-[10px] font-semibold rounded-full shadow-sm capitalize">
                             {service.category || 'Service'}
                           </span>
-                        </div>
-                      </div>
+                        </CardItem>
+                      </CardItem>
 
-                      {/* Content Area */}
-                      <div className="p-4">
+                      {/* Content Area - 3D Effect */}
+                      <CardItem translateZ="50px" className="p-4">
                         {/* Title */}
-                        <h3 className="font-semibold text-nilin-charcoal text-sm mb-2 line-clamp-1 group-hover:text-nilin-coral transition-colors">
+                        <h3 className="font-semibold text-nilin-charcoal text-sm mb-2 line-clamp-1">
                           {title}
                         </h3>
 
@@ -274,21 +281,25 @@ const RecommendedServicesSection: React.FC<RecommendedServicesSectionProps> = ({
                                 by {service.provider.businessName || (service as any).providerName || 'Pro'}
                               </p>
                             )}
-                            <p className="text-lg font-bold text-nilin-charcoal">{format(price, currency)}</p>
+                            <CardItem translateZ="70px" className="text-lg font-bold text-nilin-charcoal">
+                              {format(price, currency)}
+                            </CardItem>
                           </div>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              navigate(`/book/${service._id}`, { state: { service } });
-                            }}
-                            className="px-4 py-2 bg-gradient-to-r from-nilin-coral to-nilin-rose text-white text-xs font-bold rounded-xl hover:shadow-lg hover:shadow-nilin-coral/25 transition-all duration-200 active:scale-95"
-                          >
-                            Book
-                          </button>
+                          <CardItem translateZ="90px">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                navigate(`/book/${service._id}`, { state: { service } });
+                              }}
+                              className="px-4 py-2 bg-gradient-to-r from-nilin-coral to-nilin-rose text-white text-xs font-bold rounded-xl hover:shadow-lg hover:shadow-nilin-coral/25 transition-all duration-200 active:scale-95"
+                            >
+                              Book
+                            </button>
+                          </CardItem>
                         </div>
-                      </div>
-                    </div>
-                  </div>
+                      </CardItem>
+                    </CardBody>
+                  </CardContainer>
                 );
               })}
             </div>

@@ -14,6 +14,7 @@ router.use(authMiddleware.authenticate);
 const insightsRateLimit = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 50, // limit each IP to 50 requests per windowMs
+  skip: () => process.env.NODE_ENV !== 'production',
   message: { error: 'Too many insights requests, please try again later' }
 });
 
@@ -50,6 +51,12 @@ router.get('/insights/generate', providerInsightsController.generateInsights);
 
 // Get revenue optimization tips
 router.get('/insights/optimization-tips', providerInsightsController.getOptimizationTips);
+
+// Unified AI tips + cross-device preferences
+router.get('/insights/ai-tips', providerInsightsController.getAITips);
+router.get('/insights/preferences', providerInsightsController.getInsightPreferences);
+router.patch('/insights/preferences', providerInsightsController.updateInsightPreferences);
+router.post('/insights/preferences/sync', providerInsightsController.syncAITipPreferences);
 
 // ============================================
 // SCHEDULE OPTIMIZATION ROUTES

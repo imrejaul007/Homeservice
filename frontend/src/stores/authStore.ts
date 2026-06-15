@@ -8,6 +8,17 @@ import { secureStorage } from '@/lib/security';
 import { socketService } from '../services/socket';
 import logger from '../lib/logger';
 
+let getCurrentUserInFlight: Promise<void> | null = null;
+
+async function refreshFeatureFlagsForUser(userId?: string): Promise<void> {
+  try {
+    const { featureFlags } = await import('../services/marketplace/FeatureFlags');
+    await featureFlags.loadFromServer(userId);
+  } catch (error) {
+    logger.warn('Failed to refresh feature flags', error);
+  }
+}
+
 /**
  * Custom zustand storage adapter that uses secureStorage
  * This provides XSS protection by not exposing tokens in raw sessionStorage
@@ -253,19 +264,21 @@ export const useAuthStore = create<AuthState>()(
 
           const response = await authService.login(credentials);
 
+          const loggedInUser = response.data.user;
           set((state) => {
-            state.user = response.data.user;
+            state.user = loggedInUser;
             state.tokens = response.data.tokens;
             state.isAuthenticated = true;
             state.isLoading = false;
 
             // Set role-specific profiles using correct property names
-            if (response.data.user.role === 'customer' && response.data.customerProfile) {
+            if (loggedInUser.role === 'customer' && response.data.customerProfile) {
               state.customerProfile = response.data.customerProfile;
-            } else if (response.data.user.role === 'provider' && response.data.providerProfile) {
+            } else if (loggedInUser.role === 'provider' && response.data.providerProfile) {
               state.providerProfile = response.data.providerProfile;
             }
           });
+          await refreshFeatureFlagsForUser(loggedInUser.id || loggedInUser._id);
         } catch (error) {
           set((state) => {
             state.isLoading = false;
@@ -465,25 +478,36 @@ export const useAuthStore = create<AuthState>()(
       },
 
       getCurrentUser: async () => {
-        const authService = (await import('../services/AuthService')).default;
-
-        try {
-          const response = await authService.getCurrentUser();
-
-          set((state) => {
-            state.user = response.data.user;
-            
-            // Handle role-specific profiles using correct property names
-            if (response.data.user.role === 'customer' && response.data.customerProfile) {
-              state.customerProfile = response.data.customerProfile;
-            } else if (response.data.user.role === 'provider' && response.data.providerProfile) {
-              state.providerProfile = response.data.providerProfile;
-            }
-          });
-        } catch (error) {
-          console.error('Get current user error:', error);
-          // Don't throw error, just log it
+        if (getCurrentUserInFlight) {
+          return getCurrentUserInFlight;
         }
+
+        getCurrentUserInFlight = (async () => {
+          const authService = (await import('../services/AuthService')).default;
+
+          try {
+            const response = await authService.getCurrentUser();
+            const currentUser = response.data.user;
+
+            set((state) => {
+              state.user = currentUser;
+
+              if (currentUser.role === 'customer' && response.data.customerProfile) {
+                state.customerProfile = response.data.customerProfile;
+              } else if (currentUser.role === 'provider' && response.data.providerProfile) {
+                state.providerProfile = response.data.providerProfile;
+              }
+            });
+
+            await refreshFeatureFlagsForUser(currentUser.id || currentUser._id);
+          } catch (error) {
+            console.error('Get current user error:', error);
+          } finally {
+            getCurrentUserInFlight = null;
+          }
+        })();
+
+        return getCurrentUserInFlight;
       },
 
       updateProfile: async (data: Partial<User>, files?: FormData) => {
@@ -780,6 +804,7 @@ export const useAuthStore = create<AuthState>()(
             });
           }
         } else {
+          await refreshFeatureFlagsForUser();
           set((state) => {
             state.isInitialized = true;
           });

@@ -1,6 +1,6 @@
 /**
  * OngoingBookings — Active & today's bookings hub
- * In progress, waiting for provider, and upcoming today
+ * Seed Design System - Apothecary meets modern clinical aesthetic
  */
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -77,20 +77,29 @@ const PAYMENT_LABELS: Record<PaymentStatus, string> = {
   processed: 'Paid',
 };
 
+const PAYMENT_BADGE_CONFIG: Record<PaymentStatus, { bgClass: string; textClass: string }> = {
+  pending: { bgClass: 'bg-[#eeeee9]', textClass: 'text-[#1c3a13]' },
+  completed: { bgClass: 'bg-[#d3fa99]/30', textClass: 'text-[#1c3a13]' },
+  processed: { bgClass: 'bg-[#d3fa99]/30', textClass: 'text-[#1c3a13]' },
+  failed: { bgClass: 'bg-[#eeeee9]', textClass: 'text-[#1c3a13]' },
+  refunded: { bgClass: 'bg-[#eeeee9]', textClass: 'text-[#1c3a13]' },
+};
+
+// Seed Design - Status badges using Forest Canopy and Lime Sprout
 const KIND_CONFIG: Record<BookingCardKind, { badge: string; badgeClass: string; section?: string }> = {
   in_progress: {
     badge: 'In progress',
-    badgeClass: 'bg-nilin-coral/10 text-nilin-coral',
+    badgeClass: 'bg-[#d3fa99]/30 text-[#1c3a13]',
     section: 'Happening now',
   },
   waiting: {
     badge: 'Waiting to start',
-    badgeClass: 'bg-amber-100 text-amber-800',
+    badgeClass: 'bg-[#eeeee9] text-[#1c3a13]',
     section: 'Waiting for provider',
   },
   upcoming: {
     badge: 'Upcoming today',
-    badgeClass: 'bg-emerald-50 text-emerald-700',
+    badgeClass: 'bg-[#d3fa99]/30 text-[#1c3a13]',
     section: 'Upcoming today',
   },
 };
@@ -158,8 +167,10 @@ const calculateProgress = (booking: Booking): ProgressInfo => {
   }
 
   const elapsedMinutes = (now.getTime() - startedAt.getTime()) / (1000 * 60);
-  const percent = Math.min(100, Math.max(5, Math.round((elapsedMinutes / scheduledDuration) * 100)));
-  const remainingMinutes = Math.max(0, scheduledDuration - elapsedMinutes);
+  // Guard against negative elapsed time (future startedAt)
+  const safeElapsedMinutes = Math.max(0, elapsedMinutes);
+  const percent = Math.min(100, Math.max(5, Math.round((safeElapsedMinutes / scheduledDuration) * 100)));
+  const remainingMinutes = Math.max(0, scheduledDuration - safeElapsedMinutes);
 
   let label = 'In progress';
   if (percent >= 90) label = 'Finishing up';
@@ -333,8 +344,8 @@ const OngoingBookings: React.FC<OngoingBookingsProps> = ({
     toast(
       (t) => (
         <div className="flex flex-col gap-2 max-w-xs">
-          <p className="font-semibold text-nilin-charcoal">Service completed!</p>
-          <p className="text-sm text-nilin-warmGray">
+          <p className="font-medium text-[#1c3a13]">Service completed!</p>
+          <p className="text-[14px] text-[#6b6b6b]">
             {shortId ? `Booking #${shortId} is done.` : 'Your booking is complete.'} Share how it went.
           </p>
           <div className="flex gap-2 mt-1">
@@ -344,14 +355,14 @@ const OngoingBookings: React.FC<OngoingBookingsProps> = ({
                 toast.dismiss(t.id);
                 navigate('/customer/reviews');
               }}
-              className="px-3 py-1.5 rounded-lg bg-nilin-coral text-white text-sm font-medium"
+              className="px-3 py-1.5 rounded-[9999px] bg-[#1c3a13] text-[#fcfcf7] text-[13px] font-medium"
             >
               Leave review
             </button>
             <button
               type="button"
               onClick={() => toast.dismiss(t.id)}
-              className="px-3 py-1.5 rounded-lg border border-nilin-border text-sm text-nilin-warmGray"
+              className="px-3 py-1.5 rounded-[9999px] border border-[#1c3a13]/10 text-[14px] text-[#6b6b6b]"
             >
               Later
             </button>
@@ -465,13 +476,13 @@ const OngoingBookings: React.FC<OngoingBookingsProps> = ({
             handleViewDetails(booking);
           }
         }}
-        className="relative bg-white rounded-2xl border border-nilin-border/40 overflow-hidden hover:shadow-nilin hover:border-nilin-coral/30 transition-all duration-300 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral/50"
+        className="relative bg-[#fcfcf7] rounded-2xl border border-[#1c3a13]/10 overflow-hidden hover:border-[#1c3a13]/30 hover:shadow-lg hover:shadow-[#1c3a13]/5 hover:scale-[1.01] transition-all duration-300 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1c3a13]/30"
         style={{ animationDelay: `${index * 80}ms` }}
       >
         {progress && (
-          <div className="absolute top-0 left-0 right-0 h-1 bg-nilin-blush/50">
+          <div className="absolute top-0 left-0 right-0 h-1 bg-[#d3fa99]/30">
             <div
-              className="h-full bg-gradient-to-r from-nilin-coral to-nilin-rose transition-all duration-1000"
+              className="h-full bg-[#1c3a13] transition-all duration-1000"
               style={{ width: `${progress.percent}%` }}
               role="progressbar"
               aria-valuenow={progress.percent}
@@ -488,13 +499,13 @@ const OngoingBookings: React.FC<OngoingBookingsProps> = ({
               <img
                 src={serviceImage}
                 alt={serviceName}
-                className="w-16 h-16 rounded-xl object-cover ring-2 ring-nilin-blush/60"
+                className="w-16 h-16 rounded-xl object-cover border border-[#1c3a13]/10"
               />
               {booking.provider?.avatar && (
                 <img
                   src={booking.provider.avatar}
                   alt={providerName}
-                  className="absolute -bottom-1 -right-1 w-7 h-7 rounded-lg object-cover ring-2 ring-white"
+                  className="absolute -bottom-1 -right-1 w-7 h-7 rounded-lg object-cover ring-2 ring-[#fcfcf7]"
                 />
               )}
             </div>
@@ -502,24 +513,24 @@ const OngoingBookings: React.FC<OngoingBookingsProps> = ({
             <div className="flex-1 min-w-0">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <h3 className="font-semibold text-nilin-charcoal text-base line-clamp-1">{serviceName}</h3>
-                  <p className="text-sm text-nilin-warmGray mt-0.5 flex items-center gap-1.5">
+                  <h3 className="font-medium text-[#1c3a13] text-base line-clamp-1">{serviceName}</h3>
+                  <p className="text-[14px] text-[#6b6b6b] mt-0.5 flex items-center gap-1.5">
                     <User className="w-3.5 h-3.5 flex-shrink-0" />
-                    {providerName}
+                    <span className="truncate">{providerName}</span>
                     {providerRating != null && providerRating > 0 && (
-                      <span className="inline-flex items-center gap-0.5 text-amber-600 ml-1">
-                        <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
+                      <span className="inline-flex items-center gap-0.5 text-[#1c3a13] ml-1 flex-shrink-0">
+                        <Star className="w-3 h-3 fill-[#d3fa99] text-[#1c3a13]" />
                         {providerRating.toFixed(1)}
                       </span>
                     )}
                   </p>
-                  <div className="flex items-center gap-1.5 mt-1.5 text-sm text-nilin-warmGray">
+                  <div className="flex items-center gap-1.5 mt-1.5 text-[14px] text-[#6b6b6b]">
                     <MapPin className="w-3.5 h-3.5 flex-shrink-0" />
                     <span className="truncate">{locationText}</span>
                   </div>
                 </div>
 
-                <span className={`flex-shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold ${config.badgeClass}`}>
+                <span className={`flex-shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-medium ${config.badgeClass}`}>
                   {kind === 'in_progress' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
                   {kind === 'waiting' && <Timer className="w-3.5 h-3.5" />}
                   {kind === 'upcoming' && <Calendar className="w-3.5 h-3.5" />}
@@ -527,49 +538,48 @@ const OngoingBookings: React.FC<OngoingBookingsProps> = ({
                 </span>
               </div>
 
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-3 text-sm">
-                <div className="flex items-center gap-1.5 text-nilin-warmGray">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-3 text-[14px]">
+                <div className="flex items-center gap-1.5 text-[#6b6b6b]">
                   <Clock className="w-4 h-4" />
                   <span>{formatScheduledTime(booking)}</span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <PriceDisplay price={amount} originalCurrency={currency} size="sm" className="text-nilin-coral" />
-                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                    booking.paymentStatus === 'completed' || booking.paymentStatus === 'processed'
-                      ? 'bg-emerald-50 text-emerald-700'
-                      : booking.paymentStatus === 'failed'
-                        ? 'bg-red-50 text-red-600'
-                        : 'bg-amber-50 text-amber-700'
-                  }`}>
-                    {paymentLabel}
-                  </span>
+                  <PriceDisplay price={amount} originalCurrency={currency} size="sm" className="text-[#1c3a13]" />
+                  {(() => {
+                    const config = PAYMENT_BADGE_CONFIG[booking.paymentStatus];
+                    return (
+                      <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${config?.bgClass} ${config?.textClass || 'text-[#1c3a13]'}`}>
+                        {paymentLabel}
+                      </span>
+                    );
+                  })()}
                 </div>
               </div>
 
               {kind === 'waiting' && (
-                <p className="mt-3 text-sm text-amber-800 bg-amber-50 rounded-xl px-3 py-2">
+                <p className="mt-3 text-[14px] text-[#1c3a13] bg-[#eeeee9] rounded-xl px-3 py-2">
                   Your scheduled time has passed. The provider hasn&apos;t started yet — you can message or call them below.
                 </p>
               )}
 
               {progress && (
                 <div className="mt-4">
-                  <div className="flex items-center justify-between text-xs text-nilin-warmGray mb-1.5">
+                  <div className="flex items-center justify-between text-[11px] text-[#6b6b6b] mb-1.5">
                     <span>Estimated progress</span>
-                    <span className="font-medium text-nilin-coral">{progress.percent}%</span>
+                    <span className="font-medium text-[#1c3a13]">{progress.percent}%</span>
                   </div>
-                  <div className="h-2.5 bg-nilin-blush/40 rounded-full overflow-hidden">
+                  <div className="h-2.5 bg-[#eeeee9] rounded-full overflow-hidden">
                     <div
-                      className="h-full bg-gradient-to-r from-nilin-coral/70 via-nilin-coral to-nilin-rose rounded-full transition-all duration-1000 ease-out"
+                      className="h-full bg-gradient-to-r from-[#1c3a13] to-[#4a6b35] rounded-full transition-all duration-1000 ease-out shadow-[inset_0_1px_1px_rgba(255,255,255,0.2)]"
                       style={{ width: `${progress.percent}%` }}
                     />
                   </div>
-                  <p className="text-xs text-nilin-warmGray mt-1.5">{progress.estimatedTimeRemaining}</p>
+                  <p className="text-[11px] text-[#6b6b6b] mt-1.5">{progress.estimatedTimeRemaining}</p>
                 </div>
               )}
 
               {kind === 'upcoming' && (
-                <p className="mt-3 text-sm text-nilin-warmGray">
+                <p className="mt-3 text-[14px] text-[#6b6b6b]">
                   Scheduled for later today. We&apos;ll notify you when your provider is on the way.
                 </p>
               )}
@@ -579,7 +589,7 @@ const OngoingBookings: React.FC<OngoingBookingsProps> = ({
                   <button
                     type="button"
                     onClick={(e) => handleTrackBooking(e, booking)}
-                    className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-gradient-to-r from-nilin-coral to-nilin-rose hover:opacity-90 text-white rounded-xl text-sm font-medium transition-all"
+                    className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-[#1c3a13] hover:bg-[#1c3a13]/90 hover:scale-105 active:scale-95 text-[#fcfcf7] rounded-[9999px] text-[13px] font-medium transition-all"
                   >
                     <Navigation className="w-4 h-4" />
                     Track
@@ -588,7 +598,7 @@ const OngoingBookings: React.FC<OngoingBookingsProps> = ({
                 <button
                   type="button"
                   onClick={(e) => handleMessageProvider(e, booking)}
-                  className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-nilin-blush/50 hover:bg-nilin-blush text-nilin-charcoal rounded-xl text-sm font-medium transition-colors"
+                  className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-[#eeeee9] hover:bg-[#eeeee9]/80 hover:scale-105 active:scale-95 text-[#1c3a13] rounded-[9999px] text-[13px] font-medium transition-all"
                 >
                   <MessageSquare className="w-4 h-4" />
                   Message
@@ -596,7 +606,7 @@ const OngoingBookings: React.FC<OngoingBookingsProps> = ({
                 <button
                   type="button"
                   onClick={(e) => handleCallProvider(e, booking)}
-                  className="p-2.5 text-nilin-warmGray hover:text-nilin-coral hover:bg-nilin-blush/40 rounded-xl transition-colors"
+                  className="p-2.5 text-[#6b6b6b] hover:text-[#1c3a13] hover:bg-[#eeeee9] rounded-full transition-colors"
                   aria-label={`Call ${providerName}`}
                   title={`Call ${providerName}`}
                 >
@@ -605,7 +615,7 @@ const OngoingBookings: React.FC<OngoingBookingsProps> = ({
                 <button
                   type="button"
                   onClick={(e) => handleReportIssue(e, booking)}
-                  className="p-2.5 text-nilin-warmGray hover:text-nilin-coral hover:bg-nilin-blush/40 rounded-xl transition-colors"
+                  className="p-2.5 text-[#6b6b6b] hover:text-[#1c3a13] hover:bg-[#eeeee9] rounded-full transition-colors"
                   aria-label="Report an issue"
                   title="Get support"
                 >
@@ -616,9 +626,9 @@ const OngoingBookings: React.FC<OngoingBookingsProps> = ({
           </div>
         </div>
 
-        <div className="px-5 py-2.5 bg-nilin-blush/20 border-t border-nilin-border/20 text-xs text-nilin-warmGray flex items-center justify-between">
+        <div className="px-5 py-2.5 bg-[#eeeee9]/50 border-t border-[#1c3a13]/5 text-[11px] text-[#6b6b6b] flex items-center justify-between">
           <span>Booking #{booking.bookingNumber?.slice(-8).toUpperCase() || 'N/A'}</span>
-          <span className="inline-flex items-center gap-1 text-nilin-coral font-medium">
+          <span className="inline-flex items-center gap-1 text-[#1c3a13] font-medium">
             View details
             <ExternalLink className="w-3 h-3" />
           </span>
@@ -629,23 +639,23 @@ const OngoingBookings: React.FC<OngoingBookingsProps> = ({
 
   if (isLoading && allBookings.length === 0) {
     return (
-      <section className="py-8 px-4" aria-busy="true" aria-label="Loading active bookings">
+      <section className="py-8 px-4" aria-busy={true} aria-label="Loading active bookings">
         <div className="max-w-7xl mx-auto">
           <div className="flex items-center justify-between mb-6 animate-pulse">
             <div>
-              <div className="h-7 bg-nilin-border/40 rounded-lg w-52 mb-2" />
-              <div className="h-4 bg-nilin-border/25 rounded w-64" />
+              <div className="h-7 bg-[#eeeee9] rounded-lg w-52 mb-2" />
+              <div className="h-4 bg-[#eeeee9] rounded w-64" />
             </div>
           </div>
           <div className="space-y-4">
             {[1, 2].map((i) => (
-              <div key={i} className="bg-white rounded-2xl border border-nilin-border/30 p-5 animate-pulse">
+              <div key={i} className="bg-[#fcfcf7] rounded-2xl border border-[#1c3a13]/10 p-5 animate-pulse">
                 <div className="flex items-start gap-4">
-                  <div className="w-16 h-16 rounded-xl bg-nilin-blush/60" />
+                  <div className="w-16 h-16 rounded-xl bg-gradient-to-br from-[#d3fa99]/20 to-[#d3fa99]/10" />
                   <div className="flex-1 space-y-3">
-                    <div className="h-4 bg-nilin-border/40 rounded w-1/2" />
-                    <div className="h-3 bg-nilin-border/25 rounded w-3/4" />
-                    <div className="h-2 bg-nilin-border/25 rounded-full w-full" />
+                    <div className="h-4 bg-[#eeeee9] rounded w-1/2" />
+                    <div className="h-3 bg-[#eeeee9]/80 rounded w-3/4" />
+                    <div className="h-2 bg-[#eeeee9] rounded-full w-full" />
                   </div>
                 </div>
               </div>
@@ -660,14 +670,14 @@ const OngoingBookings: React.FC<OngoingBookingsProps> = ({
     return (
       <section className="py-8 px-4">
         <div className="max-w-7xl mx-auto">
-          <div className="bg-red-50 border border-red-100 rounded-2xl p-6 text-center">
-            <AlertCircle className="w-10 h-10 text-red-400 mx-auto mb-3" />
-            <h3 className="text-base font-semibold text-red-700 mb-1">Unable to load your bookings</h3>
-            <p className="text-sm text-red-600/80 mb-4">{error}</p>
+          <div className="bg-[#eeeee9] border border-[#1c3a13]/20 rounded-2xl p-6 text-center">
+            <AlertCircle className="w-10 h-10 text-[#1c3a13] mx-auto mb-3" />
+            <h3 className="text-base font-medium text-[#1c3a13] mb-1">Unable to load your bookings</h3>
+            <p className="text-[14px] text-[#6b6b6b] mb-4">{error}</p>
             <button
               type="button"
               onClick={handleRefresh}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-nilin-coral hover:bg-nilin-rose text-white rounded-xl text-sm font-medium transition-colors"
+              className="inline-flex items-center gap-2 px-4 py-2 bg-[#1c3a13] hover:bg-[#1c3a13]/90 text-[#fcfcf7] rounded-[9999px] text-[13px] font-medium transition-colors"
             >
               Try Again
               <RefreshCw className="w-4 h-4" />
@@ -697,18 +707,18 @@ const OngoingBookings: React.FC<OngoingBookingsProps> = ({
         <div className="flex items-end justify-between mb-6 gap-4">
           <div>
             <div className="flex items-center gap-2 mb-1">
-              <Sparkles className="w-5 h-5 text-nilin-coral" />
-              <h2 id="active-bookings-heading" className="text-2xl md:text-3xl font-serif text-nilin-charcoal">
+              <Sparkles className="w-5 h-5 text-[#1c3a13]" />
+              <h2 id="active-bookings-heading" className="text-2xl md:text-3xl font-normal text-[#1c3a13] tracking-[-0.01em]">
                 Active &amp; Today&apos;s Bookings
               </h2>
               {totalActiveCount > 0 && (
-                <span className="flex items-center gap-1 px-2.5 py-0.5 bg-nilin-coral/10 text-nilin-coral text-xs font-semibold rounded-full">
-                  <span className="w-1.5 h-1.5 bg-nilin-coral rounded-full animate-pulse" />
+                <span className="flex items-center gap-1 px-2.5 py-0.5 bg-[#d3fa99]/30 text-[#1c3a13] text-[11px] font-medium rounded-full">
+                  <span className="w-1.5 h-1.5 bg-[#d3fa99] rounded-full shadow-[0_0_8px_#d3fa99] animate-pulse" />
                   {totalActiveCount} active
                 </span>
               )}
             </div>
-            <p className="text-sm text-nilin-warmGray">
+            <p className="text-[14px] text-[#6b6b6b]">
               {totalActiveCount > 0
                 ? 'In progress, waiting, and scheduled for today'
                 : 'Nothing scheduled for today — book when you\'re ready'}
@@ -720,7 +730,7 @@ const OngoingBookings: React.FC<OngoingBookingsProps> = ({
               <button
                 type="button"
                 onClick={handleViewAll}
-                className="hidden sm:inline-flex items-center gap-1.5 px-5 py-2.5 rounded-nilin text-sm font-semibold text-white bg-gradient-to-r from-nilin-coral to-nilin-rose shadow-sm hover:shadow-md transition-all"
+                className="hidden sm:inline-flex items-center gap-1.5 px-5 py-2.5 rounded-[9999px] text-[13px] font-medium text-[#fcfcf7] bg-[#1c3a13] hover:bg-[#1c3a13]/90 hover:scale-105 active:scale-95 transition-all"
               >
                 View all
                 <ArrowRight className="w-4 h-4" />
@@ -730,7 +740,7 @@ const OngoingBookings: React.FC<OngoingBookingsProps> = ({
               type="button"
               onClick={handleRefresh}
               disabled={isRefreshing}
-              className="p-2.5 rounded-xl border border-nilin-border/50 text-nilin-warmGray hover:text-nilin-charcoal hover:bg-nilin-blush/40 transition-colors disabled:opacity-50"
+              className="p-2.5 rounded-full border border-[#1c3a13]/10 text-[#6b6b6b] hover:text-[#1c3a13] hover:bg-[#eeeee9] transition-colors disabled:opacity-50"
               aria-label="Refresh bookings"
             >
               <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
@@ -739,27 +749,27 @@ const OngoingBookings: React.FC<OngoingBookingsProps> = ({
         </div>
 
         {totalActiveCount === 0 && (
-          <div className="bg-gradient-to-br from-nilin-blush/40 via-white to-nilin-cream/30 rounded-2xl p-8 md:p-10 text-center border border-nilin-border/40">
-            <div className="w-16 h-16 rounded-2xl bg-nilin-coral/10 mx-auto mb-4 flex items-center justify-center">
-              <Calendar className="w-8 h-8 text-nilin-coral" />
+          <div className="bg-[#fcfcf7] rounded-2xl p-8 md:p-10 text-center border border-[#1c3a13]/10">
+            <div className="w-16 h-16 rounded-2xl bg-[#d3fa99]/30 mx-auto mb-4 flex items-center justify-center">
+              <Calendar className="w-8 h-8 text-[#1c3a13]" />
             </div>
-            <h3 className="text-lg font-serif text-nilin-charcoal mb-2">No active bookings today</h3>
-            <p className="text-sm text-nilin-warmGray max-w-md mx-auto mb-6">
+            <h3 className="text-lg font-light text-[#1c3a13] mb-2">No active bookings today</h3>
+            <p className="text-[14px] text-[#6b6b6b] max-w-md mx-auto mb-6">
               Services in progress and today&apos;s appointments appear here. Book something or check your full schedule.
             </p>
             <div className="flex flex-wrap items-center justify-center gap-3">
               <button
                 type="button"
                 onClick={handleViewAll}
-                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl border border-nilin-border text-nilin-charcoal text-sm font-medium hover:bg-nilin-blush/40 transition-colors"
+                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-[9999px] border border-[#1c3a13]/10 text-[#1c3a13] text-[13px] font-medium hover:bg-[#eeeee9] hover:scale-105 active:scale-95 transition-all"
               >
-                <Calendar className="w-4 h-4 text-nilin-coral" />
+                <Calendar className="w-4 h-4 text-[#1c3a13]" />
                 View all bookings
               </button>
               <button
                 type="button"
                 onClick={handleBookService}
-                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-nilin-coral to-nilin-rose text-white text-sm font-semibold shadow-nilin-warm hover:shadow-nilin transition-all"
+                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-[9999px] bg-[#1c3a13] text-[#fcfcf7] text-[13px] font-medium hover:bg-[#1c3a13]/90 hover:scale-105 active:scale-95 transition-all"
               >
                 Book a service
                 <ArrowRight className="w-4 h-4" />
@@ -773,7 +783,7 @@ const OngoingBookings: React.FC<OngoingBookingsProps> = ({
             {sectionGroups.map((group) => (
               <div key={group.kind}>
                 {sectionGroups.length > 1 && KIND_CONFIG[group.kind].section && (
-                  <h3 className="text-sm font-semibold text-nilin-warmGray uppercase tracking-wide mb-3">
+                  <h3 className="text-[11px] font-semibold text-[#6b6b6b]/80 mb-3">
                     {KIND_CONFIG[group.kind].section}
                   </h3>
                 )}
@@ -787,7 +797,7 @@ const OngoingBookings: React.FC<OngoingBookingsProps> = ({
               <button
                 type="button"
                 onClick={handleViewAll}
-                className="w-full py-3 rounded-xl border border-dashed border-nilin-coral/40 text-nilin-coral text-sm font-semibold hover:bg-nilin-blush/30 transition-colors"
+                className="w-full py-3 rounded-xl border border-dashed border-[#1c3a13]/20 text-[#1c3a13] text-[13px] font-medium hover:bg-[#eeeee9] transition-colors"
               >
                 +{overflowCount} more active booking{overflowCount !== 1 ? 's' : ''}
               </button>
@@ -800,7 +810,7 @@ const OngoingBookings: React.FC<OngoingBookingsProps> = ({
             <button
               type="button"
               onClick={handleViewAll}
-              className="inline-flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-nilin-coral to-nilin-rose text-white rounded-xl text-sm font-semibold transition-colors"
+              className="inline-flex items-center gap-2 px-6 py-3 bg-[#1c3a13] text-[#fcfcf7] rounded-[9999px] text-[13px] font-medium transition-colors"
             >
               View all bookings
               <ExternalLink className="w-4 h-4" />

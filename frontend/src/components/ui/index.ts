@@ -14,7 +14,14 @@ export { default as OptimizedImage } from './OptimizedImage';
 export { ImageCard } from './ImageCard';
 export { TrustBadge } from './TrustBadge';
 
+// 3D Card Components (Aceternity UI)
+export { CardContainer, CardBody, CardItem, useMouseEnter } from './3d-card';
+
+// Draggable Card Components (Aceternity UI)
+export { DraggableCardBody, DraggableCardContainer } from './draggable-card';
+
 // Dashboard Components
+export { DashboardBubbleButton } from './DashboardBubbleButton';
 export { StatCard, StatCardGrid } from './StatCard';
 export {
   DashboardSection,

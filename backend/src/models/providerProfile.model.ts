@@ -307,6 +307,38 @@ export interface IProviderProfile extends Document {
       views: number;
       uniqueViews: number;
     }>;
+    profileViewSessions?: Array<{
+      date: Date;
+      sessionIds: string[];
+    }>;
+    listingImpressionSessions?: Array<{
+      date: Date;
+      sessionIds: string[];
+    }>;
+    listingImpressions?: Array<{
+      date: Date;
+      impressions: number;
+      uniqueImpressions?: number;
+    }>;
+    providerMetricsDaily?: Array<{
+      date: Date;
+      bookingsCreated: number;
+      bookingsCompleted: number;
+      revenue: number;
+      bySource: Record<string, { count: number; revenue: number }>;
+      impressions?: number;
+      uniqueImpressions?: number;
+      funnelStages?: {
+        impressions: number;
+        uniqueImpressions: number;
+        profileViews: number;
+        uniqueProfileViews: number;
+        bookingRequests: number;
+        confirmed: number;
+        completed: number;
+      };
+      byCity?: Array<{ city: string; bookings: number; revenue: number }>;
+    }>;
     bookingStats: {
       totalBookings: number;
       completedBookings: number;
@@ -502,6 +534,15 @@ export interface IProviderProfile extends Document {
     };
     reviewDisplaySettings?: {
       showPendingOnReviewsPage: boolean;
+    };
+    insightPreferences?: {
+      dismissed: string[];
+      read: string[];
+      updatedAt?: Date;
+    };
+    analyticsPreferences?: {
+      emailReports?: boolean;
+      emailReportsFrequency?: 'weekly' | 'monthly';
     };
   };
 
@@ -984,6 +1025,30 @@ const providerProfileSchema = new Schema<IProviderProfile>(
         views: { type: Number, default: 0 },
         uniqueViews: { type: Number, default: 0 }
       }],
+      profileViewSessions: [{
+        date: { type: Date, required: true },
+        sessionIds: [{ type: String }]
+      }],
+      listingImpressionSessions: [{
+        date: { type: Date, required: true },
+        sessionIds: [{ type: String }]
+      }],
+      listingImpressions: [{
+        date: { type: Date, required: true },
+        impressions: { type: Number, default: 0 },
+        uniqueImpressions: { type: Number, default: 0 }
+      }],
+      providerMetricsDaily: [{
+        date: { type: Date, required: true },
+        bookingsCreated: { type: Number, default: 0 },
+        bookingsCompleted: { type: Number, default: 0 },
+        revenue: { type: Number, default: 0 },
+        bySource: { type: Schema.Types.Mixed, default: {} },
+        impressions: { type: Number, default: 0 },
+        uniqueImpressions: { type: Number, default: 0 },
+        funnelStages: { type: Schema.Types.Mixed, default: {} },
+        byCity: [{ city: String, bookings: Number, revenue: Number }],
+      }],
       bookingStats: {
         totalBookings: { type: Number, default: 0 },
         completedBookings: { type: Number, default: 0 },
@@ -1176,6 +1241,15 @@ const providerProfileSchema = new Schema<IProviderProfile>(
       },
       reviewDisplaySettings: {
         showPendingOnReviewsPage: { type: Boolean, default: true }
+      },
+      insightPreferences: {
+        dismissed: { type: [String], default: [] },
+        read: { type: [String], default: [] },
+        updatedAt: { type: Date }
+      },
+      analyticsPreferences: {
+        emailReports: { type: Boolean, default: false },
+        emailReportsFrequency: { type: String, enum: ['weekly', 'monthly'], default: 'weekly' }
       }
     },
     
@@ -1529,20 +1603,27 @@ ProviderProfile.recalculateRevenueStats = async function(userId: string | mongoo
   const now = new Date();
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
-  // Total earnings from all paid settlements
+  // FIX: Count all completed settlements (both 'pending' and 'paid')
+  // The wallet is credited immediately when booking completes, so earnings should reflect this
+  // Only 'reversed' settlements should be excluded
   const totalEarningsAgg = await Settlement.aggregate([
-    { $match: { providerId: new mongoose.Types.ObjectId(userId.toString()), status: 'paid' } },
+    {
+      $match: {
+        providerId: new mongoose.Types.ObjectId(userId.toString()),
+        status: { $in: ['pending', 'approved', 'paid'] }
+      }
+    },
     { $group: { _id: null, total: { $sum: '$netAmount' } } }
   ]);
   const totalEarnings = totalEarningsAgg[0]?.total || 0;
 
-  // Current month earnings
+  // Current month earnings (include pending settlements)
   const monthEarningsAgg = await Settlement.aggregate([
     {
       $match: {
         providerId: new mongoose.Types.ObjectId(userId.toString()),
-        status: 'paid',
-        paidAt: { $gte: startOfMonth }
+        status: { $in: ['pending', 'approved', 'paid'] },
+        periodStart: { $gte: startOfMonth }
       }
     },
     { $group: { _id: null, total: { $sum: '$netAmount' } } }
@@ -1555,8 +1636,8 @@ ProviderProfile.recalculateRevenueStats = async function(userId: string | mongoo
     {
       $match: {
         providerId: new mongoose.Types.ObjectId(userId.toString()),
-        status: 'paid',
-        paidAt: { $gte: twelveMonthsAgo }
+        status: { $in: ['pending', 'approved', 'paid'] },
+        periodStart: { $gte: twelveMonthsAgo }
       }
     },
     {

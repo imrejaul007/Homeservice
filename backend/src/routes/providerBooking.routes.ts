@@ -1,3 +1,7 @@
+/**
+ * @deprecated Legacy duplicate of /api/bookings/provider routes.
+ * The frontend uses /api/bookings/* exclusively. Kept for backward compatibility only.
+ */
 import { Router, Request, Response, NextFunction } from 'express';
 import {
   getProviderBookings,
@@ -135,6 +139,8 @@ router.post('/:id/accept', verifyProviderRole, verifyBookingOwnership, acceptBoo
  * @security IDOR protection - verifies booking belongs to this provider
  */
 router.post('/:id/reject', verifyProviderRole, verifyBookingOwnership, rejectBooking);
+router.patch('/:id/reject', verifyProviderRole, verifyBookingOwnership, rejectBooking);
+router.post('/:id/decline', verifyProviderRole, verifyBookingOwnership, rejectBooking);
 
 /**
  * @route   POST /api/v1/provider-bookings/:id/start

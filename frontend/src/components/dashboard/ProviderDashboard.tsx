@@ -6,6 +6,16 @@ import { providerAnalyticsApi, type ProviderAnalytics } from '../../services/pro
 import { reviewsApi, type Review } from '../../services/reviewsApi';
 import { providerWalletApi } from '../../services/walletApi';
 import { socketService } from '../../services/socket';
+import { AITipsAlerts, type AITip } from '../provider/AITipsAlerts';
+import { providerInsightsApi } from '../../services/providerInsightsApi';
+import { useFeatureFlag } from '../../services/marketplace/FeatureFlags';
+import {
+  dismissAiTip,
+  getTipActionRoute,
+  markAiTipRead,
+  saveTipPreferencesCache,
+  syncLocalTipPreferencesToServer,
+} from '../../utils/aiTips';
 import NotificationBell from '../common/NotificationBell';
 import { PageErrorBoundary } from '../common/PageErrorBoundary';
 import { useToastActions } from '../common/Toast';
@@ -38,7 +48,7 @@ import {
   PieChart,
   Layers,
   List,
-  TrendingUpIcon
+  TrendingUpIcon,
 } from 'lucide-react';
 
 interface StatCard {
@@ -50,6 +60,7 @@ interface StatCard {
     value: number;
     isPositive: boolean;
   } | null;
+  showStar?: boolean;
   color: string;
 }
 
@@ -148,6 +159,11 @@ const ProviderDashboard: React.FC = () => {
   const [loadingAnalytics, setLoadingAnalytics] = useState(true);
   const [analyticsError, setAnalyticsError] = useState<string | null>(null);
 
+  const [aiTips, setAiTips] = useState<AITip[]>([]);
+  const [aiTipsLoading, setAiTipsLoading] = useState(false);
+  const [aiTipsError, setAiTipsError] = useState<string | null>(null);
+  const [aiTipsHasLoaded, setAiTipsHasLoaded] = useState(false);
+  const aiTipsFetchInFlightRef = useRef(false);
   // Reviews state
   const [recentReviews, setRecentReviews] = useState<RecentReview[]>([]);
   const [loadingReviews, setLoadingReviews] = useState(true);
@@ -160,8 +176,18 @@ const ProviderDashboard: React.FC = () => {
   const [walletBalance, setWalletBalance] = useState<number>(0);
   const [loadingWallet, setLoadingWallet] = useState(true);
 
-  // Status counts for booking funnel
+  // Service status counts (for Service Stats widget)
   const [statusCounts, setStatusCounts] = useState<StatusCounts>({
+    pending: 0,
+    confirmed: 0,
+    in_progress: 0,
+    completed: 0,
+    cancelled: 0,
+  });
+
+  // Booking status counts (for Booking Status Funnel widget)
+  // FIX: Was using statusCounts (service counts) instead of statusBreakdown (booking counts)
+  const [bookingStatusCounts, setBookingStatusCounts] = useState<StatusCounts>({
     pending: 0,
     confirmed: 0,
     in_progress: 0,
@@ -172,8 +198,17 @@ const ProviderDashboard: React.FC = () => {
   // Category stats with booking counts
   const [categoryStats, setCategoryStats] = useState<CategoryStats[]>([]);
 
-  const { user, providerProfile, logout, getCurrentUser, refreshProviderProfile } = useAuthStore();
+  const {
+    user,
+    providerProfile,
+    logout,
+    refreshProviderProfile,
+    isAuthenticated,
+    isInitialized,
+  } = useAuthStore();
   const toast = useToastActions();
+  const aiRecommendationsEnabled = useFeatureFlag('enable_ai_recommendations');
+  const providerUserId = user?.id || user?._id;
 
   // Subscribe to provider status events (approval, rejection, suspension)
   const { approved, rejected, suspended } = useProviderStatus();
@@ -220,16 +255,28 @@ const ProviderDashboard: React.FC = () => {
 
   // Fetch analytics with retry logic
   const fetchAnalyticsWithRetry = useCallback(async (retryCount = 0) => {
+    if (!isMountedRef.current) return;
     try {
       setLoadingAnalytics(true);
       setAnalyticsError(null);
       const response = await providerAnalyticsApi.getProviderAnalytics();
+      if (!isMountedRef.current) return;
       if (response.success && response.data.overview) {
         const overview = response.data.overview;
         setAnalytics(overview);
-        // Extract status counts if available
+        // Extract service status counts if available (for Service Stats widget)
         if (overview.statusCounts) {
           setStatusCounts(overview.statusCounts);
+        }
+        // Extract booking status funnel counts if available (FIX: use statusBreakdown, not statusCounts)
+        if (overview.statusBreakdown) {
+          setBookingStatusCounts({
+            pending: overview.statusBreakdown.pending || 0,
+            confirmed: overview.statusBreakdown.confirmed || 0,
+            in_progress: overview.statusBreakdown.in_progress || 0,
+            completed: overview.statusBreakdown.completed || 0,
+            cancelled: overview.statusBreakdown.cancelled || 0,
+          });
         }
         // Extract category stats if available
         if (overview.categoryStats && Array.isArray(overview.categoryStats)) {
@@ -243,9 +290,10 @@ const ProviderDashboard: React.FC = () => {
       const isNetworkError = !error.response || error.code === 'ECONNABORTED';
       const shouldRetry = isNetworkError && retryCount < MAX_RETRIES;
 
-      if (shouldRetry) {
+      if (shouldRetry && isMountedRef.current) {
         console.warn(`Analytics fetch failed, retrying in ${RETRY_DELAYS[retryCount]}ms...`);
         await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS[retryCount]));
+        if (!isMountedRef.current) return;
         return fetchAnalyticsWithRetry(retryCount + 1);
       }
 
@@ -290,6 +338,68 @@ const ProviderDashboard: React.FC = () => {
       setLoadingReviews(false);
     }
   }, []);
+
+  const AI_TIPS_TIMEOUT_MS = 12000;
+
+  // Fetch AI tips/recommendations
+  const fetchAiTips = useCallback(async () => {
+    if (!providerUserId || !aiRecommendationsEnabled || aiTipsFetchInFlightRef.current) return;
+
+    aiTipsFetchInFlightRef.current = true;
+    try {
+      setAiTipsLoading(true);
+      setAiTipsError(null);
+
+      void syncLocalTipPreferencesToServer(providerUserId);
+
+      const fetchPromise = providerInsightsApi.getAITips();
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('AI insights request timed out')), AI_TIPS_TIMEOUT_MS);
+      });
+
+      const { tips, preferences } = await Promise.race([fetchPromise, timeoutPromise]);
+      if (!isMountedRef.current) return;
+
+      saveTipPreferencesCache(providerUserId, preferences);
+      setAiTips(tips);
+      setAiTipsHasLoaded(true);
+    } catch (error) {
+      if (!isMountedRef.current) return;
+      console.error('Failed to fetch AI tips:', error);
+      setAiTipsError('Failed to load recommendations');
+      setAiTipsHasLoaded(true);
+    } finally {
+      aiTipsFetchInFlightRef.current = false;
+      if (isMountedRef.current) {
+        setAiTipsLoading(false);
+      }
+    }
+  }, [providerUserId, aiRecommendationsEnabled]);
+
+  const handleTipDismiss = useCallback(async (tipId: string) => {
+    if (!providerUserId) return;
+    setAiTips((prev) =>
+      prev.map((tip) => (tip.id === tipId ? { ...tip, isDismissed: true } : tip))
+    );
+    await dismissAiTip(providerUserId, tipId);
+  }, [providerUserId]);
+
+  const handleTipMarkAsRead = useCallback(async (tipId: string) => {
+    if (!providerUserId) return;
+    setAiTips((prev) =>
+      prev.map((tip) => (tip.id === tipId ? { ...tip, isRead: true } : tip))
+    );
+    await markAiTipRead(providerUserId, tipId);
+  }, [providerUserId]);
+
+  const handleTipAction = useCallback(async (tip: AITip) => {
+    if (!providerUserId) return;
+    setAiTips((prev) =>
+      prev.map((t) => (t.id === tip.id ? { ...t, isRead: true } : t))
+    );
+    await markAiTipRead(providerUserId, tip.id);
+    navigate(getTipActionRoute(tip));
+  }, [providerUserId, navigate]);
 
   // Fetch wallet balance
   const fetchWalletBalance = useCallback(async () => {
@@ -353,21 +463,38 @@ const ProviderDashboard: React.FC = () => {
     }
   }, [batchCompleted, user?.id, toast, fetchAnalyticsWithRetry]);
 
-  // Initial data fetch
+  // Core dashboard data — wait for auth; avoid duplicate /auth/me (handled in authStore.initialize)
   useEffect(() => {
-    // Set mounted flag
-    isMountedRef.current = true;
+    if (!isInitialized || !isAuthenticated || !providerUserId) return;
 
-    getCurrentUser();
+    isMountedRef.current = true;
     fetchBookingRequests();
     fetchAnalyticsWithRetry();
     fetchReviews();
 
-    // Cleanup on unmount
     return () => {
       isMountedRef.current = false;
     };
-  }, [fetchBookingRequests, fetchAnalyticsWithRetry, fetchReviews, getCurrentUser]);
+  }, [
+    isInitialized,
+    isAuthenticated,
+    providerUserId,
+    fetchBookingRequests,
+    fetchAnalyticsWithRetry,
+    fetchReviews,
+  ]);
+
+  // AI tips load separately so feature-flag hydration does not refetch the whole dashboard
+  useEffect(() => {
+    if (!isInitialized || !isAuthenticated || !providerUserId || !aiRecommendationsEnabled) return;
+    fetchAiTips();
+  }, [
+    isInitialized,
+    isAuthenticated,
+    providerUserId,
+    aiRecommendationsEnabled,
+    fetchAiTips,
+  ]);
 
   // Socket listeners for real-time updates
   useEffect(() => {
@@ -431,6 +558,16 @@ const ProviderDashboard: React.FC = () => {
         }
       });
 
+      // Listen for insights updates (AI tips may change when key metrics change)
+      const unsubInsightsUpdated = socketService.onInsightsUpdated((data) => {
+        if (isMountedRef.current) {
+          // Refresh analytics and AI tips when insights change
+          fetchAnalyticsWithRetry();
+          fetchAiTips();
+          console.log('Insights updated:', data.reason);
+        }
+      });
+
       const unsubReviewModerated = socketService.onReviewModerated(() => {
         if (isMountedRef.current) {
           fetchReviews();
@@ -451,7 +588,8 @@ const ProviderDashboard: React.FC = () => {
         unsubServiceApproved,
         unsubServiceRejected,
         unsubReviewModerated,
-        unsubNotification
+        unsubNotification,
+        unsubInsightsUpdated
       ];
     };
 
@@ -842,11 +980,11 @@ const ProviderDashboard: React.FC = () => {
 	              <span className="text-xs font-medium text-nilin-charcoal text-center">Bookings</span>
 	            </Link>
 	            <Link
-	              to="/provider/services"
+	              to="/provider/calendar"
 	              className="flex flex-col items-center justify-center p-3 bg-white/60 backdrop-blur rounded-xl border border-nilin-border/30 hover:border-nilin-coral/50 hover:shadow-md transition-all duration-300"
 	            >
-	              <Settings className="h-5 w-5 text-nilin-rose mb-1" />
-	              <span className="text-xs font-medium text-nilin-charcoal text-center">Services</span>
+	              <List className="h-5 w-5 text-nilin-rose mb-1" />
+	              <span className="text-xs font-medium text-nilin-charcoal text-center">Schedule</span>
 	            </Link>
 	            <Link
 	              to="/provider/analytics"
@@ -875,13 +1013,6 @@ const ProviderDashboard: React.FC = () => {
 	            >
 	              <Clock className="h-5 w-5 text-nilin-rose mb-1" />
 	              <span className="text-xs font-medium text-nilin-charcoal text-center">Hours</span>
-	            </Link>
-	            <Link
-	              to="/provider/service-availability"
-	              className="flex flex-col items-center justify-center p-3 bg-white/60 backdrop-blur rounded-xl border border-nilin-border/30 hover:border-nilin-coral/50 hover:shadow-md transition-all duration-300"
-	            >
-	              <Calendar className="h-5 w-5 text-purple-500 mb-1" />
-	              <span className="text-xs font-medium text-nilin-charcoal text-center">Services</span>
 	            </Link>
 	            <Link
 	              to="/provider/settings"
@@ -913,9 +1044,18 @@ const ProviderDashboard: React.FC = () => {
                   <div className="ml-4 flex-1">
                     <p className="text-sm font-medium text-nilin-warmGray font-sans">{stat.title}</p>
                     <div className="flex items-baseline">
-                      <p className="text-2xl font-serif font-light text-nilin-charcoal">
-                        {typeof stat.value === 'number' && stat.title.includes('Earnings') ? `AED ${stat.value}` : stat.value}
-                      </p>
+                      {stat.showStar ? (
+                        <div className="flex items-center gap-1">
+                          <p className="text-2xl font-serif font-light text-nilin-charcoal">
+                            {typeof stat.value === 'number' ? stat.value.toFixed(1) : stat.value}
+                          </p>
+                          <Star className="h-5 w-5 text-amber-400 fill-amber-400" />
+                        </div>
+                      ) : (
+                        <p className="text-2xl font-serif font-light text-nilin-charcoal">
+                          {stat.title.includes('Earnings') ? `AED ${stat.value}` : stat.value}
+                        </p>
+                      )}
                       {stat.trend && (
                         <span className={`ml-2 text-sm font-medium font-sans ${
                           stat.trend.isPositive ? 'text-green-600' : 'text-red-600'
@@ -933,6 +1073,40 @@ const ProviderDashboard: React.FC = () => {
             );
           })}
         </div>
+
+        {/* AI Recommendations Section — fixed min-height prevents CLS while loading */}
+        {aiRecommendationsEnabled && providerUserId && (
+          <div className="mb-8 min-h-[12rem]">
+            {aiTipsError && !aiTipsLoading ? (
+              <div className="p-4 glass rounded-xl border border-nilin-border/50">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle className="h-5 w-5 text-amber-500" />
+                    <span className="text-sm text-nilin-charcoal">AI Recommendations unavailable</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => fetchAiTips()}
+                    className="text-xs text-nilin-coral hover:text-nilin-rose font-medium"
+                  >
+                    Retry
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <AITipsAlerts
+                tips={aiTips}
+                isLoading={aiTipsLoading && !aiTipsHasLoaded}
+                maxVisible={5}
+                onTipAction={handleTipAction}
+                onDismiss={handleTipDismiss}
+                onMarkAsRead={handleTipMarkAsRead}
+                viewAllHref="/provider/analytics?tab=insights"
+              />
+            )}
+          </div>
+        )}
+
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           {/* Booking Requests */}
@@ -1282,31 +1456,31 @@ const ProviderDashboard: React.FC = () => {
                 <div className="flex justify-between items-center py-2 border-b border-nilin-border/30">
                   <span className="text-sm text-nilin-warmGray font-sans">Pending</span>
                   <span className="text-sm font-medium text-amber-600 font-sans">
-                    {statusCounts.pending}
+                    {bookingStatusCounts.pending}
                   </span>
                 </div>
                 <div className="flex justify-between items-center py-2 border-b border-nilin-border/30">
                   <span className="text-sm text-nilin-warmGray font-sans">Confirmed</span>
                   <span className="text-sm font-medium text-blue-600 font-sans">
-                    {statusCounts.confirmed}
+                    {bookingStatusCounts.confirmed}
                   </span>
                 </div>
                 <div className="flex justify-between items-center py-2 border-b border-nilin-border/30">
                   <span className="text-sm text-nilin-warmGray font-sans">In Progress</span>
                   <span className="text-sm font-medium text-purple-600 font-sans">
-                    {statusCounts.in_progress}
+                    {bookingStatusCounts.in_progress}
                   </span>
                 </div>
                 <div className="flex justify-between items-center py-2 border-b border-nilin-border/30">
                   <span className="text-sm text-nilin-warmGray font-sans">Completed</span>
                   <span className="text-sm font-medium text-green-600 font-sans">
-                    {statusCounts.completed}
+                    {bookingStatusCounts.completed}
                   </span>
                 </div>
                 <div className="flex justify-between items-center py-2">
                   <span className="text-sm text-nilin-warmGray font-sans">Cancelled</span>
                   <span className="text-sm font-medium text-red-600 font-sans">
-                    {statusCounts.cancelled}
+                    {bookingStatusCounts.cancelled}
                   </span>
                 </div>
               </div>

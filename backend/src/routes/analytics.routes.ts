@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { authenticate, requireRole } from '../middleware/auth.middleware';
+import { authenticate, requireRole, optionalAuth } from '../middleware/auth.middleware';
 import { asyncHandler } from '../utils/asyncHandler';
 import { ApiError } from '../utils/ApiError';
 import Booking from '../models/booking.model';
@@ -20,6 +20,7 @@ import {
   FunnelMetrics,
   GeographicAnalytics,
 } from '../services/analytics.service';
+import { ingestAnalyticsEventBatch } from '../services/analyticsEventsIngest.service';
 
 const router = Router();
 
@@ -52,6 +53,26 @@ function parseAnalyticsDateRange(query: Request['query']): { start: Date; end: D
   const start = new Date(end.getTime() - days * 24 * 60 * 60 * 1000);
   return { start, end, period: periodValue };
 }
+
+/**
+ * @route   POST /api/analytics
+ * @desc    Ingest batched frontend analytics events (provider funnel events)
+ * @access  Public (optional auth enriches userId)
+ */
+router.post('/', optionalAuth, asyncHandler(async (req: Request, res: Response) => {
+  const { events } = req.body || {};
+  if (!Array.isArray(events)) {
+    throw new ApiError(400, 'events array is required');
+  }
+
+  const user = req.user as { _id?: { toString(): string } } | undefined;
+  const result = await ingestAnalyticsEventBatch(events, user?._id?.toString());
+
+  res.status(202).json({
+    success: true,
+    data: result,
+  });
+}));
 
 /**
  * @route   GET /api/analytics/overview
@@ -172,11 +193,13 @@ router.post('/refresh', authenticate, requireRole('admin'), asyncHandler(async (
 
 /**
  * @route   GET /api/analytics/provider/:id
- * @desc    Get analytics for specific provider
+ * @desc    Get analytics for specific provider (admin only; MongoDB ObjectId only)
  * @access  Admin only
+ * @note    :id is restricted to ObjectId so paths like "dashboard" are not captured here
  */
-router.get('/provider/:id', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
+router.get('/provider/:id([0-9a-fA-F]{24})', authenticate, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
+
   const { period = '30d' } = req.query;
 
   // Validate period parameter

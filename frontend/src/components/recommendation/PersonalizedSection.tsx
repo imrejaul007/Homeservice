@@ -86,7 +86,7 @@ const PersonalizedSection: React.FC<PersonalizedSectionProps> = ({
       <div className="container mx-auto px-4 py-6" data-testid={testID}>
         <SectionHeader title={title} subtitle={subtitle} />
         <div className="flex flex-col items-center justify-center py-10">
-          <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+          <div className="w-8 h-8 border-4 border-nilin-coral border-t-transparent rounded-full animate-spin" />
           <p className="mt-3 text-sm text-gray-500">Finding best matches for you...</p>
         </div>
       </div>

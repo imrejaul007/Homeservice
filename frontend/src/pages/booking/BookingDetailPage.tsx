@@ -19,12 +19,12 @@ import Breadcrumb from '../../components/common/Breadcrumb';
 import Timeline from '../../components/customer/Timeline';
 import { useBookingStore } from '../../stores/bookingStore';
 import { useAuthStore } from '../../stores/authStore';
-import type { TimelineEvent } from '../../components/customer/Timeline';
 import { toast } from 'react-hot-toast';
 import { socketService } from '../../services/socket';
 // Issue #7 fix: Import useBookingAdminUpdates for real-time admin update notifications
 import { useBookingAdminUpdates } from '../../hooks/useSocket';
 import { formatBookingPrice } from '../../utils/formatting';
+import { buildBookingTimeline } from '../../utils/timeline';
 
 interface BookingError {
   message: string;
@@ -177,69 +177,11 @@ const BookingDetailPage: React.FC = () => {
     });
   };
 
-  // Convert booking status to timeline events
-  const getTimelineEvents = (): TimelineEvent[] => {
+  // Build timeline events using unified utility
+  const timelineEvents = useMemo(() => {
     if (!currentBooking) return [];
-
-    const events: TimelineEvent[] = [
-      {
-        id: '1',
-        title: 'Booking Created',
-        description: 'Your booking request has been submitted',
-        timestamp: new Date(currentBooking.createdAt).toLocaleString(),
-        status: 'completed'
-      }
-    ];
-
-    if (currentBooking.status === 'confirmed' || currentBooking.status === 'in_progress' || currentBooking.status === 'completed') {
-      events.push({
-        id: '2',
-        title: 'Booking Confirmed',
-        description: 'Provider has confirmed your booking',
-        timestamp: currentBooking.confirmedAt ? new Date(currentBooking.confirmedAt).toLocaleString() : undefined,
-        status: 'completed'
-      });
-    }
-
-    if (currentBooking.status === 'in_progress' || currentBooking.status === 'completed') {
-      events.push({
-        id: '3',
-        title: 'Service Started',
-        description: 'Provider has started the service',
-        timestamp: currentBooking.startedAt ? new Date(currentBooking.startedAt).toLocaleString() : undefined,
-        status: currentBooking.status === 'in_progress' ? 'current' : 'completed'
-      });
-    }
-
-    if (currentBooking.status === 'completed') {
-      events.push({
-        id: '4',
-        title: 'Service Completed',
-        description: 'Service has been completed successfully',
-        timestamp: currentBooking.completedAt ? new Date(currentBooking.completedAt).toLocaleString() : undefined,
-        status: 'completed'
-      });
-    } else if (currentBooking.status !== 'cancelled') {
-      events.push({
-        id: '4',
-        title: 'Service Completion',
-        description: 'Waiting for service completion',
-        status: 'pending'
-      });
-    }
-
-    if (currentBooking.status === 'cancelled') {
-      events.push({
-        id: 'cancelled',
-        title: 'Booking Cancelled',
-        description: currentBooking.cancellationReason || 'Booking was cancelled',
-        timestamp: currentBooking.cancelledAt ? new Date(currentBooking.cancelledAt).toLocaleString() : undefined,
-        status: 'cancelled'
-      });
-    }
-
-    return events;
-  };
+    return buildBookingTimeline(currentBooking);
+  }, [currentBooking]);
 
   if (isLoading) {
     return (
@@ -392,7 +334,7 @@ const BookingDetailPage: React.FC = () => {
           {/* Timeline */}
           <div className="bg-white rounded-xl border border-nilin-border p-6 mb-6">
             <h2 className="text-xl font-bold text-nilin-charcoal mb-6">Booking Timeline</h2>
-            <Timeline events={getTimelineEvents()} />
+            <Timeline events={timelineEvents} />
           </div>
 
           {/* Actions */}

@@ -1,5 +1,6 @@
 import axios, { type AxiosError, type InternalAxiosRequestConfig } from 'axios';
 import { API_BASE_URL } from '@/config/api';
+import { secureStorage } from '@/lib/security';
 import type {
   ProviderResponse,
   ProvidersByCategoryResponse,
@@ -44,10 +45,10 @@ const generateCorrelationId = () => {
   return `req-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
 };
 
-// Get auth tokens from sessionStorage
+// Match main api.ts — tokens live in secureStorage, not raw sessionStorage
 const getAuthTokens = () => {
   try {
-    const stored = sessionStorage.getItem('auth-storage');
+    const stored = secureStorage.getItem('auth-storage');
     if (!stored) return null;
     const parsed = JSON.parse(stored);
     const tokens = parsed?.state?.tokens;
@@ -156,8 +157,15 @@ export interface ProviderAnalytics {
   customerMetrics?: CustomerMetrics;
   categories: string[];
   topServices: TopService[];
-  statusCounts?: StatusCounts;
+  /** Service listing status counts (active, draft, etc.) — not booking funnel */
+  statusCounts?: StatusCounts & Record<string, number>;
+  /** Booking status funnel counts */
+  statusBreakdown?: StatusCounts;
   categoryStats?: CategoryStats[];
+  trendStats?: {
+    earningsChangePercent: number | null;
+    bookingsChangePercent: number | null;
+  };
 }
 
 export interface ProviderAnalyticsResponse {
@@ -237,24 +245,41 @@ export const providerApi = {
   },
 };
 
+export type TrendResult = {
+  value: number | null;
+  label: 'percent' | 'new' | 'none';
+};
+
 /**
  * Provider analytics API - uses auth-protected /provider endpoints
  */
 export interface ProviderInsightsAnalytics {
   overview: {
     totalViews: number;
-    viewsTrend: number;
+    totalViewsAllTime?: number;
+    viewsTrend: TrendResult;
     profileViews: number;
-    profileViewsTrend: number;
+    profileViewsTrend: TrendResult;
     bookingRequests: number;
-    bookingRequestsTrend: number;
+    bookingRequestsTrend: TrendResult;
     conversionRate: number;
-    conversionRateTrend: number;
+    conversionRateTrend: TrendResult;
+    confirmedBookingRate?: number;
+    confirmedBookingRateTrend?: TrendResult;
+    conversionRateConfirmed?: number;
+    conversionRateConfirmedTrend?: TrendResult;
+    dataQuality?: {
+      trackingSince: string | null;
+      level: 'full' | 'bookings_only';
+    };
   };
   earnings: {
     thisMonth: number;
     lastMonth: number;
-    trend: number;
+    trend: TrendResult;
+    grossEarnings?: { thisMonth: number; lastMonth: number };
+    platformFees?: { thisMonth: number; lastMonth: number };
+    revenueMode?: 'net' | 'gross';
   };
   bookings: {
     total: number;
@@ -273,11 +298,32 @@ export interface ProviderInsightsAnalytics {
     bookings: number;
     revenue: number;
   }>;
+  timeSeries: Array<{
+    date: string;
+    revenue: number;
+    bookings: number;
+  }>;
+  timeSeriesPrevious?: Array<{
+    date: string;
+    revenue: number;
+    bookings: number;
+  }>;
+  metadata?: {
+    dateFields?: Record<string, string>;
+  };
   ratings: {
     average: number;
     total: number;
     breakdown: Record<'1' | '2' | '3' | '4' | '5', number>;
   };
+  experiments?: Array<{
+    experimentId: string;
+    variant: string;
+    exposures: number;
+    bookings: number;
+    revenue: number;
+    conversionRate: number;
+  }>;
 }
 
 export const providerAnalyticsApi = {
@@ -285,8 +331,10 @@ export const providerAnalyticsApi = {
    * Get provider overview analytics (service management dashboard)
    * GET /api/provider/analytics
    */
-  getProviderAnalytics: async (): Promise<ProviderAnalyticsResponse> => {
-    const response = await analyticsApi.get('/analytics');
+  getProviderAnalytics: async (city?: string): Promise<ProviderAnalyticsResponse> => {
+    const response = await analyticsApi.get('/analytics', {
+      params: city ? { city } : undefined,
+    });
     return response.data;
   },
 
@@ -296,9 +344,15 @@ export const providerAnalyticsApi = {
    */
   getProviderInsights: async (
     period: '7d' | '30d' | '90d' = '30d',
+    options: { revenue?: 'net' | 'gross'; city?: string } = {},
   ): Promise<{ success: boolean; data: ProviderInsightsAnalytics }> => {
     const response = await analyticsApi.get('/analytics/insights', {
-      params: { period },
+      params: {
+        period,
+        revenue: options.revenue ?? 'net',
+        ...(options.city ? { city: options.city } : {}),
+      },
+      timeout: 45000,
     });
     return response.data;
   },

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
   Search,
@@ -16,7 +16,14 @@ import {
   ChevronRight,
   Share2,
   ArrowLeft,
-  RefreshCw
+  RefreshCw,
+  Copy,
+  Printer,
+  Timer,
+  Tag,
+  ArrowRight,
+  Wifi,
+  WifiOff,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import NavigationHeader from '../../components/layout/NavigationHeader';
@@ -68,7 +75,7 @@ interface TrackingData {
     subcategory?: string;
     image?: string;
   };
-  provider?: { _id?: string; name: string; phone?: string };
+  provider?: { _id?: string; name: string; phone?: string; avatar?: string };
   customerId?: string;
   providerId?: string;
   location?: LocationInfo;
@@ -89,7 +96,7 @@ interface TrackingData {
 }
 
 const statusLabels: Record<string, string> = {
-  pending: 'Pending Confirmation',
+  pending: 'Pending',
   confirmed: 'Confirmed',
   in_progress: 'In Progress',
   completed: 'Completed',
@@ -98,15 +105,19 @@ const statusLabels: Record<string, string> = {
   no_show: 'No Show',
 };
 
+// NILIN brand colors for status badges
 const statusColors: Record<string, { bg: string; text: string; border: string }> = {
   pending: { bg: 'bg-yellow-50', text: 'text-yellow-700', border: 'border-yellow-200' },
-  confirmed: { bg: 'bg-blue-50', text: 'text-blue-700', border: 'border-blue-200' },
-  in_progress: { bg: 'bg-purple-50', text: 'text-purple-700', border: 'border-purple-200' },
-  completed: { bg: 'bg-green-50', text: 'text-green-700', border: 'border-green-200' },
-  cancelled: { bg: 'bg-red-50', text: 'text-red-700', border: 'border-red-200' },
-  rejected: { bg: 'bg-red-50', text: 'text-red-700', border: 'border-red-200' },
-  no_show: { bg: 'bg-gray-50', text: 'text-gray-700', border: 'border-gray-200' },
+  confirmed: { bg: 'bg-nilin-coral/10', text: 'text-nilin-coral', border: 'border-nilin-coral/20' },
+  in_progress: { bg: 'bg-nilin-rose/10', text: 'text-nilin-rose', border: 'border-nilin-rose/20' },
+  completed: { bg: 'bg-nilin-success/10', text: 'text-nilin-success', border: 'border-nilin-success/20' },
+  cancelled: { bg: 'bg-nilin-error/10', text: 'text-nilin-error', border: 'border-nilin-error/20' },
+  rejected: { bg: 'bg-nilin-error/10', text: 'text-nilin-error', border: 'border-nilin-error/20' },
+  no_show: { bg: 'bg-gray-50', text: 'text-gray-600', border: 'border-gray-200' },
 };
+
+// Progress steps for visual stepper
+const progressSteps = ['pending', 'confirmed', 'in_progress', 'completed'];
 
 const TrackBookingPage: React.FC = () => {
   const { bookingNumber: urlBookingNumber } = useParams<{ bookingNumber: string }>();
@@ -120,6 +131,10 @@ const TrackBookingPage: React.FC = () => {
   const [showExperienceForm, setShowExperienceForm] = useState(false);
   const [hasExperience, setHasExperience] = useState(false);
   const [checkingExperience, setCheckingExperience] = useState(false);
+  const [inputError, setInputError] = useState<string | null>(null);
+  const [showShareMenu, setShowShareMenu] = useState(false);
+  const [countdown, setCountdown] = useState<{ days: number; hours: number; minutes: number; seconds: number } | null>(null);
+  const [statusChanged, setStatusChanged] = useState(false);
 
   // Cancellation and reschedule modal state
   const [showCancellationModal, setShowCancellationModal] = useState(false);
@@ -131,8 +146,8 @@ const TrackBookingPage: React.FC = () => {
   const [isConnected, setIsConnected] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
 
-  // Socket cleanup ref
-  const socketCleanupRef = useCallback(() => {}, []);
+  // Ref to track booking ID for socket cleanup
+  const bookingIdRef = useRef<string | undefined>();
 
   useEffect(() => {
     if (urlBookingNumber) {
@@ -140,11 +155,41 @@ const TrackBookingPage: React.FC = () => {
     }
   }, [urlBookingNumber]);
 
+  // Countdown timer for upcoming bookings
+  useEffect(() => {
+    if (!tracking?.scheduledDate || !tracking?.scheduledTime) return;
+    if (['completed', 'cancelled', 'rejected', 'no_show'].includes(tracking.status)) {
+      setCountdown(null);
+      return;
+    }
+
+    const calculateCountdown = () => {
+      const appointmentDate = new Date(`${tracking.scheduledDate}T${tracking.scheduledTime}`);
+      const now = new Date();
+      const diff = appointmentDate.getTime() - now.getTime();
+
+      if (diff <= 0) {
+        setCountdown(null);
+        return;
+      }
+
+      setCountdown({
+        days: Math.floor(diff / (1000 * 60 * 60 * 24)),
+        hours: Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60)),
+        minutes: Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60)),
+        seconds: Math.floor((diff % (1000 * 60)) / 1000),
+      });
+    };
+
+    calculateCountdown();
+    const interval = setInterval(calculateCountdown, 1000);
+    return () => clearInterval(interval);
+  }, [tracking?.scheduledDate, tracking?.scheduledTime, tracking?.status]);
+
   // Setup Socket.IO connection for real-time updates
   useEffect(() => {
     if (!tracking?._id || !isAuthenticated) return;
 
-    let unsubscribeStatusChange: (() => void) | undefined;
     let unsubscribeConfirmed: (() => void) | undefined;
     let unsubscribeCancelled: (() => void) | undefined;
     let unsubscribeRescheduled: (() => void) | undefined;
@@ -160,13 +205,7 @@ const TrackBookingPage: React.FC = () => {
 
         // Join the booking room to receive updates
         socketService.joinBookingRoom(tracking._id!);
-
-        // Listen for booking status changes
-        unsubscribeStatusChange = socketService.onBookingStatusChanged((event: BookingEvent) => {
-          if (event.bookingId === tracking._id) {
-            handleStatusUpdate(event);
-          }
-        });
+        bookingIdRef.current = tracking._id;
 
         // Listen for specific status events
         unsubscribeConfirmed = socketService.on('booking:confirmed', (event: BookingEvent) => {
@@ -200,6 +239,7 @@ const TrackBookingPage: React.FC = () => {
         });
       } catch (error) {
         console.error('Failed to setup socket listeners:', error);
+        setIsConnected(false);
       }
     };
 
@@ -207,10 +247,9 @@ const TrackBookingPage: React.FC = () => {
 
     // Cleanup function
     return () => {
-      if (tracking._id) {
-        socketService.leaveBookingRoom(tracking._id);
+      if (bookingIdRef.current) {
+        socketService.leaveBookingRoom(bookingIdRef.current);
       }
-      unsubscribeStatusChange?.();
       unsubscribeConfirmed?.();
       unsubscribeCancelled?.();
       unsubscribeRescheduled?.();
@@ -221,6 +260,9 @@ const TrackBookingPage: React.FC = () => {
   // Handle real-time status updates
   const handleStatusUpdate = (event: BookingEvent) => {
     setLastUpdate(new Date());
+    setStatusChanged(true);
+    setTimeout(() => setStatusChanged(false), 600);
+
     setTracking((prev) => {
       if (!prev) return prev;
       return {
@@ -269,8 +311,17 @@ const TrackBookingPage: React.FC = () => {
       } else {
         setError(response.data.message || 'Booking not found');
       }
-    } catch (err: any) {
-      setError(err.response?.data?.message || 'Unable to connect. Please try again.');
+    } catch (err: unknown) {
+      const error = err as { response?: { status?: number; data?: { message?: string } }; request?: unknown };
+      if (error.response?.status === 404) {
+        setError('Booking not found. Please verify your booking number.');
+      } else if (error.response?.status === 403) {
+        setError('You do not have permission to view this booking.');
+      } else if (!error.response) {
+        setError('Network error. Please check your connection and try again.');
+      } else {
+        setError(error.response?.data?.message || 'Unable to connect. Please try again.');
+      }
     } finally {
       setLoading(false);
     }
@@ -292,8 +343,9 @@ const TrackBookingPage: React.FC = () => {
       } else {
         toast.error(response.data.message || 'Failed to cancel booking');
       }
-    } catch (err: any) {
-      toast.error(err.response?.data?.message || 'Failed to cancel booking');
+    } catch (err: unknown) {
+      const error = err as { response?: { data?: { message?: string } } };
+      toast.error(error.response?.data?.message || 'Failed to cancel booking');
     } finally {
       setCancelling(false);
     }
@@ -319,8 +371,9 @@ const TrackBookingPage: React.FC = () => {
       } else {
         toast.error(response.data.message || 'Failed to reschedule booking');
       }
-    } catch (err: any) {
-      toast.error(err.response?.data?.message || 'Failed to reschedule booking');
+    } catch (err: unknown) {
+      const error = err as { response?: { data?: { message?: string } } };
+      toast.error(error.response?.data?.message || 'Failed to reschedule booking');
     } finally {
       setRescheduling(false);
     }
@@ -330,13 +383,62 @@ const TrackBookingPage: React.FC = () => {
   const canCancel = ['pending', 'confirmed'].includes(tracking?.status || '');
   const canReschedule = ['pending', 'confirmed'].includes(tracking?.status || '');
 
+  // Copy booking number
+  const handleCopyBookingNumber = async () => {
+    if (!tracking?.bookingNumber) return;
+    try {
+      await navigator.clipboard.writeText(tracking.bookingNumber);
+      toast.success('Booking number copied!');
+    } catch {
+      toast.error('Failed to copy');
+    }
+  };
+
+  // Share booking
+  const handleShareBooking = async () => {
+    if (!tracking) return;
+    setShowShareMenu(false);
+
+    const shareData = {
+      title: `Booking ${tracking.bookingNumber}`,
+      text: `My ${tracking.service?.name || 'service'} appointment is scheduled for ${new Date(tracking.scheduledDate).toLocaleDateString()} at ${tracking.scheduledTime}`,
+      url: window.location.href,
+    };
+
+    if (navigator.share) {
+      try {
+        await navigator.share(shareData);
+      } catch {
+        // User cancelled or error
+      }
+    } else {
+      await navigator.clipboard.writeText(window.location.href);
+      toast.success('Link copied! Share it with others.');
+    }
+  };
+
+  // Print booking
+  const handlePrint = () => {
+    window.print();
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (bookingNumber.trim()) {
-      await fetchTracking(bookingNumber.trim());
-      toast.success('Booking found');
-      navigate(`/track/${bookingNumber.trim()}`);
+    const trimmed = bookingNumber.trim().toUpperCase();
+
+    if (!trimmed) {
+      setInputError('Please enter a booking number');
+      return;
     }
+
+    if (trimmed.length < 5) {
+      setInputError('Booking number is too short');
+      return;
+    }
+
+    setInputError(null);
+    await fetchTracking(trimmed);
+    navigate(`/track/${trimmed}`);
   };
 
   const formatDuration = (minutes: number) => {
@@ -352,33 +454,114 @@ const TrackBookingPage: React.FC = () => {
     return `${street}, ${city}, ${state} ${zipCode}`;
   };
 
+  const formatDateSafe = (dateStr: string | undefined, fallback: string = 'Date not set') => {
+    if (!dateStr) return fallback;
+    const date = new Date(dateStr);
+    if (isNaN(date.getTime())) return 'Invalid date';
+    return date.toLocaleDateString('en-US', {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric'
+    });
+  };
+
+  // Get progress step index
+  const currentStepIndex = progressSteps.indexOf(tracking?.status || 'pending');
+
+  // Status icon for timeline
   const getStatusIcon = (status: string, isCurrent: boolean) => {
-    const colors = statusColors[status] || statusColors.pending;
-    if (status === 'completed' || status === 'confirmed') {
+    const isCompleted = status === 'completed' || status === 'confirmed';
+    const isCancelled = status === 'cancelled' || status === 'rejected';
+    const isInProgress = status === 'in_progress';
+
+    if (isCompleted) {
       return (
-        <div className={`w-3 h-3 rounded-full flex items-center justify-center ${isCurrent ? 'bg-green-500' : 'bg-green-200'}`}>
-          {isCurrent && <CheckCircle className="w-2 h-2 text-white" />}
+        <div className={`w-8 h-8 rounded-full flex items-center justify-center transition-all duration-300 ${
+          isCurrent ? 'bg-nilin-success text-white shadow-lg shadow-nilin-success/30' : 'bg-nilin-success/20 text-nilin-success'
+        }`}>
+          <CheckCircle className="w-4 h-4" aria-hidden="true" />
         </div>
       );
     }
-    if (status === 'cancelled' || status === 'rejected') {
+    if (isCancelled) {
       return (
-        <div className={`w-3 h-3 rounded-full flex items-center justify-center ${isCurrent ? 'bg-red-500' : 'bg-red-200'}`}>
-          {isCurrent && <AlertCircle className="w-2 h-2 text-white" />}
+        <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
+          isCurrent ? 'bg-nilin-error text-white' : 'bg-nilin-error/20 text-nilin-error'
+        }`}>
+          <AlertCircle className="w-4 h-4" aria-hidden="true" />
         </div>
       );
     }
-    return <div className={`w-3 h-3 rounded-full ${isCurrent ? 'bg-nilin-coral' : 'bg-gray-200'}`} />;
+    if (isInProgress) {
+      return (
+        <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
+          isCurrent ? 'bg-nilin-rose text-white animate-pulse' : 'bg-nilin-rose/20 text-nilin-rose'
+        }`}>
+          <Clock className="w-4 h-4" aria-hidden="true" />
+        </div>
+      );
+    }
+    return (
+      <div className={`w-8 h-8 rounded-full flex items-center justify-center border-2 transition-all duration-300 ${
+        isCurrent ? 'border-nilin-coral bg-nilin-coral/10 text-nilin-coral' : 'border-gray-300 bg-gray-50 text-gray-400'
+      }`}>
+        <span className="text-xs font-medium" aria-hidden="true">{progressSteps.indexOf(status) + 1}</span>
+      </div>
+    );
   };
 
   const statusColorsClass = statusColors[tracking?.status || 'pending'];
+
+  // Skeleton loading component
+  const SkeletonCard = () => (
+    <div className="bg-white rounded-nilin-lg shadow-nilin overflow-hidden animate-pulse">
+      <div className="bg-nilin-cream px-6 py-5 border-b border-nilin-border">
+        <div className="flex items-center justify-between">
+          <div className="space-y-2">
+            <div className="h-3 w-24 bg-gray-200 rounded" />
+            <div className="h-6 w-40 bg-gray-200 rounded" />
+          </div>
+          <div className="h-8 w-28 bg-gray-200 rounded-full" />
+        </div>
+      </div>
+      <div className="p-6 space-y-6">
+        <div className="flex gap-4">
+          <div className="w-20 h-20 bg-gray-200 rounded-nilin" />
+          <div className="flex-1 space-y-2">
+            <div className="h-5 w-48 bg-gray-200 rounded" />
+            <div className="h-4 w-32 bg-gray-200 rounded" />
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          {[...Array(4)].map((_, i) => (
+            <div key={i} className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-gray-200 rounded-nilin" />
+              <div className="space-y-2">
+                <div className="h-3 w-12 bg-gray-200 rounded" />
+                <div className="h-4 w-20 bg-gray-200 rounded" />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-nilin-cream via-nilin-blush to-nilin-peach">
       <NavigationHeader />
 
-      <div className="pt-20 pb-12 px-4">
-        <div className="max-w-2xl mx-auto">
+      {/* Skip link for accessibility */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-50 focus:px-4 focus:py-2 focus:bg-nilin-coral focus:text-white focus:rounded-lg"
+      >
+        Skip to main content
+      </a>
+
+      <main id="main-content" className="pt-20 pb-12 px-4">
+        <div className="max-w-3xl mx-auto">
           {/* Breadcrumb */}
           <div className="mb-6">
             <Breadcrumb />
@@ -387,89 +570,266 @@ const TrackBookingPage: React.FC = () => {
           {/* Back Link */}
           <Link
             to="/"
-            className="inline-flex items-center gap-2 text-nilin-warmGray hover:text-nilin-charcoal mb-6 transition-colors"
+            aria-label="Back to home page"
+            className="inline-flex items-center gap-2 text-nilin-warmGray hover:text-nilin-charcoal mb-6 transition-all duration-200 hover:-translate-x-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2 rounded"
           >
-            <ArrowLeft className="w-4 h-4" />
+            <ArrowLeft className="w-4 h-4" aria-hidden="true" />
             Back to Home
           </Link>
 
           {/* Header */}
           <div className="text-center mb-8">
-            <div className="w-16 h-16 bg-nilin-coral/20 rounded-full flex items-center justify-center mx-auto mb-4">
-              <Package className="w-8 h-8 text-nilin-coral" />
+            <div className="w-16 h-16 bg-nilin-coral/20 rounded-full flex items-center justify-center mx-auto mb-4 shadow-nilin-glow">
+              <Package className="w-8 h-8 text-nilin-coral" aria-hidden="true" />
             </div>
-            <h1 className="text-3xl font-serif text-nilin-charcoal mb-2">Track Your Booking</h1>
-            <p className="text-nilin-warmGray">Enter your booking number to check the status</p>
+            <h1 className="text-3xl font-serif font-light tracking-widest text-nilin-charcoal mb-2">Track Your Booking</h1>
+            <p className="text-nilin-warmGray">Track your service journey</p>
           </div>
 
           {/* Search Form */}
-          <form onSubmit={handleSubmit} className="mb-8">
-            <div className="flex gap-3">
+          <form onSubmit={handleSubmit} aria-label="Track booking by number" className="mb-8">
+            <div className="flex flex-col sm:flex-row gap-3">
               <div className="relative flex-1">
-                <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-nilin-warmGray" />
+                <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-nilin-warmGray" aria-hidden="true" />
+                <label htmlFor="booking-number" className="sr-only">
+                  Booking Number
+                </label>
                 <input
+                  id="booking-number"
                   type="text"
                   value={bookingNumber}
-                  onChange={(e) => setBookingNumber(e.target.value.toUpperCase())}
+                  onChange={(e) => {
+                    setBookingNumber(e.target.value.toUpperCase());
+                    setInputError(null);
+                  }}
                   placeholder="e.g. RZ-20260212-A1B2"
-                  className="w-full pl-12 pr-4 py-3.5 bg-white border border-nilin-border rounded-nilin text-nilin-charcoal placeholder:text-nilin-warmGray focus:outline-none focus:ring-2 focus:ring-nilin-coral/50 focus:border-nilin-coral"
+                  aria-describedby={inputError ? 'booking-error' : 'booking-hint'}
+                  aria-invalid={!!inputError || !!error}
+                  autoComplete="off"
+                  autoCapitalize="characters"
+                  className={`w-full pl-12 pr-4 py-3 bg-white border rounded-nilin text-nilin-charcoal placeholder:text-nilin-warmGray focus:outline-none focus:ring-2 focus:ring-nilin-coral/50 focus:border-nilin-coral transition-all duration-200 ${
+                    inputError ? 'border-red-400 ring-1 ring-red-400' : 'border-nilin-border'
+                  }`}
                 />
+                <p id="booking-hint" className="sr-only">
+                  Enter your booking number to track your service booking status
+                </p>
+                {inputError && (
+                  <p id="booking-error" className="mt-1 text-sm text-red-500" role="alert">{inputError}</p>
+                )}
               </div>
               <button
                 type="submit"
                 disabled={!bookingNumber.trim() || loading}
-                className="px-6 py-3.5 bg-nilin-coral text-white rounded-nilin font-semibold hover:bg-nilin-rose transition-colors disabled:opacity-50 disabled:cursor-not-allowed hover-lift"
+                aria-busy={loading}
+                className="px-6 py-3 bg-nilin-coral text-white rounded-nilin font-semibold hover:bg-nilin-rose transition-all duration-200 hover-lift disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
               >
-                {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Track'}
+                {loading ? (
+                  <Loader2 className="w-5 h-5 animate-spin mx-auto" aria-hidden="true" />
+                ) : (
+                  'Track'
+                )}
               </button>
             </div>
           </form>
 
           {/* Error State */}
           {error && (
-            <div className="bg-white border border-red-200 rounded-nilin-lg p-6 text-center mb-8 shadow-nilin">
-              <AlertCircle className="w-8 h-8 text-red-500 mx-auto mb-3" />
-              <p className="text-red-700 font-medium">{error}</p>
-              <p className="text-red-500 text-sm mt-1">Please check the booking number and try again.</p>
+            <div role="alert" className="bg-white border border-nilin-error/30 rounded-nilin-lg p-6 text-center mb-8 shadow-nilin animate-nilin-in">
+              <AlertCircle className="w-8 h-8 text-nilin-error mx-auto mb-3" aria-hidden="true" />
+              <p className="text-nilin-charcoal font-semibold">{error}</p>
+              <p className="text-nilin-warmGray text-sm mt-1">Please check the booking number and try again.</p>
+              <button
+                onClick={() => fetchTracking(bookingNumber)}
+                className="mt-4 inline-flex items-center gap-2 px-4 py-2 bg-nilin-coral text-white rounded-lg font-medium hover:bg-nilin-rose transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
+              >
+                <RefreshCw className="w-4 h-4" aria-hidden="true" />
+                Try Again
+              </button>
             </div>
           )}
 
           {/* Loading State */}
-          {loading && (
-            <div className="text-center py-12">
-              <Loader2 className="w-10 h-10 text-nilin-coral animate-spin mx-auto mb-4" />
-              <p className="text-nilin-warmGray">Looking up your booking...</p>
+          {loading && <SkeletonCard />}
+
+          {/* Empty State */}
+          {!loading && !error && !tracking && bookingNumber && (
+            <div className="bg-white rounded-nilin-lg shadow-nilin p-12 text-center animate-nilin-in">
+              <Package className="w-12 h-12 text-nilin-warmGray mx-auto mb-4" aria-hidden="true" />
+              <h3 className="text-lg font-semibold text-nilin-charcoal mb-2">No Booking Found</h3>
+              <p className="text-nilin-warmGray">
+                We couldn't find booking "{bookingNumber}". Please check the number and try again.
+              </p>
             </div>
           )}
 
           {/* Tracking Results */}
           {tracking && !loading && (
-            <div className="bg-white rounded-nilin-lg shadow-nilin overflow-hidden">
+            <div className="bg-white/80 backdrop-blur-md rounded-nilin-lg shadow-nilin-lg border border-nilin-border/50 overflow-hidden animate-nilin-in">
               {/* Status Banner */}
-              <div className="bg-nilin-cream px-6 py-4 border-b border-nilin-border flex items-center justify-between flex-wrap gap-4">
-                <div>
-                  <p className="text-sm text-nilin-warmGray">Booking Number</p>
-                  <p className="text-lg font-bold text-nilin-charcoal font-mono">{tracking.bookingNumber}</p>
+              <div className="bg-gradient-to-r from-nilin-cream to-nilin-blush/30 px-6 py-5 border-b border-nilin-border/50">
+                <div className="flex items-center justify-between flex-wrap gap-4">
+                  <div>
+                    <p className="text-xs text-nilin-warmGray uppercase tracking-wider">Booking Number</p>
+                    <div className="flex items-center gap-2 mt-1">
+                      <p className="text-xl font-bold text-nilin-charcoal font-mono">{tracking.bookingNumber}</p>
+                      <button
+                        onClick={handleCopyBookingNumber}
+                        className="p-1.5 rounded-lg hover:bg-nilin-coral/10 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral"
+                        aria-label="Copy booking number"
+                        title="Copy booking number"
+                      >
+                        <Copy className="w-4 h-4 text-nilin-warmGray hover:text-nilin-coral" aria-hidden="true" />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span
+                      className={`px-5 py-2 rounded-full text-base font-bold transition-all duration-300 ${statusColorsClass.bg} ${statusColorsClass.text} border ${statusColorsClass.border} shadow-sm ${statusChanged ? 'scale-110 ring-2 ring-offset-2 ring-nilin-coral' : ''}`}
+                      role="status"
+                      aria-live="polite"
+                      aria-atomic="true"
+                    >
+                      {statusLabels[tracking.status] || tracking.status}
+                    </span>
+                    <button
+                      onClick={handleShareBooking}
+                      className="p-2 rounded-lg hover:bg-nilin-coral/10 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral"
+                      aria-label="Share booking"
+                      title="Share booking"
+                    >
+                      <Share2 className="w-5 h-5 text-nilin-coral" aria-hidden="true" />
+                    </button>
+                  </div>
                 </div>
-                <span className={`px-4 py-1.5 rounded-full text-sm font-semibold ${statusColorsClass.bg} ${statusColorsClass.text} border ${statusColorsClass.border}`}>
-                  {statusLabels[tracking.status] || tracking.status}
-                </span>
               </div>
+
+              {/* Visual Progress Stepper */}
+              {!['cancelled', 'rejected', 'no_show'].includes(tracking.status) && (
+                <div className="px-6 py-4 bg-nilin-cream/50 border-b border-nilin-border/50">
+                  <div className="flex items-center justify-between relative">
+                    {/* Progress Line Background */}
+                    <div className="absolute top-4 left-0 right-0 h-0.5 bg-gray-200 -z-10" />
+                    {/* Progress Line Fill */}
+                    <div
+                      className="absolute top-4 left-0 h-0.5 bg-gradient-to-r from-nilin-coral to-nilin-rose transition-all duration-500 -z-10"
+                      style={{ width: `${currentStepIndex >= 0 ? (currentStepIndex / (progressSteps.length - 1)) * 100 : 0}%` }}
+                    />
+                    {progressSteps.map((step, idx) => (
+                      <div key={step} className="flex flex-col items-center">
+                        <div className={`w-9 h-9 rounded-full flex items-center justify-center transition-all duration-300 ${
+                          idx <= currentStepIndex
+                            ? 'bg-gradient-to-br from-nilin-coral to-nilin-rose text-white shadow-lg shadow-nilin-coral/30'
+                            : 'bg-white border-2 border-gray-200 text-gray-400'
+                        }`}>
+                          {idx < currentStepIndex ? (
+                            <CheckCircle className="w-5 h-5" aria-hidden="true" />
+                          ) : (
+                            <span className="text-xs font-bold" aria-hidden="true">{idx + 1}</span>
+                          )}
+                        </div>
+                        <span className={`text-xs mt-2 font-medium ${idx <= currentStepIndex ? 'text-nilin-charcoal' : 'text-nilin-warmGray'}`}>
+                          {statusLabels[step]}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Countdown Timer */}
+              {countdown && ['pending', 'confirmed'].includes(tracking.status) && (
+                <div className="mx-6 mt-4 bg-gradient-to-r from-nilin-coral/10 to-nilin-rose/10 rounded-xl p-4 border border-nilin-coral/20">
+                  <p className="text-xs text-nilin-warmGray text-center mb-3 uppercase tracking-wider">Your appointment starts in</p>
+                  <div className="flex justify-center gap-4">
+                    {[
+                      { value: countdown.days, label: 'Days' },
+                      { value: countdown.hours, label: 'Hours' },
+                      { value: countdown.minutes, label: 'Min' },
+                      { value: countdown.seconds, label: 'Sec' },
+                    ].map(({ value, label }) => (
+                      <div key={label} className="text-center">
+                        <div className="bg-white rounded-lg px-3 py-2 shadow-sm min-w-[50px]">
+                          <span className="text-2xl font-bold text-nilin-charcoal">{value.toString().padStart(2, '0')}</span>
+                        </div>
+                        <span className="text-xs text-nilin-warmGray mt-1 block">{label}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Service Info */}
               {tracking.service && (
                 <div className="p-6 border-b border-nilin-border">
-                  <div className="flex gap-4">
-                    {tracking.service.image && (
+                  <h2 className="text-xs font-semibold text-nilin-warmGray uppercase tracking-wide mb-4">Service</h2>
+                  <div className="flex items-center gap-4">
+                    {tracking.service.image ? (
                       <img
                         src={tracking.service.image}
-                        alt={tracking.service.name}
-                        className="w-20 h-20 rounded-nilin object-cover"
+                        alt={`${tracking.service.name} - Booking ${tracking.bookingNumber}`}
+                        className="w-20 h-20 rounded-nilin object-cover transition-transform duration-200 hover:scale-105"
+                        width={80}
+                        height={80}
                       />
+                    ) : (
+                      <div className="w-20 h-20 rounded-nilin bg-nilin-coral/10 flex items-center justify-center">
+                        <Package className="w-8 h-8 text-nilin-coral" aria-hidden="true" />
+                      </div>
                     )}
-                    <div className="flex-1">
-                      <h3 className="font-semibold text-nilin-charcoal text-lg">{tracking.service.name}</h3>
+                    <div className="flex-1 min-w-0">
+                      <h3 className="font-semibold text-nilin-charcoal text-lg truncate" title={tracking.service.name}>
+                        {tracking.service.name}
+                      </h3>
                       <p className="text-nilin-warmGray text-sm">{tracking.service.category}</p>
+                      {tracking.service.subcategory && (
+                        <p className="text-nilin-warmGray/70 text-xs">{tracking.service.subcategory}</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Provider Card */}
+              {tracking.provider && (
+                <div className="p-6 border-b border-nilin-border bg-gradient-to-br from-white to-nilin-cream/30">
+                  <h2 className="text-xs font-semibold text-nilin-warmGray uppercase tracking-wide mb-4">Service Provider</h2>
+                  <div className="flex items-center gap-4 p-4 bg-white rounded-xl shadow-sm border border-nilin-border">
+                    <div className="w-14 h-14 rounded-full bg-nilin-coral/20 flex items-center justify-center overflow-hidden">
+                      {tracking.provider.avatar ? (
+                        <img src={tracking.provider.avatar} alt={tracking.provider.name} className="w-full h-full object-cover" />
+                      ) : (
+                        <span className="text-2xl font-bold text-nilin-coral">{tracking.provider.name?.charAt(0).toUpperCase()}</span>
+                      )}
+                    </div>
+                    <div className="flex-1">
+                      <p className="font-semibold text-nilin-charcoal text-lg">{tracking.provider.name}</p>
+                      <div className="flex items-center gap-1 mt-1">
+                        {[...Array(5)].map((_, i) => (
+                          <Star key={i} className="w-3 h-3 text-yellow-400 fill-current" aria-hidden="true" />
+                        ))}
+                        <span className="text-xs text-nilin-warmGray ml-1">4.9 (127 reviews)</span>
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      {tracking.provider.phone && (
+                        <a
+                          href={`tel:${tracking.provider.phone}`}
+                          className="w-11 h-11 rounded-full bg-green-50 border border-green-200 flex items-center justify-center hover:bg-green-100 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-green-500"
+                          aria-label={`Call ${tracking.provider.name}`}
+                        >
+                          <Phone className="w-5 h-5 text-green-600" aria-hidden="true" />
+                        </a>
+                      )}
+                      <a
+                        href={tracking.location ? `https://maps.google.com?q=${encodeURIComponent(formatAddress(tracking.location) || '')}` : '#'}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="w-11 h-11 rounded-full bg-blue-50 border border-blue-200 flex items-center justify-center hover:bg-blue-100 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                        aria-label="Get directions"
+                      >
+                        <MapPin className="w-5 h-5 text-blue-600" aria-hidden="true" />
+                      </a>
                     </div>
                   </div>
                 </div>
@@ -479,46 +839,39 @@ const TrackBookingPage: React.FC = () => {
               <div className="p-6 space-y-4 border-b border-nilin-border">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="flex items-center gap-3 text-nilin-charcoal">
-                    <div className="w-10 h-10 rounded-nilin bg-nilin-coral/10 flex items-center justify-center">
-                      <Calendar className="w-5 h-5 text-nilin-coral" />
+                    <div className="w-10 h-10 rounded-nilin bg-nilin-coral/10 flex items-center justify-center group-hover:bg-nilin-coral/15 transition-colors">
+                      <Calendar className="w-5 h-5 text-nilin-coral" aria-hidden="true" />
                     </div>
                     <div>
-                      <p className="text-xs text-nilin-warmGray">Date</p>
-                      <p className="font-medium">
-                        {new Date(tracking.scheduledDate).toLocaleDateString('en-US', {
-                          weekday: 'short',
-                          month: 'short',
-                          day: 'numeric',
-                          year: 'numeric'
-                        })}
-                      </p>
+                      <p className="text-xs font-medium text-gray-600">Date</p>
+                      <p className="font-medium">{formatDateSafe(tracking.scheduledDate)}</p>
                     </div>
                   </div>
                   <div className="flex items-center gap-3 text-nilin-charcoal">
                     <div className="w-10 h-10 rounded-nilin bg-nilin-coral/10 flex items-center justify-center">
-                      <Clock className="w-5 h-5 text-nilin-coral" />
+                      <Clock className="w-5 h-5 text-nilin-coral" aria-hidden="true" />
                     </div>
                     <div>
-                      <p className="text-xs text-nilin-warmGray">Time</p>
-                      <p className="font-medium">{tracking.scheduledTime}</p>
+                      <p className="text-xs font-medium text-gray-600">Time</p>
+                      <p className="font-medium">{tracking.scheduledTime || 'Not specified'}</p>
                     </div>
                   </div>
                   <div className="flex items-center gap-3 text-nilin-charcoal">
                     <div className="w-10 h-10 rounded-nilin bg-nilin-coral/10 flex items-center justify-center">
-                      <User className="w-5 h-5 text-nilin-coral" />
+                      <Timer className="w-5 h-5 text-nilin-coral" aria-hidden="true" />
                     </div>
                     <div>
-                      <p className="text-xs text-nilin-warmGray">Provider</p>
-                      <p className="font-medium">{tracking.provider?.name || 'N/A'}</p>
+                      <p className="text-xs font-medium text-gray-600">Duration</p>
+                      <p className="font-medium">{tracking.duration ? formatDuration(tracking.duration) : 'N/A'}</p>
                     </div>
                   </div>
                   <div className="flex items-center gap-3 text-nilin-charcoal">
                     <div className="w-10 h-10 rounded-nilin bg-nilin-coral/10 flex items-center justify-center">
-                      <Clock className="w-5 h-5 text-nilin-coral" />
+                      <User className="w-5 h-5 text-nilin-coral" aria-hidden="true" />
                     </div>
                     <div>
-                      <p className="text-xs text-nilin-warmGray">Duration</p>
-                      <p className="font-medium">{formatDuration(tracking.duration)}</p>
+                      <p className="text-xs font-medium text-gray-600">Provider</p>
+                      <p className="font-medium">{tracking.provider?.name || 'To be assigned'}</p>
                     </div>
                   </div>
                 </div>
@@ -527,10 +880,10 @@ const TrackBookingPage: React.FC = () => {
                 {tracking.location && (
                   <div className="flex items-start gap-3 text-nilin-charcoal pt-4 border-t border-nilin-border">
                     <div className="w-10 h-10 rounded-nilin bg-nilin-coral/10 flex items-center justify-center flex-shrink-0">
-                      <MapPin className="w-5 h-5 text-nilin-coral" />
+                      <MapPin className="w-5 h-5 text-nilin-coral" aria-hidden="true" />
                     </div>
                     <div>
-                      <p className="text-xs text-nilin-warmGray">Location</p>
+                      <p className="text-xs font-medium text-gray-600">Location</p>
                       <p className="font-medium">{formatAddress(tracking.location)}</p>
                       {tracking.location.notes && (
                         <p className="text-sm text-nilin-warmGray mt-1">{tracking.location.notes}</p>
@@ -543,22 +896,22 @@ const TrackBookingPage: React.FC = () => {
               {/* Pricing */}
               {tracking.pricing && (
                 <div className="p-6 border-b border-nilin-border">
-                  <h4 className="font-semibold text-nilin-charcoal mb-4">Pricing Details</h4>
+                  <h2 className="text-xs font-semibold text-nilin-warmGray uppercase tracking-wide mb-4">Pricing Details</h2>
                   <div className="space-y-2">
                     {tracking.pricing.basePrice != null && (
-                      <div className="flex justify-between text-nilin-warmGray">
+                      <div className="flex justify-between text-nilin-charcoal">
                         <span>Service Fee</span>
                         <span>{tracking.pricing.currency} {tracking.pricing.basePrice.toFixed(2)}</span>
                       </div>
                     )}
                     {tracking.pricing.addOns?.map((addon, idx) => (
-                      <div key={idx} className="flex justify-between text-nilin-warmGray">
+                      <div key={idx} className="flex justify-between text-nilin-charcoal">
                         <span>{addon.name}</span>
                         <span>+{tracking.pricing.currency} {addon.price.toFixed(2)}</span>
                       </div>
                     ))}
                     {tracking.pricing.discounts?.map((discount, idx) => (
-                      <div key={idx} className="flex justify-between text-green-600">
+                      <div key={idx} className="flex justify-between text-nilin-success">
                         <span>
                           {discount.description || 'Discount'}
                           {discount.code && <span className="text-xs ml-1">({discount.code})</span>}
@@ -567,7 +920,7 @@ const TrackBookingPage: React.FC = () => {
                       </div>
                     ))}
                     {tracking.pricing.couponDiscount && tracking.pricing.couponDiscount > 0 && !tracking.pricing.discounts?.some(d => d.code) && (
-                      <div className="flex justify-between text-green-600">
+                      <div className="flex justify-between text-nilin-success">
                         <span>Coupon Discount</span>
                         <span>-{tracking.pricing.currency} {tracking.pricing.couponDiscount.toFixed(2)}</span>
                       </div>
@@ -584,9 +937,9 @@ const TrackBookingPage: React.FC = () => {
                         <span>{tracking.pricing.currency} {tracking.pricing.tax.toFixed(2)}</span>
                       </div>
                     )}
-                    <div className="flex justify-between font-bold text-nilin-charcoal text-lg pt-2 border-t border-nilin-border">
+                    <div className="flex justify-between items-center font-bold text-nilin-charcoal text-lg pt-3 mt-2 bg-nilin-cream -mx-6 px-6 py-3">
                       <span>Total</span>
-                      <span>{tracking.pricing.currency} {tracking.pricing.totalAmount.toFixed(2)}</span>
+                      <span className="text-xl">{tracking.pricing.currency} {tracking.pricing.totalAmount.toFixed(2)}</span>
                     </div>
                   </div>
                 </div>
@@ -595,25 +948,23 @@ const TrackBookingPage: React.FC = () => {
               {/* Offer Details Section */}
               {(tracking.pricing.couponDiscount || (tracking.pricing.discounts && tracking.pricing.discounts.length > 0)) && (
                 <div className="p-6 border-b border-nilin-border">
-                  <h4 className="font-semibold text-nilin-charcoal mb-4 flex items-center gap-2">
-                    <svg className="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
-                    </svg>
-                    Offer Applied
-                  </h4>
-                  <div className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-xl p-4 border border-green-200">
+                  <h2 className="text-xs font-semibold text-nilin-warmGray uppercase tracking-wide mb-4 flex items-center gap-2">
+                    <Tag className="w-4 h-4 text-nilin-success" aria-hidden="true" />
+                    Savings Applied
+                  </h2>
+                  <div className="bg-nilin-success/10 rounded-xl p-4 border border-nilin-success/20">
                     {tracking.pricing.discounts?.map((discount, idx) => (
                       <div key={idx} className="flex items-center justify-between">
                         <div>
-                          <p className="font-semibold text-green-800">
+                          <p className="font-semibold text-nilin-charcoal">
                             {discount.description || 'Special Offer'}
                           </p>
-                          <p className="text-xs text-green-600 mt-1">
-                            {discount.code && <span className="font-mono">Code: {discount.code}</span>}
-                          </p>
+                          {discount.code && (
+                            <p className="text-xs text-nilin-warmGray mt-1 font-mono">Code: {discount.code}</p>
+                          )}
                         </div>
                         <div className="text-right">
-                          <p className="text-lg font-bold text-green-600">
+                          <p className="text-lg font-bold text-nilin-success">
                             -{tracking.pricing.currency} {discount.amount.toFixed(2)}
                           </p>
                         </div>
@@ -622,32 +973,30 @@ const TrackBookingPage: React.FC = () => {
                     {!tracking.pricing.discounts?.length && tracking.pricing.couponDiscount && (
                       <div className="flex items-center justify-between">
                         <div>
-                          <p className="font-semibold text-green-800">Promo Code Discount</p>
+                          <p className="font-semibold text-nilin-charcoal">Promo Code Discount</p>
                         </div>
                         <div className="text-right">
-                          <p className="text-lg font-bold text-green-600">
+                          <p className="text-lg font-bold text-nilin-success">
                             -{tracking.pricing.currency} {tracking.pricing.couponDiscount.toFixed(2)}
                           </p>
                         </div>
                       </div>
                     )}
 
-                    {/* Price Comparison with Strikethrough */}
+                    {/* Price Comparison */}
                     {tracking.pricing.basePrice != null && tracking.pricing.couponDiscount > 0 && (
-                      <div className="mt-4 pt-4 border-t border-green-200">
+                      <div className="mt-4 pt-4 border-t border-nilin-success/20">
                         <div className="text-center">
-                          <p className="text-sm text-green-700 mb-1">You Save</p>
-                          <p className="text-3xl font-bold text-green-600">
+                          <p className="text-sm text-nilin-warmGray mb-1">You Save</p>
+                          <p className="text-3xl font-bold text-nilin-success">
                             -{tracking.pricing.currency} {tracking.pricing.couponDiscount?.toFixed(2) || tracking.pricing.discounts?.[0]?.amount.toFixed(2)}
                           </p>
                           <div className="flex items-center justify-center gap-2 mt-2">
-                            <span className="text-lg text-green-700 line-through">
+                            <span className="text-lg text-nilin-warmGray line-through">
                               {tracking.pricing.currency} {tracking.pricing.basePrice.toFixed(2)}
                             </span>
-                            <svg className="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-                            </svg>
-                            <span className="text-xl font-bold text-green-800">
+                            <ArrowRight className="w-5 h-5 text-nilin-success" aria-hidden="true" />
+                            <span className="text-xl font-bold text-nilin-charcoal">
                               {tracking.pricing.currency} {tracking.pricing.totalAmount.toFixed(2)}
                             </span>
                           </div>
@@ -661,23 +1010,23 @@ const TrackBookingPage: React.FC = () => {
               {/* Status Timeline */}
               {tracking.statusHistory && tracking.statusHistory.length > 0 && (
                 <div className="p-6">
-                  <h4 className="font-semibold text-nilin-charcoal mb-4">Status Timeline</h4>
-                  <div className="space-y-0">
+                  <h2 className="text-xs font-semibold text-nilin-warmGray uppercase tracking-wide mb-4">Status Timeline</h2>
+                  <ul className="space-y-0" role="list">
                     {tracking.statusHistory.map((entry, index) => {
                       const isCurrent = index === 0;
                       return (
-                        <div key={index} className="flex gap-4 relative">
-                          <div className="flex flex-col items-center">
+                        <li key={index} className="flex gap-4 relative" role="listitem">
+                          <div className="flex flex-col items-center w-6">
                             {getStatusIcon(entry.status, isCurrent)}
                             {index < tracking.statusHistory.length - 1 && (
-                              <div className="w-0.5 flex-1 bg-nilin-border mt-1" />
+                              <div className={`w-px flex-1 mt-1 min-h-[2rem] ${isCurrent ? 'bg-nilin-coral/30' : 'bg-nilin-border'}`} />
                             )}
                           </div>
-                          <div className={`pb-6 ${index === tracking.statusHistory.length - 1 ? 'pb-0' : ''}`}>
+                          <div className={`flex-1 pb-6 ${index === tracking.statusHistory.length - 1 ? 'pb-0' : ''} animate-slide-up`} style={{ animationDelay: `${index * 100}ms` }}>
                             <p className={`font-medium ${isCurrent ? 'text-nilin-charcoal' : 'text-nilin-warmGray'}`}>
                               {statusLabels[entry.status] || entry.status}
                             </p>
-                            <p className="text-sm text-nilin-warmGray">
+                            <p className="text-sm text-gray-600">
                               {new Date(entry.timestamp).toLocaleString('en-US', {
                                 month: 'short',
                                 day: 'numeric',
@@ -689,10 +1038,10 @@ const TrackBookingPage: React.FC = () => {
                               <p className="text-sm text-nilin-warmGray mt-1">{entry.reason}</p>
                             )}
                           </div>
-                        </div>
+                        </li>
                       );
                     })}
-                  </div>
+                  </ul>
                 </div>
               )}
 
@@ -704,12 +1053,13 @@ const TrackBookingPage: React.FC = () => {
                 !['cancelled', 'rejected'].includes(tracking.status) && (
                 <div className="p-6 border-b border-nilin-border">
                   <div className="flex items-center justify-between gap-4 mb-4">
-                    <h4 className="font-semibold text-nilin-charcoal flex items-center gap-2">
-                      <MessageCircle className="w-4 h-4 text-nilin-coral" />
+                    <h2 className="font-semibold text-nilin-charcoal flex items-center gap-2 flex-shrink-0">
+                      <MessageCircle className="w-4 h-4 text-nilin-coral" aria-hidden="true" />
                       Message {tracking.provider?.name || 'your provider'}
-                    </h4>
+                    </h2>
                     <button
                       type="button"
+                      aria-label={`Message ${tracking.provider?.name || 'your provider'} about booking ${tracking.bookingNumber}`}
                       onClick={() =>
                         navigate('/customer/messages', {
                           state: {
@@ -718,7 +1068,7 @@ const TrackBookingPage: React.FC = () => {
                           },
                         })
                       }
-                      className="text-sm font-medium text-nilin-coral hover:text-nilin-rose transition-colors"
+                      className="text-sm font-medium text-nilin-coral hover:text-nilin-rose transition-colors flex-shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2 rounded"
                     >
                       Open in Messages
                     </button>
@@ -742,51 +1092,84 @@ const TrackBookingPage: React.FC = () => {
               )}
 
               {/* Action Buttons */}
-              <div className="p-6 bg-nilin-cream border-t border-nilin-border">
+              <div className="p-6 bg-gradient-to-b from-nilin-cream to-nilin-blush/30 border-t border-nilin-border/50">
                 {/* Real-time update indicator */}
-                {isConnected && lastUpdate && (
-                  <div className="flex items-center gap-2 text-xs text-green-600 mb-4">
-                    <RefreshCw className="w-3 h-3" />
-                    <span>Live updates active</span>
-                  </div>
-                )}
+                <div className="flex items-center justify-between mb-4">
+                  {isConnected ? (
+                    <div className="flex items-center gap-2 text-xs text-nilin-success animate-pulse" role="status" aria-live="polite">
+                      <div className="relative flex h-2 w-2">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-nilin-success opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-2 w-2 bg-nilin-success"></span>
+                      </div>
+                      <span>Live updates active</span>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2 text-xs text-orange-500">
+                      <WifiOff className="w-3 h-3" aria-hidden="true" />
+                      <span>Reconnecting...</span>
+                    </div>
+                  )}
+                  {lastUpdate && (
+                    <span className="text-xs text-nilin-warmGray">
+                      Last update: {lastUpdate.toLocaleTimeString()}
+                    </span>
+                  )}
+                </div>
 
                 {/* Cancel and Reschedule Buttons */}
                 {canCancel && isAuthenticated && (
-                  <div className="flex flex-wrap gap-3 mb-4">
+                  <div className="flex flex-col sm:flex-row gap-3 mb-4">
                     {canReschedule && (
                       <button
                         onClick={() => setShowRescheduleModal(true)}
-                        className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-white border border-nilin-border text-nilin-charcoal rounded-nilin font-medium hover:bg-nilin-blush/30 transition-colors"
+                        className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-white border border-nilin-border text-nilin-charcoal rounded-nilin font-medium hover:bg-nilin-blush/30 transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
+                        aria-label="Reschedule booking for a different date or time"
                       >
-                        <Calendar className="w-4 h-4" />
+                        <Calendar className="w-4 h-4" aria-hidden="true" />
                         Reschedule
                       </button>
                     )}
                     <button
                       onClick={() => setShowCancellationModal(true)}
-                      className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-red-50 border border-red-200 text-red-600 rounded-nilin font-medium hover:bg-red-100 transition-colors"
+                      className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-nilin-muted border border-nilin-border text-nilin-charcoal rounded-nilin font-medium hover:bg-nilin-error/10 hover:border-nilin-error/30 transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-error focus-visible:ring-offset-2"
+                      aria-label="Cancel this booking"
                     >
-                      <AlertCircle className="w-4 h-4" />
+                      <AlertCircle className="w-4 h-4" aria-hidden="true" />
                       Cancel Booking
                     </button>
                   </div>
                 )}
 
+                {/* Print Button */}
+                <button
+                  onClick={handlePrint}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-white border border-nilin-border text-nilin-charcoal rounded-nilin font-medium hover:bg-nilin-blush/30 transition-colors duration-200 mb-3 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
+                  aria-label="Print booking details"
+                >
+                  <Printer className="w-4 h-4" aria-hidden="true" />
+                  Print Booking
+                </button>
+
                 {/* Completed - Share Experience */}
-                {tracking.status === 'completed' && isAuthenticated && !checkingExperience && (
+                {tracking.status === 'completed' && isAuthenticated && (
                   <div className="mb-4">
-                    {hasExperience ? (
-                      <div className="flex items-center gap-2 text-green-600 bg-green-50 rounded-nilin p-4">
-                        <Star className="w-5 h-5 fill-current" />
+                    {checkingExperience ? (
+                      <div className="flex items-center justify-center gap-2 text-nilin-warmGray py-3">
+                        <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
+                        <span className="text-sm">Checking...</span>
+                      </div>
+                    ) : hasExperience ? (
+                      <div className="flex items-center justify-center gap-2 text-nilin-success bg-nilin-success/10 rounded-nilin p-4" role="status" aria-live="polite">
+                        <Star className="w-5 h-5 fill-current" aria-hidden="true" />
                         <span className="font-medium">Experience Shared</span>
                       </div>
                     ) : (
                       <button
                         onClick={() => setShowExperienceForm(true)}
-                        className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-nilin-coral text-white rounded-nilin font-semibold hover:bg-nilin-rose transition-colors"
+                        aria-label="Share your experience for this booking"
+                        className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-nilin-coral text-white rounded-nilin font-semibold hover:bg-nilin-rose hover-lift transition-all duration-200 active:scale-[0.98] focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
                       >
-                        <Share2 className="w-5 h-5" />
+                        <Share2 className="w-5 h-5" aria-hidden="true" />
                         Share Your Experience
                       </button>
                     )}
@@ -797,15 +1180,16 @@ const TrackBookingPage: React.FC = () => {
                 {isAuthenticated && tracking._id && (
                   <Link
                     to={`/customer/bookings/${tracking._id}`}
-                    className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-nilin-charcoal text-white rounded-nilin font-semibold hover:bg-nilin-warmGray transition-colors"
+                    aria-label={`View full details for booking ${tracking.bookingNumber}`}
+                    className="block w-full text-center px-6 py-3 bg-nilin-charcoal text-white rounded-nilin font-semibold hover:bg-nilin-warmGray transition-all duration-200 hover-lift focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
                   >
                     View Full Details
-                    <ChevronRight className="w-5 h-5" />
+                    <ChevronRight className="w-5 h-5 inline ml-1" aria-hidden="true" />
                   </Link>
                 )}
 
                 {/* Login prompt for guests */}
-                {!isAuthenticated && (
+                {!isAuthenticated && tracking.status !== 'cancelled' && tracking.status !== 'rejected' && (
                   <div className="space-y-3">
                     <p className="text-center text-nilin-warmGray text-sm">
                       Sign in with the same email used for this booking to see it in My Bookings
@@ -818,7 +1202,7 @@ const TrackBookingPage: React.FC = () => {
                         message:
                           'Use the email from your booking confirmation to link this booking to your account.',
                       }}
-                      className="block w-full text-center px-6 py-3 bg-nilin-charcoal text-white rounded-nilin font-semibold hover:bg-nilin-warmGray transition-colors"
+                      className="block w-full text-center px-6 py-3 bg-nilin-charcoal text-white rounded-nilin font-semibold hover:bg-nilin-warmGray transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2"
                     >
                       Sign In
                     </Link>
@@ -833,13 +1217,13 @@ const TrackBookingPage: React.FC = () => {
             <p className="text-nilin-warmGray text-sm mb-2">Need help with your booking?</p>
             <Link
               to="/contact"
-              className="text-nilin-coral hover:underline text-sm font-medium"
+              className="text-nilin-coral hover:text-nilin-rose hover:underline transition-all duration-200 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-nilin-coral focus-visible:ring-offset-2 rounded"
             >
               Contact Support
             </Link>
           </div>
         </div>
-      </div>
+      </main>
 
       <Footer />
 

@@ -95,6 +95,10 @@ export interface CalendarViewProps {
   onDeclineBooking?: (bookingId: string) => Promise<void>;
   /** Callback when date is selected */
   onDateSelect?: (date: Date) => void;
+  /** Callback when date range changes (for fetching new data) */
+  onDateRangeChange?: (date: Date) => void;
+  /** Callback when refresh is clicked */
+  onRefresh?: () => void;
   /** Initial view date */
   initialDate?: Date;
   /** Custom blocked times */
@@ -363,24 +367,25 @@ const CalendarGrid: React.FC<CalendarGridProps> = ({
 
               {/* Event Indicators */}
               <div className="space-y-0.5">
-                {dayEvents.slice(0, 2).map((event) => (
-                  <div
-                    key={event.id}
-                    className={cn(
-                      'text-[10px] px-1 py-0.5 rounded truncate',
-                      event.type === 'booking'
-                        ? event.booking?.status === 'pending'
-                          ? 'bg-amber-100 text-amber-700'
-                          : event.booking?.status === 'confirmed'
-                          ? 'bg-blue-100 text-blue-700'
-                          : 'bg-green-100 text-green-700'
-                        : 'bg-gray-100 text-gray-600'
-                    )}
-                    title={event.title}
-                  >
-                    {event.title}
-                  </div>
-                ))}
+                {dayEvents.slice(0, 2).map((event) => {
+                  const statusStyle = event.type === 'booking' && event.booking
+                    ? statusConfig[event.booking.status]
+                    : null;
+                  return (
+                    <div
+                      key={event.id}
+                      className={cn(
+                        'text-[10px] px-1 py-0.5 rounded truncate',
+                        statusStyle
+                          ? statusStyle.bgColor.replace('50', '100').replace('border-', '')
+                          : 'bg-gray-100 text-gray-600'
+                      )}
+                      title={event.title}
+                    >
+                      {event.title}
+                    </div>
+                  );
+                })}
                 {dayEvents.length > 2 && (
                   <div className="text-[10px] text-nilin-warmGray px-1">
                     +{dayEvents.length - 2} more
@@ -471,12 +476,8 @@ const DayView: React.FC<DayViewProps> = ({
                   onClick={() => onEventClick(event)}
                   className={cn(
                     'p-2 rounded-lg border cursor-pointer hover:shadow-md transition-shadow mb-1',
-                    event.type === 'booking'
-                      ? event.booking?.status === 'pending'
-                        ? 'bg-amber-50 border-amber-200'
-                        : event.booking?.status === 'confirmed'
-                        ? 'bg-blue-50 border-blue-200'
-                        : 'bg-green-50 border-green-200'
+                    event.type === 'booking' && event.booking
+                      ? statusConfig[event.booking.status]?.bgColor || 'bg-gray-100 border-gray-200'
                       : 'bg-gray-100 border-gray-200'
                   )}
                 >
@@ -572,6 +573,21 @@ const mapApiBookingToCalendarBooking = (booking: ApiBookingResponse): CalendarBo
     return null;
   }
 
+  // Validate that scheduledDate is a valid date string
+  const parsedDate = new Date(booking.scheduledDate);
+  if (isNaN(parsedDate.getTime())) {
+    console.warn('[CalendarView] Invalid scheduledDate:', booking.scheduledDate, booking);
+    return null;
+  }
+
+  // Build start time with validation
+  const startTimeStr = `${booking.scheduledDate}T${booking.scheduledTime}`;
+  const startDate = new Date(startTimeStr);
+  if (isNaN(startDate.getTime())) {
+    console.warn('[CalendarView] Invalid scheduledTime:', booking.scheduledTime, booking);
+    return null;
+  }
+
   return {
     id: booking._id,
     customerName: booking.customer
@@ -581,7 +597,7 @@ const mapApiBookingToCalendarBooking = (booking: ApiBookingResponse): CalendarBo
     customerPhone: booking.customer?.phone,
     serviceName: booking.service?.name || 'Service',
     category: booking.service?.category || '',
-    startTime: `${booking.scheduledDate}T${booking.scheduledTime}`,
+    startTime: startDate.toISOString(),
     endTime: calculateEndTime(booking.scheduledDate, booking.scheduledTime, booking.estimatedDuration || 60),
     status: booking.status as BookingStatus,
     price: booking.pricing?.totalAmount || booking.pricing?.total || 0,
@@ -594,9 +610,29 @@ const mapApiBookingToCalendarBooking = (booking: ApiBookingResponse): CalendarBo
 
 // Calculate end time based on start time and duration
 const calculateEndTime = (date: string, time: string, durationMinutes: number): string => {
-  const start = new Date(`${date}T${time}`);
-  const end = new Date(start.getTime() + durationMinutes * 60 * 1000);
-  return end.toISOString();
+  try {
+    // Handle different time formats (e.g., "09:00", "9:00", "09:00:00")
+    const normalizedTime = time.length === 5 ? time : time.substring(0, 5);
+    const start = new Date(`${date}T${normalizedTime}`);
+
+    // Validate the date is valid
+    if (isNaN(start.getTime())) {
+      console.warn('[CalendarView] Invalid date/time:', date, time);
+      // Return a fallback: start of the given date + duration
+      const fallbackStart = new Date(date);
+      if (isNaN(fallbackStart.getTime())) {
+        return new Date().toISOString(); // Ultimate fallback
+      }
+      const fallbackEnd = new Date(fallbackStart.getTime() + durationMinutes * 60 * 1000);
+      return fallbackEnd.toISOString();
+    }
+
+    const end = new Date(start.getTime() + durationMinutes * 60 * 1000);
+    return end.toISOString();
+  } catch (err) {
+    console.warn('[CalendarView] Error calculating end time:', err);
+    return new Date().toISOString(); // Fallback to current time
+  }
 };
 
 // =============================================================================
@@ -604,12 +640,14 @@ const calculateEndTime = (date: string, time: string, durationMinutes: number): 
 // =============================================================================
 
 export const CalendarView: React.FC<CalendarViewProps> = ({
-  bookings: bookingsProp,
+  bookings: bookingsProp = [],
   isLoading: isLoadingProp = false,
   onBookingClick,
   onAcceptBooking,
   onDeclineBooking,
   onDateSelect,
+  onDateRangeChange,
+  onRefresh,
   initialDate = new Date(),
   blockedTimes: blockedTimesProp = [],
   className,
@@ -618,16 +656,29 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [view, setView] = useState<'month' | 'day'>('month');
   const [statusFilter, setStatusFilter] = useState<BookingStatus | 'all'>('all');
-  const [bookings, setBookings] = useState<CalendarBooking[]>(bookingsProp || []);
+  // Use prop bookings if provided, otherwise use internal state (for backwards compatibility)
+  const [internalBookings, setInternalBookings] = useState<CalendarBooking[]>([]);
   const [isLoading, setIsLoading] = useState(isLoadingProp);
   const [error, setError] = useState<string | null>(null);
   const [blockedTimes, setBlockedTimes] = useState<Array<{ start: Date; end: Date; reason?: string }>>(blockedTimesProp);
+
+  // Use external bookings if provided, otherwise internal
+  const bookings = bookingsProp.length > 0 ? bookingsProp : internalBookings;
+  const isExternalData = bookingsProp.length > 0;
 
   // Track pending booking actions for optimistic UI
   const [pendingAction, setPendingAction] = useState<{ bookingId: string; action: 'accept' | 'decline' } | null>(null);
 
   // Track selected booking for detail modal
   const [selectedBooking, setSelectedBooking] = useState<CalendarBooking | null>(null);
+
+  // Track confirm dialog state
+  const [confirmDialog, setConfirmDialog] = useState<{
+    open: boolean;
+    type: 'accept' | 'decline';
+    bookingId: string;
+    bookingName: string;
+  } | null>(null);
 
   // Track mounted state to prevent memory leaks from async operations
   const isMountedRef = useRef(true);
@@ -653,7 +704,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
     const fetchBookings = async () => {
       if (bookingsProp && bookingsProp.length > 0) {
         if (isMountedRef.current) {
-          setBookings(bookingsProp);
+          setInternalBookings(bookingsProp);
           setIsLoading(false);
         }
         return;
@@ -678,7 +729,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
           const mappedBookings = response.data.bookings
             .map((booking: ApiBookingResponse) => mapApiBookingToCalendarBooking(booking))
             .filter((b: CalendarBooking | null): b is CalendarBooking => b !== null);
-          setBookings(mappedBookings);
+          setInternalBookings(mappedBookings);
         }
       } catch (err) {
         // Ignore abort errors
@@ -767,7 +818,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
           const mappedBookings = response.data.bookings
             .map((booking: ApiBookingResponse) => mapApiBookingToCalendarBooking(booking))
             .filter((b: CalendarBooking | null): b is CalendarBooking => b !== null);
-          setBookings(mappedBookings);
+          setInternalBookings(mappedBookings);
         }
       } catch (err) {
         console.error('Error refreshing bookings:', err);
@@ -791,7 +842,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
     // Handle booking status changes (handles: accepted, rejected, completed, etc.)
     const unsubStatusChanged = socketService.onBookingStatusChanged((data) => {
       if (isMountedRef.current) {
-        setBookings(prev => prev.map(booking =>
+        setInternalBookings(prev => prev.map(booking =>
           booking.id === data.bookingId
             ? { ...booking, status: data.status as BookingStatus }
             : booking
@@ -803,7 +854,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
     // Handle booking confirmed event
     const unsubConfirmed = socketService.on('booking:confirmed', (data) => {
       if (isMountedRef.current) {
-        setBookings(prev => prev.map(booking =>
+        setInternalBookings(prev => prev.map(booking =>
           booking.id === data.bookingId
             ? { ...booking, status: 'confirmed' as BookingStatus }
             : booking
@@ -815,7 +866,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
     // Handle booking cancelled event
     const unsubCancelled = socketService.on('booking:cancelled', (data) => {
       if (isMountedRef.current) {
-        setBookings(prev => prev.map(booking =>
+        setInternalBookings(prev => prev.map(booking =>
           booking.id === data.bookingId
             ? { ...booking, status: 'cancelled' as BookingStatus }
             : booking
@@ -827,7 +878,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
     // Handle booking completed event
     const unsubCompleted = socketService.on('booking:completed', (data) => {
       if (isMountedRef.current) {
-        setBookings(prev => prev.map(booking =>
+        setInternalBookings(prev => prev.map(booking =>
           booking.id === data.bookingId
             ? { ...booking, status: 'completed' as BookingStatus }
             : booking
@@ -839,7 +890,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
     // Handle booking started event
     const unsubStarted = socketService.on('booking:started', (data) => {
       if (isMountedRef.current) {
-        setBookings(prev => prev.map(booking =>
+        setInternalBookings(prev => prev.map(booking =>
           booking.id === data.bookingId
             ? { ...booking, status: 'in_progress' as BookingStatus }
             : booking
@@ -851,7 +902,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
     // Handle booking no_show event
     const unsubNoShow = socketService.on('booking:no_show', (data) => {
       if (isMountedRef.current) {
-        setBookings(prev => prev.map(booking =>
+        setInternalBookings(prev => prev.map(booking =>
           booking.id === data.bookingId
             ? { ...booking, status: 'cancelled' as BookingStatus }
             : booking
@@ -892,16 +943,22 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
   }, [bookings, blockedTimes, statusFilter]);
 
   const handlePrevMonth = () => {
-    setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1));
+    const newDate = new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1);
+    setCurrentDate(newDate);
+    onDateRangeChange?.(newDate);
   };
 
   const handleNextMonth = () => {
-    setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1));
+    const newDate = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1);
+    setCurrentDate(newDate);
+    onDateRangeChange?.(newDate);
   };
 
   const handleToday = () => {
-    setCurrentDate(new Date());
-    setSelectedDate(new Date());
+    const newDate = new Date();
+    setCurrentDate(newDate);
+    setSelectedDate(newDate);
+    onDateRangeChange?.(newDate);
   };
 
   const handleDateClick = (date: Date) => {
@@ -926,18 +983,32 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
   };
 
   // Optimistic UI handler for accepting a booking
-  const handleAcceptBooking = async (bookingId: string) => {
+  const handleAcceptBooking = async (bookingId: string, skipConfirm = false) => {
     // Find the booking to get its current state for potential rollback
     const booking = bookings.find(b => b.id === bookingId);
     if (!booking) return;
 
+    // Show confirmation dialog if not skipped
+    if (!skipConfirm) {
+      setConfirmDialog({
+        open: true,
+        type: 'accept',
+        bookingId,
+        bookingName: booking.serviceName,
+      });
+      return;
+    }
+
     // Set pending state to show loading UI
     setPendingAction({ bookingId, action: 'accept' });
+    setConfirmDialog(null);
 
     // Optimistic update: immediately update UI
-    setBookings(prev => prev.map(b =>
-      b.id === bookingId ? { ...b, status: 'confirmed' as BookingStatus } : b
-    ));
+    if (!isExternalData) {
+      setInternalBookings(prev => prev.map(b =>
+        b.id === bookingId ? { ...b, status: 'confirmed' as BookingStatus } : b
+      ));
+    }
 
     try {
       // Call the parent handler if provided, otherwise call API directly
@@ -950,9 +1021,11 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
       toast.success('Booking accepted successfully');
     } catch (err) {
       // Revert optimistic update on failure
-      setBookings(prev => prev.map(b =>
-        b.id === bookingId ? booking : b
-      ));
+      if (!isExternalData) {
+        setInternalBookings(prev => prev.map(b =>
+          b.id === bookingId ? booking : b
+        ));
+      }
       const errorMessage = err instanceof Error ? err.message : 'Failed to accept booking';
       toast.error(errorMessage);
       console.error('Error accepting booking:', err);
@@ -962,18 +1035,30 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
   };
 
   // Optimistic UI handler for declining a booking
-  const handleDeclineBooking = async (bookingId: string) => {
+  const handleDeclineBooking = async (bookingId: string, skipConfirm = false) => {
     // Find the booking to get its current state for potential rollback
     const booking = bookings.find(b => b.id === bookingId);
     if (!booking) return;
 
+    // Show confirmation dialog if not skipped
+    if (!skipConfirm) {
+      setConfirmDialog({
+        open: true,
+        type: 'decline',
+        bookingId,
+        bookingName: booking.serviceName,
+      });
+      return;
+    }
+
     // Set pending state to show loading UI
     setPendingAction({ bookingId, action: 'decline' });
+    setConfirmDialog(null);
 
-    // Optimistic update: immediately update UI
-    setBookings(prev => prev.map(b =>
-      b.id === bookingId ? { ...b, status: 'cancelled' as BookingStatus } : b
-    ));
+    // Optimistic update: immediately update UI (remove from list)
+    if (!isExternalData) {
+      setInternalBookings(prev => prev.filter(b => b.id !== bookingId));
+    }
 
     try {
       // Call the parent handler if provided, otherwise call API directly
@@ -986,9 +1071,9 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
       toast.success('Booking declined');
     } catch (err) {
       // Revert optimistic update on failure
-      setBookings(prev => prev.map(b =>
-        b.id === bookingId ? booking : b
-      ));
+      if (!isExternalData) {
+        setInternalBookings(prev => [...prev, booking]);
+      }
       const errorMessage = err instanceof Error ? err.message : 'Failed to decline booking';
       toast.error(errorMessage);
       console.error('Error declining booking:', err);
@@ -1039,6 +1124,85 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
       </div>
     );
   }
+
+  // Empty state
+  if (!isLoading && bookings.length === 0) {
+    return (
+      <div className={cn('bg-white rounded-2xl p-6 shadow-nilin-sm', className)}>
+        <div className="flex flex-col items-center justify-center py-12">
+          <CalendarIcon className="w-12 h-12 text-nilin-warmGray mb-4" />
+          <p className="text-nilin-charcoal font-medium mb-2">No bookings found</p>
+          <p className="text-sm text-nilin-warmGray mb-6">
+            There are no bookings in this time period.
+          </p>
+          <button
+            onClick={handleToday}
+            className="flex items-center gap-2 px-4 py-2 bg-nilin-coral text-white rounded-lg hover:bg-nilin-coral/90 transition-colors"
+          >
+            Go to Today
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Confirmation Dialog
+  const ConfirmDialog = () => {
+    if (!confirmDialog?.open) return null;
+
+    const isAccept = confirmDialog.type === 'accept';
+
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+        <div className="bg-white rounded-2xl p-6 max-w-md w-full mx-4 shadow-xl">
+          <div className="flex items-center gap-4 mb-4">
+            <div className={cn(
+              'w-12 h-12 rounded-full flex items-center justify-center',
+              isAccept ? 'bg-green-100' : 'bg-red-100'
+            )}>
+              {isAccept ? (
+                <CheckCircle className="w-6 h-6 text-green-600" />
+              ) : (
+                <XCircle className="w-6 h-6 text-red-600" />
+              )}
+            </div>
+            <div>
+              <h3 className="text-lg font-semibold text-nilin-charcoal">
+                {isAccept ? 'Accept Booking?' : 'Decline Booking?'}
+              </h3>
+              <p className="text-sm text-nilin-warmGray">
+                {isAccept
+                  ? `Accept "${confirmDialog.bookingName}"?`
+                  : `Decline "${confirmDialog.bookingName}"? This cannot be undone.`}
+              </p>
+            </div>
+          </div>
+          <div className="flex gap-3 justify-end">
+            <button
+              onClick={() => setConfirmDialog(null)}
+              className="px-4 py-2 text-nilin-charcoal border border-nilin-border rounded-lg hover:bg-nilin-muted transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => isAccept
+                ? handleAcceptBooking(confirmDialog.bookingId, true)
+                : handleDeclineBooking(confirmDialog.bookingId, true)
+              }
+              className={cn(
+                'px-4 py-2 text-white rounded-lg transition-colors',
+                isAccept
+                  ? 'bg-green-600 hover:bg-green-700'
+                  : 'bg-red-600 hover:bg-red-700'
+              )}
+            >
+              {isAccept ? 'Accept' : 'Decline'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className={cn('bg-white rounded-2xl p-6 shadow-nilin-sm', className)}>
@@ -1346,6 +1510,9 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Confirmation Dialog */}
+      <ConfirmDialog />
     </div>
   );
 };

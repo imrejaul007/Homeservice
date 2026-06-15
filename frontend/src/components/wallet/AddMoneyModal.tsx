@@ -50,6 +50,9 @@ export function AddMoneyModal({ isOpen, onClose, onSuccess }: AddMoneyModalProps
   const handleCustomChange = (value: string) => {
     setCustomAmount(value);
     if (value === '') {
+      // Reset to default amount when cleared — prevents stale value
+      setAmount(500);
+      setIsCustom(false);
       setError(null);
       return;
     }
@@ -57,7 +60,8 @@ export function AddMoneyModal({ isOpen, onClose, onSuccess }: AddMoneyModalProps
     if (!isNaN(num) && num > 0) {
       setAmount(num);
       setIsCustom(true);
-      setError(null);
+      // Clear any previous error when user starts typing valid input
+      if (amount > 0) setError(null);
     }
   };
 
@@ -84,6 +88,11 @@ export function AddMoneyModal({ isOpen, onClose, onSuccess }: AddMoneyModalProps
 
     if (amount < 10) {
       setError(`Minimum amount is ${formatCurrency(10, 'AED')}`);
+      return;
+    }
+
+    if (amount > 10000) {
+      setError(`Maximum amount is ${formatCurrency(10000, 'AED')} per transaction`);
       return;
     }
 
@@ -228,8 +237,8 @@ export function AddMoneyModal({ isOpen, onClose, onSuccess }: AddMoneyModalProps
                     </div>
 
                     {error && (
-                      <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-xl" role="alert">
-                        <p className="text-sm text-red-600">{error}</p>
+                      <div className="mb-4 p-3 bg-nilin-error/10 border border-nilin-error/20 rounded-xl" role="alert">
+                        <p className="text-sm text-nilin-charcoal">{error}</p>
                       </div>
                     )}
 

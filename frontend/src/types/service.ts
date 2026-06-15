@@ -57,6 +57,12 @@ export interface Service {
     rating?: number;
     location?: string;
     isVerified?: boolean;
+    businessInfo?: {
+      businessName: string;
+      description: string;
+      website?: string;
+      businessType?: string;
+    };
   };
   distance?: number;
   fullLocation?: string;
@@ -67,6 +73,7 @@ export interface Service {
     popularityScore: number;
   };
   durationOptions?: Array<{ duration: number; price: number; label: string }>;
+  addOns?: Array<{ name: string; price: number; description?: string }>;
   availability?: {
     schedule: {
       [day: string]: {
