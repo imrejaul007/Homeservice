@@ -92,6 +92,7 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
 
   // User must be authenticated with a valid token from this point
   if (!user || !tokenValid) {
+    useAuthStore.getState().clearAuth();
     return (
       <Navigate
         to={redirectTo}
@@ -244,6 +245,11 @@ export const PublicRoute: React.FC<{
 
   // Redirect authenticated users if required
   if (redirectAuthenticated && isAuthenticated && user) {
+    if (!authService.isTokenValid()) {
+      useAuthStore.getState().clearAuth();
+      return <>{children}</>;
+    }
+
     const stateReturn =
       (location.state as { returnTo?: string; from?: string } | null)?.returnTo ||
       (location.state as { from?: string } | null)?.from;

@@ -540,16 +540,26 @@ class AuthService {
    */
   public isTokenValid(): boolean {
     const tokens = this.getStoredTokens();
-    if (!tokens?.accessToken || !tokens?.expiresAt) {
+    if (!tokens?.accessToken) {
       return false;
     }
 
-    // Check if token expires within next minute
-    const expirationTime = new Date(tokens.expiresAt).getTime();
-    const currentTime = Date.now();
     const bufferTime = 60 * 1000; // 1 minute buffer
+    const now = Date.now();
 
-    return expirationTime > (currentTime + bufferTime);
+    if (tokens.expiresAt) {
+      const expirationTime = new Date(tokens.expiresAt).getTime();
+      return expirationTime > now + bufferTime;
+    }
+
+    // Backend tokens omit expiresAt — derive expiry from JWT exp claim
+    const decoded = this.decodeToken(tokens.accessToken);
+    if (decoded?.exp) {
+      return decoded.exp * 1000 > now + bufferTime;
+    }
+
+    // Non-JWT or undecodable token — assume valid; refresh flow handles hard expiry
+    return true;
   }
 
   // ==========================================

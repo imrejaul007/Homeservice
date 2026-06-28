@@ -384,6 +384,7 @@ export const useSearchStore = create<SearchState>()(
     {
       name: 'search-store',
       version: 1,
+      migrate: (persistedState) => persistedState as SearchState,
       partialize: (state) => ({
         // Only persist certain parts of the state
         searchHistory: state.searchHistory,
