@@ -92,7 +92,7 @@ app.use((req: any, res: any, next: any) => {
   // Handle preflight OPTIONS requests
   if (req.method === 'OPTIONS') {
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, X-Correlation-ID, X-Tenant, X-Device-Fingerprint, X-Idempotency-Key, Idempotency-Key, idempotency-key, x-csrf-token, x-2fa-token, skipauth, cookies');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, X-Correlation-ID, X-Tenant, X-Device-Fingerprint, X-Idempotency-Key, Idempotency-Key, idempotency-key, x-csrf-token, x-2fa-token, x-session-id, skipauth, cookies');
     res.setHeader('Access-Control-Max-Age', '86400');
     res.status(204).end();
     return;

@@ -272,7 +272,7 @@ const HomePage: React.FC = () => {
                 src={slide.image}
                 alt={slide.title}
                 loading={isActive ? 'eager' : 'lazy'}
-                fetchPriority={isActive ? 'high' : 'auto'}
+                fetchpriority={isActive ? 'high' : 'auto'}
                 decoding="async"
                 className="absolute inset-0 w-full h-full object-cover object-center"
               />

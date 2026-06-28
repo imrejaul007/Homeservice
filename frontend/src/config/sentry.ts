@@ -8,6 +8,13 @@ export const initializeSentry = () => {
     return;
   }
 
+  // Skip in local dev unless explicitly enabled (avoids ad-blocker noise on ingest URLs)
+  const sentryEnabled =
+    import.meta.env.PROD || import.meta.env.VITE_SENTRY_ENABLED === 'true';
+  if (!sentryEnabled) {
+    return;
+  }
+
   Sentry.init({
     dsn: SENTRY_DSN,
 
